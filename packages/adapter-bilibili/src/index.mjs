@@ -9,13 +9,33 @@
 //     这里改成三条 followup：可追踪、可核实、可关闭
 
 import { execFile } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 const ARCHIVES = "https://member.bilibili.com/x/web/archives";
+
+/**
+ * biliup 在不在。不能只 existsSync("biliup")：那查的是 cwd 下的相对路径，
+ * 而用户装在哪都有可能。先看显式配置，再按 PATH 找可执行文件。
+ */
+function hasBiliup() {
+  const configured = process.env.VK_BILIUP_BIN;
+  if (configured) return existsSync(configured);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, "biliup"), constants.X_OK);
+      return true;
+    } catch {
+      /* not here */
+    }
+  }
+  return false;
+}
 
 /** 平台怪癖写在这里，不进业务逻辑：延时发布必须 ≥4 小时，否则立即发。 */
 const MIN_SCHEDULE_MS = 4.2 * 3600e3;
@@ -212,7 +232,7 @@ export default {
     minScheduleLeadMs: MIN_SCHEDULE_MS,
   },
   ready() {
-    if (!existsSync(BILIUP()) && !process.env.VK_BILIUP_BIN) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
+    if (!hasBiliup()) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
     return null;
   },
   login: null, // 登录在 biliup CLI 里做（浏览器登录），不需要我们实现

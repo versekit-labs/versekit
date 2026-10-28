@@ -22,6 +22,7 @@ export function createRunner({
   leaseMs = 5 * 60_000,
   uploadLeaseMs = 30 * 60_000,
   heartbeatMs = 30_000,
+  maxAttempts = MAX_ATTEMPTS,
   onRunFailed = null,
   log = () => {},
 } = {}) {
@@ -130,7 +131,7 @@ export function createRunner({
     const attempts = run.attempts + 1;
     // A coded non-retryable failure (auth, asset_invalid …) is terminal on the first try. Retrying
     // it would just make the person wait three backoff rounds for the same answer.
-    if ((policy && !policy.retryable) || attempts >= MAX_ATTEMPTS) {
+    if ((policy && !policy.retryable) || attempts >= maxAttempts) {
       giveUp(run, error, message, attempts);
       return;
     }

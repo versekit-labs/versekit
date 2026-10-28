@@ -196,3 +196,23 @@ test("同一账号里找不到稿件时，错误里带 external_id 便于排障"
     globalThis.fetch = realFetch;
   }
 });
+
+test("ready() 按 PATH 找 biliup，而不是只看 cwd 的相对路径", () => {
+  const saved = { bin: process.env.VK_BILIUP_BIN, path: process.env.PATH };
+  try {
+    delete process.env.VK_BILIUP_BIN;
+    process.env.PATH = mkdtempSync(join(tmpdir(), "vk-emptypath-"));
+    assert.match(adapter.ready(), /未配置/);
+
+    const dir = mkdtempSync(join(tmpdir(), "vk-path-"));
+    const bin = join(dir, "biliup");
+    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    chmodSync(bin, 0o755);
+    process.env.PATH = dir;
+    assert.equal(adapter.ready(), null);
+  } finally {
+    if (saved.bin === undefined) delete process.env.VK_BILIUP_BIN;
+    else process.env.VK_BILIUP_BIN = saved.bin;
+    process.env.PATH = saved.path;
+  }
+});
