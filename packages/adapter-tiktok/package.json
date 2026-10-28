@@ -1,0 +1,9 @@
+{
+  "name": "@fangyouxi/adapter-tiktok",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TikTok 适配器：TikTok Studio 网页发布 + 作品管理页接口拦截采集",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}
