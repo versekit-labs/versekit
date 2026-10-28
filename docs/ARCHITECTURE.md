@@ -299,7 +299,7 @@ defineCommand({
 | `vk serve [--port]` | 前台/后台运行守护进程 | 否 |
 | `vk now [--human]` | 一屏状态：账号健康 / 队列 / 通道 / 下次采集 | 是 |
 | `vk account add <platform> --name` | 加账号，输出扫码页链接（自动开 Web） | 否 |
-| `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 只能本地（需扫码） |
+| `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 可远程发起，但扫码必须在电脑前完成 |
 | `vk account mode <id> auto\|manual` | 该号是否自动 | 是 |
 | `vk publish <asset> --to a,b --schedule --visibility --dry-run` | 创建发布 | 否（本地） |
 | `vk publish retry <id>` / `cancel <id>` | 队列操作 | 是 |

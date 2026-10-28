@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
+import { eventForTransition, isKnownEvent } from "./events.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = join(HERE, "schema.sql");
@@ -121,6 +122,9 @@ export const sha256 = (value) => createHash("sha256").update(value).digest("hex"
  * dedupeKey makes delivery idempotent — the same logical fact is never sent twice.
  */
 export function emit({ type, severity = "info", publishId = null, payload = null, dedupeKey = null }) {
+  // A typo'd event type used to land in the table and never be deliverable. The catalog is the
+  // contract with the channels, so an unregistered type is a bug, not a row.
+  if (!isKnownEvent(type)) throw new Error(`未登记的事件类型：${type}（见 core/src/events.mjs）`);
   const conn = open();
   const id = newId("evt");
   try {
@@ -163,9 +167,10 @@ export function transitionPublish(publishId, to, { reason = null, patch = {} } =
   const fields = { ...patch, state: to, updated_at: Date.now() };
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(", ");
   conn.prepare(`UPDATE publish SET ${sets} WHERE id = ?`).run(...Object.values(fields), publishId);
+  const event = eventForTransition(to);
   emit({
-    type: `publish.${to === "published" ? "published" : to}`,
-    severity: to === "failed" ? "warn" : "info",
+    type: event.type,
+    severity: event.severity,
     publishId,
     payload: { from: row.state, to, reason },
     dedupeKey: `${publishId}:${row.state}->${to}:${row.updated_at}`,

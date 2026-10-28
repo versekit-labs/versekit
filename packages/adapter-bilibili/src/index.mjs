@@ -218,10 +218,11 @@ async function collect({ publishId }) {
 export default {
   platform: "bilibili",
   capabilities: {
-    publish: "web", // biliup 是模拟官方客户端的 CLI，归到 web 路线
-    collect: "web",
+    publish: "cli", // biliup 是模拟官方客户端的 CLI，按契约归 cli 路线
+    collect: "web", // 指标读创作中心接口，不是 biliup
+    draft: false, // biliup 没有草稿箱：要么发，要么不发
     requiresQualification: false,
-    visibility: null, // 稿件先过审再公开，不提供发布时可见性开关
+    visibility: [], // 稿件先过审再公开，发布时不能选可见性
     minScheduleLeadMs: MIN_SCHEDULE_MS,
   },
   ready() {

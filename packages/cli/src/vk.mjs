@@ -217,7 +217,8 @@ function cmdCommands() {
     summary: c.summary,
     remote: c.remote,
     cli: c.cli?.usage ?? null,
-    card: c.card?.label ?? null,
+    http: c.http ? `${c.http.method} ${c.http.path}` : null,
+    card: c.card ? { label: c.card.label, style: c.card.style, confirm: c.card.confirm } : null,
     idempotent: typeof c.idempotent === "function",
     ttl_ms: c.ttlMs ?? null,
   }));

@@ -8,30 +8,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join, dirname } from "node:path";
 import { open } from "./index.mjs";
+import { validateAdapter } from "./contract.mjs";
 import { fileURLToPath } from "node:url";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const ADAPTER_METHODS = ["login", "check", "publish", "collect"];
-
-/** Shape check — the same one contract tests assert, kept here so a bad adapter fails at load. */
-function validate(adapter, where) {
-  if (!adapter?.platform) throw new Error(`${where}: 缺少 platform`);
-  if (typeof adapter.ready !== "function") throw new Error(`${where}: 缺少 ready()`);
-  for (const m of ADAPTER_METHODS) {
-    if (adapter[m] && typeof adapter[m] !== "function") throw new Error(`${where}: ${m} 不是函数`);
-  }
-  if (!adapter.publish && !adapter.collect) throw new Error(`${where}: publish 与 collect 都没有，适配器没有意义`);
-  const caps = adapter.capabilities ?? {};
-  return {
-    platform: adapter.platform,
-    publish: caps.publish ?? (adapter.publish ? "web" : "none"),
-    collect: caps.collect ?? (adapter.collect ? "web" : "none"),
-    requiresQualification: caps.requiresQualification ?? false,
-    visibility: caps.visibility ?? null,
-    adapter,
-  };
-}
 
 /**
  * Loads every installed adapter. `only` restricts to some platforms (useful in tests and in
@@ -56,7 +37,7 @@ export async function loadAdapters({ only = null, root = PACKAGES } = {}) {
     try {
       const mod = await import(pathToFileURL(join(dirPath, entry)).href);
       const adapter = mod.default ?? mod.adapter;
-      const info = validate(adapter, dir);
+      const info = validateAdapter(adapter, dir);
       if (only && !only.includes(info.platform)) continue;
       loaded.push(info);
     } catch (err) {
