@@ -10,6 +10,10 @@
   "scripts": {
     "vk": "node packages/cli/src/vk.mjs",
     "doctor": "node packages/cli/src/vk.mjs doctor --human",
+    "check:parity": "node scripts/ci/parity.mjs",
+    "check:contract": "node scripts/ci/adapter-contract.mjs",
+    "check:backdoor": "node scripts/ci/no-backdoor.mjs",
+    "ci": "npm run check:parity && npm run check:contract && npm run check:backdoor && npm test",
     "test": "node --test packages/*/test/*.test.mjs"
   }
 }
