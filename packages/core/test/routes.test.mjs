@@ -86,3 +86,17 @@ test("parseArgs rejects an unknown argument instead of dropping it silently", ()
 test("parseArgs keeps optional arguments absent rather than filling defaults", () => {
   assert.deepEqual(parseArgs(findCommand("collect.now"), {}), {});
 });
+
+test("畸形百分号编码不会抛 URIError，只是匹配不上", () => {
+  // /api/accounts/%E0%A4%A/reauth —— decodeURIComponent 会在这里抛
+  assert.equal(matchRoute("POST", "/api/accounts/%E0%A4%A/reauth"), null);
+});
+
+test("会改状态的卡片按钮必须有幂等键、过期时间和审计", () => {
+  for (const cmd of COMMANDS) {
+    if (!cmd.card || cmd.http?.method !== "POST") continue;
+    assert.equal(typeof cmd.idempotent, "function", `${cmd.name} 缺 idempotent`);
+    assert.ok(Number.isFinite(cmd.ttlMs), `${cmd.name} 缺 ttlMs`);
+    assert.equal(cmd.audit, "always", `${cmd.name} 缺审计`);
+  }
+});

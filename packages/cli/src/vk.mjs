@@ -241,6 +241,7 @@ function cmdCommands() {
     name: c.name,
     summary: c.summary,
     remote: c.remote,
+    localOnly: c.localOnly === true,
     cli: c.cli?.usage ?? null,
     http: c.http ? `${c.http.method} ${c.http.path}` : null,
     card: c.card ? { label: c.card.label, style: c.card.style, confirm: c.card.confirm } : null,

@@ -69,7 +69,20 @@ export function validateAdapter(adapter, where = "adapter") {
     if (!CAPABILITY_VALUES.includes(caps[key])) {
       fail(where, `capabilities.${key} 只能是 ${CAPABILITY_VALUES.join(" / ")}，收到 ${JSON.stringify(caps[key])}`);
     }
+    // 声明了能力就必须有对应方法：否则契约测试全绿，第一次真发布才炸。
+    if (caps[key] !== "none" && !isFn(adapter[key])) {
+      fail(where, `capabilities.${key} = ${caps[key]}，但没有 ${key}()`);
+    }
   }
+
+  // 作者写了 "unlisted" 这种拼错的值，静默丢掉只会让人以为生效了。声明就要合法。
+  const declared = adapter.capabilities?.visibility;
+  if (declared != null) {
+    if (!Array.isArray(declared)) fail(where, "capabilities.visibility 必须是数组（[] 表示发布时不能选）");
+    const bad = declared.filter((v) => !VISIBILITIES.includes(v));
+    if (bad.length) fail(where, `capabilities.visibility 含未知值：${bad.join(", ")}（只能是 ${VISIBILITIES.join(" / ")}）`);
+  }
+
   if (caps.publish === "none" && caps.collect === "none") {
     fail(where, "publish 与 collect 都是 none，这个适配器没有意义");
   }

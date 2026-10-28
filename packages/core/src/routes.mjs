@@ -57,7 +57,16 @@ export function matchRoute(method, pathname, routes = ROUTES) {
     if (route.method !== verb) continue;
     const m = route.regex.exec(clean);
     if (!m) continue;
-    const params = Object.fromEntries(route.names.map((name, i) => [name, decodeURIComponent(m[i + 1])]));
+    // 畸形的百分号编码（/api/accounts/%E0%A4%A/reauth）会让 decodeURIComponent 抛 URIError。
+    // 一个坏请求不该变成 500，更不该带崩守护进程：当作没有匹配，由调用方回 404。
+    const params = {};
+    for (const [i, name] of route.names.entries()) {
+      try {
+        params[name] = decodeURIComponent(m[i + 1]);
+      } catch {
+        return null;
+      }
+    }
     return { command: route.command, params };
   }
   return null;

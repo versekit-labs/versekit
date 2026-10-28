@@ -139,3 +139,20 @@ test("an unregistered event type is not silently accepted", () => {
   assert.equal(isKnownEvent("publish.exploded"), false);
   assert.equal(isKnownEvent("publish.failed"), true);
 });
+
+// ---------------------------------------------------------------- 声明与实现必须一致
+
+test("声明 publish/collect 能力就必须有对应方法", () => {
+  const noCollect = { platform: "x", ready: () => null, async publish() {}, capabilities: { collect: "api" } };
+  assert.throws(() => validateAdapter(noCollect, "adapter-x"), /collect/);
+});
+
+test("capabilities.visibility 写了未知值要报错，而不是被静默丢掉", () => {
+  const bad = base({ capabilities: { visibility: ["public", "unlisted"] } });
+  assert.throws(() => validateAdapter(bad, "adapter-x"), /unlisted/);
+});
+
+test("visibility 传了非数组也要报错", () => {
+  const bad = base({ capabilities: { visibility: "public" } });
+  assert.throws(() => validateAdapter(bad, "adapter-x"), /必须是数组/);
+});

@@ -66,8 +66,16 @@ if (loaded.adapters.length === 0 && loaded.errors.length === 0) {
 function snapshotOf(db, publishId) {
   const row = db.prepare("SELECT state, external_id, external_url FROM publish WHERE id = ?").get(publishId);
   if (!row) throw new Error(`fixture 里的发布不见了：${publishId}`);
-  const snapshots = db.prepare("SELECT COUNT(*) AS n FROM snapshot WHERE publish_id = ?").get(publishId).n;
-  return { state: row.state, external_id: row.external_id, external_url: row.external_url, snapshots };
+  const count = (table, where = "1=1", ...params) => db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).get(...params).n;
+  return {
+    state: row.state,
+    external_id: row.external_id,
+    external_url: row.external_url,
+    snapshots: count("snapshot", "publish_id = ?", publishId),
+    followups: count("followup", "publish_id = ?", publishId),
+    events: count("event"),
+    runs: count("run"),
+  };
 }
 
 for (const info of loaded.adapters) {
@@ -199,6 +207,22 @@ for (const info of loaded.adapters) {
       );
     } else {
       ok(`contract.dry-run-state.${platform}`, `${label} 的 dry-run 没有改 publish 状态（仍为 ${before.state}）`);
+    }
+
+    const writes = [
+      ["followup", after.followups, before.followups],
+      ["event", after.events, before.events],
+      ["run", after.runs, before.runs],
+    ].filter(([, a, b]) => a !== b);
+
+    if (writes.length) {
+      bad(
+        `contract.dry-run-writes.${platform}`,
+        `${label} 的 dry-run 还写了：${writes.map(([t, a, b]) => `${t} ${b} → ${a}`).join("；")}`,
+        "dry-run 只读：followup / event / run 都不许新增。排采集、记事件、建 followup 都是真发布之后的事",
+      );
+    } else {
+      ok(`contract.dry-run-writes.${platform}`, `${label} 的 dry-run 没有新增 followup / event / run`);
     }
 
     if (after.snapshots !== before.snapshots) {

@@ -39,6 +39,7 @@ const skip = (id, reason) => results.push({ id, ok: null, detail: reason });
 let COMMANDS = null;
 let findCommand = null;
 let routesApi = null;
+let cliRows = null;
 
 try {
   ({ COMMANDS, findCommand } = await import("../../packages/core/src/commands.mjs"));
@@ -200,6 +201,7 @@ if (!COMMANDS) {
     const parsed = JSON.parse(stdout);
     if (!Array.isArray(parsed)) throw new Error(`vk commands 输出的不是数组（收到 ${typeof parsed}）`);
     cli = parsed;
+    cliRows = parsed;
     ok("parity.cli.commands", `vk commands 成功输出 ${parsed.length} 条命令的 JSON`);
   } catch (err) {
     const stderr = String(err.stderr ?? "")
@@ -278,6 +280,109 @@ if (!COMMANDS) {
     skip("parity.cli.http", "上游 parity.cli.commands 失败");
     skip("parity.cli.card-label", "上游 parity.cli.commands 失败");
     skip("parity.cli.remote", "上游 parity.cli.commands 失败");
+  }
+}
+
+// ---------------------------------------------------------------- 5. 语义约束（不只是形状）
+
+if (COMMANDS && routesApi) {
+  // 引导命令是唯一可以在服务之外跑的命令，所以它的身份要钉死；
+  // 否则有人给它加个 remote，规则就悄悄失效了。
+  const init = findCommand?.("init");
+  const initProblems = [];
+  if (!init) initProblems.push("命令表里没有 init");
+  else {
+    if (init.localOnly !== true) initProblems.push("init 必须 localOnly: true");
+    if (init.http != null) initProblems.push("init 不能有 http 路由（落库之前没有服务可调）");
+    if (init.remote === true) initProblems.push("init 不能 remote");
+    if (init.card != null) initProblems.push("init 不能有卡片按钮");
+  }
+  if (initProblems.length) {
+    bad("parity.commands.init-identity", initProblems.join("；"), "init 是引导命令，在数据库存在之前运行：localOnly + 无路由 + 无卡片");
+  } else {
+    ok("parity.commands.init-identity", "init 仍是引导命令（localOnly、无路由、无按钮）");
+  }
+
+  // 重名不会撞路由（localOnly 命令没有路由），但 findCommand 会静默取第一条。
+  const names = COMMANDS.map((c) => c.name);
+  const dups = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+  if (dups.length) {
+    bad("parity.commands.name-unique", `命令名重复：${dups.join(", ")}`, "命令名是卡片按钮与审计表的主键；重名会让其中一条永远调不到");
+  } else {
+    ok("parity.commands.name-unique", `${names.length} 条命令名唯一`);
+  }
+
+  // 路径里的 :param 必须在 args 里声明，否则 handler 永远拿到 undefined。
+  const undeclared = [];
+  for (const route of routesApi.buildRoutes()) {
+    const cmd = findCommand?.(route.command);
+    if (!cmd) continue;
+    for (const name of route.names) {
+      if (!(name in (cmd.args ?? {}))) undeclared.push(`${route.command}: :${name} 不在 args 里`);
+    }
+  }
+  if (undeclared.length) {
+    bad("parity.route.params-declared", undeclared.join("；"), "http.path 里的每个 :param 都要在 args 里声明类型，否则参数校验会漏掉它");
+  } else {
+    ok("parity.route.params-declared", "每条路由的 :param 都能在 args 里找到");
+  }
+
+  // GET 必须是只读的：浏览器预取、爬虫、历史记录都可能 GET 一次。
+  const badGets = [];
+  for (const cmd of COMMANDS) {
+    if (cmd.http?.method !== "GET") continue;
+    if (cmd.audit === "always") badGets.push(`${cmd.name} 是 GET 但 audit=always（会写审计表）`);
+    if (typeof cmd.idempotent === "function") badGets.push(`${cmd.name} 是 GET 但有幂等键（说明它本来是写操作）`);
+  }
+  if (badGets.length) {
+    bad("parity.http.get-readonly", badGets.join("；"), "写操作必须用 POST：GET 可能被预取或重放，不该产生副作用");
+  } else {
+    ok("parity.http.get-readonly", "所有 GET 命令都是只读的（无审计写入、无幂等键）");
+  }
+
+  // 卡片按钮 24h 过期 + 幂等 + 审计，是「手机点一下就改状态」的安全底线。
+  const kit = [];
+  for (const cmd of COMMANDS) {
+    if (cmd.card == null) continue;
+    if (cmd.http?.method !== "POST") continue; // 只读按钮（看数据）不要求幂等
+    if (typeof cmd.idempotent !== "function") kit.push(`${cmd.name} 缺 idempotent`);
+    if (!Number.isFinite(cmd.ttlMs)) kit.push(`${cmd.name} 缺 ttlMs`);
+    if (cmd.audit !== "always") kit.push(`${cmd.name} 缺 audit: "always"`);
+  }
+  if (kit.length) {
+    bad("parity.cards.remote-kit", kit.join("；"), "会改状态的卡片按钮必须有幂等键、24h 过期、全量审计，否则重复点击或旧卡片会做两次");
+  } else {
+    const count = COMMANDS.filter((c) => c.card && c.http?.method === "POST").length;
+    ok("parity.cards.remote-kit", `${count} 个写操作按钮都带幂等键 / ttl / 审计`);
+  }
+
+  const buttons = routesApi.cardButtons();
+  const labels = buttons.map((b) => b.label);
+  const dupLabels = [...new Set(labels.filter((l, i) => labels.indexOf(l) !== i))];
+  if (labels.some((l) => !l || !String(l).trim())) {
+    bad("parity.cards.label-unique", "存在空的卡片按钮 label", "按钮上必须有一句人能看懂的话");
+  } else if (dupLabels.length) {
+    bad("parity.cards.label-unique", `卡片按钮 label 重复：${dupLabels.join(", ")}`, "同一张卡片出现两个「重试」时，用户点错、日志也分不清");
+  } else {
+    ok("parity.cards.label-unique", `${labels.length} 个按钮 label 唯一且非空`);
+  }
+
+  // CLI 完整律：每条能力都必须先在 vk 上存在（有 usage、有 summary）。
+  const incomplete = COMMANDS.filter((c) => !c.summary?.trim() || !c.cli?.usage?.trim()).map((c) => c.name);
+  if (incomplete.length) {
+    bad("parity.cli.projection-fields", `这些命令缺 summary 或 cli.usage：${incomplete.join(", ")}`, "CLI 完整律：任何能力必须先在 vk 上存在，help 文案也算能力的一部分");
+  } else if (cliRows) {
+    const localDiffs = COMMANDS.filter((c) => {
+      const row = cliRows.find((r) => r.name === c.name);
+      return row && Boolean(row.localOnly) !== (c.localOnly === true);
+    }).map((c) => c.name);
+    if (localDiffs.length) {
+      bad("parity.cli.projection-fields", `localOnly 在注册表与 CLI 输出里不一致：${localDiffs.join(", ")}`, "CLI 输出要反映 localOnly，Web 与卡片才能判断这条命令能不能远程触发");
+    } else {
+      ok("parity.cli.projection-fields", `${COMMANDS.length} 条命令都有 summary / usage，localOnly 也投影一致`);
+    }
+  } else {
+    skip("parity.cli.projection-fields", "上游 parity.cli.commands 失败");
   }
 }
 
