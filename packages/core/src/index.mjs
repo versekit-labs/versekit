@@ -25,6 +25,7 @@ export function paths() {
     state,
     configFile: join(config, "config.json"),
     db: join(state, "vk.db"),
+    socket: join(state, "vk.sock"),
     log: join(state, "vk.log"),
     browserProfile: join(state, "browser"),
     credentials: join(config, "credentials"),
@@ -112,6 +113,7 @@ export function migrate() {
 const COLUMNS = {
   run: { lane: "TEXT" },
   publish: {},
+  account: { last_checked_at: "INTEGER" },
 };
 
 function addMissingColumns(conn) {
@@ -188,7 +190,7 @@ export function emit({ type, severity = "info", publishId = null, payload = null
  * code path fails loudly instead of writing a state nobody handles.
  */
 export const PUBLISH_TRANSITIONS = {
-  queued: ["auto_running", "draft_running", "failed", "canceled", "blocked"],
+  queued: ["auto_running", "draft_running", "notify_pending", "failed", "canceled", "blocked"],
   auto_running: ["published", "published_limited", "draft_running", "notify_pending", "failed", "blocked", "canceled"],
   draft_running: ["draft_pending", "notify_pending", "failed", "blocked", "canceled"],
   draft_pending: ["published", "notify_pending", "failed", "canceled"],

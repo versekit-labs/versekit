@@ -55,7 +55,6 @@ export const requiredEvents = () =>
  */
 const TRANSITION_EVENT = {
   published: "publish.published",
-  published_limited: "publish.needs_followup",
   notify_pending: "publish.needs_human",
   draft_pending: "publish.degraded",
   failed: "publish.failed",

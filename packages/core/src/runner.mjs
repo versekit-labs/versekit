@@ -9,6 +9,7 @@
 //     the fastest way to get rate-limited or flagged
 
 import { enqueue, emit, open, newId } from "./index.mjs";
+import { ERROR_CODES } from "./errors.mjs";
 
 export const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
 export const MAX_ATTEMPTS = 3;
@@ -21,6 +22,7 @@ export function createRunner({
   leaseMs = 5 * 60_000,
   uploadLeaseMs = 30 * 60_000,
   heartbeatMs = 30_000,
+  onRunFailed = null,
   log = () => {},
 } = {}) {
   const db = () => open();
@@ -88,23 +90,48 @@ export function createRunner({
     return beatTimer;
   }
 
+  function giveUp(run, error, message, attempts) {
+    db().prepare("UPDATE run SET state='failed', attempts=?, lease_until=NULL, last_error=? WHERE id=?").run(attempts, message.slice(0, 500), run.id);
+    emit({
+      type: "run.failed",
+      severity: "critical",
+      payload: { runId: run.id, kind: run.kind, target: run.target_id, attempts, error: message },
+      dedupeKey: `run:${run.id}:failed`,
+    });
+    log(`[runner] ✗ ${run.kind} ${run.target_id}: ${message}`);
+    // The queue is transport; the publish row still has to end somewhere a person can see.
+    try {
+      onRunFailed?.(run, error);
+    } catch (hookError) {
+      log(`[runner] onRunFailed 出错 ${run.id}: ${hookError.message}`);
+    }
+  }
+
   function finish(run, error) {
     if (!error) {
       db().prepare("UPDATE run SET state='done', lease_until=NULL, last_error=NULL WHERE id=?").run(run.id);
       log(`[runner] ✓ ${run.kind} ${run.target_id}`);
       return;
     }
-    const attempts = run.attempts + 1;
+    const policy = ERROR_CODES[error?.code] ?? null;
     const message = error instanceof Error ? error.message : String(error);
-    if (attempts >= MAX_ATTEMPTS) {
-      db().prepare("UPDATE run SET state='failed', attempts=?, lease_until=NULL, last_error=? WHERE id=?").run(attempts, message.slice(0, 500), run.id);
-      emit({
-        type: "run.failed",
-        severity: "critical",
-        payload: { runId: run.id, kind: run.kind, target: run.target_id, attempts, error: message },
-        dedupeKey: `run:${run.id}:failed`,
-      });
-      log(`[runner] ✗ ${run.kind} ${run.target_id}: ${message}`);
+
+    // Quota is not the publish's fault: wait it out without spending the retry budget, otherwise
+    // three rate limits in one evening would silently turn a publish into a failure.
+    if (policy && policy.countsAttempt === false) {
+      const delay = policy.delayMs ?? BACKOFF_MS[0];
+      db()
+        .prepare("UPDATE run SET state='queued', lease_until=NULL, last_error=?, run_after=? WHERE id=?")
+        .run(message.slice(0, 500), now() + delay, run.id);
+      log(`[runner] ⏸ ${run.kind} ${run.target_id} 配额限制，${Math.round(delay / 1000)}s 后再试（不计次数）`);
+      return;
+    }
+
+    const attempts = run.attempts + 1;
+    // A coded non-retryable failure (auth, asset_invalid …) is terminal on the first try. Retrying
+    // it would just make the person wait three backoff rounds for the same answer.
+    if ((policy && !policy.retryable) || attempts >= MAX_ATTEMPTS) {
+      giveUp(run, error, message, attempts);
       return;
     }
     const delay = BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];

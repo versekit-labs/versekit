@@ -122,7 +122,8 @@ test("every event declares a valid severity", () => {
 
 test("publish transitions map to business events, not to invented type names", () => {
   assert.equal(eventForTransition("published").type, "publish.published");
-  assert.equal(eventForTransition("published_limited").type, "publish.needs_followup");
+  // limited 的卡片由 followup 逐条发，迁移本身只留 trace，避免同一条发布推两次
+  assert.equal(eventForTransition("published_limited").type, "publish.state_changed");
   assert.equal(eventForTransition("notify_pending").type, "publish.needs_human");
   assert.equal(eventForTransition("draft_pending").type, "publish.degraded");
   assert.equal(eventForTransition("failed").type, "publish.failed");

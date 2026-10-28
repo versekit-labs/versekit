@@ -466,6 +466,22 @@ async function publish({ publishId, dryRun = false } = {}) {
     const handle = normaliseHandle(row.handle);
     const steps = [];
 
+    // dry-run 是契约测试与「先看一眼」的入口：它必须零对外动作，所以放在开浏览器之前。
+    // 一旦这里开始 goto/upload，dry-run 就变成了「假装试跑其实真跑」。
+    if (dryRun) {
+      return {
+        dryRun: true,
+        target: {
+          visibility: plan.visibility,
+          captionPreview: [...plan.caption].slice(0, 160).join(""),
+          tags: plan.tags,
+        },
+        asset,
+        cover,
+        steps: ["打开 TikTok Studio 上传页", "设置 1600x1000 视口", "上传视频", "填写描述与话题", "设置封面", "设置可见性", "打开 AI 生成内容声明"],
+      };
+    }
+
     tab = await openAccount({ accountId });
     await uiStep("打开 TikTok Studio 上传页", () => tab.goto(UPLOAD_URL));
     steps.push("打开 TikTok Studio 上传页");
@@ -578,19 +594,6 @@ async function publish({ publishId, dryRun = false } = {}) {
       }
     }
     steps.push("打开 AI 生成内容声明");
-
-    if (dryRun) {
-      const shot = await capture(tab, accountId, "tiktok-dryrun");
-      return {
-        dryRun: true,
-        target: {
-          visibility: plan.visibility,
-          captionPreview: [...plan.caption].slice(0, 160).join(""),
-        },
-        steps,
-        ...(shot ? { evidence: shot } : {}),
-      };
-    }
 
     await clickOn(tab, findButton, T.post, "发布");
 

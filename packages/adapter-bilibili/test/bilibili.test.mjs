@@ -1,20 +1,23 @@
 // B站适配器测试：不碰真网络、不碰真 biliup —— 用一个假的 biliup 脚本 + 一个假的 archives 接口。
-// 验的是契约，不是平台：状态迁移、followup 落库、auth 失败要降级到 blocked 而不是 failed。
+//
+// 这里验的是**契约**，不是平台：适配器只返回结果或抛 AdapterError，绝不自己写 publish 状态、
+// 快照、事件。落库是 core 的事（packages/core/src/publish-flow.mjs），所以断言的是「什么都没写」。
 import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-bili-"));
 
 const core = await import("../../core/src/index.mjs");
+const { AdapterError } = await import("../../core/src/errors.mjs");
 const adapter = (await import("../src/index.mjs")).default;
 
 const db = () => core.open();
 let seq = 0;
 
-/** 一个只会照剧本说话的 biliup：STYLE=cookie 决定是成功还是登录失效。 */
+/** 一个只会照剧本说话的 biliup：STYLE 决定是成功、登录失效还是拿不到 BV 号。 */
 function fakeBiliup() {
   const dir = mkdtempSync(join(tmpdir(), "vk-biliup-"));
   const bin = join(dir, "biliup");
@@ -67,37 +70,38 @@ beforeEach(() => {
   process.env.STYLE = "ok";
 });
 
-test("publish 把稿件发出去：拿回 BV 号、进 published、排一次采集", async () => {
-  const { publishId, accountId } = seed();
+test("publish 返回 BV 号与 published，但自己不落库", async () => {
+  const { publishId } = seed();
   const res = await adapter.publish({ publishId });
+
   assert.match(res.id, /^BV[0-9A-Za-z]{10}$/);
   assert.equal(res.state, "published");
+  assert.match(res.url, /bilibili\.com\/video\//);
+  assert.equal(res.visibility, "public");
 
-  const row = db().prepare("SELECT state, external_id, external_url FROM publish WHERE id=?").get(publishId);
-  assert.equal(row.state, "published");
-  assert.equal(row.external_id, res.id);
-  assert.match(row.external_url, /bilibili\.com\/video\//);
-
-  const run = db().prepare("SELECT kind, lane, state FROM run WHERE target_id=?").get(publishId);
-  assert.equal(run.kind, "collect");
-  assert.equal(run.lane, accountId);
+  const row = db().prepare("SELECT state, external_id FROM publish WHERE id=?").get(publishId);
+  assert.equal(row.state, "queued", "状态迁移必须由 core 做");
+  assert.equal(row.external_id, null);
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM run WHERE target_id=?").get(publishId).n, 0, "排采集也是 core 的事");
 });
 
-test("publish 生成三条 followup：工厂里这些只是 notes 字符串，这里必须可追踪", async () => {
+test("publish 把平台要求补做的事作为 followup 返回，而不是写库", async () => {
   const { publishId } = seed();
-  await adapter.publish({ publishId });
-  const kinds = db().prepare("SELECT kind FROM followup WHERE publish_id=? ORDER BY kind").all(publishId).map((r) => r.kind);
+  const res = await adapter.publish({ publishId });
+  const kinds = res.followups.map((f) => f.kind).sort();
   assert.deepEqual(kinds, ["declare_ai_generated", "upload_captions"]);
-  const events = db().prepare("SELECT COUNT(*) n FROM event WHERE type='publish.needs_followup' AND publish_id=?").get(publishId);
-  assert.equal(events.n, 2);
+  assert.equal(res.followups.find((f) => f.kind === "upload_captions").verify, "captions");
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM followup").get().n, 0);
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM event").get().n, 0);
 });
 
-test("合集是可选 followup：配置了才生成", async () => {
+test("合集是可选 followup：配置了才返回，并带核实方式", async () => {
   const { publishId } = seed();
   db().prepare("UPDATE publish SET overrides_json=? WHERE id=?").run(JSON.stringify({ collection: "出海合规" }), publishId);
-  await adapter.publish({ publishId });
-  const kinds = db().prepare("SELECT kind FROM followup WHERE publish_id=?").all(publishId).map((r) => r.kind);
-  assert.ok(kinds.includes("add_to_collection"));
+  const res = await adapter.publish({ publishId });
+  const collection = res.followups.find((f) => f.kind === "add_to_collection");
+  assert.ok(collection);
+  assert.equal(collection.verify, "collection");
 });
 
 test("延时发布不足 4 小时就不传 --dtime（平台怪癖归适配器）", async () => {
@@ -109,6 +113,13 @@ test("延时发布不足 4 小时就不传 --dtime（平台怪癖归适配器）
   assert.ok(b.args.includes("--dtime"));
 });
 
+test("dry-run 不触碰平台状态，也不调用 biliup", async () => {
+  const { publishId } = seed();
+  const res = await adapter.publish({ publishId, dryRun: true });
+  assert.equal(res.dryRun, true);
+  assert.equal(db().prepare("SELECT state FROM publish WHERE id=?").get(publishId).state, "queued");
+});
+
 test("输出里没有 BV 号时回退到 biliup list 找", async () => {
   process.env.STYLE = "nobv";
   const { publishId } = seed({ title: "固定标题" });
@@ -116,21 +127,25 @@ test("输出里没有 BV 号时回退到 biliup list 找", async () => {
   assert.equal(res.id, "BV1xx411c7mD");
 });
 
-test("登录失效 → blocked + 账号置 expired + 事件，而不是 failed", async () => {
+test("登录失效抛 auth，交给 core 去 block 和过期账号", async () => {
   process.env.STYLE = "auth";
-  const { publishId, accountId } = seed();
-  await assert.rejects(() => adapter.publish({ publishId }));
-  assert.equal(db().prepare("SELECT state FROM publish WHERE id=?").get(publishId).state, "blocked");
-  assert.equal(db().prepare("SELECT state FROM account WHERE id=?").get(accountId).state, "expired");
-  assert.ok(db().prepare("SELECT 1 FROM event WHERE type='account.expired'").get());
+  const { publishId } = seed();
+  await assert.rejects(
+    () => adapter.publish({ publishId }),
+    (err) => err instanceof AdapterError && err.code === "auth",
+  );
+  assert.equal(db().prepare("SELECT state FROM publish WHERE id=?").get(publishId).state, "queued");
 });
 
 test("没有凭证时立刻报人话，不去调 biliup", async () => {
   const { publishId } = seed({ credential: false });
-  await assert.rejects(() => adapter.publish({ publishId }), /没有凭证|登录文件不存在/);
+  await assert.rejects(
+    () => adapter.publish({ publishId }),
+    (err) => err instanceof AdapterError && err.code === "auth",
+  );
 });
 
-test("collect 把稿件指标写成快照，来源记 intercept", async () => {
+test("collect 返回指标与来源，不写快照", async () => {
   const { publishId } = seed();
   db().prepare("UPDATE publish SET state='published', external_id='BV1yy411c7mF' WHERE id=?").run(publishId);
 
@@ -141,28 +156,43 @@ test("collect 把稿件指标写成快照，来源记 intercept", async () => {
       data: { arc_audits: [{ Archive: { bvid: "BV1yy411c7mF" }, stat: { view: 1234, like: 56, favorite: 7, coin: 8, share: 9, reply: 10 } }] },
     }),
   });
+  let res;
   try {
-    const res = await adapter.collect({ publishId });
-    assert.deepEqual(res.metrics, { play: 1234, like: 56, fav: 7, coin: 8, share: 9, comment: 10 });
+    res = await adapter.collect({ publishId });
   } finally {
     globalThis.fetch = realFetch;
   }
 
-  const snap = db().prepare("SELECT source, status, metrics_json FROM snapshot WHERE publish_id=?").get(publishId);
-  assert.equal(snap.source, "intercept");
-  assert.equal(snap.status, "ok");
-  assert.equal(JSON.parse(snap.metrics_json).play, 1234);
+  assert.deepEqual(res.metrics, { play: 1234, like: 56, fav: 7, coin: 8, share: 9, comment: 10 });
+  assert.equal(res.source, "intercept");
+  assert.equal(res.status, "ok");
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM snapshot").get().n, 0, "快照由 core 落库");
 });
 
-test("collect 遇到登录失效抛错并留下 degraded 事件", async () => {
+test("collect 遇到登录失效抛 auth，不自己发事件", async () => {
   const { publishId } = seed();
   db().prepare("UPDATE publish SET state='published', external_id='BV1yy411c7mF' WHERE id=?").run(publishId);
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ json: async () => ({ code: -101, message: "账号未登录" }) });
   try {
-    await assert.rejects(() => adapter.collect({ publishId }), /-101/);
+    await assert.rejects(
+      () => adapter.collect({ publishId }),
+      (err) => err instanceof AdapterError && err.code === "auth",
+    );
   } finally {
     globalThis.fetch = realFetch;
   }
-  assert.ok(db().prepare("SELECT 1 FROM event WHERE type='collect.degraded'").get());
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM event").get().n, 0);
+});
+
+test("同一账号里找不到稿件时，错误里带 external_id 便于排障", async () => {
+  const { publishId } = seed();
+  db().prepare("UPDATE publish SET state='published', external_id='BV_not_there' WHERE id=?").run(publishId);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ json: async () => ({ code: 0, data: { arc_audits: [] } }) });
+  try {
+    await assert.rejects(() => adapter.collect({ publishId }), /BV_not_there/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

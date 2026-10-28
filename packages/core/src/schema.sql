@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS account (
   is_manual      INTEGER NOT NULL DEFAULT 0,
   expires_at     INTEGER,
   last_ok_at     INTEGER,
+  last_checked_at INTEGER,          -- 最近一次主动探测（成功失败都算），调度靠它
   created_at     INTEGER NOT NULL,
   UNIQUE (platform, handle)
 );

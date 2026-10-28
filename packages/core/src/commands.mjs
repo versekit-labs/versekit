@@ -8,7 +8,7 @@
 //   name       command id, stable — it is what a card button sends and what the audit row records
 //   args       shape of the payload; the CLI and the HTTP layer both validate against it
 //   remote     may be triggered by a card button (i.e. without the person sitting at the machine)
-//   localOnly  explicitly cannot be triggered remotely; required when `http` is null
+//   localOnly  explicitly cannot be triggered from a card (may still have a local HTTP route)
 //   http       { method, path } — null only when localOnly is true
 //   card       button projection; only allowed on remote commands
 //   audit      "always" for anything remote, "never" for read-only local queries
@@ -50,9 +50,9 @@ export const COMMANDS = [
     summary: "加一个账号（需要在电脑上扫码）",
     remote: false,
     localOnly: true,
-    args: { platform: "string", name: "string", handle: "string?" },
-    http: null,
-    cli: { usage: "vk account add <platform> --name <name>" },
+    args: { platform: "string", name: "string", handle: "string?", credentialRef: "string?" },
+    http: { method: "POST", path: "/api/accounts" },
+    cli: { usage: "vk account add <platform> --name <name> [--handle @x] [--credential <cookies.json>]" },
     card: null,
     audit: "never",
   },
@@ -91,8 +91,8 @@ export const COMMANDS = [
     summary: "创建发布（一条内容 → 多平台）",
     remote: false,
     localOnly: true,
-    args: { asset: "string", to: "string[]", schedule: "number?", visibility: "string?", dryRun: "boolean?" },
-    http: null,
+    args: { asset: "string", to: "string[]", schedule: "number?", visibility: "string?", dryRun: "boolean?", title: "string?" },
+    http: { method: "POST", path: "/api/publishes" },
     cli: { usage: "vk publish <asset> --to <platforms> [--schedule] [--visibility] [--dry-run]" },
     card: null,
     audit: "never",
@@ -159,7 +159,7 @@ export const COMMANDS = [
     remote: false,
     localOnly: true,
     args: {},
-    http: null,
+    http: { method: "POST", path: "/api/channels/feishu/bind" },
     cli: { usage: "vk channel bind feishu" },
     card: null,
     audit: "never",

@@ -5,13 +5,19 @@ import assert from "node:assert/strict";
 import { COMMANDS, findCommand, parseArgs } from "../src/commands.mjs";
 import { buildRoutes, matchRoute, cardButtons, ROUTES } from "../src/routes.mjs";
 
-test("every command is reachable: either it has a route, or it says why not", () => {
+test("every command except bootstrap is reachable over HTTP", () => {
   for (const cmd of COMMANDS) {
-    if (cmd.http == null) {
-      assert.equal(cmd.localOnly, true, `${cmd.name} 没有 http 路由，也没标 localOnly`);
-    } else {
-      assert.equal(cmd.localOnly, undefined, `${cmd.name} 既有路由又标了 localOnly`);
+    if (cmd.name === "init") {
+      assert.equal(cmd.http, null, "init 是引导命令，落库之前没有服务可调");
+      continue;
     }
+    assert.ok(cmd.http, `${cmd.name} 没有 http 路由，Web 与 CLI 会各写一套`);
+  }
+});
+
+test("a local-only command never grows a card button", () => {
+  for (const cmd of COMMANDS) {
+    if (cmd.localOnly) assert.equal(cmd.card, null, `${cmd.name} 标了 localOnly 却有卡片按钮`);
   }
 });
 
