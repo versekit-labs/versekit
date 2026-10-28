@@ -44,12 +44,18 @@ export function buildRoutes(commands = COMMANDS) {
 
 export const ROUTES = buildRoutes();
 
-/** Returns `{command, params}` or null. Used by the daemon in Round 1. */
+/**
+ * Returns `{command, params}` or null. Used by the daemon in Round 1.
+ *
+ * Callers hand over the raw request target (`/api/stats/works?range=7d`), so the query string is
+ * stripped here — once, in the single matcher — instead of every transport growing its own copy.
+ */
 export function matchRoute(method, pathname, routes = ROUTES) {
   const verb = String(method).toUpperCase();
+  const clean = String(pathname).split("?")[0].split("#")[0];
   for (const route of routes) {
     if (route.method !== verb) continue;
-    const m = route.regex.exec(pathname);
+    const m = route.regex.exec(clean);
     if (!m) continue;
     const params = Object.fromEntries(route.names.map((name, i) => [name, decodeURIComponent(m[i + 1])]));
     return { command: route.command, params };

@@ -57,6 +57,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "account.list",
+    summary: "列出所有账号与登录状态",
+    remote: true,
+    args: {},
+    http: { method: "GET", path: "/api/accounts" },
+    cli: { usage: "vk account list" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.reauth",
     summary: "重新登录某个账号（远程只能发起，扫码必须在电脑前完成）",
     remote: true,
