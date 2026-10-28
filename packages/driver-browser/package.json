@@ -1,0 +1,9 @@
+{
+  "name": "@fangyouxi/driver-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome CDP 驱动：每账号 profile/端口、真实鼠标、shadow DOM、响应拦截",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}
