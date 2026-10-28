@@ -45,14 +45,44 @@ export function ensureDirs() {
   return p;
 }
 
-let db = null;
+// One process, one home. Connections are cached per database path so a test (or a daemon test
+// file) can point VK_HOME at a fresh directory without sharing state between cases.
+let cache = { path: null, write: null, read: null };
 
+/**
+ * Open the database.
+ *
+ * `readonly: true` must never create a file: `vk doctor` runs before `vk init` and a doctor run
+ * that leaves an empty `vk.db` behind would make `isInitialised()` lie forever after. So a
+ * read-only open checks the file first and otherwise refuses with the sentence the person needs.
+ */
 export function open({ readonly = false } = {}) {
-  if (db) return db;
   const p = paths();
-  mkdirSync(dirname(p.db), { recursive: true, mode: 0o700 });
-  db = new DatabaseSync(p.db, { readOnly: readonly });
-  return db;
+  if (cache.path !== p.db) cache = { path: p.db, write: null, read: null };
+  if (!readonly) {
+    if (!cache.write) {
+      mkdirSync(dirname(p.db), { recursive: true, mode: 0o700 });
+      cache.write = new DatabaseSync(p.db);
+    }
+    return cache.write;
+  }
+  if (cache.write) return cache.write;
+  if (!existsSync(p.db)) throw new Error("还没有初始化：先运行 vk init");
+  if (!cache.read) cache.read = new DatabaseSync(p.db, { readOnly: true });
+  return cache.read;
+}
+
+/** Close cached connections (used by tests and by a clean daemon shutdown). */
+export function close() {
+  for (const key of ["write", "read"]) {
+    try {
+      cache[key]?.close();
+    } catch {
+      /* already closed */
+    }
+    cache[key] = null;
+  }
+  cache.path = null;
 }
 
 export function migrate() {
@@ -94,11 +124,26 @@ function addMissingColumns(conn) {
 }
 
 export function getMeta(key) {
-  return open().prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value ?? null;
+  // A database file can exist without the schema (an interrupted init, a stray empty file). Ask
+  // the schema first so this never creates a table, never throws `no such table`, and never turns
+  // "not initialised" into "initialised" by accident.
+  if (!isInitialised()) return null;
+  return open({ readonly: true }).prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value ?? null;
 }
 
+/**
+ * "Initialised" means the schema is there, not merely that a file exists. The old check let one
+ * `vk doctor` (which used to open a writable connection) flip this to true on an empty database.
+ */
 export function isInitialised() {
-  return existsSync(paths().db);
+  const p = paths();
+  if (!existsSync(p.db)) return false;
+  try {
+    const conn = open({ readonly: true });
+    return Boolean(conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get());
+  } catch {
+    return false;
+  }
 }
 
 // ------------------------------------------------------------------ ids
