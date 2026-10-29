@@ -773,6 +773,17 @@ async function newTab(instance) {
     /** 导航并等 load；返回时页面已经稳定，而不是「navigate 发出去就算完」。 */
     async goto(url, { timeout = 30e3 } = {}) {
       if (typeof url !== "string" || !url.trim()) throw new TypeError("goto 需要 URL 字符串");
+
+      // 只改 hash 的「导航」不会触发 load，等 load 会白等到超时。SPA 里这是常态。
+      const [base, hash] = url.split("#");
+      if (hash != null) {
+        const current = await tab.eval("location.href").catch(() => "");
+        if (current.split("#")[0] === base) {
+          await tab.eval(`location.hash = ${JSON.stringify(`#${hash}`)}`);
+          return;
+        }
+      }
+
       await send("Page.enable");
       const loaded = waitEvent("Page.loadEventFired", { timeout, what: `页面加载（${url}）` });
       loaded.catch(() => {}); // 下面若因 errorText 提前抛出，别留下未处理的 rejection

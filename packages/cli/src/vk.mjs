@@ -7,14 +7,15 @@
 // one writer, many faces.
 
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { spawn } from "node:child_process";
+import { basename, extname, join } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot } from "../../core/src/store.mjs";
-import { browserReady, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { statusSnapshot, getAccount } from "../../core/src/store.mjs";
+import { browserReady, openAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
@@ -93,7 +94,7 @@ function cmdInit() {
     db: p.db,
     config: p.configFile,
     schema_version: getMeta("schema_version"),
-    next: ["vk doctor", "vk account add tiktok --name 主号", "vk channel bind feishu"],
+    next: ["vk serve --open（打开本地控制台）", "vk account add bilibili --name 主号 --credential <cookies.json>", "vk doctor --human"],
   };
   if (human) {
     console.log(line("已初始化", p.state));
@@ -198,21 +199,69 @@ async function cmdDoctor() {
  * Two kinds of handlers share the daemon: the queue runner takes `run` rows (publish/collect),
  * the dispatcher takes commands (publish.retry …). Names never collide — the dot is the separator.
  */
+const LOGIN_URL = {
+  tiktok: "https://www.tiktok.com/login",
+  xiaohongshu: "https://creator.xiaohongshu.com/login",
+  douyin: "https://creator.douyin.com/",
+  youtube: "https://studio.youtube.com/",
+};
+
 function daemonHandlers(adapters, log) {
+  const core = createCoreHandlers({ adapters, log });
   return {
     ...buildHandlers(adapters, { log }),
-    ...createCoreHandlers({ adapters, log }),
+    ...core,
     "channel.test": () => ({ bound: false, next: "vk channel bind feishu" }),
+
+    /**
+     * 「重新授权」要有实际动作：在这个账号自己的 Chrome profile 里打开登录页，
+     * 让人扫码。标签页故意不关——关掉就没法扫了。B站走 biliup CLI，没有网页可开，
+     * 就沿用核心那句能照做的指引。
+     */
+    "account.reauth": async ({ accountId }) => {
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+      const url = LOGIN_URL[account.platform];
+      if (!url) return core["account.reauth"]({ accountId });
+      await openAccount({ accountId, url });
+      log(`[reauth] 打开 ${account.platform} 登录页（账号 ${accountId}）`);
+      return {
+        accountId,
+        started: true,
+        next: `已在 ${account.platform} 的浏览器里打开登录页，扫码/登录完成后回来点刷新`,
+      };
+    },
   };
+}
+
+/** 本机打开控制台；打不开也不算失败，URL 已经打印出来了。 */
+function openBrowser(url) {
+  try {
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+    spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    /* 没有图形界面也能用：URL 在输出里 */
+  }
 }
 
 async function cmdServe() {
   if (!guard()) return;
 
   if (has("--detach")) {
-    const result = await ensureDaemon();
-    const data = { ok: true, started: result.started, socket: paths().socket };
-    if (human) console.log(result.started ? "守护进程已启动" : "守护进程已经在跑");
+    const wanted = Number(val("--port") ?? 8787);
+    const result = await ensureDaemon({ port: wanted });
+    // 端口以守护进程自己写下的为准：它可能比我们先起、跑在别的端口上。
+    let running = wanted;
+    try {
+      running = JSON.parse(readFileSync(join(paths().state, "daemon.json"), "utf8")).port ?? wanted;
+    } catch {
+      /* 老版本没有这个文件 */
+    }
+    const url = `http://127.0.0.1:${running}`;
+    if (has("--open")) openBrowser(url);
+    const data = { ok: true, started: result.started, socket: paths().socket, web: url };
+    if (human) console.log(`${result.started ? "守护进程已启动" : "守护进程已经在跑"}：${url}`);
     else out(data);
     return data;
   }
@@ -222,7 +271,9 @@ async function cmdServe() {
   const handlers = daemonHandlers(adapters, log);
   const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787) });
 
-  log(`versekit 守护进程已启动：http://127.0.0.1:${daemon.port} · socket ${daemon.socketPath}`);
+  const web = `http://127.0.0.1:${daemon.port}`;
+  if (has("--open")) openBrowser(web);
+  log(`versekit 守护进程已启动：${web} · socket ${daemon.socketPath}`);
   log(`适配器 ${adapters.length} 个${adapters.length ? "：" + adapters.map((a) => a.platform).join(", ") : "（尚未安装）"}`);
   for (const e of errors) log(`适配器加载失败 ${e.dir}: ${e.message}`);
 
@@ -305,6 +356,18 @@ async function cmdPublish() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
 
+  if (sub === "list") {
+    const data = await send("publish.list", {
+      ...(val("--state") ? { state: val("--state") } : {}),
+      ...(val("--platform") ? { platform: val("--platform") } : {}),
+    });
+    if (human) {
+      for (const r of data.rows) console.log(`${r.id.padEnd(16)}${r.platform.padEnd(10)}${r.state.padEnd(18)}${String(r.title).slice(0, 30)}`);
+      if (!data.rows.length) console.log("还没有发布：vk publish <素材> --to <平台>");
+    } else out(data);
+    return data;
+  }
+
   if (["retry", "release", "confirm"].includes(sub)) {
     const publishId = pos[2];
     if (!publishId) throw new Error(`用法：vk publish ${sub} <publishId>`);
@@ -346,9 +409,47 @@ async function cmdCollect() {
   return data;
 }
 
+async function cmdPlatforms() {
+  const data = await send("platform.list", {});
+  if (human) {
+    for (const p of data.platforms) console.log(`${p.platform.padEnd(12)}发布=${p.publish.padEnd(5)}采集=${p.collect.padEnd(5)}${p.ready ? `  不可用：${p.ready}` : "  可用"}`);
+  } else out(data);
+  return data;
+}
+
+async function cmdRuns() {
+  const data = await send("run.list", { ...(val("--state") ? { state: val("--state") } : {}) });
+  if (human) {
+    for (const r of data.rows) console.log(`${r.kind.padEnd(9)}${String(r.state).padEnd(10)}${String(r.target_id).padEnd(18)}${r.last_error ?? ""}`);
+    if (!data.rows.length) console.log("队列是空的");
+  } else out(data);
+  return data;
+}
+
+async function cmdEvents() {
+  const data = await send("event.list", {
+    ...(val("--since") ? { since: Number(val("--since")) } : {}),
+    ...(val("--limit") ? { limit: Number(val("--limit")) } : {}),
+  });
+  if (human) {
+    for (const e of data.rows) console.log(`${new Date(e.created_at).toLocaleString()}  ${e.type.padEnd(24)}${e.severity}`);
+  } else out(data);
+  return data;
+}
+
 async function cmdStats() {
   const sub = pos[1];
-  if (sub !== "works") throw new Error("用法：vk stats works [--range 7d] [--publish <id>]");
+  if (sub === "series") {
+    const publishId = pos[2] ?? val("--publish");
+    if (!publishId) throw new Error("用法：vk stats series <publishId>");
+    const data = await send("stats.series", { publishId });
+    if (human) {
+      if (!data.points.length) console.log("还没有快照：vk collect --now");
+      for (const p of data.points) console.log(`${new Date(p.at).toLocaleString()}  ${p.status.padEnd(8)}${JSON.stringify(p.metrics)}`);
+    } else out(data);
+    return data;
+  }
+  if (sub !== "works") throw new Error("用法：vk stats works|series …");
   const data = await send("stats.works", { range: val("--range") ?? "all", ...(val("--publish") ? { publishId: val("--publish") } : {}) });
   if (human) {
     const rows = data.rows.filter((r) => r.latest);
@@ -367,13 +468,15 @@ function usage() {
       "  vk init",
       "  vk now [--human]",
       "  vk doctor [--human]",
-      "  vk serve [--detach] [--port 8787]",
+      "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
       "  vk commands [--human]",
       "  vk account list | add <platform> --name <名字> | mode <id> auto|manual | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk collect [--now] [--platform <p>]",
-      "  vk stats works [--range 7d]",
+      "  vk stats works [--range 7d] | series <publishId>",
+      "  vk publish list [--state failed] [--platform tiktok]",
+      "  vk platforms | runs [--state failed] | events [--since <ms>]",
       "  vk --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
@@ -397,6 +500,9 @@ try {
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();
   else if (cmd === "stats") await cmdStats();
+  else if (cmd === "platforms") await cmdPlatforms();
+  else if (cmd === "runs") await cmdRuns();
+  else if (cmd === "events") await cmdEvents();
   else {
     console.error(`未知命令：${cmd}\n`);
     usage();

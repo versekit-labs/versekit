@@ -9,7 +9,9 @@
 // that looks like business logic belongs in handlers.mjs, not here.
 
 import { createServer } from "node:http";
-import { existsSync, unlinkSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { paths, newId, open } from "./index.mjs";
 import { matchRoute, ROUTES } from "./routes.mjs";
 import { findCommand, parseArgs } from "./commands.mjs";
@@ -18,6 +20,89 @@ import { applyTerminalFailure } from "./publish-flow.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 
 const MAX_BODY = 1 << 20;
+const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
+
+const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "public");
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
+
+/** 静态页只服务 web/public 里的文件；任何越界路径都当 404，不做「聪明」的路径修正。 */
+function staticFile(webRoot, pathname) {
+  const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  if (!rel || rel.includes("\0")) return null;
+  const root = resolve(webRoot);
+  const file = resolve(join(root, rel));
+  if (file !== root && !file.startsWith(root + sep)) return null;
+  if (!existsSync(file) || !statSync(file).isFile()) return null;
+  return file;
+}
+
+function serveStatic(res, file) {
+  res.writeHead(200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  createReadStream(file).pipe(res);
+}
+
+/**
+ * 资产上传：浏览器没法给守护进程一个本机路径，所以文件先落到 state/assets/ 再当素材路径用。
+ * 这是 publish.create 的传输层，不是新能力——CLI 直接用文件路径就等价，所以不进命令表。
+ */
+function receiveAsset(req, res, { assetsDir, log }) {
+  let name = "asset.bin";
+  try {
+    name = decodeURIComponent(String(req.headers["x-vk-filename"] ?? "asset.bin"));
+  } catch {
+    /* 头部坏了就用默认名，下面的清洗会兜住 */
+  }
+  const safe = basename(name).replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(-120) || "asset.bin";
+  mkdirSync(assetsDir, { recursive: true, mode: 0o700 });
+  const target = join(assetsDir, `${Date.now()}-${safe}`);
+
+  let bytes = 0;
+  let failed = null;
+  const out = createWriteStream(target, { mode: 0o600 });
+  req.on("data", (chunk) => {
+    bytes += chunk.length;
+    if (bytes > MAX_ASSET && !failed) {
+      failed = "too_large";
+      req.destroy();
+      out.destroy();
+      try {
+        unlinkSync(target);
+      } catch {
+        /* 已经没了 */
+      }
+    }
+  });
+  req.on("error", () => out.destroy());
+  out.on("error", (err) => {
+    log(`[daemon] 资产写入失败：${err.message}`);
+    if (!res.headersSent) send(res, 500, { ok: false, error: { code: "asset_write_failed", message: err.message } });
+  });
+  out.on("finish", () => {
+    if (failed) return send(res, 413, { ok: false, error: { code: "too_large", message: "素材超过 4GB" } });
+    if (bytes === 0) {
+      try {
+        unlinkSync(target);
+      } catch {
+        /* 忽略 */
+      }
+      return send(res, 400, { ok: false, error: { code: "empty_asset", message: "上传的是空文件" } });
+    }
+    log(`[daemon] 收到素材 ${safe}（${bytes} 字节）`);
+    send(res, 200, { ok: true, path: target, bytes });
+  });
+  req.pipe(out);
+}
 
 const readBody = (req) =>
   new Promise((resolve, reject) => {
@@ -85,11 +170,22 @@ function pathExists(pathname) {
   return ROUTES.some((route) => route.regex.test(pathname));
 }
 
-export function createDispatcher({ handlers, log = () => {} }) {
+export function createDispatcher({ handlers, log = () => {}, webRoot = WEB_ROOT, assetsDir = join(paths().state, "assets") }) {
   return async function dispatch(req, res) {
     const started = Date.now();
     const url = new URL(req.url, "http://127.0.0.1");
     const pathname = url.pathname;
+
+    // 浏览器打开的是本地控制台；/api/* 之外只有静态页。
+    if ((req.method === "GET" || req.method === "HEAD") && !pathname.startsWith("/api/")) {
+      const file = staticFile(webRoot, pathname);
+      if (file) return serveStatic(res, file);
+      return send(res, 404, { ok: false, error: { code: "not_found", message: `没有这个文件：${pathname}` } });
+    }
+    if (req.method === "POST" && pathname === "/api/assets") {
+      return receiveAsset(req, res, { assetsDir, log });
+    }
+
     const hit = matchRoute(req.method, pathname);
 
     if (!hit) {
@@ -147,7 +243,7 @@ function listen(server, options) {
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot } = {}) {
   const runner = createRunner({
     handlers,
     log,
@@ -157,7 +253,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     },
   });
 
-  const dispatch = createDispatcher({ handlers, log });
+  const dispatch = createDispatcher({ handlers, log, ...(webRoot ? { webRoot } : {}) });
   const httpServer = createServer(dispatch);
   const socketServer = createServer(dispatch);
 
@@ -186,6 +282,16 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   }
 
   const { port: boundPort } = httpServer.address();
+
+  // 谁起的守护进程不重要，重要的是别的客户端能问到它监听在哪。端口不写下来的话，
+  // `serve --detach --port 8801` 只能靠猜。
+  const infoFile = join(paths().state, "daemon.json");
+  try {
+    writeFileSync(infoFile, JSON.stringify({ pid: process.pid, port: boundPort, socket: socketPath, started_at: Date.now() }), { mode: 0o600 });
+  } catch {
+    /* 写不下来就退化成「只能用默认端口」 */
+  }
+
   return {
     runner,
     port: boundPort,
@@ -199,9 +305,10 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
         new Promise((r) => httpServer.close(() => r())),
         new Promise((r) => socketServer.close(() => r())),
       ]);
-      if (existsSync(socketPath)) {
+      for (const file of [socketPath, infoFile]) {
+        if (!existsSync(file)) continue;
         try {
-          unlinkSync(socketPath);
+          unlinkSync(file);
         } catch {
           /* best effort */
         }

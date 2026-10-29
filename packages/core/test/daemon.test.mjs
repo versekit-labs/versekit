@@ -2,7 +2,7 @@
 // bad args are 400 not 500, and the unix socket behaves exactly like the loopback port.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
@@ -122,4 +122,48 @@ test("coerceArgs only converts types the command declares", () => {
   assert.deepEqual(out.to, ["tiktok", "bilibili"]);
   assert.equal(out.dryRun, false);
   assert.equal(out.schedule, 1700000000000);
+});
+
+// ---------------------------------------------------------------- 静态页与资产上传
+
+test("本地控制台首页能打开，静态资源带了正确类型", async () => {
+  const index = await fetch(`${base}/`);
+  assert.equal(index.status, 200);
+  assert.match(index.headers.get("content-type"), /text\/html/);
+  assert.match(await index.text(), /versekit/);
+
+  const css = await fetch(`${base}/style.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get("content-type"), /text\/css/);
+
+  const js = await fetch(`${base}/app.js`);
+  assert.equal(js.status, 200);
+  assert.match(js.headers.get("content-type"), /javascript/);
+});
+
+test("静态目录之外的文件一律 404（不许用 .. 读仓库）", async () => {
+  assert.equal((await fetch(`${base}/../package.json`)).status, 404);
+  assert.equal((await fetch(`${base}/%2e%2e/package.json`)).status, 404);
+  assert.equal((await fetch(`${base}/nope.html`)).status, 404);
+});
+
+test("资产上传落到 state/assets，文件名被清洗，内容是原样", async () => {
+  const res = await fetch(`${base}/api/assets`, {
+    method: "POST",
+    headers: { "x-vk-filename": encodeURIComponent("../我的 视频.mp4"), "content-type": "application/octet-stream" },
+    body: Buffer.from("video-bytes"),
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.ok, true);
+  assert.ok(body.path.includes("/assets/"), body.path);
+  assert.ok(!body.path.includes(".."), "文件名里的 .. 必须被清掉");
+  assert.ok(existsSync(body.path));
+  assert.equal(readFileSync(body.path, "utf8"), "video-bytes");
+});
+
+test("空文件上传会被拒绝，而不是留下一个 0 字节素材", async () => {
+  const res = await fetch(`${base}/api/assets`, { method: "POST", headers: { "x-vk-filename": "empty.mp4" }, body: Buffer.alloc(0) });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error.code, "empty_asset");
 });

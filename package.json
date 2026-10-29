@@ -9,6 +9,7 @@
   "bin": { "vk": "./packages/cli/src/vk.mjs" },
   "scripts": {
     "vk": "node packages/cli/src/vk.mjs",
+    "serve": "node packages/cli/src/vk.mjs serve --open",
     "doctor": "node packages/cli/src/vk.mjs doctor --human",
     "check:parity": "node scripts/ci/parity.mjs",
     "check:contract": "node scripts/ci/adapter-contract.mjs",

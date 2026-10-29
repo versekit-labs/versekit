@@ -302,10 +302,12 @@ defineCommand({
 | `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 可远程发起，但扫码必须在电脑前完成 |
 | `vk account mode <id> auto\|manual` | 该号是否自动 | 是 |
 | `vk publish <asset> --to a,b --schedule --visibility --dry-run` | 创建发布 | 否（本地） |
-| `vk publish retry <id>` / `cancel <id>` | 队列操作 | 是 |
+| `vk publish list` / `retry <id>` / `release <id>` / `confirm <id>` | 列表与队列操作 | 是 |
+| `vk platforms` | 已安装适配器与可用状态（Web 发布台的数据源） | 否 |
 | `vk publish approve <work>` / `reject <work> --reason` | 审批门禁（可选） | 是 |
 | `vk collect [--now] [--platform]` | 立即采集 / 查看下次计划 | `--now` 是 |
-| `vk stats works [--range]` / `overview` | 数据查询（JSON） | 否 |
+| `vk stats works [--range]` / `series <id>` | 数据查询（最新值 / 全部快照） | 否 |
+| `vk runs [--state]` / `events [--since]` | 队列与事件排障 | 是 |
 | `vk channel bind feishu` / `test` | 配对 + 探活 | 否 |
 | `vk commands [--json]` | 导出注册表（CI 用） | 否 |
 | `vk doctor [--json]` | 32 项自检 | 否 |

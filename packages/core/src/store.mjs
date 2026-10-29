@@ -217,3 +217,61 @@ export function listStats({ range = "all", publishId = null } = {}) {
       : null,
   }));
 }
+
+// ------------------------------------------------------------------ 列表（Web / CLI 共用）
+
+const boundedLimit = (limit, fallback = 100) => {
+  const n = Number(limit ?? fallback);
+  if (!Number.isInteger(n) || n < 1) return fallback;
+  return Math.min(n, 500);
+};
+
+export function listPublishes({ state = null, platform = null, limit = 100 } = {}) {
+  return open()
+    .prepare(
+      `SELECT p.id, p.state, p.mode, p.visibility, p.external_id, p.external_url,
+              p.error_code, p.error_message, p.fallback_reason, p.scheduled_at,
+              p.created_at, p.updated_at, a.platform, a.handle, w.title, w.asset_path
+         FROM publish p
+         JOIN account a ON a.id = p.account_id
+         JOIN work w ON w.id = p.work_id
+        WHERE (? IS NULL OR p.state = ?)
+          AND (? IS NULL OR a.platform = ?)
+        ORDER BY p.created_at DESC LIMIT ?`,
+    )
+    .all(state, state, platform, platform, boundedLimit(limit));
+}
+
+export function listRuns({ state = null, limit = 100 } = {}) {
+  return open()
+    .prepare(
+      `SELECT id, kind, target_type, target_id, lane, state, priority, attempts,
+              run_after, lease_until, last_error, created_at
+         FROM run WHERE (? IS NULL OR state = ?)
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(state, state, boundedLimit(limit));
+}
+
+export function listEvents({ since = 0, limit = 100 } = {}) {
+  const from = Number(since ?? 0);
+  if (!Number.isFinite(from) || from < 0) fail("since 必须是毫秒时间戳");
+  return open()
+    .prepare(
+      `SELECT id, type, severity, publish_id, payload_json, created_at
+         FROM event WHERE created_at >= ?
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(from, boundedLimit(limit))
+    .map((r) => ({ ...r, payload: r.payload_json ? JSON.parse(r.payload_json) : null }));
+}
+
+/** Every capture for one publish, oldest first: the shape a trend line needs. */
+export function seriesFor({ publishId }) {
+  const row = open().prepare("SELECT id FROM publish WHERE id = ?").get(publishId);
+  if (!row) fail(`没有这条发布：${publishId}`);
+  return open()
+    .prepare("SELECT captured_at, source, status, metrics_json FROM snapshot WHERE publish_id = ? ORDER BY captured_at")
+    .all(publishId)
+    .map((s) => ({ at: s.captured_at, source: s.source, status: s.status, metrics: JSON.parse(s.metrics_json) }));
+}

@@ -35,6 +35,18 @@ export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
 
     "account.list": () => ({ accounts: store.listAccounts() }),
 
+    "platform.list": () => ({
+      platforms: adapters.map((a) => ({
+        platform: a.platform,
+        publish: a.publish,
+        collect: a.collect,
+        draft: a.draft,
+        visibility: a.visibility,
+        requiresQualification: a.requiresQualification,
+        ready: a.adapter.ready(),
+      })),
+    }),
+
     "account.add": ({ platform, name, handle, credentialRef }) => {
       const result = store.addAccount({ platform, handle: handle ?? name, displayName: name, credentialRef: credentialRef ?? null });
       return { ...result, next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）` };
@@ -144,5 +156,15 @@ export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
     },
 
     "stats.works": ({ range = "all", publishId = null }) => ({ rows: store.listStats({ range, publishId }) }),
+
+    "stats.series": ({ publishId }) => ({ publishId, points: store.seriesFor({ publishId }) }),
+
+    "publish.list": ({ state = null, platform = null, limit = 100 }) => ({
+      rows: store.listPublishes({ state, platform, limit }),
+    }),
+
+    "run.list": ({ state = null, limit = 100 }) => ({ rows: store.listRuns({ state, limit }) }),
+
+    "event.list": ({ since = 0, limit = 100 }) => ({ rows: store.listEvents({ since, limit }) }),
   };
 }
