@@ -379,6 +379,8 @@ WHERE id = (SELECT id FROM run
 
 ```
 发布后：+1h · +6h · +24h · +3d · +7d · 之后每天（上限 30 天）
+由 `core/collect-plan.mjs` 的纯函数排下一个点（依据 `publish.published_at`），
+每次采集成功后自动排下一次；重启不影响，手动补抓也不会打乱节奏。
 每条快照：{ captured_at, source, status, metrics_json }
 ```
 

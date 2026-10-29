@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS publish (
   attempts        INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
+  published_at    INTEGER,           -- 首次进入 published/published_limited；采集节奏从它起算
   UNIQUE (work_id, account_id)
 );
 CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at);

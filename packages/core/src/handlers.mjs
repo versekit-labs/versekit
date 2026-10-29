@@ -7,9 +7,10 @@
 
 import { existsSync } from "node:fs";
 import { basename, extname } from "node:path";
-import { open, transitionPublish } from "./index.mjs";
+import { open, transitionPublish, enqueue } from "./index.mjs";
 import { queuePublish, queueCollect } from "./runner.mjs";
 import * as store from "./store.mjs";
+import { nextCollectAt } from "./collect-plan.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -129,7 +130,14 @@ export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
       const row = store.getPublish(publishId);
       if (!row) fail(`没有这条发布：${publishId}`);
       if (!["notify_pending", "draft_pending"].includes(row.state)) fail(`当前状态 ${row.state} 不需要确认`);
-      transitionPublish(publishId, "published", { reason: "confirmed_by_operator" });
+      const publishedAt = row.published_at ?? Date.now();
+      transitionPublish(publishId, "published", {
+        reason: "confirmed_by_operator",
+        patch: row.published_at ? {} : { published_at: publishedAt },
+      });
+      // 人工确认的发布也要进采集节奏，否则 notify 模式的作品永远没有数据。
+      const next = nextCollectAt(publishedAt);
+      if (next) enqueue({ kind: "collect", targetType: "publish", targetId: publishId, lane: row.account_id, priority: 200, runAfter: next });
       return { publishId, state: "published" };
     },
 

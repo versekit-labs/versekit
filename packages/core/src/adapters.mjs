@@ -7,10 +7,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
-import { open, transitionPublish, emit } from "./index.mjs";
+import { open, transitionPublish, emit, enqueue } from "./index.mjs";
 import { validateAdapter } from "./contract.mjs";
 import { toAdapterError } from "./errors.mjs";
 import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow } from "./publish-flow.mjs";
+import { nextCollectAt } from "./collect-plan.mjs";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -119,13 +120,21 @@ export function buildHandlers(adapters, { log = () => {} } = {}) {
       if (adapter.collect === "none") throw new Error(`${adapter.platform} 还没有指标采集`);
       try {
         const result = await adapter.adapter.collect({ publishId });
-        return recordSnapshot({
+        const snap = recordSnapshot({
           publishId,
           source: result.source,
           status: result.status,
           metrics: result.metrics,
           capturedAt: result.capturedAt ?? Date.now(),
         });
+
+        // 排下一个采集点：前密后疏，30 天封顶。失败不排——这一次的 run 会先重试。
+        const row = getPublishRow(publishId);
+        const next = row?.published_at ? nextCollectAt(row.published_at) : null;
+        if (next && next > Date.now()) {
+          enqueue({ kind: "collect", targetType: "publish", targetId: publishId, lane: row.account_id, priority: 200, runAfter: next });
+        }
+        return snap;
       } catch (err) {
         const error = toAdapterError(err);
         const row = getPublishRow(publishId);

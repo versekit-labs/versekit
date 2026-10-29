@@ -8,6 +8,7 @@
 import { open, transitionPublish, emit, enqueue, newId } from "./index.mjs";
 import { ERROR_CODES, toAdapterError } from "./errors.mjs";
 import { assertPublishResult } from "./contract.mjs";
+import { nextCollectAt } from "./collect-plan.mjs";
 
 const SNAPSHOT_SOURCES = ["api", "intercept", "csv"];
 const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
@@ -51,6 +52,8 @@ export function applyPublishResult(publishId, result) {
   if (!row) throw new Error(`没有这条发布：${publishId}`);
 
   const patch = { external_id: result.id, external_url: result.url };
+  // 采集节奏从「第一次真的发出去」起算，不能从建行（可能提前几天定时）起算。
+  if (!row.published_at && ["published", "published_limited"].includes(result.state)) patch.published_at = Date.now();
   if (row.state === result.state) {
     // Adapter filled in the row itself (legacy) — patch the ids, do not transition twice.
     open()
@@ -78,14 +81,18 @@ export function applyPublishResult(publishId, result) {
 
   // First collection is part of publishing, not a separate decision someone can forget.
   if (["published", "published_limited"].includes(result.state)) {
-    enqueue({
-      kind: "collect",
-      targetType: "publish",
-      targetId: publishId,
-      lane: row.account_id,
-      priority: 200,
-      runAfter: Date.now() + 60 * 60e3,
-    });
+    const publishedAt = getPublishRow(publishId)?.published_at ?? Date.now();
+    const next = nextCollectAt(publishedAt);
+    if (next) {
+      enqueue({
+        kind: "collect",
+        targetType: "publish",
+        targetId: publishId,
+        lane: row.account_id,
+        priority: 200,
+        runAfter: next,
+      });
+    }
   }
 
   return { state: result.state, id: result.id, url: result.url, followups };

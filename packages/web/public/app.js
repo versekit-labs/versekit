@@ -297,7 +297,11 @@ async function viewWorks(selectedId = null) {
         : `<p class="meta">还没有快照。发布成功一小时后会自动抓第一次。</p>`}
       <div class="row" style="margin-top:12px">
         <div class="tight"><button class="small" data-collect="${esc(selected.id)}">立即抓一次</button></div>
+        ${["failed", "blocked"].includes(selected.state) ? `<div class="tight"><button class="small" data-act="retry" data-id="${esc(selected.id)}">重试</button></div>` : ""}
+        ${["notify_pending", "draft_pending"].includes(selected.state) ? `<div class="tight"><button class="small primary" data-act="confirm" data-id="${esc(selected.id)}">我已发布</button></div>` : ""}
+        ${selected.state === "published_limited" ? `<div class="tight"><button class="small primary" data-act="release" data-id="${esc(selected.id)}">放行公开</button></div>` : ""}
       </div>
+      ${selected.error_message ? `<p class="meta">失败原因：${esc(selected.error_message)}</p>` : ""}
       ${selected.external_url ? `<p><a href="${esc(selected.external_url)}" target="_blank" rel="noreferrer">打开平台页面 ↗</a></p>` : ""}`;
   }
 
@@ -329,6 +333,24 @@ async function viewWorks(selectedId = null) {
   for (const tr of document.querySelectorAll("tr[data-pid]")) {
     tr.onclick = () => render(tr.dataset.pid);
   }
+  const ACTIONS = {
+    retry: (id) => api(`/api/publishes/${encodeURIComponent(id)}/retry`, { method: "POST", body: { publishId: id } }),
+    confirm: (id) => api(`/api/publishes/${encodeURIComponent(id)}/confirm`, { method: "POST", body: { publishId: id } }),
+    release: (id) => api(`/api/publishes/${encodeURIComponent(id)}/release`, { method: "POST", body: { publishId: id } }),
+  };
+  for (const btn of document.querySelectorAll("[data-act]")) {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      try {
+        await ACTIONS[btn.dataset.act](btn.dataset.id);
+        toast("已提交");
+        render(btn.dataset.id);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
   for (const btn of document.querySelectorAll("[data-collect]")) {
     btn.onclick = async (e) => {
       e.stopPropagation();

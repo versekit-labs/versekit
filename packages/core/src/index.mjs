@@ -112,7 +112,7 @@ export function migrate() {
 /** SQLite has no "ADD COLUMN IF NOT EXISTS"; keep re-runs cheap and idempotent. */
 const COLUMNS = {
   run: { lane: "TEXT" },
-  publish: {},
+  publish: { published_at: "INTEGER" },
   account: { last_checked_at: "INTEGER" },
 };
 
