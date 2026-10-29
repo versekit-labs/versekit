@@ -6,6 +6,7 @@
 
 import { request } from "node:http";
 import { spawn } from "node:child_process";
+import { openSync, closeSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { paths, isInitialised } from "../../core/src/index.mjs";
@@ -106,8 +107,12 @@ export async function ensureDaemon({ timeoutMs = 6000, port = null, log = () => 
 
   log("守护进程没在跑，正在拉起…");
   const args = [CLI, "serve", ...(port != null ? ["--port", String(port)] : [])];
-  const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: process.env });
+  // detach 之后控制台就没了：把 stdout/stderr 落到 vk.log，排障才有现场。
+  const logFile = paths().log;
+  const fd = openSync(logFile, "a", 0o600);
+  const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
   child.unref();
+  closeSync(fd);
 
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
