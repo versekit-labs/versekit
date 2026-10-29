@@ -86,6 +86,10 @@ export default {
           const line = buffer.slice(0, idx).trim();
           buffer = buffer.slice(idx + 1);
           if (!line) continue;
+          if (/feishu-websocket: connected|ready event_key/.test(line)) {
+            log("[feishu] 长连接已就绪，按钮可以点了");
+            continue;
+          }
           let obj;
           try {
             obj = JSON.parse(line);
