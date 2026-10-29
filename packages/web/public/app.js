@@ -479,9 +479,38 @@ async function viewTasks() {
   }
 }
 
+// ---------------------------------------------------------------- 自检
+
+async function viewDoctor() {
+  const report = await api("/api/doctor");
+  const bad = report.checks.filter((c) => !c.ok);
+  $("#view").innerHTML = `
+    <h1>自检</h1>
+    <p class="hint">回答一个问题：为什么发不出去。红灯都带「下一步该做什么」。</p>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="kpi">${report.passed}/${report.total}<small>项通过</small></div>
+        <span class="chip"><i class="dot ${bad.length ? "bad" : "ok"}"></i>${bad.length ? `${bad.length} 项需要处理` : "全部正常"}</span>
+      </div>
+    </div>
+    <div class="card" style="padding:6px 10px;margin-top:14px">
+      <table><thead><tr><th>检查</th><th>结果</th><th>下一步</th></tr></thead><tbody>
+        ${report.checks
+          .map(
+            (c) => `<tr>
+              <td class="mono">${esc(c.id)}</td>
+              <td>${c.ok ? `<span class="chip"><i class="dot ok"></i>通过</span>` : `<span class="chip"><i class="dot bad"></i>${esc(c.detail)}</span>`}</td>
+              <td class="meta">${esc(c.ok ? "—" : c.next ?? "")}</td>
+            </tr>`,
+          )
+          .join("")}
+      </tbody></table>
+    </div>`;
+}
+
 // ---------------------------------------------------------------- 路由
 
-const VIEWS = { accounts: viewAccounts, publish: viewPublish, works: viewWorks, overview: viewOverview, tasks: viewTasks };
+const VIEWS = { accounts: viewAccounts, publish: viewPublish, works: viewWorks, overview: viewOverview, tasks: viewTasks, doctor: viewDoctor };
 
 function current() {
   const name = location.hash.replace("#", "") || "overview";
@@ -520,7 +549,7 @@ $("#refresh").onclick = () => {
 };
 setInterval(() => {
   ping();
-  if (["overview", "tasks", "accounts"].includes(current()) && !document.activeElement?.matches("input,select,textarea")) render();
+  if (["overview", "tasks", "accounts", "doctor"].includes(current()) && !document.activeElement?.matches("input,select,textarea")) render();
 }, 20000);
 
 ping();
