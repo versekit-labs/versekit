@@ -114,6 +114,7 @@ const COLUMNS = {
   run: { lane: "TEXT" },
   publish: { published_at: "INTEGER" },
   account: { last_checked_at: "INTEGER" },
+  command_audit: { idempotency_key: "TEXT" },
 };
 
 function addMissingColumns(conn) {

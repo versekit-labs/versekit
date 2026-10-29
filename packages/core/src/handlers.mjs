@@ -36,6 +36,8 @@ export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
 
     "account.list": () => ({ accounts: store.listAccounts() }),
 
+    "channel.bind": ({ openId }) => store.bindChannel("feishu", openId),
+
     "platform.list": () => ({
       platforms: adapters.map((a) => ({
         platform: a.platform,

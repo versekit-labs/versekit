@@ -18,6 +18,9 @@ import { findCommand, parseArgs } from "./commands.mjs";
 import { createRunner } from "./runner.mjs";
 import { applyTerminalFailure } from "./publish-flow.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
+import { deliverPending, executeAction } from "./notify.mjs";
+import { resultCard } from "./cards.mjs";
+import { getBinding } from "./store.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -243,7 +246,7 @@ function listen(server, options) {
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot, channels = [] } = {}) {
   const runner = createRunner({
     handlers,
     log,
@@ -281,6 +284,61 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     stopSweeper = startCheckSweeper({ log });
   }
 
+  // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
+  const stopChannels = [];
+  let deliveryTimer = null;
+  if (runQueue && channels.length) {
+    const deliverAll = async () => {
+      for (const channel of channels) {
+        const binding = getBinding(channel.channel);
+        if (!binding) continue;
+        try {
+          const res = await deliverPending({ channel, binding, log });
+          if (res.sent) log(`[channel] ${channel.channel} 发出 ${res.sent} 张卡片`);
+        } catch (err) {
+          log(`[channel] ${channel.channel} 投递失败：${err.message}`);
+        }
+      }
+    };
+
+    for (const channel of channels) {
+      const missing = channel.ready?.();
+      if (missing) {
+        log(`[channel] ${channel.channel} 不可用：${missing}`);
+        continue;
+      }
+      const binding = getBinding(channel.channel);
+      if (!binding) {
+        log(`[channel] ${channel.channel} 还没有配对：vk channel bind ${channel.channel}`);
+        continue;
+      }
+      stopChannels.push(
+        channel.start({
+          log,
+          onAction: async (evt) => {
+            const current = getBinding(channel.channel);
+            const res = await executeAction({
+              action: evt.action_value,
+              operator: evt.operator_id,
+              binding: current,
+              handlers,
+            });
+            log(`[channel] ${res.ok ? "✓" : "✗"} ${res.message}`);
+            if (evt.token) {
+              await channel
+                .updateCard({ token: evt.token, card: resultCard(res.ok ? "已处理" : "没有执行", res.message, { ok: res.ok }) })
+                .catch((err) => log(`[channel] 更新卡片失败：${err.message}`));
+            }
+          },
+        }),
+      );
+    }
+
+    deliveryTimer = setInterval(deliverAll, 5000);
+    deliveryTimer.unref?.();
+    deliverAll();
+  }
+
   const { port: boundPort } = httpServer.address();
 
   // 谁起的守护进程不重要，重要的是别的客户端能问到它监听在哪。端口不写下来的话，
@@ -298,6 +356,14 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     socketPath,
     async close() {
       stopSweeper();
+      if (deliveryTimer) clearInterval(deliveryTimer);
+      for (const stop of stopChannels) {
+        try {
+          stop();
+        } catch {
+          /* 已经停了 */
+        }
+      }
       runner.stop();
       httpServer.closeAllConnections?.();
       socketServer.closeAllConnections?.();

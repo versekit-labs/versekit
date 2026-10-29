@@ -339,7 +339,7 @@ type EventType =
 | 接入方式 | **长连接（WebSocket）**，不是公网回调 → 不需要域名/内网穿透（与视频工厂"轮询不依赖公网"同一思路） |
 | 卡片 | 交互卡片 v2；`actions` 里每个按钮带 `command_id` + `idempotency_key` + `exp`（24h） |
 | 回执 | 收到 `card.action.trigger` 事件 → 校验 `exp` / 白名单 / 幂等键 → 执行 → **原地更新卡片**为结果态 |
-| 配对 | 本机 `vk channel bind feishu` 显示 6 位码 → 飞书里发给机器人 → 落 `channel_binding` |
+| 配对 | `vk channel bind feishu`：用 lark-cli 已登录身份取 open_id → 落 `channel_binding` → 发测试卡（不需要 6 位码，也不需要公网回调） |
 | 脱敏 | 卡片只放业务字段；路径、凭证、内部 id 一律不出 |
 | 降级 | 长连接断开 → 事件积压在 `delivery(pending)`，恢复后按 `created_at` 补投并按类型合并 |
 

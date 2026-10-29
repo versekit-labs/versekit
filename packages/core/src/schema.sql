@@ -119,8 +119,10 @@ CREATE TABLE IF NOT EXISTS command_audit (
   args_json  TEXT,
   result     TEXT,
   reason     TEXT,
+  idempotency_key TEXT,          -- 卡片按钮的幂等键：同一张卡点两次只执行一次
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_idem ON command_audit(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_binding (
   id               TEXT PRIMARY KEY,

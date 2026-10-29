@@ -275,3 +275,26 @@ export function seriesFor({ publishId }) {
     .all(publishId)
     .map((s) => ({ at: s.captured_at, source: s.source, status: s.status, metrics: JSON.parse(s.metrics_json) }));
 }
+
+// ------------------------------------------------------------------ 通道配对
+
+/** One binding per (channel, user); re-binding the same person just refreshes the timestamp. */
+export function bindChannel(channel, externalUserId) {
+  const c = requireString(channel, "channel", { max: 32 });
+  const uid = requireString(externalUserId, "externalUserId", { max: 200 });
+  const existing = open().prepare("SELECT id FROM channel_binding WHERE channel=? AND external_user_id=?").get(c, uid);
+  if (existing) {
+    open().prepare("UPDATE channel_binding SET paired_at=? WHERE id=?").run(Date.now(), existing.id);
+    return { id: existing.id, existed: true, channel: c, externalUserId: uid };
+  }
+  const id = newId("bind");
+  open()
+    .prepare("INSERT INTO channel_binding (id, channel, external_user_id, paired_at) VALUES (?,?,?,?)")
+    .run(id, c, uid, Date.now());
+  return { id, existed: false, channel: c, externalUserId: uid };
+}
+
+/** Latest binding for a channel, or null. */
+export function getBinding(channel) {
+  return open().prepare("SELECT * FROM channel_binding WHERE channel=? ORDER BY paired_at DESC LIMIT 1").get(channel) ?? null;
+}

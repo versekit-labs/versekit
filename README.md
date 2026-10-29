@@ -14,6 +14,7 @@
   <a href="docs/ARCHITECTURE.md">架构</a> ·
   <a href="docs/platforms.md">平台矩阵</a> ·
   <a href="docs/adapter-contract.md">适配器规约</a> ·
+  <a href="docs/channels.md">通道</a> ·
   <a href="docs/wireframes.html">设计稿</a>
 </p>
 
@@ -115,7 +116,7 @@ flowchart LR
 | **本地 Web 控制台**（账号墙 / 发布台 / 作品 / 总览 / 任务日志） | ✅ 真浏览器验收 |
 | 适配器 B站（biliup 发布 + 创作中心采集 + 登录体检） | ✅ 待真机验收 |
 | 适配器 TikTok（Studio 发布 + 后台拦截采集 + 登录探测） | ✅ 待真机验收 |
-| 飞书通道（长连接 + 交互卡片） | ⬜ v0.2 |
+| 飞书通道（卡片投递 + 按钮回执，走 lark-cli） | ✅ 发卡片已通；按钮需后台订阅事件（[channels.md](docs/channels.md)） |
 | 其余三平台（YouTube / 小红书 / 抖音） | ⬜ v0.3 |
 | CI 门禁（parity 19 · adapter-contract 15 · no-backdoor） | ✅ |
 

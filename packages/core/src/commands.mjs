@@ -212,10 +212,10 @@ export const COMMANDS = [
   },
   {
     name: "channel.bind",
-    summary: "配对飞书（本机显示 6 位码）",
+    summary: "配对飞书账号（用 lark-cli 已登录的人）",
     remote: false,
     localOnly: true,
-    args: {},
+    args: { openId: "string" },
     http: { method: "POST", path: "/api/channels/feishu/bind" },
     cli: { usage: "vk channel bind feishu" },
     card: null,

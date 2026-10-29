@@ -1,0 +1,9 @@
+{
+  "name": "@fangyouxi/channel-feishu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "飞书通道：lark-cli 发交互卡片 + 长连接收按钮事件（凭证由 lark-cli 持有）",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}

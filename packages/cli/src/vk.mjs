@@ -14,8 +14,9 @@ import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding } from "../../core/src/store.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
+import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 
@@ -167,7 +168,22 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
-    "channel.test": () => ({ bound: false, next: "vk channel bind feishu" }),
+    "channel.test": async () => {
+      const binding = getBinding("feishu");
+      if (!binding) throw new Error("还没有配对：先运行 vk channel bind feishu");
+      const card = {
+        config: { wide_screen_mode: true },
+        header: { template: "blue", title: { tag: "plain_text", content: "versekit · 通道已连通" } },
+        elements: [
+          {
+            tag: "div",
+            text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点按钮就会在这台电脑上执行。" },
+          },
+        ],
+      };
+      const { messageId } = await channelFeishu.send({ openId: binding.external_user_id, card });
+      return { messageId, openId: binding.external_user_id };
+    },
     // 控制台的「自检」页与 CLI 用的是同一份检查，避免「网页说没问题、命令行说有问题」。
     doctor: () => doctorReport(),
 
@@ -227,7 +243,7 @@ async function cmdServe() {
   const { adapters, errors } = await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
   const handlers = daemonHandlers(adapters, log);
-  const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787) });
+  const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787), channels: [channelFeishu] });
 
   const web = `http://127.0.0.1:${daemon.port}`;
   if (has("--open")) openBrowser(web);
@@ -395,6 +411,36 @@ async function cmdEvents() {
   return data;
 }
 
+async function cmdChannel() {
+  const sub = pos[1];
+  const name = pos[2] ?? "feishu";
+  if (name !== "feishu") throw new Error("目前只支持飞书：vk channel bind feishu");
+  const missing = channelFeishu.ready();
+  if (missing) throw new Error(missing);
+
+  if (sub === "bind") {
+    const who = val("--open-id") ? { openId: val("--open-id"), name: null } : await channelFeishu.whoami();
+    const bound = await send("channel.bind", { openId: who.openId });
+    const test = await send("channel.test", {});
+    const data = { ok: true, ...bound, messageId: test.messageId, who: who.name ?? who.openId };
+    if (human) {
+      console.log(`已配对飞书：${who.name ?? who.openId}`);
+      if (bound.existed) console.log("（之前配过，已刷新配对时间）");
+      console.log(`测试卡片已发送${test.messageId ? `（${test.messageId}）` : ""}，去飞书里看一眼。`);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "test") {
+    const test = await send("channel.test", {});
+    if (human) console.log(`测试卡片已发送${test.messageId ? `（${test.messageId}）` : ""}`);
+    else out({ ok: true, ...test });
+    return test;
+  }
+
+  throw new Error("用法：vk channel bind feishu [--open-id ou_xxx] | vk channel test feishu");
+}
+
 async function cmdStats() {
   const sub = pos[1];
   if (sub === "series") {
@@ -435,6 +481,7 @@ function usage() {
       "  vk stats works [--range 7d] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
       "  vk platforms | runs [--state failed] | events [--since <ms>]",
+      "  vk channel bind feishu | test feishu",
       "  vk --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
@@ -461,6 +508,7 @@ try {
   else if (cmd === "platforms") await cmdPlatforms();
   else if (cmd === "runs") await cmdRuns();
   else if (cmd === "events") await cmdEvents();
+  else if (cmd === "channel") await cmdChannel();
   else {
     console.error(`未知命令：${cmd}\n`);
     usage();
