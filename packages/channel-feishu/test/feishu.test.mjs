@@ -77,13 +77,14 @@ test("send(): 以机器人身份发交互卡片，参数与幂等键都带上了
   assert.equal(call[call.indexOf("--as") + 1], "bot");
 });
 
-test("updateCard(): 用 token 原地更新卡片", async () => {
-  await channel.updateCard({ token: "tok_1", card: { elements: [] } });
+test("updateCard(): 按 message_id PATCH，content 是序列化后的卡片", async () => {
+  const card = { elements: [], header: { title: { content: "已处理" } } };
+  await channel.updateCard({ messageId: "om_test_1", card });
   const call = calls().reverse().find((a) => a[0] === "api");
-  assert.equal(call[call.indexOf("POST")], "POST");
-  assert.ok(call.includes("/open-apis/interactive/v1/card/update"));
+  assert.equal(call[call.indexOf("PATCH")], "PATCH");
+  assert.ok(call.includes("/open-apis/im/v1/messages/om_test_1"));
   const body = JSON.parse(call[call.indexOf("--data") + 1]);
-  assert.equal(body.token, "tok_1");
+  assert.deepEqual(JSON.parse(body.content), card);
 });
 
 test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", async () => {

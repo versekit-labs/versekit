@@ -14,7 +14,14 @@ const exec = promisify(execFile);
 const bin = () => process.env.VK_LARK_BIN ?? "lark-cli";
 
 async function lark(args, { timeout = 25e3 } = {}) {
-  const { stdout } = await exec(bin(), args, { timeout, maxBuffer: 16 << 20, encoding: "utf8" });
+  let stdout;
+  try {
+    ({ stdout } = await exec(bin(), args, { timeout, maxBuffer: 16 << 20, encoding: "utf8" }));
+  } catch (err) {
+    // execFile 的 rejection 只有一句 "Command failed"；真正的原因在 stderr 里。
+    const detail = String(err.stderr ?? err.message ?? "").trim().slice(0, 500);
+    throw new Error(`lark-cli ${args.slice(0, 2).join(" ")} 失败：${detail}`);
+  }
   let json;
   try {
     json = JSON.parse(stdout);
@@ -54,10 +61,21 @@ export default {
     return { messageId };
   },
 
-  /** 点完按钮原地更新（飞书给的 token 有效期 30 分钟，最多更新 2 次）。 */
-  async updateCard({ token, card }) {
-    if (!token) throw new Error("更新卡片需要 token");
-    await lark(["api", "POST", "/open-apis/interactive/v1/card/update", "--as", "bot", "--data", JSON.stringify({ token, card })]);
+  /**
+   * 点完按钮原地更新。按 message_id PATCH（14 天内有效），不用回调 token——
+   * token 那条路要带 open_id，参数一错就只回一句 "openid empty"，不如消息 id 稳。
+   */
+  async updateCard({ messageId, card }) {
+    if (!messageId) throw new Error("更新卡片需要 messageId");
+    await lark([
+      "api",
+      "PATCH",
+      `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+      "--as",
+      "bot",
+      "--data",
+      JSON.stringify({ content: JSON.stringify(card) }),
+    ]);
     return { ok: true };
   },
 

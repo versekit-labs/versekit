@@ -324,9 +324,9 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
               handlers,
             });
             log(`[channel] ${res.ok ? "✓" : "✗"} ${res.message}`);
-            if (evt.token) {
+            if (evt.message_id) {
               await channel
-                .updateCard({ token: evt.token, card: resultCard(res.ok ? "已处理" : "没有执行", res.message, { ok: res.ok }) })
+                .updateCard({ messageId: evt.message_id, card: resultCard(res.ok ? "已处理" : "没有执行", res.message, { ok: res.ok }) })
                 .catch((err) => log(`[channel] 更新卡片失败：${err.message}`));
             }
           },
