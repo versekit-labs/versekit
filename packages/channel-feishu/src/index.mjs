@@ -73,7 +73,9 @@ export default {
 
     const connect = () => {
       if (stopped) return;
-      child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot"], { stdio: ["ignore", "pipe", "pipe"] });
+      // stdin 必须保持打开：lark-cli 把 stdin EOF 当作退出信号（为 AI 子进程设计），
+      // 用 ignore 会让它刚连上就退出。
+      child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot"], { stdio: ["pipe", "pipe", "pipe"] });
       buffer = "";
 
       child.stdout.setEncoding("utf8");
