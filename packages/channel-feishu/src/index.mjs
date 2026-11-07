@@ -9,6 +9,9 @@
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const exec = promisify(execFile);
 const bin = () => process.env.VK_LARK_BIN ?? "lark-cli";
@@ -28,6 +31,19 @@ function runWithInput(args, input) {
     child.stdin.end(input);
   });
 }
+
+function profileInfo() {
+  const list = spawnSync(bin(), ["profile", "list"], { encoding: "utf8", timeout: 5000 });
+  try {
+    const profiles = JSON.parse(list.stdout ?? "[]");
+    const found = Array.isArray(profiles) ? profiles.find((p) => p.name === profile()) : null;
+    return { exists: Boolean(found), appId: found?.appId ?? null };
+  } catch {
+    return { exists: false, appId: null };
+  }
+}
+
+const profileExists = () => profileInfo().exists;
 
 async function lark(args, { timeout = 25e3 } = {}) {
   args = [...args, "--profile", profile()];
@@ -49,6 +65,9 @@ async function lark(args, { timeout = 25e3 } = {}) {
   return json;
 }
 
+// 扫码创建应用：config init --new 会阻塞到浏览器里完成；URL 先给用户扫。
+let createState = { running: false, url: null, qr: null, startedAt: 0, child: null };
+
 export default {
   channel: "feishu",
 
@@ -58,15 +77,8 @@ export default {
     if (probe.error) return "飞书未配置：没有找到 lark-cli（装好后到「接入」页填写你的应用）";
     if (probe.status !== 0) return `飞书未配置：lark-cli 不可用（${String(probe.stderr ?? "").trim().slice(0, 120)}）`;
 
-    const list = spawnSync(bin(), ["profile", "list"], { encoding: "utf8", timeout: 5000 });
-    let profiles = [];
-    try {
-      profiles = JSON.parse(list.stdout ?? "[]");
-    } catch {
-      profiles = [];
-    }
-    if (!Array.isArray(profiles) || !profiles.some((p) => p.name === profile())) {
-      return "飞书应用未配置：在「接入」页填写你自己的 app_id 与 app_secret";
+    if (!profileExists()) {
+      return "飞书应用未配置：在「接入」页扫码创建，或填写你自己的 app_id 与 app_secret";
     }
 
     const status = spawnSync(bin(), ["auth", "status", "--profile", profile()], { encoding: "utf8", timeout: 8000 });
@@ -78,6 +90,75 @@ export default {
     }
     if (!st?.identities?.user?.openId) return "飞书应用已配置，但还没有授权：在「接入」页点「开始授权」";
     return null;
+  },
+
+  /** 把授权链接变成二维码（PNG data URI），页面直接 <img>。 */
+  async qr(url) {
+    const file = join(tmpdir(), `vk-qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
+    try {
+      await exec(bin(), ["auth", "qrcode", url, "-o", file], { timeout: 15e3, encoding: "utf8" });
+      const data = readFileSync(file).toString("base64");
+      return `data:image/png;base64,${data}`;
+    } finally {
+      try {
+        unlinkSync(file);
+      } catch {
+        /* 已经没了 */
+      }
+    }
+  },
+
+  /**
+   * 扫码创建应用：官方流程会在浏览器里建一个应用，并把 app_id/secret 直接写进
+   * 当前 profile（钥匙串）。我们只把 URL 截出来给用户扫，不接触 secret。
+   */
+  async createAppStart() {
+    if (createState.running) return { url: createState.url, qr: createState.qr, running: true };
+    const child = spawn(bin(), ["config", "init", "--new", "--name", profile()], { stdio: ["pipe", "pipe", "pipe"] });
+    createState = { running: true, url: null, qr: null, startedAt: Date.now(), child };
+    let buffer = "";
+
+    const url = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("30 秒内没有拿到创建应用的链接")), 30e3);
+      const onData = (chunk) => {
+        buffer += chunk;
+        const hit = buffer.match(/https:\/\/[^"'\s]+/)?.[0];
+        if (!hit) return;
+        clearTimeout(timer);
+        child.stdout.off("data", onData);
+        resolve(hit);
+      };
+      child.stdout.on("data", onData);
+      child.stderr.on("data", (c) => (buffer += c));
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on("exit", (code) => {
+        if (!createState.url) {
+          clearTimeout(timer);
+          reject(new Error(`创建应用进程退出了（code ${code}）：${buffer.slice(-200)}`));
+        }
+        createState.running = false;
+      });
+    });
+
+    const qr = await this.qr(url);
+    createState.url = url;
+    createState.qr = qr;
+    child.stdout.resume();
+    return { url, qr, running: true };
+  },
+
+  createAppStatus() {
+    const info = profileInfo();
+    return {
+      running: createState.running,
+      url: createState.url,
+      qr: createState.qr,
+      configured: info.exists,
+      appId: info.appId,
+    };
   },
 
   /** 保存用户自己的应用（secret 走 stdin，不写文件、不进 argv/日志）。 */
@@ -97,8 +178,10 @@ export default {
   async authStart() {
     const json = await lark(["auth", "login", "--no-wait", "--json"]);
     const data = json.data ?? json;
+    const verificationUrl = data.verification_url ?? data.verificationUrl ?? null;
     return {
-      verificationUrl: data.verification_url ?? data.verificationUrl ?? null,
+      verificationUrl,
+      qr: verificationUrl ? await this.qr(verificationUrl) : null,
       deviceCode: data.device_code ?? data.deviceCode ?? null,
       expiresIn: data.expires_in ?? data.expiresIn ?? null,
     };

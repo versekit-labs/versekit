@@ -262,6 +262,11 @@ test("authStart / authFinish：设备码两步", async () => {
 const fs = require("node:fs");
 const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
+if (a[0] === "auth" && a[1] === "qrcode") {
+  const out = a[a.indexOf("-o") + 1];
+  fs.writeFileSync(out, Buffer.from([137, 80, 78, 71]));
+  process.exit(0);
+}
 if (a[0] === "auth" && a[1] === "login") {
   if (a.includes("--no-wait")) console.log(JSON.stringify({ ok: true, data: { verification_url: "https://open.feishu.cn/device", device_code: "dc_1", expires_in: 300 } }));
   else console.log(JSON.stringify({ ok: true }));
@@ -276,10 +281,53 @@ process.exit(0);
     const started = await channel.authStart();
     assert.equal(started.verificationUrl, "https://open.feishu.cn/device");
     assert.equal(started.deviceCode, "dc_1");
+    assert.match(started.qr, /^data:image\/png;base64,/);
 
     await channel.authFinish("dc_1");
     const calls = readFileSync(log, "utf8");
     assert.match(calls, /--device-code/);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("createAppStart(): 从官方创建流程里截出链接，并生成二维码", async () => {
+  const bin = join(DIR, "lark-create");
+  const marker = join(DIR, "created-profile");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+if (a[0] === "config" && a.includes("--new")) {
+  console.log("在浏览器里完成创建：https://open.feishu.cn/page/app-create?demo=1");
+  setTimeout(() => { fs.writeFileSync(${JSON.stringify(marker)}, "1"); process.exit(0); }, 400);
+  setInterval(() => {}, 1000);
+  return;
+}
+if (a[0] === "auth" && a[1] === "qrcode") {
+  fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71]));
+  process.exit(0);
+}
+if (a[0] === "profile") {
+  console.log(JSON.stringify(fs.existsSync(${JSON.stringify(marker)}) ? [{ name: "versekit", appId: "cli_create" }] : []));
+  process.exit(0);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const started = await channel.createAppStart();
+    assert.match(started.url, /open\.feishu\.cn\/page\/app-create/);
+    assert.match(started.qr, /^data:image\/png;base64,/);
+
+    await new Promise((r) => setTimeout(r, 600));
+    const status = channel.createAppStatus();
+    assert.equal(status.configured, true);
+    assert.equal(status.appId, "cli_create");
   } finally {
     process.env.VK_LARK_BIN = BIN;
   }

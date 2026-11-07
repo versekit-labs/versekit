@@ -174,17 +174,22 @@ function daemonHandlers(adapters, log) {
     "channel.status": () => {
       const ready = channelFeishu.ready();
       const cfg = readConfig().channel?.feishu ?? {};
+      const create = channelFeishu.createAppStatus();
       const binding = getBinding("feishu");
       return {
+        create,
         ready,
-        configured: Boolean(cfg.app_id),
+        configured: Boolean(cfg.app_id) || create.configured,
         authorized: ready === null,
         bound: Boolean(binding),
         profile: cfg.profile ?? feishuProfileName(),
-        appId: cfg.app_id ?? null,
+        appId: cfg.app_id ?? create.appId ?? null,
         externalUserId: binding?.external_user_id ?? null,
       };
     },
+
+    "channel.app.create.start": () => channelFeishu.createAppStart(),
+    "channel.app.create.status": () => channelFeishu.createAppStatus(),
 
     "channel.app.set": async ({ appId, appSecret }) => {
       const r = await channelFeishu.configure({ appId, appSecret });

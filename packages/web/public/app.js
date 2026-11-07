@@ -599,6 +599,7 @@ async function viewDoctor() {
 
 // 授权中的 device_code 只放内存：它是短时凭据，不适合落库。
 let pendingDevice = null;
+let currentChannelStatus = null;
 
 /**
  * 用户必须用自己的飞书应用。这里的三态是：
@@ -607,11 +608,31 @@ let pendingDevice = null;
  *   已授权未配对 / 已配对 → 绑定并测试
  */
 function channelBlockHtml(st) {
+  currentChannelStatus = st;
   const configured = Boolean(st.configured);
   const authorized = Boolean(st.authorized);
   const bound = Boolean(st.bound);
-  const label = !configured ? "未配置应用" : !authorized ? "待授权" : bound ? "已配对" : "待配对";
-  const dot = bound && authorized ? "ok" : configured ? "warn" : "bad";
+  const creating = Boolean(st.create?.running);
+  const label = !configured ? (creating ? "等待创建" : "未配置应用") : !authorized ? "待授权" : bound ? "已配对" : "待配对";
+  const dot = bound && authorized ? "ok" : configured || creating ? "warn" : "bad";
+
+  const createPane = creating
+    ? `
+      <p class="meta">用手机扫下面的码，在打开页里登录并创建 versekit 应用；凭据会直接存进系统钥匙串。</p>
+      ${st.create.qr ? `<p><img src="${esc(st.create.qr)}" alt="扫码创建飞书应用" style="width:180px;height:180px;background:#fff;padding:8px;border-radius:8px"/></p>` : ""}
+      <p><a class="btn" href="${esc(st.create.url ?? "")}" target="_blank" rel="noreferrer">在浏览器打开 ↗</a></p>
+      <p class="meta">完成后这里会自动变成「待授权」，不需要手动填任何 key。</p>
+    `
+    : `
+      <button class="primary" id="ch-create">扫码创建应用</button>
+      <p class="meta">会打开飞书官方页面：创建应用、开权限、写进独立 profile。我们看不到 secret。</p>
+      <details class="meta" style="margin-top:10px">
+        <summary style="cursor:pointer">我已有应用，手动填写</summary>
+        <label>App ID</label><input id="ch-appid" placeholder="cli_xxxxxxxxxxxx"/>
+        <label>App Secret</label><input id="ch-secret" type="password" placeholder="只显示这一次"/>
+        <button class="small" id="ch-save" style="margin-top:8px">保存应用</button>
+      </details>
+    `;
 
   return `
   <div class="card" style="margin-top:10px">
@@ -620,28 +641,40 @@ function channelBlockHtml(st) {
       <span class="meta">profile ${esc(st.profile)}${st.appId ? ` · ${esc(st.appId)}` : ""}</span>
     </div>
     <p class="meta">用你自己的飞书应用；App Secret 只在保存时通过 stdin 交给系统钥匙串，不进数据库、不进日志。</p>
-    ${!configured ? `
-      <label>App ID</label><input id="ch-appid" placeholder="cli_xxxxxxxxxxxx">
-      <label>App Secret</label><input id="ch-secret" type="password" placeholder="只显示这一次">
-      <p class="meta">还没有应用？飞书开放平台 → 创建「企业自建应用」→ 开启机器人 → 添加 im:message:send_as_bot、im:message:readonly → 订阅 card.action.trigger。</p>
-      <button class="primary" id="ch-save">保存应用</button>
-    ` : !authorized ? `
-      <button class="primary" id="ch-start">开始授权</button>
+    ${!configured ? createPane : ""}
+    ${configured && !authorized ? `
+      <button class="primary" id="ch-start">扫码授权</button>
       <div id="ch-login-box" class="meta" style="margin-top:8px"></div>
-    ` : !bound ? `
-      <button class="primary" id="ch-bind">配对并发送测试卡</button>
-    ` : `
+    ` : ""}
+    ${configured && authorized && !bound ? `<button class="primary" id="ch-bind">配对并发送测试卡</button>` : ""}
+    ${configured && authorized && bound ? `
       <div class="row">
         <div class="tight"><button class="ghost" id="ch-test">发测试卡</button></div>
         <div class="tight"><button class="ghost" id="ch-diag">诊断</button></div>
       </div>
-    `}
+    ` : ""}
     <p class="meta" id="ch-note">${st.ready ? esc(st.ready) : ""}</p>
     <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>
   </div>`;
 }
 
 function wireChannelBlock() {
+  // 创建应用是异步的：每 3 秒看一眼状态，完成后自动进下一步。
+  if (currentChannelStatus?.create?.running) setTimeout(() => render(), 3000);
+
+  const create = $("#ch-create");
+  if (create) {
+    create.onclick = async () => {
+      try {
+        await api("/api/channels/feishu/app/create", { method: "POST", body: {} });
+        toast("已生成创建链接，请扫码");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
   const save = $("#ch-save");
   if (save) {
     save.onclick = async () => {
@@ -667,7 +700,8 @@ function wireChannelBlock() {
       try {
         const r = await api("/api/channels/feishu/login/start", { method: "POST", body: {} });
         pendingDevice = r.deviceCode;
-        box.innerHTML = `<p>在浏览器里完成授权：<a class="btn" href="${esc(r.verificationUrl)}" target="_blank" rel="noreferrer">打开授权页 ↗</a></p>
+        box.innerHTML = `${r.qr ? `<p><img src="${esc(r.qr)}" alt="扫码授权" style="width:160px;height:160px;background:#fff;padding:8px;border-radius:8px"/></p>` : ""}
+          <p>用手机扫码，或在浏览器打开：<a class="btn" href="${esc(r.verificationUrl)}" target="_blank" rel="noreferrer">打开授权页 ↗</a></p>
           <button class="small primary" id="ch-finish">我已完成授权</button>`;
         $("#ch-finish").onclick = async () => {
           try {
