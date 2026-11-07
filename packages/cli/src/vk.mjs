@@ -180,6 +180,7 @@ function daemonHandlers(adapters, log) {
         create,
         auth: channelFeishu.authStatus(),
         ready,
+        skipped: Boolean(cfg.skipped),
         configured: Boolean(cfg.app_id) || create.configured,
         authorized: ready === null,
         bound: Boolean(binding),
@@ -187,6 +188,15 @@ function daemonHandlers(adapters, log) {
         appId: cfg.app_id ?? create.appId ?? null,
         externalUserId: binding?.external_user_id ?? null,
       };
+    },
+
+    "channel.skip": () => {
+      updateConfig({ channel: { feishu: { skipped: true } } });
+      return { skipped: true, next: "已跳过；需要手机拍板时再回来开启" };
+    },
+    "channel.unskip": () => {
+      updateConfig({ channel: { feishu: { skipped: false } } });
+      return { skipped: false };
     },
 
     "channel.app.create.start": () => channelFeishu.createAppStart(),

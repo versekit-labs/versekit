@@ -22,9 +22,10 @@ const statusOf = (checks, done) => {
  * @param doctor   doctorReport() 的结果；缺省时环境步骤视为未知（不假装绿）
  * @param accounts 账号列表（store.listAccounts）
  * @param channel  {bound:boolean, who?:string}
+ * @param channelSkipped 用户选择「先跳过手机通道」；跳过时这一步算完成，不挡发布
  * @param publishedCount 已成功发布的数量
  */
-export function setupStatus({ doctor = null, accounts = [], channel = { bound: false }, publishedCount = 0, now = Date.now() } = {}) {
+export function setupStatus({ doctor = null, accounts = [], channel = { bound: false }, channelSkipped = false, publishedCount = 0, now = Date.now() } = {}) {
   const doctorChecks = doctor?.checks ?? [];
   const envChecks = doctorChecks
     .filter((c) => ENV_CHECKS.includes(c.id))
@@ -80,15 +81,21 @@ export function setupStatus({ doctor = null, accounts = [], channel = { bound: f
       id: "channel.bound",
       ok: Boolean(channel?.bound),
       blocking: false,
-      detail: channel?.bound ? `已配对${channel.who ? `（${channel.who}）` : ""}` : "还没有配对飞书，失败时只能自己盯着",
+      detail: channel?.bound
+        ? `已配对${channel.who ? `（${channel.who}）` : ""}`
+        : channelSkipped
+          ? "已跳过；发布和采集不受影响，随时可以回来开启"
+          : "还没有配对飞书，失败时只能自己盯着",
+      ...(channelSkipped && !channel?.bound ? { next: "需要手机拍板时，在接入页重新开启" } : {}),
     },
   ];
-  const channelDone = Boolean(channel?.bound);
+  const channelDone = Boolean(channel?.bound) || channelSkipped;
   const channelStep = {
     id: "channel",
     title: "手机通道",
-    intent: "出问题时在手机上拍板",
+    intent: "可选：出问题时在手机上拍板",
     status: statusOf(channelChecks, channelDone),
+    skipped: channelSkipped && !channel?.bound, 
     done: channelDone,
     checks: channelChecks,
     fix: channelDone ? null : fix("page", { label: "去配对飞书", href: "#accounts" }),

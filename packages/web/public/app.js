@@ -616,6 +616,15 @@ function channelBlockHtml(st) {
   const authorized = Boolean(st.authorized);
   const bound = Boolean(st.bound);
 
+  if (st.skipped && !bound) {
+    return `
+    <div class="channel-flow">
+      <p class="meta">手机通道已跳过。发布、采集都不受影响；需要手机拍板时再开启。</p>
+      <div class="row"><button class="mini" id="ch-unskip">开启手机通道</button></div>
+      <details class="meta advanced"><summary>高级信息</summary>profile：${esc(st.profile)}</details>
+    </div>`;
+  }
+
   const step = (n, title, done, detail) => `
     <div class="step-line ${done ? "done" : ""}">
       <span class="step-dot">${done ? "✓" : n}</span>
@@ -649,15 +658,15 @@ function channelBlockHtml(st) {
 
     ${
       configured
-        ? step(2, "授权", authorized, authorized ? "已完成" : auth.running ? "等待你在飞书确认…" : auth.error ? "上次授权没完成" : "准备授权二维码")
+        ? step(2, "授权", authorized, authorized ? "已完成" : auth.running ? "等待你在飞书确认…（最长 10 分钟）" : auth.error ? "上次授权没完成" : "准备授权二维码")
         : ""
     }
     ${
       configured && !authorized
         ? auth.qr
-          ? qrPane(auth.qr, auth.url, "扫码并在飞书里点确认；完成后会自动配对。")
+          ? qrPane(auth.qr, auth.url, auth.running ? "扫码并在飞书里点确认；页面会自动检测，最长 10 分钟。" : "扫码并在飞书里点确认；完成后会自动配对。")
           : auth.error
-            ? `<p class="meta">${esc(auth.error)}</p><button class="mini" id="ch-retry">重试授权</button>`
+            ? `<p class="meta">${esc((auth.error || "").slice(0, 180))}</p><button class="mini" id="ch-retry">重新扫码授权</button>`
             : `<p class="meta">正在准备授权二维码…</p>`
         : ""
     }
@@ -674,6 +683,7 @@ function channelBlockHtml(st) {
         : ""
     }
 
+    ${!bound ? `<p class="meta skip-line">飞书应用要等管理员审核，或你暂时不想配？<button class="mini ghost" id="ch-skip">先跳过，直接发布</button></p>` : ""}
     <details class="meta advanced"><summary>高级信息</summary>
       <div>profile：${esc(st.profile)}${st.appId ? ` · appId：${esc(st.appId)}` : ""}</div>
       ${st.ready ? `<div>${esc(st.ready)}</div>` : ""}
@@ -693,6 +703,32 @@ function wireChannelBlock(st = {}) {
     create.onclick = async () => {
       try {
         await api("/api/channels/feishu/app/create", { method: "POST", body: {} });
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const skip = $("#ch-skip");
+  if (skip) {
+    skip.onclick = async () => {
+      try {
+        await api("/api/channels/feishu/skip", { method: "POST", body: {} });
+        toast("已跳过手机通道，可以直接发布");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const unskip = $("#ch-unskip");
+  if (unskip) {
+    unskip.onclick = async () => {
+      try {
+        await api("/api/channels/feishu/unskip", { method: "POST", body: {} });
+        toast("已重新开启手机通道");
         render();
       } catch (err) {
         toast(err.message, true);

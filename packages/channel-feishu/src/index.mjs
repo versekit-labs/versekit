@@ -240,7 +240,8 @@ export default {
   /** 设备码授权第二步：用户确认后完成轮询。 */
   async authFinish(deviceCode) {
     if (!deviceCode) throw new Error("缺少 device_code");
-    await lark(["auth", "login", "--device-code", deviceCode]);
+    // 设备码轮询最长约 10 分钟；默认 25s 超时会把进程杀掉，用户授权后也收不到结果。
+    await lark(["auth", "login", "--device-code", deviceCode], { timeout: 620e3 });
     return { ok: true };
   },
 

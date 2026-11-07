@@ -78,3 +78,17 @@ test("每步都有 intent 与 checks，界面不需要再拼文案", () => {
     assert.ok(Array.isArray(step.checks) && step.checks.length > 0, step.id);
   }
 });
+
+test("跳过手机通道时算完成，下一步直接是第一条发布", () => {
+  const r = setupStatus({
+    doctor: doctor(),
+    accounts: [account()],
+    channel: { bound: false },
+    channelSkipped: true,
+    publishedCount: 0,
+  });
+  assert.equal(stepOf(r, "channel").status, "ok");
+  assert.equal(stepOf(r, "channel").skipped, true);
+  assert.equal(r.nextStep, "first-publish");
+  assert.equal(r.done, 3);
+});
