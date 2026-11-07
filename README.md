@@ -102,7 +102,7 @@ flowchart LR
 失败会降级、状态会落库、数据会按节奏回收。飞书通道还没接。
 
 <p align="center">
-  <img src="docs/screenshots/setup.png" alt="versekit 接入向导" width="820"/>
+  <img src="docs/screenshots/setup-qr.png" alt="versekit 接入向导" width="820"/>
   <br/><sub>总览：成功、失败、待处理与账号健康在一屏（真实运行截图）</sub>
 </p>
 
@@ -114,10 +114,10 @@ flowchart LR
 | Chrome CDP 驱动（每账号 profile/端口 · 真实鼠标 · shadow DOM · 响应拦截） | ✅ |
 | CLI（19 条命令，含 publish / account / collect / stats / runs / events） | ✅ |
 | **本地 Web 控制台**（接入 / 账号墙 / 发布台 / 作品 / 总览 / 任务 / 自检） | ✅ 真浏览器验收 + SSE 实时刷新 |
-| **接入向导**（四步：环境 → 账号 → 通道 → 第一条） | ✅ 无账号时首启自动落地，动作/检查/深链齐备 |
+| **接入向导**（环境 → 账号 → 通道 → 第一条） | ✅ 只展开当前一步；飞书两次扫码，其余自动推进 |
 | 适配器 B站（biliup 发布 + 创作中心采集 + 登录体检） | ✅ 待真机验收 |
 | 适配器 TikTok（Studio 发布 + 后台拦截采集 + 登录探测） | ✅ 待真机验收 |
-| 飞书通道（卡片投递 + 按钮回执） | ✅ 端到端已验证；接入页可**扫码创建/授权**你自己的应用，无需手填 key |
+| 飞书通道（卡片投递 + 按钮回执） | ✅ 端到端已验证；**两次扫码**即可完成应用创建与授权 |
 | 其余三平台（YouTube / 小红书 / 抖音） | ⬜ v0.3 |
 | CI 门禁（parity 19 · adapter-contract 15 · no-backdoor） | ✅ |
 

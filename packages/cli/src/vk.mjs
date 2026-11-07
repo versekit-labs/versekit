@@ -178,6 +178,7 @@ function daemonHandlers(adapters, log) {
       const binding = getBinding("feishu");
       return {
         create,
+        auth: channelFeishu.authStatus(),
         ready,
         configured: Boolean(cfg.app_id) || create.configured,
         authorized: ready === null,

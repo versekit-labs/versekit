@@ -65,6 +65,9 @@ async function lark(args, { timeout = 25e3 } = {}) {
   return json;
 }
 
+// 授权状态：后台轮询进行中 / 已完成 / 失败。
+let authState = { running: false, url: null, qr: null, error: null, completed: false };
+
 // 扫码创建应用：config init --new 会阻塞到浏览器里完成；URL 先给用户扫。
 let createState = { running: false, url: null, qr: null, startedAt: 0, child: null };
 
@@ -204,15 +207,34 @@ export default {
 
   /** 设备码授权第一步：拿验证地址，交给用户去浏览器确认。 */
   async authStart() {
+    if (authState.running) return { ...authState, already: true };
     const json = await lark(["auth", "login", "--no-wait", "--json"]);
     const data = json.data ?? json;
     const verificationUrl = data.verification_url ?? data.verificationUrl ?? null;
-    return {
-      verificationUrl,
-      qr: verificationUrl ? await this.qr(verificationUrl) : null,
-      deviceCode: data.device_code ?? data.deviceCode ?? null,
-      expiresIn: data.expires_in ?? data.expiresIn ?? null,
-    };
+    const deviceCode = data.device_code ?? data.deviceCode ?? null;
+    const qr = verificationUrl ? await this.qr(verificationUrl) : null;
+
+    authState = { running: Boolean(deviceCode), url: verificationUrl, qr, error: null, completed: false };
+
+    // 设备码在后台自己轮询：用户扫完码、在飞书点确认后，这里会自动完成，
+    // 页面只负责轮询状态，不再需要「我已完成授权」按钮。
+    if (deviceCode) {
+      this.authFinish(deviceCode)
+        .then(() => {
+          authState.running = false;
+          authState.completed = true;
+        })
+        .catch((err) => {
+          authState.running = false;
+          authState.error = err.message;
+        });
+    }
+
+    return { verificationUrl, qr, deviceCode, expiresIn: data.expires_in ?? data.expiresIn ?? null };
+  },
+
+  authStatus() {
+    return { ...authState };
   },
 
   /** 设备码授权第二步：用户确认后完成轮询。 */

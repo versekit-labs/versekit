@@ -95,7 +95,11 @@ async function viewAccounts() {
     ${accounts.length ? `<div class="grid cols-2">${cards}</div>` : `<div class="empty">还没有账号。先在下面添加一个。</div>`}
 
     <h2>飞书通道</h2>
-    ${channelBlockHtml(chStatus)}
+    <div class="card slim">
+      <span class="chip"><i class="dot ${chStatus.bound ? "ok" : chStatus.configured ? "warn" : "bad"}"></i>飞书 ${chStatus.bound ? "已配对" : chStatus.configured ? "待授权" : "未配置"}</span>
+      <span class="meta">${chStatus.bound ? "发布失败、登录失效会推卡片到手机" : "在「接入」页扫码配置自己的飞书应用"}</span>
+      <a class="btn ghost mini" href="#setup">${chStatus.bound ? "管理" : "去配置"}</a>
+    </div>
 
     <h2>添加账号</h2>
     <div class="card">
@@ -166,8 +170,6 @@ async function viewAccounts() {
       }
     };
   }
-
-  wireChannelBlock();
 
   for (const btn of document.querySelectorAll("[data-act]")) {
     btn.onclick = async () => {
@@ -608,68 +610,89 @@ let currentChannelStatus = null;
  *   已授权未配对 / 已配对 → 绑定并测试
  */
 function channelBlockHtml(st) {
-  currentChannelStatus = st;
+  const create = st.create ?? {};
+  const auth = st.auth ?? {};
   const configured = Boolean(st.configured);
   const authorized = Boolean(st.authorized);
   const bound = Boolean(st.bound);
-  const creating = Boolean(st.create?.running);
-  const label = !configured ? (creating ? "等待创建" : "未配置应用") : !authorized ? "待授权" : bound ? "已配对" : "待配对";
-  const dot = bound && authorized ? "ok" : configured || creating ? "warn" : "bad";
 
-  const createPane = creating
-    ? `
-      <p class="meta">用手机扫下面的码，在打开页里登录并创建 versekit 应用；凭据会直接存进系统钥匙串。</p>
-      ${st.create.qr ? `<p><img src="${esc(st.create.qr)}" alt="扫码创建飞书应用" style="width:180px;height:180px;background:#fff;padding:8px;border-radius:8px"/></p>` : ""}
-      ${st.create.qrError ? `<p class="meta">二维码生成失败（${esc(st.create.qrError)}），请直接用下面的链接。</p>` : ""}
-      <p><a class="btn" href="${esc(st.create.url ?? "")}" target="_blank" rel="noreferrer">在浏览器打开 ↗</a></p>
-      <p class="meta">完成后这里会自动变成「待授权」，不需要手动填任何 key。</p>
-      <p><button class="small ghost" id="ch-cancel">取消创建</button></p>
-    `
-    : `
-      <button class="primary" id="ch-create">扫码创建应用</button>
-      <p class="meta">会打开飞书官方页面：创建应用、开权限、写进独立 profile。我们看不到 secret。</p>
-      <details class="meta" style="margin-top:10px">
-        <summary style="cursor:pointer">我已有应用，手动填写</summary>
-        <label>App ID</label><input id="ch-appid" placeholder="cli_xxxxxxxxxxxx"/>
-        <label>App Secret</label><input id="ch-secret" type="password" placeholder="只显示这一次"/>
-        <button class="small" id="ch-save" style="margin-top:8px">保存应用</button>
-      </details>
-    `;
+  const step = (n, title, done, detail) => `
+    <div class="step-line ${done ? "done" : ""}">
+      <span class="step-dot">${done ? "✓" : n}</span>
+      <div><b>${title}</b><div class="meta">${detail}</div></div>
+    </div>`;
+
+  const qrPane = (qr, url, hint) => `
+    <div class="qr-wrap">
+      ${qr ? `<img class="qr" src="${esc(qr)}" alt="扫码"/>` : `<div class="qr-missing">二维码没生成，请直接用链接</div>`}
+      <a class="btn ghost" href="${esc(url ?? "")}" target="_blank" rel="noreferrer">在浏览器打开 ↗</a>
+      <div class="meta">${esc(hint)}</div>
+    </div>`;
 
   return `
-  <div class="card" style="margin-top:10px">
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <span class="chip"><i class="dot ${dot}"></i>${label}</span>
-      <span class="meta">profile ${esc(st.profile)}${st.appId ? ` · ${esc(st.appId)}` : ""}</span>
-    </div>
-    <p class="meta">用你自己的飞书应用；App Secret 只在保存时通过 stdin 交给系统钥匙串，不进数据库、不进日志。</p>
-    ${!configured ? createPane : ""}
-    ${configured && !authorized ? `
-      <button class="primary" id="ch-start">扫码授权</button>
-      <div id="ch-login-box" class="meta" style="margin-top:8px"></div>
-    ` : ""}
-    ${configured && authorized && !bound ? `<button class="primary" id="ch-bind">配对并发送测试卡</button>` : ""}
-    ${configured && authorized && bound ? `
-      <div class="row">
-        <div class="tight"><button class="ghost" id="ch-test">发测试卡</button></div>
-        <div class="tight"><button class="ghost" id="ch-diag">诊断</button></div>
-      </div>
-    ` : ""}
-    <p class="meta" id="ch-note">${st.ready ? esc(st.ready) : ""}</p>
-    <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>
+  <div class="channel-flow">
+    ${step(1, "创建飞书应用", configured, configured ? `已创建 · ${esc(st.appId ?? "")}` : "在你的飞书账号下创建一个专用应用")}
+    ${
+      !configured
+        ? create.running
+          ? `${qrPane(create.qr, create.url, "用手机扫码，在飞书里确认创建；完成后自动进入下一步。")}
+             <p class="meta">等待你在飞书完成创建…</p>
+             <button class="mini ghost" id="ch-cancel">取消</button>`
+          : `<div class="row"><button class="primary" id="ch-create">扫码创建应用</button></div>
+             <details class="meta"><summary>我已有应用，手动填写</summary>
+               <label>App ID</label><input id="ch-appid" placeholder="cli_xxxxxxxxxxxx"/>
+               <label>App Secret</label><input id="ch-secret" type="password" placeholder="只显示这一次"/>
+               <button class="mini" id="ch-save">保存应用</button>
+             </details>`
+        : ""
+    }
+
+    ${
+      configured
+        ? step(2, "授权", authorized, authorized ? "已完成" : auth.running ? "等待你在飞书确认…" : auth.error ? "上次授权没完成" : "准备授权二维码")
+        : ""
+    }
+    ${
+      configured && !authorized
+        ? auth.qr
+          ? qrPane(auth.qr, auth.url, "扫码并在飞书里点确认；完成后会自动配对。")
+          : auth.error
+            ? `<p class="meta">${esc(auth.error)}</p><button class="mini" id="ch-retry">重试授权</button>`
+            : `<p class="meta">正在准备授权二维码…</p>`
+        : ""
+    }
+
+    ${authorized ? step(3, "配对", bound, bound ? "已配对，测试卡已发送" : "正在自动配对…") : ""}
+
+    ${
+      bound
+        ? `<div class="row" style="margin-top:8px">
+             <div class="tight"><button class="ghost mini" id="ch-test">发测试卡</button></div>
+             <div class="tight"><button class="ghost mini" id="ch-diag">诊断</button></div>
+           </div>
+           <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>`
+        : ""
+    }
+
+    <details class="meta advanced"><summary>高级信息</summary>
+      <div>profile：${esc(st.profile)}${st.appId ? ` · appId：${esc(st.appId)}` : ""}</div>
+      ${st.ready ? `<div>${esc(st.ready)}</div>` : ""}
+    </details>
   </div>`;
 }
 
-function wireChannelBlock() {
-  // 创建应用是异步的：每 3 秒看一眼状态，完成后自动进下一步。
-  if (currentChannelStatus?.create?.running) setTimeout(() => render(), 3000);
+// 自动推进：创建完成→自动出授权码；授权完成→自动配对。用户只扫码，不点按钮。
+let autoAuthFor = null;
+let autoBoundFor = null;
+
+function wireChannelBlock(st = {}) {
+  if (!st.bound) setTimeout(() => render(), 2000);
 
   const create = $("#ch-create");
   if (create) {
     create.onclick = async () => {
       try {
         await api("/api/channels/feishu/app/create", { method: "POST", body: {} });
-        toast("已生成创建链接，请扫码");
         render();
       } catch (err) {
         toast(err.message, true);
@@ -682,12 +705,46 @@ function wireChannelBlock() {
     cancel.onclick = async () => {
       try {
         await api("/api/channels/feishu/app/create/cancel", { method: "POST", body: {} });
-        toast("已取消");
         render();
       } catch (err) {
         toast(err.message, true);
       }
     };
+  }
+
+  if (st.configured && !st.authorized && !st.auth?.running && !st.auth?.qr && !st.auth?.error && autoAuthFor !== st.appId) {
+    autoAuthFor = st.appId;
+    api("/api/channels/feishu/login/start", { method: "POST", body: {} })
+      .then(() => render())
+      .catch((err) => {
+        autoAuthFor = null;
+        toast(err.message, true);
+      });
+  }
+
+  const retry = $("#ch-retry");
+  if (retry) {
+    retry.onclick = async () => {
+      try {
+        await api("/api/channels/feishu/login/start", { method: "POST", body: {} });
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  if (st.authorized && !st.bound && autoBoundFor !== st.appId) {
+    autoBoundFor = st.appId;
+    (async () => {
+      await api("/api/channels/feishu/bind", { method: "POST", body: {} });
+      await api("/api/channels/feishu/test", { method: "POST", body: {} });
+      toast("已配对，测试卡已发送");
+      render();
+    })().catch((err) => {
+      autoBoundFor = null;
+      toast(err.message, true);
+    });
   }
 
   const save = $("#ch-save");
@@ -699,48 +756,6 @@ function wireChannelBlock() {
       try {
         await api("/api/channels/feishu/app", { method: "POST", body: { appId, appSecret } });
         $("#ch-secret").value = "";
-        toast("应用已保存，下一步授权");
-        render();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-
-  const start = $("#ch-start");
-  if (start) {
-    start.onclick = async () => {
-      const box = $("#ch-login-box");
-      box.textContent = "正在申请设备码…";
-      try {
-        const r = await api("/api/channels/feishu/login/start", { method: "POST", body: {} });
-        pendingDevice = r.deviceCode;
-        box.innerHTML = `${r.qr ? `<p><img src="${esc(r.qr)}" alt="扫码授权" style="width:160px;height:160px;background:#fff;padding:8px;border-radius:8px"/></p>` : ""}
-          <p>用手机扫码，或在浏览器打开：<a class="btn" href="${esc(r.verificationUrl)}" target="_blank" rel="noreferrer">打开授权页 ↗</a></p>
-          <button class="small primary" id="ch-finish">我已完成授权</button>`;
-        $("#ch-finish").onclick = async () => {
-          try {
-            const done = await api("/api/channels/feishu/login/wait", { method: "POST", body: { deviceCode: pendingDevice } });
-            toast(`已授权并配对：${done.who ?? done.externalUserId}`);
-            render();
-          } catch (err) {
-            toast(err.message, true);
-          }
-        };
-      } catch (err) {
-        box.textContent = err.message;
-      }
-    };
-  }
-
-  const bind = $("#ch-bind");
-  if (bind) {
-    bind.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
-        const test = await api("/api/channels/feishu/test", { method: "POST", body: {} });
-        toast(`已配对：${r.who ?? r.externalUserId}，测试卡已发送`);
-        $("#ch-note").textContent = test.messageId ? `测试消息 ${test.messageId}` : "测试卡已发送";
         render();
       } catch (err) {
         toast(err.message, true);
@@ -752,9 +767,8 @@ function wireChannelBlock() {
   if (test) {
     test.onclick = async () => {
       try {
-        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
+        await api("/api/channels/feishu/test", { method: "POST", body: {} });
         toast("测试卡已发送");
-        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
       } catch (err) {
         toast(err.message, true);
       }
@@ -765,6 +779,7 @@ function wireChannelBlock() {
   if (diag) {
     diag.onclick = async () => {
       const box = $("#ch-diag-box");
+      box.textContent = "诊断中…（约 10 秒）";
       try {
         await renderDiagnose(box);
       } catch (err) {
@@ -809,43 +824,48 @@ function fixHtml(fix) {
 }
 
 async function viewSetup() {
-  const [setup, chStatus] = await Promise.all([api("/api/setup"), api("/api/channels/feishu/status")]);
-  const chips = { ok: ["ok", "完成"], todo: ["warn", "待做"], blocked: ["bad", "卡住"] };
+  const [setup, ch] = await Promise.all([api("/api/setup"), api("/api/channels/feishu/status")]);
+  const current = setup.nextStep;
+  const pct = Math.round((setup.done / setup.total) * 100);
 
-  const steps = setup.steps
-    .map((step) => {
-      const [dot, word] = chips[step.status] ?? ["", step.status];
-      const bad = step.checks.filter((c) => !c.ok);
-      return `
-      <div class="card">
+  const rows = setup.steps
+    .map((step, index) => {
+      const done = step.status === "ok";
+      if (done || step.id !== current) {
+        return `<div class="step-compact ${done ? "done" : ""}">
+          <span class="step-dot">${done ? "✓" : index + 1}</span>
+          <b>${esc(step.title)}</b>
+          <span class="meta">${esc(step.intent)}</span>
+        </div>`;
+      }
+
+      const failures = step.checks.filter((c) => !c.ok);
+      return `<div class="card current-step">
         <div class="row" style="justify-content:space-between;align-items:center">
-          <div>
-            <h3>${esc(step.title)} <span class="meta">${esc(step.intent)}</span></h3>
-          </div>
-          <span class="chip"><i class="dot ${dot}"></i>${esc(word)}</span>
+          <div><h3>${esc(step.title)}</h3><p class="hint tight-text">${esc(step.intent)}</p></div>
+          <span class="chip"><i class="dot warn"></i>现在做这个</span>
         </div>
-        <div class="grid" style="gap:4px;margin-top:10px">
-          ${step.checks.map((c) => `<div>${c.ok ? "✓" : "✗"} <span class="meta">${esc(c.id)}</span> ${esc(c.detail)}</div>`).join("")}
-        </div>
-        ${step.id === "channel" ? channelBlockHtml(chStatus) : ""}
-        ${step.id !== "channel" && (bad.length || step.fix)
-          ? `<div class="row" style="margin-top:12px">${step.fix ? fixHtml(step.fix) : ""}</div>`
-          : ""}
+        ${failures
+          .map((c) => `<div class="meta line">✗ ${esc(c.detail)}${c.next ? ` — ${esc(c.next)}` : ""}</div>`)
+          .join("")}
+        ${step.id === "channel" ? channelBlockHtml(ch) : ""}
+        ${step.id !== "channel" && step.fix ? `<div class="row" style="margin-top:12px">${fixHtml(step.fix)}</div>` : ""}
       </div>`;
     })
     .join("");
 
   $("#view").innerHTML = `
     <h1>接入</h1>
-    <p class="hint">四步走完，就能在电脑上发、在手机上拍板。第一个不是绿色的步骤，就是你现在该做的事。</p>
-    <div class="card" style="margin-bottom:14px">
+    <p class="hint">三步：环境 → 账号 → 手机通道。做完当前这步，下一步才会出现。</p>
+    <div class="progress-card">
       <div class="row" style="justify-content:space-between;align-items:center">
-        <div class="kpi">${setup.done}/${setup.total}<small>步完成</small></div>
-        <span class="meta">${setup.nextStep ? `下一步：${esc(setup.steps.find((s) => s.id === setup.nextStep)?.title ?? setup.nextStep)}` : "全部就绪"}</span>
+        <span class="meta">${setup.done}/${setup.total} 完成</span>
+        <span class="meta">${setup.nextStep ? "下一步在下面" : "全部就绪"}</span>
       </div>
-      <div class="bar" style="margin-top:10px"><i style="width:${(setup.done / setup.total) * 100}%"></i></div>
+      <div class="bar" style="margin-top:8px"><i style="width:${pct}%"></i></div>
     </div>
-    ${steps}`;
+    ${rows}
+    <p class="meta" style="margin-top:18px"><a href="#doctor">看完整自检</a> · 修改过的应用信息在每一步的「高级信息」里</p>`;
 
   for (const btn of document.querySelectorAll("[data-copy]")) {
     btn.onclick = async () => {
@@ -862,9 +882,8 @@ async function viewSetup() {
     btn.onclick = async () => {
       try {
         const args = JSON.parse(btn.dataset.args ?? "{}");
-        const path = COMMAND_ROUTES[btn.dataset.fix](args);
-        await api(path, { method: "POST", body: { ...args } });
-        toast("已提交，稍后刷新");
+        await api(COMMAND_ROUTES[btn.dataset.fix](args), { method: "POST", body: { ...args } });
+        toast("已提交");
         render();
       } catch (err) {
         toast(err.message, true);
@@ -872,7 +891,7 @@ async function viewSetup() {
     };
   }
 
-  wireChannelBlock();
+  wireChannelBlock(ch);
 }
 
 // ---------------------------------------------------------------- 路由
