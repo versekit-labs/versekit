@@ -261,6 +261,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "channel.app.create.cancel",
+    summary: "取消还没完成的扫码创建",
+    remote: false,
+    args: {},
+    http: { method: "POST", path: "/api/channels/feishu/app/create/cancel" },
+    cli: { usage: "vk channel app create feishu --cancel" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "channel.app.set",
     summary: "保存你自己的飞书应用（secret 只走 stdin）",
     remote: false,

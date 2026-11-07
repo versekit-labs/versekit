@@ -94,7 +94,10 @@ export default {
 
   /** 把授权链接变成二维码（PNG data URI），页面直接 <img>。 */
   async qr(url) {
-    const file = join(tmpdir(), `vk-qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
+    // lark-cli 的输出路径只允许 cwd、/tmp、~/files；macOS 的 tmpdir() 是 /var/folders/…，
+    // 不在白名单里，会被拒绝。这里显式用 /tmp。
+    const dir = process.platform === "darwin" ? "/tmp" : tmpdir();
+    const file = join(dir, `vk-qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
     try {
       await exec(bin(), ["auth", "qrcode", url, "-o", file], { timeout: 15e3, encoding: "utf8" });
       const data = readFileSync(file).toString("base64");
@@ -114,8 +117,14 @@ export default {
    */
   async createAppStart() {
     if (createState.running) return { url: createState.url, qr: createState.qr, running: true };
-    const child = spawn(bin(), ["config", "init", "--new", "--name", profile()], { stdio: ["pipe", "pipe", "pipe"] });
-    createState = { running: true, url: null, qr: null, startedAt: Date.now(), child };
+
+    // 这条命令只有在 TTY 里才会输出二维码和链接；管道下它会直接退出。
+    // 用系统自带的 script 分配一个 pty，再照常解析输出。
+    const child =
+      process.platform === "linux"
+        ? spawn("script", ["-q", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
+        : spawn("script", ["-q", "/dev/null", bin(), "config", "init", "--new", "--name", profile()], { stdio: ["ignore", "pipe", "pipe"] });
+    createState = { running: true, url: null, qr: null, qrError: null, startedAt: Date.now(), child };
     let buffer = "";
 
     const url = await new Promise((resolve, reject) => {
@@ -143,11 +152,29 @@ export default {
       });
     });
 
-    const qr = await this.qr(url);
+    // 二维码只是锦上添花：生成失败也要把链接给出去，否则用户彻底没法继续。
     createState.url = url;
+    let qr = null;
+    let qrError = null;
+    try {
+      qr = await this.qr(url);
+    } catch (err) {
+      qrError = err.message;
+    }
     createState.qr = qr;
+    createState.qrError = qrError;
     child.stdout.resume();
-    return { url, qr, running: true };
+    return { url, qr, qrError, running: true };
+  },
+
+  createAppCancel() {
+    try {
+      createState.child?.kill("SIGTERM");
+    } catch {
+      /* 已经退了 */
+    }
+    createState = { running: false, url: null, qr: null, qrError: null, startedAt: 0, child: null };
+    return { running: false };
   },
 
   createAppStatus() {
@@ -156,6 +183,7 @@ export default {
       running: createState.running,
       url: createState.url,
       qr: createState.qr,
+      qrError: createState.qrError,
       configured: info.exists,
       appId: info.appId,
     };

@@ -620,8 +620,10 @@ function channelBlockHtml(st) {
     ? `
       <p class="meta">用手机扫下面的码，在打开页里登录并创建 versekit 应用；凭据会直接存进系统钥匙串。</p>
       ${st.create.qr ? `<p><img src="${esc(st.create.qr)}" alt="扫码创建飞书应用" style="width:180px;height:180px;background:#fff;padding:8px;border-radius:8px"/></p>` : ""}
+      ${st.create.qrError ? `<p class="meta">二维码生成失败（${esc(st.create.qrError)}），请直接用下面的链接。</p>` : ""}
       <p><a class="btn" href="${esc(st.create.url ?? "")}" target="_blank" rel="noreferrer">在浏览器打开 ↗</a></p>
       <p class="meta">完成后这里会自动变成「待授权」，不需要手动填任何 key。</p>
+      <p><button class="small ghost" id="ch-cancel">取消创建</button></p>
     `
     : `
       <button class="primary" id="ch-create">扫码创建应用</button>
@@ -668,6 +670,19 @@ function wireChannelBlock() {
       try {
         await api("/api/channels/feishu/app/create", { method: "POST", body: {} });
         toast("已生成创建链接，请扫码");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const cancel = $("#ch-cancel");
+  if (cancel) {
+    cancel.onclick = async () => {
+      try {
+        await api("/api/channels/feishu/app/create/cancel", { method: "POST", body: {} });
+        toast("已取消");
         render();
       } catch (err) {
         toast(err.message, true);

@@ -190,6 +190,7 @@ function daemonHandlers(adapters, log) {
 
     "channel.app.create.start": () => channelFeishu.createAppStart(),
     "channel.app.create.status": () => channelFeishu.createAppStatus(),
+    "channel.app.create.cancel": () => channelFeishu.createAppCancel(),
 
     "channel.app.set": async ({ appId, appSecret }) => {
       const r = await channelFeishu.configure({ appId, appSecret });
