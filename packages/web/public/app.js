@@ -823,49 +823,70 @@ function fixHtml(fix) {
   return "";
 }
 
+let expandedStep = null;
+
 async function viewSetup() {
   const [setup, ch] = await Promise.all([api("/api/setup"), api("/api/channels/feishu/status")]);
   const current = setup.nextStep;
+  // 飞书已经建好应用但还没配对时，优先把这一步打开：用户多半正卡在这里。
+  const feishuPending = ch.configured && !ch.bound;
+  const expanded = expandedStep ?? (feishuPending ? "channel" : current);
   const pct = Math.round((setup.done / setup.total) * 100);
 
-  const rows = setup.steps
+  const steps = setup.steps
     .map((step, index) => {
       const done = step.status === "ok";
-      if (done || step.id !== current) {
-        return `<div class="step-compact ${done ? "done" : ""}">
-          <span class="step-dot">${done ? "✓" : index + 1}</span>
-          <b>${esc(step.title)}</b>
-          <span class="meta">${esc(step.intent)}</span>
-        </div>`;
-      }
-
+      const open = expanded === step.id;
       const failures = step.checks.filter((c) => !c.ok);
-      return `<div class="card current-step">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <div><h3>${esc(step.title)}</h3><p class="hint tight-text">${esc(step.intent)}</p></div>
-          <span class="chip"><i class="dot warn"></i>现在做这个</span>
+      const chip = done
+        ? `<span class="chip"><i class="dot ok"></i>完成</span>`
+        : step.id === "channel" && feishuPending
+          ? `<span class="chip"><i class="dot warn"></i>${ch.authorized ? "待配对" : "待授权"}</span>`
+          : step.id === current
+            ? `<span class="chip"><i class="dot warn"></i>现在做</span>`
+            : `<span class="meta">待做</span>`;
+
+      const body = open
+        ? `<div class="step-body">
+            ${failures.map((c) => `<div class="meta line">✗ ${esc(c.detail)}${c.next ? ` — ${esc(c.next)}` : ""}</div>`).join("")}
+            ${step.id === "channel" ? channelBlockHtml(ch) : ""}
+            ${step.id !== "channel" && step.fix ? `<div class="row" style="margin-top:12px">${fixHtml(step.fix)}</div>` : ""}
+          </div>`
+        : "";
+
+      return `<div class="step-block ${open ? "open" : ""} ${step.id === current ? "current-step" : ""}">
+        <div class="step-row" data-step="${esc(step.id)}">
+          <span class="step-dot ${done ? "done" : ""}">${done ? "✓" : index + 1}</span>
+          <div class="step-title"><b>${esc(step.title)}</b><span class="meta">${
+            step.id === "channel" && feishuPending ? (ch.authorized ? "应用已授权，点开自动配对" : "应用已创建，点开扫码授权") : esc(step.intent)
+          }</span></div>
+          <span class="step-side">${chip}<span class="chev">${open ? "▾" : "▸"}</span></span>
         </div>
-        ${failures
-          .map((c) => `<div class="meta line">✗ ${esc(c.detail)}${c.next ? ` — ${esc(c.next)}` : ""}</div>`)
-          .join("")}
-        ${step.id === "channel" ? channelBlockHtml(ch) : ""}
-        ${step.id !== "channel" && step.fix ? `<div class="row" style="margin-top:12px">${fixHtml(step.fix)}</div>` : ""}
+        ${body}
       </div>`;
     })
     .join("");
 
   $("#view").innerHTML = `
     <h1>接入</h1>
-    <p class="hint">三步：环境 → 账号 → 手机通道。做完当前这步，下一步才会出现。</p>
+    <p class="hint">按需展开每一步。第一个未完成的步骤默认展开。</p>
     <div class="progress-card">
       <div class="row" style="justify-content:space-between;align-items:center">
         <span class="meta">${setup.done}/${setup.total} 完成</span>
-        <span class="meta">${setup.nextStep ? "下一步在下面" : "全部就绪"}</span>
+        <span class="meta">${setup.nextStep ? "下一步在展开的那一步" : "全部就绪"}</span>
       </div>
       <div class="bar" style="margin-top:8px"><i style="width:${pct}%"></i></div>
     </div>
-    ${rows}
-    <p class="meta" style="margin-top:18px"><a href="#doctor">看完整自检</a> · 修改过的应用信息在每一步的「高级信息」里</p>`;
+    ${steps}
+    <p class="meta" style="margin-top:18px"><a href="#doctor">看完整自检</a></p>`;
+
+  for (const row of document.querySelectorAll("[data-step]")) {
+    row.onclick = () => {
+      const id = row.dataset.step;
+      expandedStep = expandedStep === id ? "" : id;
+      render();
+    };
+  }
 
   for (const btn of document.querySelectorAll("[data-copy]")) {
     btn.onclick = async () => {
@@ -879,7 +900,8 @@ async function viewSetup() {
   }
 
   for (const btn of document.querySelectorAll("[data-fix]")) {
-    btn.onclick = async () => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
       try {
         const args = JSON.parse(btn.dataset.args ?? "{}");
         await api(COMMAND_ROUTES[btn.dataset.fix](args), { method: "POST", body: { ...args } });
@@ -891,7 +913,7 @@ async function viewSetup() {
     };
   }
 
-  wireChannelBlock(ch);
+  if (expanded === "channel") wireChannelBlock(ch);
 }
 
 // ---------------------------------------------------------------- 路由

@@ -168,3 +168,16 @@ svg.chart text { fill: var(--muted); font-size: 10px; }
 .qr-missing { color: var(--muted); font-size: 12px; }
 .mini { padding: 4px 10px; font-size: 12px; }
 .advanced { margin-top: 10px; }
+
+/* 可展开的接入步骤 */
+.step-block { border-bottom: 1px solid var(--line); }
+.step-block.current-step.open { background: linear-gradient(180deg, #0f1a22, transparent); }
+.step-row { display: flex; align-items: center; gap: 12px; padding: 12px 4px; cursor: pointer; }
+.step-row:hover { background: #101a24; }
+.step-title { display: grid; gap: 1px; flex: 1; }
+.step-title b { font-weight: 550; }
+.step-title .meta { font-size: 12px; }
+.step-side { display: flex; align-items: center; gap: 8px; }
+.step-side .chev { color: var(--muted); font-size: 12px; }
+.step-dot.done { border-color: var(--good); color: var(--good); }
+.step-body { padding: 2px 4px 16px 38px; }
