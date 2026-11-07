@@ -29,6 +29,7 @@ test("控制台在真浏览器里能打开：五页都在、没有横向溢出�
     ...buildHandlers(adapters, { log: () => {} }),
     ...createCoreHandlers({ adapters, log: () => {} }),
     doctor: () => doctorReport({ browserReady: () => null, browser: { profile: HOME, port: 0 }, adapters }),
+    "channel.status": () => ({ ready: "飞书应用未配置：在「接入」页填写你自己的 app_id 与 app_secret", configured: false, authorized: false, bound: false, profile: "versekit", appId: null }),
   };
   const daemon = await startDaemon({ handlers, runQueue: false, port: 0, socketPath: join(HOME, "ui.sock") });
   const base = `http://127.0.0.1:${daemon.port}`;

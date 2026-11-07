@@ -61,7 +61,12 @@ const METRIC_LABEL = { play: "播放", like: "点赞", fav: "收藏", comment: "
 // ---------------------------------------------------------------- 账号
 
 async function viewAccounts() {
-  const [{ accounts }, { platforms }, now] = await Promise.all([api("/api/accounts"), api("/api/platforms"), api("/api/now")]);
+  const [{ accounts }, { platforms }, now, chStatus] = await Promise.all([
+    api("/api/accounts"),
+    api("/api/platforms"),
+    api("/api/now"),
+    api("/api/channels/feishu/status"),
+  ]);
   const channel = now.channel;
   const usable = platforms.filter((p) => p.publish !== "none");
 
@@ -90,19 +95,7 @@ async function viewAccounts() {
     ${accounts.length ? `<div class="grid cols-2">${cards}</div>` : `<div class="empty">还没有账号。先在下面添加一个。</div>`}
 
     <h2>飞书通道</h2>
-    <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <span class="chip"><i class="dot ${channel.feishu === "bound" ? "ok" : "bad"}"></i>${channel.feishu === "bound" ? "已配对" : "未配对"}</span>
-        <span class="meta">${channel.binding ? `配对于 ${fmtTime(channel.binding.paired_at)}` : "配对后，发布失败 / 登录失效会推卡片到手机"}</span>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <div class="tight"><button id="ch-bind">${channel.feishu === "bound" ? "重新配对" : "配对飞书"}</button></div>
-        <div class="tight"><button class="ghost" id="ch-test" ${channel.feishu !== "bound" ? "disabled" : ""}>发测试卡</button></div>
-        <div class="tight"><button class="ghost" id="ch-diag">诊断</button></div>
-      </div>
-      <p class="meta" id="ch-note">配对用 lark-cli 当前登录的人，不需要手抄 open_id。</p>
-      <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>
-    </div>
+    ${channelBlockHtml(chStatus)}
 
     <h2>添加账号</h2>
     <div class="card">
@@ -163,44 +156,6 @@ async function viewAccounts() {
     };
   }
 
-  const chDiag = $("#ch-diag");
-  if (chDiag) {
-    chDiag.onclick = async () => {
-      const box = $("#ch-diag-box");
-      box.textContent = "诊断中…（约 10 秒，要等飞书事件总线就绪）";
-      try {
-        renderDiagnose(box);
-      } catch (err) {
-        box.textContent = err.message;
-      }
-    };
-  }
-
-  const chBind = $("#ch-bind");
-  if (chBind) {
-    chBind.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
-        $("#ch-note").textContent = `已配对：${r.who ?? r.externalUserId}`;
-        toast("飞书已配对");
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-  const chTest = $("#ch-test");
-  if (chTest) {
-    chTest.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
-        toast("测试卡已发送，去飞书看看");
-        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-
   for (const btn of document.querySelectorAll("[data-copy]")) {
     btn.onclick = async () => {
       try {
@@ -211,6 +166,8 @@ async function viewAccounts() {
       }
     };
   }
+
+  wireChannelBlock();
 
   for (const btn of document.querySelectorAll("[data-act]")) {
     btn.onclick = async () => {
@@ -457,44 +414,6 @@ async function viewWorks(selectedId = null) {
     };
   }
 
-  const chDiag = $("#ch-diag");
-  if (chDiag) {
-    chDiag.onclick = async () => {
-      const box = $("#ch-diag-box");
-      box.textContent = "诊断中…（约 10 秒，要等飞书事件总线就绪）";
-      try {
-        renderDiagnose(box);
-      } catch (err) {
-        box.textContent = err.message;
-      }
-    };
-  }
-
-  const chBind = $("#ch-bind");
-  if (chBind) {
-    chBind.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
-        $("#ch-note").textContent = `已配对：${r.who ?? r.externalUserId}`;
-        toast("飞书已配对");
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-  const chTest = $("#ch-test");
-  if (chTest) {
-    chTest.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
-        toast("测试卡已发送，去飞书看看");
-        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-
   for (const btn of document.querySelectorAll("[data-copy]")) {
     btn.onclick = async () => {
       try {
@@ -676,6 +595,136 @@ async function viewDoctor() {
     </div>`;
 }
 
+// ---------------------------------------------------------------- 飞书通道（产品内配置）
+
+// 授权中的 device_code 只放内存：它是短时凭据，不适合落库。
+let pendingDevice = null;
+
+/**
+ * 用户必须用自己的飞书应用。这里的三态是：
+ *   未配置应用 → 填 app_id / app_secret（secret 只走一次 stdin）
+ *   已配置未授权 → 设备码授权
+ *   已授权未配对 / 已配对 → 绑定并测试
+ */
+function channelBlockHtml(st) {
+  const configured = Boolean(st.configured);
+  const authorized = Boolean(st.authorized);
+  const bound = Boolean(st.bound);
+  const label = !configured ? "未配置应用" : !authorized ? "待授权" : bound ? "已配对" : "待配对";
+  const dot = bound && authorized ? "ok" : configured ? "warn" : "bad";
+
+  return `
+  <div class="card" style="margin-top:10px">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <span class="chip"><i class="dot ${dot}"></i>${label}</span>
+      <span class="meta">profile ${esc(st.profile)}${st.appId ? ` · ${esc(st.appId)}` : ""}</span>
+    </div>
+    <p class="meta">用你自己的飞书应用；App Secret 只在保存时通过 stdin 交给系统钥匙串，不进数据库、不进日志。</p>
+    ${!configured ? `
+      <label>App ID</label><input id="ch-appid" placeholder="cli_xxxxxxxxxxxx">
+      <label>App Secret</label><input id="ch-secret" type="password" placeholder="只显示这一次">
+      <p class="meta">还没有应用？飞书开放平台 → 创建「企业自建应用」→ 开启机器人 → 添加 im:message:send_as_bot、im:message:readonly → 订阅 card.action.trigger。</p>
+      <button class="primary" id="ch-save">保存应用</button>
+    ` : !authorized ? `
+      <button class="primary" id="ch-start">开始授权</button>
+      <div id="ch-login-box" class="meta" style="margin-top:8px"></div>
+    ` : !bound ? `
+      <button class="primary" id="ch-bind">配对并发送测试卡</button>
+    ` : `
+      <div class="row">
+        <div class="tight"><button class="ghost" id="ch-test">发测试卡</button></div>
+        <div class="tight"><button class="ghost" id="ch-diag">诊断</button></div>
+      </div>
+    `}
+    <p class="meta" id="ch-note">${st.ready ? esc(st.ready) : ""}</p>
+    <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>
+  </div>`;
+}
+
+function wireChannelBlock() {
+  const save = $("#ch-save");
+  if (save) {
+    save.onclick = async () => {
+      const appId = $("#ch-appid").value.trim();
+      const appSecret = $("#ch-secret").value;
+      if (!appId || !appSecret) return toast("app_id 和 app_secret 都要填", true);
+      try {
+        await api("/api/channels/feishu/app", { method: "POST", body: { appId, appSecret } });
+        $("#ch-secret").value = "";
+        toast("应用已保存，下一步授权");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const start = $("#ch-start");
+  if (start) {
+    start.onclick = async () => {
+      const box = $("#ch-login-box");
+      box.textContent = "正在申请设备码…";
+      try {
+        const r = await api("/api/channels/feishu/login/start", { method: "POST", body: {} });
+        pendingDevice = r.deviceCode;
+        box.innerHTML = `<p>在浏览器里完成授权：<a class="btn" href="${esc(r.verificationUrl)}" target="_blank" rel="noreferrer">打开授权页 ↗</a></p>
+          <button class="small primary" id="ch-finish">我已完成授权</button>`;
+        $("#ch-finish").onclick = async () => {
+          try {
+            const done = await api("/api/channels/feishu/login/wait", { method: "POST", body: { deviceCode: pendingDevice } });
+            toast(`已授权并配对：${done.who ?? done.externalUserId}`);
+            render();
+          } catch (err) {
+            toast(err.message, true);
+          }
+        };
+      } catch (err) {
+        box.textContent = err.message;
+      }
+    };
+  }
+
+  const bind = $("#ch-bind");
+  if (bind) {
+    bind.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
+        const test = await api("/api/channels/feishu/test", { method: "POST", body: {} });
+        toast(`已配对：${r.who ?? r.externalUserId}，测试卡已发送`);
+        $("#ch-note").textContent = test.messageId ? `测试消息 ${test.messageId}` : "测试卡已发送";
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const test = $("#ch-test");
+  if (test) {
+    test.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
+        toast("测试卡已发送");
+        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const diag = $("#ch-diag");
+  if (diag) {
+    diag.onclick = async () => {
+      const box = $("#ch-diag-box");
+      try {
+        await renderDiagnose(box);
+      } catch (err) {
+        box.textContent = err.message;
+      }
+    };
+  }
+}
+
 // ---------------------------------------------------------------- 飞书诊断
 
 async function renderDiagnose(el) {
@@ -711,7 +760,7 @@ function fixHtml(fix) {
 }
 
 async function viewSetup() {
-  const setup = await api("/api/setup");
+  const [setup, chStatus] = await Promise.all([api("/api/setup"), api("/api/channels/feishu/status")]);
   const chips = { ok: ["ok", "完成"], todo: ["warn", "待做"], blocked: ["bad", "卡住"] };
 
   const steps = setup.steps
@@ -729,12 +778,10 @@ async function viewSetup() {
         <div class="grid" style="gap:4px;margin-top:10px">
           ${step.checks.map((c) => `<div>${c.ok ? "✓" : "✗"} <span class="meta">${esc(c.id)}</span> ${esc(c.detail)}</div>`).join("")}
         </div>
-        ${bad.length || step.fix ? `<div class="row" style="margin-top:12px">${step.fix ? fixHtml(step.fix) : ""}${
-          step.id === "channel" && !step.done
-            ? `<div class="tight"><button id="setup-bind">配对飞书</button></div><div class="tight"><button class="ghost" id="setup-diag">诊断</button></div>`
-            : ""
-        }</div>` : ""}
-        ${step.id === "channel" && !step.done ? `<div id="setup-diag-box" class="meta" style="margin-top:8px"></div>` : ""}
+        ${step.id === "channel" ? channelBlockHtml(chStatus) : ""}
+        ${step.id !== "channel" && (bad.length || step.fix)
+          ? `<div class="row" style="margin-top:12px">${step.fix ? fixHtml(step.fix) : ""}</div>`
+          : ""}
       </div>`;
     })
     .join("");
@@ -776,30 +823,7 @@ async function viewSetup() {
     };
   }
 
-  const bind = $("#setup-bind");
-  if (bind) {
-    bind.onclick = async () => {
-      try {
-        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
-        toast(`已配对：${r.who ?? r.externalUserId}`);
-        render();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
-
-  const diag = $("#setup-diag");
-  if (diag) {
-    diag.onclick = async () => {
-      const box = $("#setup-diag-box");
-      try {
-        await renderDiagnose(box);
-      } catch (err) {
-        box.textContent = err.message;
-      }
-    };
-  }
+  wireChannelBlock();
 }
 
 // ---------------------------------------------------------------- 路由

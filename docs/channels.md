@@ -1,57 +1,38 @@
 # 通道：飞书
 
-**状态**：发卡片可用；按钮回执代码就绪，需要在飞书开发者后台订阅一次事件。
+**状态**：卡片 + 按钮回执已验证；**应用由用户在产品里配置**，versekit 不复用机器上已有的任何飞书应用。
 
 ---
 
-## 1. 为什么走 lark-cli
+## 1. 前提
 
-飞书的交互卡片需要「长连接收事件」才能拿到按钮点击。蓝图明确不开公网回调，而官方长连接
-协议要自己实现一大套鉴权与帧格式。
+- 本机有 `lark-cli`（令牌刷新与长连接由它负责；versekit 保持零依赖）
+- 你自己的飞书**企业自建应用**（在飞书开放平台创建）
 
-这台机器上已经有 `lark-cli`（trustbridge 在用）：它持有 app secret（系统钥匙串）、负责
-token 刷新与事件总线。versekit 只调用它：
+## 2. 三步接上（都在「接入」页）
 
-| 动作 | 命令 |
+1. **保存应用**：填 App ID 与 App Secret。Secret 通过 stdin 交给 `lark-cli`，存进系统钥匙串；
+   **不进数据库、不进日志、不进 argv**。versekit 只记 `profile` 名与 `app_id`。
+2. **授权**：点「开始授权」→ 打开飞书验证链接 → 完成后点「我已完成授权」（设备码轮询）。
+3. **配对**：点「配对并发送测试卡」→ 飞书里收到测试卡即成功。
+
+## 3. 应用需要的能力
+
+| 项 | 值 |
 |---|---|
-| 发卡片 | `lark-cli im +messages-send --msg-type interactive ...` |
-| 收按钮 | `lark-cli event consume card.action.trigger --as bot`（NDJSON 流） |
-| 原地更新卡片 | `lark-cli api POST /open-apis/interactive/v1/card/update` |
+| 机器人 | 开启 |
+| 发消息权限 | `im:message:send_as_bot` |
+| 读事件权限 | `im:message:readonly` |
+| 事件订阅 | `card.action.trigger`（开发者后台 → 事件与回调） |
+| 可用范围 | 包含你自己 |
 
-好处：凭证不进 versekit 的库、不写文件；零依赖；token 刷新不用我们管。
-代价：飞书通道依赖本机装了 `lark-cli` 并已登录（`lark-cli auth status` 有 user identity）。
+没订阅事件时卡片能收到、按钮收不到；「诊断」会直接给出后台订阅链接，订阅后 5 分钟内自动重连。
 
----
+## 3.1 隔离与不回落
 
-## 2. 三步接上
-
-```bash
-lark-cli auth login                 # 如果还没登录
-npm run vk -- init                  # 只需一次
-npm run serve                       # 守护进程（会自动拉起）
-npm run vk -- channel bind feishu   # 配对 + 发一张测试卡
-```
-
-`channel bind` 会：
-
-1. 用 `lark-cli auth status` 取当前登录人的 `open_id`（不用手抄 `ou_...`）
-2. 写一条 `channel_binding`（配对关系，重新执行只会刷新时间）
-3. 发一张测试卡到你飞书
-
-## 3. 最后一步：订阅按钮事件
-
-没订阅时卡片能收到，但**按钮点击收不到**。日志会明确写出来，并给一个链接：
-
-```
-[feishu] 开发者后台还没订阅 card.action.trigger（卡片按钮收不到点击）。
-[feishu] 打开这个链接完成订阅：https://open.feishu.cn/page/launcher?clientID=...&addons=...
-[feishu] 订阅后无需重启，5 分钟内会自动重连。
-```
-
-在飞书后台 → 该应用 → **事件与回调** 里订阅 `card.action.trigger` 即可。订阅完成后
-通道会自动重连，不需要重启守护进程。
-
----
+- versekit 只使用名为 `versekit` 的 lark-cli profile，所有调用都带 `--profile versekit`
+- 没有配置自己的应用时，通道明确报「飞书应用未配置」，**不会回落到机器上的全局默认应用**
+- 想换应用：在「接入」页重新填 App ID / Secret，或先移除 `versekit` profile
 
 ## 4. 哪些事会发卡片
 

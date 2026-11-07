@@ -12,8 +12,25 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const bin = () => process.env.VK_LARK_BIN ?? "lark-cli";
+// 只用 versekit 自己的 profile：用户在自己的应用上配的，不碰机器上别的应用。
+const profile = () => process.env.VK_FEISHU_PROFILE ?? "versekit";
+
+/** 需要喂 stdin 的命令（app secret 只能走 stdin，不能进 argv）。 */
+function runWithInput(args, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin(), args, { stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.stderr.on("data", (c) => (err += c));
+    child.on("error", reject);
+    child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(String(err || out).trim().slice(0, 500)))));
+    child.stdin.end(input);
+  });
+}
 
 async function lark(args, { timeout = 25e3 } = {}) {
+  args = [...args, "--profile", profile()];
   let stdout;
   try {
     ({ stdout } = await exec(bin(), args, { timeout, maxBuffer: 16 << 20, encoding: "utf8" }));
@@ -38,9 +55,60 @@ export default {
   /** null = 可用；否则一句人能照做的话。这条会被账号墙与 doctor 直接显示。 */
   ready() {
     const probe = spawnSync(bin(), ["--version"], { encoding: "utf8", timeout: 5000 });
-    if (probe.error) return "飞书未配置：没有找到 lark-cli（装好后 lark-cli auth login）";
+    if (probe.error) return "飞书未配置：没有找到 lark-cli（装好后到「接入」页填写你的应用）";
     if (probe.status !== 0) return `飞书未配置：lark-cli 不可用（${String(probe.stderr ?? "").trim().slice(0, 120)}）`;
+
+    const list = spawnSync(bin(), ["profile", "list"], { encoding: "utf8", timeout: 5000 });
+    let profiles = [];
+    try {
+      profiles = JSON.parse(list.stdout ?? "[]");
+    } catch {
+      profiles = [];
+    }
+    if (!Array.isArray(profiles) || !profiles.some((p) => p.name === profile())) {
+      return "飞书应用未配置：在「接入」页填写你自己的 app_id 与 app_secret";
+    }
+
+    const status = spawnSync(bin(), ["auth", "status", "--profile", profile()], { encoding: "utf8", timeout: 8000 });
+    let st = null;
+    try {
+      st = JSON.parse(status.stdout ?? "null");
+    } catch {
+      st = null;
+    }
+    if (!st?.identities?.user?.openId) return "飞书应用已配置，但还没有授权：在「接入」页点「开始授权」";
     return null;
+  },
+
+  /** 保存用户自己的应用（secret 走 stdin，不写文件、不进 argv/日志）。 */
+  async configure({ appId, appSecret }) {
+    if (typeof appId !== "string" || !/^cli_[0-9a-z]+$/i.test(appId.trim())) throw new Error("app_id 格式不对：应以 cli_ 开头");
+    if (typeof appSecret !== "string" || appSecret.trim().length < 8) throw new Error("app_secret 看起来不合法");
+    try {
+      await lark(["profile", "remove", "--name", profile()], { timeout: 10e3 });
+    } catch {
+      /* 第一次配置时本来就不存在 */
+    }
+    await runWithInput(["profile", "add", "--name", profile(), "--app-id", appId.trim(), "--app-secret-stdin"], appSecret.trim() + "\n");
+    return { profile: profile(), appId: appId.trim() };
+  },
+
+  /** 设备码授权第一步：拿验证地址，交给用户去浏览器确认。 */
+  async authStart() {
+    const json = await lark(["auth", "login", "--no-wait", "--json"]);
+    const data = json.data ?? json;
+    return {
+      verificationUrl: data.verification_url ?? data.verificationUrl ?? null,
+      deviceCode: data.device_code ?? data.deviceCode ?? null,
+      expiresIn: data.expires_in ?? data.expiresIn ?? null,
+    };
+  },
+
+  /** 设备码授权第二步：用户确认后完成轮询。 */
+  async authFinish(deviceCode) {
+    if (!deviceCode) throw new Error("缺少 device_code");
+    await lark(["auth", "login", "--device-code", deviceCode]);
+    return { ok: true };
   },
 
   /** 当前登录的人（open_id）。配对时用它，不需要用户手抄一串 ou_。 */
@@ -97,7 +165,7 @@ export default {
     return new Promise((resolve) => {
       let child;
       try {
-        child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--timeout", "4s"], { stdio: ["pipe", "pipe", "pipe"] });
+        child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--timeout", "4s", "--profile", profile()], { stdio: ["pipe", "pipe", "pipe"] });
       } catch (err) {
         return resolve({ ok: false, detail: err.message, url: null });
       }
@@ -148,7 +216,7 @@ export default {
       if (stopped) return;
       // stdin 必须保持打开：lark-cli 把 stdin EOF 当作退出信号（为 AI 子进程设计），
       // 用 ignore 会让它刚连上就退出。
-      child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot"], { stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--profile", profile()], { stdio: ["pipe", "pipe", "pipe"] });
       buffer = "";
 
       child.stdout.setEncoding("utf8");

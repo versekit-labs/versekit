@@ -15,6 +15,7 @@ import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapte
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/src/store.mjs";
+import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
@@ -170,12 +171,48 @@ function daemonHandlers(adapters, log) {
     ...core,
     "account.check": ({ accountId }) => checkAccount(adapters, accountId),
 
+    "channel.status": () => {
+      const ready = channelFeishu.ready();
+      const cfg = readConfig().channel?.feishu ?? {};
+      const binding = getBinding("feishu");
+      return {
+        ready,
+        configured: Boolean(cfg.app_id),
+        authorized: ready === null,
+        bound: Boolean(binding),
+        profile: cfg.profile ?? feishuProfileName(),
+        appId: cfg.app_id ?? null,
+        externalUserId: binding?.external_user_id ?? null,
+      };
+    },
+
+    "channel.app.set": async ({ appId, appSecret }) => {
+      const r = await channelFeishu.configure({ appId, appSecret });
+      updateConfig({ channel: { feishu: { profile: r.profile, app_id: r.appId, configured_at: Date.now() } } });
+      return { ...r, next: "点「开始授权」，在浏览器里完成飞书授权" };
+    },
+
+    "channel.login.start": async () => {
+      if (channelFeishu.ready() && !/还没有授权/.test(channelFeishu.ready() ?? "")) throw new Error(channelFeishu.ready());
+      const started = await channelFeishu.authStart();
+      if (!started.verificationUrl) throw new Error("lark-cli 没有返回验证链接");
+      return started;
+    },
+
+    "channel.login.wait": async ({ deviceCode }) => {
+      await channelFeishu.authFinish(deviceCode);
+      const who = await channelFeishu.whoami();
+      const bound = bindChannel("feishu", who.openId);
+      updateConfig({ channel: { feishu: { authorized_at: Date.now() } } });
+      return { ...bound, who: who.name ?? null };
+    },
+
     "channel.diagnose": async () => {
       const checks = [];
       const add = (id, ok, detail, extra = {}) => checks.push({ id, ok, detail, ...extra });
 
-      const missing = channelFeishu.ready();
-      add("lark-cli", missing === null, missing ?? "lark-cli 已安装");
+      const ready = channelFeishu.ready();
+      add("app", ready === null, ready ?? "飞书应用已配置且已授权");
 
       let status = null;
       try {
@@ -186,7 +223,7 @@ function daemonHandlers(adapters, log) {
       }
 
       const binding = getBinding("feishu");
-      add("binding", Boolean(binding), binding ? `已配对（${binding.external_user_id}）` : "还没有配对：vk channel bind feishu");
+      add("binding", Boolean(binding), binding ? `已配对（${binding.external_user_id}）` : "还没有配对");
 
       let probe = { ok: false, detail: "未执行探活", url: null };
       try {
@@ -255,6 +292,9 @@ function openBrowser(url) {
     /* 没有图形界面也能用：URL 在输出里 */
   }
 }
+
+// 通道只认 versekit 自己的 profile（用户在接入页配置的应用），不碰机器上的其他应用。
+process.env.VK_FEISHU_PROFILE = process.env.VK_FEISHU_PROFILE ?? feishuProfileName();
 
 async function cmdServe() {
   if (!guard()) return;
@@ -475,7 +515,19 @@ async function cmdChannel() {
   const sub = pos[1];
   const name = pos[2] ?? "feishu";
   if (name !== "feishu") throw new Error("目前只支持飞书：vk channel bind feishu");
-  const missing = channelFeishu.ready();
+
+  if (sub === "status") {
+    const data = await send("channel.status", {});
+    if (human) {
+      console.log(`应用    ${data.configured ? data.appId ?? "已配置" : "未配置"}`);
+      console.log(`授权    ${data.authorized ? "已完成" : "未完成"}`);
+      console.log(`配对    ${data.bound ? `已配对（${data.externalUserId}）` : "未配对"}`);
+      if (data.ready) console.log(`提示    ${data.ready}`);
+    } else out(data);
+    return data;
+  }
+
+  const missing = sub === "diagnose" ? null : channelFeishu.ready();
   if (missing) throw new Error(missing);
 
   if (sub === "bind") {

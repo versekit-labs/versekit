@@ -18,6 +18,10 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(LOG)}, JSON.stringify(args) + "\\n");
 if (args[0] === "--version") { console.log("1.0.97"); process.exit(0); }
+if (args[0] === "profile") {
+  console.log(JSON.stringify([{ name: "versekit", appId: "cli_test" }]));
+  process.exit(0);
+}
 if (args[0] === "auth") {
   console.log(JSON.stringify({ ok: true, identities: { user: { openId: "ou_test", userName: "测试用户" } } }));
   process.exit(0);
@@ -174,6 +178,108 @@ process.exit(0);
   try {
     const res = await channel.probeEvents();
     assert.equal(res.ok, true);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("configure(): app_secret 只走 stdin，不进 argv、不落文件", async () => {
+  const bin = join(DIR, "lark-config");
+  const secretLog = join(DIR, "secret-audit.log");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(secretLog)}, JSON.stringify(args) + "\\n");
+if (args[0] === "profile" && args[1] === "add") {
+  let data = "";
+  process.stdin.on("data", (c) => (data += c));
+  process.stdin.on("end", () => {
+    fs.appendFileSync(${JSON.stringify(secretLog)}, "stdin_len=" + data.trim().length + "\\n");
+    console.log(JSON.stringify({ ok: true }));
+  });
+  return;
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const res = await channel.configure({ appId: "cli_test123", appSecret: "super-secret-value" });
+    assert.equal(res.profile, "versekit");
+    assert.equal(res.appId, "cli_test123");
+
+    const audit = readFileSync(secretLog, "utf8");
+    assert.ok(!audit.includes("super-secret-value"), "secret 不能出现在 argv 或日志里");
+    assert.match(audit, /stdin_len=18/);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("ready(): 没有自己的 profile 时让你去配，不回落全局应用", () => {
+  const bin = join(DIR, "lark-noprofile");
+  writeFileSync(bin, `#!/usr/bin/env node\nconst a=process.argv.slice(2);\nif(a[0]==="--version"){console.log("1.0.97");process.exit(0)}\nif(a[0]==="profile"){console.log("[]");process.exit(0)}\nprocess.exit(0);\n`);
+  chmodSync(bin, 0o755);
+  process.env.VK_LARK_BIN = bin;
+  try {
+    assert.match(channel.ready(), /应用未配置|app_secret/);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("ready(): 应用配了但没授权时，要求先授权", () => {
+  const bin = join(DIR, "lark-noauth");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const a=process.argv.slice(2);
+if(a[0]==="--version"){console.log("1.0.97");process.exit(0)}
+if(a[0]==="profile"){console.log(JSON.stringify([{name:"versekit"}]));process.exit(0)}
+if(a[0]==="auth"){console.log(JSON.stringify({appId:"cli_test",identities:{bot:{status:"ready"}}}));process.exit(0)}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.VK_LARK_BIN = bin;
+  try {
+    assert.match(channel.ready(), /还没有授权/);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("authStart / authFinish：设备码两步", async () => {
+  const bin = join(DIR, "lark-login");
+  const log = join(DIR, "login.log");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
+if (a[0] === "auth" && a[1] === "login") {
+  if (a.includes("--no-wait")) console.log(JSON.stringify({ ok: true, data: { verification_url: "https://open.feishu.cn/device", device_code: "dc_1", expires_in: 300 } }));
+  else console.log(JSON.stringify({ ok: true }));
+  process.exit(0);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const started = await channel.authStart();
+    assert.equal(started.verificationUrl, "https://open.feishu.cn/device");
+    assert.equal(started.deviceCode, "dc_1");
+
+    await channel.authFinish("dc_1");
+    const calls = readFileSync(log, "utf8");
+    assert.match(calls, /--device-code/);
   } finally {
     process.env.VK_LARK_BIN = BIN;
   }
