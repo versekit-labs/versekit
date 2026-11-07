@@ -519,10 +519,31 @@ async function viewOverview() {
 // ---------------------------------------------------------------- 任务
 
 async function viewTasks() {
-  const [{ rows: runs }, { rows: events }] = await Promise.all([api("/api/runs"), api("/api/events?limit=12")]);
+  const [{ rows: runs }, { rows: events }, { rows: waiting }, { rows: failedPubs }] = await Promise.all([
+    api("/api/runs"),
+    api("/api/events?limit=12"),
+    api("/api/publishes?state=notify_pending"),
+    api("/api/publishes?state=failed"),
+  ]);
+  const waitingAll = [...waiting, ...failedPubs];
   $("#view").innerHTML = `
     <h1>任务与日志</h1>
     <p class="hint">队列是发布与采集的唯一通道。失败会带原因，重试不会丢掉原任务。</p>
+    ${
+      waitingAll.length
+        ? `<h2>等你拍板</h2>
+           <div class="card" style="padding:6px 10px"><table><thead><tr><th>平台</th><th>标题</th><th>状态</th><th>原因</th><th></th></tr></thead><tbody>
+             ${waitingAll
+               .map(
+                 (p) => `<tr><td>${esc(p.platform)}</td><td>${esc(p.title ?? "")}</td><td><span class="badge ${STATE_CLASS(p.state)}">${esc(p.state)}</span></td><td class="meta">${esc(p.error_message ?? p.fallback_reason ?? "")}</td>
+                   <td><button class="small" data-approve="${esc(p.id)}">手机审批</button></td></tr>`,
+               )
+               .join("")}
+           </tbody></table></div>`
+        : ""
+    }
+
+    <h2>队列</h2>
     <div class="card" style="padding:6px 10px">
       ${
         runs.length
@@ -554,6 +575,23 @@ async function viewTasks() {
           : `<div class="empty">还没有事件。</div>`
       }
     </div>`;
+
+  for (const btn of document.querySelectorAll("[data-approve]")) {
+    btn.onclick = async () => {
+      try {
+        const r = await api(`/api/approvals/link?publishId=${encodeURIComponent(btn.dataset.approve)}`);
+        try {
+          await navigator.clipboard.writeText(r.url);
+          toast("审批链接已复制，可在手机上打开");
+        } catch {
+          toast(r.url);
+        }
+        window.open(r.path, "_blank");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
 
   for (const btn of document.querySelectorAll("[data-retry]")) {
     btn.onclick = async () => {

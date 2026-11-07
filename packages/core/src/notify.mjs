@@ -9,6 +9,7 @@ import { open, newId } from "./index.mjs";
 import { findCommand, parseArgs } from "./commands.mjs";
 import { buildEventCard, CARD_TTL_MS } from "./cards.mjs";
 import { getPublishRow } from "./publish-flow.mjs";
+import { approvalLink } from "./approval.mjs";
 
 const RETRY_AFTER_MS = 60e3;
 const MAX_ATTEMPTS = 3;
@@ -42,7 +43,9 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
   for (const raw of rows) {
     const event = parsePayload(raw);
     const publish = event.publish_id ? getPublishRow(event.publish_id) : null;
-    const card = buildEventCard(event, { publish, now });
+    const approvalUrl =
+      publish && ["publish.failed", "publish.needs_human"].includes(event.type) ? approvalLink(publish.id) : null;
+    const card = buildEventCard(event, { publish, now, approvalUrl });
     if (!card) continue; // 内部 trace，不该打扰人
 
     try {

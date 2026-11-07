@@ -195,7 +195,7 @@ export const PUBLISH_TRANSITIONS = {
   auto_running: ["published", "published_limited", "draft_running", "notify_pending", "failed", "blocked", "canceled"],
   draft_running: ["draft_pending", "notify_pending", "failed", "blocked", "canceled"],
   draft_pending: ["published", "notify_pending", "failed", "canceled"],
-  notify_pending: ["published", "failed", "canceled", "expired"],
+  notify_pending: ["published", "failed", "canceled", "expired", "queued"],
   published: [],
   published_limited: ["published"],
   failed: ["queued", "notify_pending", "canceled"],

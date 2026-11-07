@@ -22,6 +22,8 @@ import { deliverPending, executeAction } from "./notify.mjs";
 import { resultCard } from "./cards.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
+import { verifyApproval, applyApproval } from "./approval.mjs";
+import { getPublishRow } from "./publish-flow.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -134,6 +136,91 @@ const readBody = (req) =>
     });
     req.on("error", reject);
   });
+
+/** /a/:token 的页面只收表单，不走 JSON。 */
+function readForm(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > 64 * 1024) reject(new Error("表单太大了"));
+    });
+    req.on("end", () => resolve(Object.fromEntries(new URLSearchParams(body))));
+    req.on("error", reject);
+  });
+}
+
+const page = (title, body) => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${title}</title>
+<style>
+body{margin:0;background:#0b1117;color:#e6edf3;font:16px/1.6 -apple-system,system-ui,sans-serif;padding:24px}
+.card{max-width:560px;margin:0 auto;background:#111a23;border:1px solid #24303c;border-radius:14px;padding:20px}
+h1{font-size:20px;margin:0 0 4px}.muted{color:#8b9bab;font-size:13px}
+.row{display:flex;gap:10px;margin-top:16px}
+button{flex:1;padding:12px;border-radius:10px;border:1px solid #2b3947;background:#16222e;color:#e6edf3;font-size:15px}
+button.primary{background:#2f6fed;border-color:#2f6fed}
+button.danger{color:#ff9b9b;border-color:#5a2a2a}
+.note{margin-top:14px;color:#8b9bab;font-size:12px}
+</style></head><body><div class="card">${body}</div></body></html>`;
+
+/**
+ * 手机审批页：GET 展示，POST 执行。链接自带签名与有效期，页面不暴露任何其他能力。
+ */
+async function approvalPage(req, res, { token }) {
+  const sendHtml = (status, html) => {
+    res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(html);
+  };
+
+  let data;
+  try {
+    data = verifyApproval(token);
+  } catch (err) {
+    return sendHtml(400, page("链接不可用", `<h1>链接不可用</h1><p class="muted">${err.message}</p>`));
+  }
+
+  const row = getPublishRow(data.p);
+  if (!row) return sendHtml(404, page("找不到发布", `<h1>找不到这条发布</h1>`));
+
+  if (req.method === "POST") {
+    let form;
+    try {
+      form = await readForm(req);
+    } catch (err) {
+      return sendHtml(400, page("提交失败", `<h1>提交失败</h1><p class="muted">${err.message}</p>`));
+    }
+    const decision = form.decision === "cancel" ? "cancel" : "retry";
+    try {
+      const result = applyApproval(token, decision, { actor: `link:${req.socket.remoteAddress ?? "phone"}` });
+      return sendHtml(
+        200,
+        page("已处理", `<h1>${result.duplicate ? "已经处理过" : "已处理"}</h1>
+          <p>${result.message}</p>
+          <p class="muted">${row.platform} @${row.handle} · ${row.title ?? ""}</p>
+          <div class="note">可以关掉这个页面了。</div>`),
+      );
+    } catch (err) {
+      return sendHtml(400, page("没处理成", `<h1>没处理成</h1><p>${err.message}</p>`));
+    }
+  }
+
+  const reason = row.fallback_reason ?? row.error_message ?? "";
+  return sendHtml(
+    200,
+    page("需要你拍板", `<h1>需要你拍板</h1>
+      <p class="muted">${row.platform} @${row.handle} · ${row.state}</p>
+      <p>${row.title ?? "（无标题）"}</p>
+      ${reason ? `<p class="muted">原因：${reason}</p>` : ""}
+      <form method="post" action="">
+        <div class="row">
+          <button class="primary" name="decision" value="retry">重试发布</button>
+          <button class="danger" name="decision" value="cancel">取消这条</button>
+        </div>
+      </form>
+      <div class="note">链接 24 小时内有效 · 重复点击只执行一次 · 电脑上也能看到结果</div>`),
+  );
+}
 
 /**
  * Query strings and JSON bodies arrive as strings. Coerce only where the command's declared arg
@@ -250,6 +337,17 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
     const url = new URL(req.url, "http://127.0.0.1");
     const pathname = url.pathname;
 
+    const remote = req.socket.remoteAddress ?? "";
+    const loopback = remote === "" || remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!loopback && !pathname.startsWith("/a/")) {
+      return send(res, 403, { ok: false, error: { code: "forbidden", message: "这个接口只允许本机访问" } });
+    }
+
+    // 手机审批页：唯一允许从局域网访问的页面（安全边界见 serve 的 host 设置）。
+    if (pathname.startsWith("/a/") && (req.method === "GET" || req.method === "POST")) {
+      return approvalPage(req, res, { token: pathname.slice(3) });
+    }
+
     // 浏览器打开的是本地控制台；/api/* 之外只有静态页。
     if ((req.method === "GET" || req.method === "HEAD") && !pathname.startsWith("/api/")) {
       const file = staticFile(webRoot, pathname);
@@ -320,7 +418,7 @@ function listen(server, options) {
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null } = {}) {
   const runner = createRunner({
     handlers,
     log,
@@ -334,7 +432,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   const httpServer = createServer(dispatch);
   const socketServer = createServer(dispatch);
 
-  await listen(httpServer, { host: "127.0.0.1", port });
+  await listen(httpServer, { host, port });
 
   // A leftover socket file from a crashed daemon would make listen() fail with EADDRINUSE.
   if (existsSync(socketPath)) {

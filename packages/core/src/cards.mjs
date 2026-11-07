@@ -21,7 +21,7 @@ function button(label, cmd, args, eventId, now, style = "default") {
 const line = (...parts) => parts.filter(Boolean).join("\n");
 
 /** 事件 → 卡片。返回 null 表示这类事件不发卡片（内部 trace 或还没有对应动作）。 */
-export function buildEventCard(event, { publish = null, account = null, now = Date.now() } = {}) {
+export function buildEventCard(event, { publish = null, account = null, now = Date.now(), approvalUrl = null } = {}) {
   const payload = event.payload ?? {};
   const who = publish ? `${publish.platform} @${publish.handle}` : payload.platform ? `${payload.platform} @${payload.handle ?? ""}` : "";
   const what = publish?.title ? `「${publish.title}」` : "";
@@ -38,6 +38,7 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
       template = "red";
       body = line(`${who} ${what}没有发出去。`, reason && `原因：${reason}`, "可以在手机上重试，或到电脑上看现场。");
       if (publish) buttons.push(button("重试", "publish.retry", { publishId: publish.id }, event.id, now, "primary"));
+      if (approvalUrl) buttons.push({ tag: "button", text: { tag: "plain_text", content: "手机打开" }, type: "default", url: approvalUrl });
       break;
 
     case "publish.needs_human":
@@ -47,6 +48,7 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
       if (publish) {
         buttons.push(button("我已发布", "publish.confirm", { publishId: publish.id }, event.id, now, "primary"));
         buttons.push(button("重试", "publish.retry", { publishId: publish.id }, event.id, now));
+        if (approvalUrl) buttons.push({ tag: "button", text: { tag: "plain_text", content: "手机打开" }, type: "default", url: approvalUrl });
       }
       break;
 

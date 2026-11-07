@@ -318,7 +318,7 @@ async function cmdServe() {
 
   if (has("--detach")) {
     const wanted = Number(val("--port") ?? 8787);
-    const result = await ensureDaemon({ port: wanted });
+    const result = await ensureDaemon({ port: wanted, lan: has("--lan") });
     // 端口以守护进程自己写下的为准：它可能比我们先起、跑在别的端口上。
     let running = wanted;
     try {
@@ -337,7 +337,10 @@ async function cmdServe() {
   const { adapters, errors } = await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
   const handlers = daemonHandlers(adapters, log);
-  const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787), channels: [channelFeishu], doctor: doctorReport });
+  const port = Number(val("--port") ?? 8787);
+  const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
+  updateConfig({ server: { port, host } });
+  const daemon = await startDaemon({ handlers, log, port, host, channels: [channelFeishu], doctor: doctorReport });
 
   const web = `http://127.0.0.1:${daemon.port}`;
   if (has("--open")) openBrowser(web);
@@ -528,6 +531,45 @@ async function cmdEvents() {
   return data;
 }
 
+async function cmdApproval() {
+  const sub = pos[1] ?? "list";
+  const log = (m) => human && console.log(m);
+
+  if (sub === "list") {
+    const [pending, failed] = await Promise.all([
+      send("publish.list", { state: "notify_pending" }),
+      send("publish.list", { state: "failed" }),
+    ]);
+    const rows = [...pending.rows, ...failed.rows];
+    if (human) {
+      for (const r of rows) console.log(`${r.id.padEnd(16)}${r.platform.padEnd(10)}${String(r.title ?? "").slice(0, 36)}`);
+      if (!rows.length) console.log("没有需要拍板的发布");
+    } else out(rows);
+    return rows;
+  }
+
+  if (sub === "link") {
+    const publishId = pos[2];
+    if (!publishId) throw new Error("用法：vk approval link <publishId>");
+    const data = await send("approval.link", { publishId });
+    if (human) console.log(data.url);
+    else out(data);
+    return data;
+  }
+
+  if (sub === "apply" || sub === "retry" || sub === "cancel") {
+    const token = sub === "apply" ? pos[2] : pos[2];
+    const decision = sub === "cancel" ? "cancel" : sub === "apply" ? (pos[3] ?? "retry") : sub;
+    if (!token) throw new Error("用法：vk approval apply <token> retry|cancel");
+    const data = await send("approval.apply", { token, decision }, { log });
+    if (human) console.log(data.message ?? data.state);
+    else out(data);
+    return data;
+  }
+
+  throw new Error("用法：vk approval list | link <publishId> | apply <token> retry|cancel");
+}
+
 async function cmdChannel() {
   const sub = pos[1];
   const name = pos[2] ?? "feishu";
@@ -616,6 +658,7 @@ function usage() {
       "  vk account list | add <platform> --name <名字> | mode <id> auto|manual | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
+      "  vk approval list | link <publishId> | apply <token> retry|cancel",
       "  vk collect [--now] [--platform <p>]",
       "  vk stats works [--range 7d] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
@@ -649,6 +692,7 @@ try {
   else if (cmd === "runs") await cmdRuns();
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();
+  else if (cmd === "approval") await cmdApproval();
   else {
     console.error(`未知命令：${cmd}\n`);
     usage();

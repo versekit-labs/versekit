@@ -100,13 +100,13 @@ async function alive(socketPath, timeout = 400) {
  * Makes sure the daemon is up. Returns `{ started }` so `vk serve --detach` can say what happened
  * instead of hanging; throws only when the daemon genuinely could not come up.
  */
-export async function ensureDaemon({ timeoutMs = 6000, port = null, log = () => {} } = {}) {
+export async function ensureDaemon({ timeoutMs = 6000, port = null, lan = false, log = () => {} } = {}) {
   if (!isInitialised()) throw new Error("还没有初始化：先运行 vk init");
   const socketPath = paths().socket;
   if (existsSync(socketPath) && (await alive(socketPath))) return { started: false };
 
   log("守护进程没在跑，正在拉起…");
-  const args = [CLI, "serve", ...(port != null ? ["--port", String(port)] : [])];
+  const args = [CLI, "serve", ...(port != null ? ["--port", String(port)] : []), ...(lan ? ["--lan"] : [])];
   // detach 之后控制台就没了：把 stdout/stderr 落到 vk.log，排障才有现场。
   const logFile = paths().log;
   const fd = openSync(logFile, "a", 0o600);

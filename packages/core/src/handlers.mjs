@@ -115,6 +115,14 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { workId: work.id, publishes: created };
     },
 
+    "approval.link": ({ publishId }) => {
+      const row = store.getPublish(publishId);
+      if (!row) fail(`没有这条发布：${publishId}`);
+      return { publishId, url: approvalLink(publishId), path: approvalPath(publishId), state: row.state };
+    },
+
+    "approval.apply": ({ token, decision }) => applyApproval(token, decision, { actor: "cli" }),
+
     "publish.retry": ({ publishId }) => {
       const row = store.getPublish(publishId);
       if (!row) fail(`没有这条发布：${publishId}`);
