@@ -262,14 +262,27 @@ function daemonHandlers(adapters, log) {
     "channel.test": async () => {
       const binding = getBinding("feishu");
       if (!binding) throw new Error("还没有配对：先运行 vk channel bind feishu");
+      const now = Date.now();
       const card = {
         config: { wide_screen_mode: true },
         header: { template: "blue", title: { tag: "plain_text", content: "versekit · 通道已连通" } },
         elements: [
           {
             tag: "div",
-            text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点按钮就会在这台电脑上执行。" },
+            text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点下面的按钮，验证「手机点一下、电脑执行」这条闭环。" },
           },
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "点我验证闭环" },
+                type: "primary",
+                value: { cmd: "stats.works", args: {}, exp: now + 24 * 3600e3, key: `test:${now}` },
+              },
+            ],
+          },
+          { tag: "note", elements: [{ tag: "plain_text", content: "按钮 24 小时内有效 · 重复点击只会执行一次" }] },
         ],
       };
       const { messageId } = await channelFeishu.send({ openId: binding.external_user_id, card });

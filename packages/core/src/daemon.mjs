@@ -457,35 +457,45 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   }
 
   // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
-  const stopChannels = [];
+  //
+  // 授权可能在守护进程启动之后才完成（用户在网页里扫码），所以这里必须是「监督式」的：
+  // 每 30 秒重试一次，条件满足就拉起监听，而不是启动时判断一次就放弃。
+  const startedChannels = new Map();
+  const channelState = new Map();
   let deliveryTimer = null;
-  if (runQueue && channels.length) {
-    const deliverAll = async () => {
-      for (const channel of channels) {
-        const binding = getBinding(channel.channel);
-        if (!binding) continue;
-        try {
-          const res = await deliverPending({ channel, binding, log });
-          if (res.sent) log(`[channel] ${channel.channel} 发出 ${res.sent} 张卡片`);
-        } catch (err) {
-          log(`[channel] ${channel.channel} 投递失败：${err.message}`);
-        }
-      }
-    };
+  let channelTimer = null;
 
+  const deliverAll = async () => {
     for (const channel of channels) {
+      const binding = getBinding(channel.channel);
+      if (!binding) continue;
+      try {
+        const res = await deliverPending({ channel, binding, log });
+        if (res.sent) log(`[channel] ${channel.channel} 发出 ${res.sent} 张卡片`);
+      } catch (err) {
+        log(`[channel] ${channel.channel} 投递失败：${err.message}`);
+      }
+    }
+  };
+
+  const ensureChannels = () => {
+    for (const channel of channels) {
+      if (startedChannels.has(channel.channel)) continue;
       const missing = channel.ready?.();
       if (missing) {
-        log(`[channel] ${channel.channel} 不可用：${missing}`);
+        if (channelState.get(channel.channel) !== missing) log(`[channel] ${channel.channel} 不可用：${missing}`);
+        channelState.set(channel.channel, missing);
         continue;
       }
       const binding = getBinding(channel.channel);
       if (!binding) {
-        log(`[channel] ${channel.channel} 还没有配对：vk channel bind ${channel.channel}`);
+        if (channelState.get(channel.channel) !== "unbound") log(`[channel] ${channel.channel} 还没有配对：vk channel bind ${channel.channel}`);
+        channelState.set(channel.channel, "unbound");
         continue;
       }
-      stopChannels.push(
-        channel.start({
+      channelState.set(channel.channel, "ready");
+      try {
+        const stop = channel.start({
           log,
           onAction: async (evt) => {
             const current = getBinding(channel.channel);
@@ -502,10 +512,19 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
                 .catch((err) => log(`[channel] 更新卡片失败：${err.message}`));
             }
           },
-        }),
-      );
+        });
+        startedChannels.set(channel.channel, stop);
+        log(`[channel] ${channel.channel} 事件监听已启动`);
+      } catch (err) {
+        log(`[channel] ${channel.channel} 启动失败：${err.message}`);
+      }
     }
+  };
 
+  if (runQueue && channels.length) {
+    ensureChannels();
+    channelTimer = setInterval(ensureChannels, 30e3);
+    channelTimer.unref?.();
     deliveryTimer = setInterval(deliverAll, 5000);
     deliveryTimer.unref?.();
     deliverAll();
@@ -529,7 +548,9 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     async close() {
       stopSweeper();
       if (deliveryTimer) clearInterval(deliveryTimer);
-      for (const stop of stopChannels) {
+      if (channelTimer) clearInterval(channelTimer);
+      if (deliveryTimer) clearInterval(deliveryTimer);
+      for (const stop of startedChannels.values()) {
         try {
           stop();
         } catch {
