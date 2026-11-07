@@ -121,6 +121,11 @@ export default {
         clearTimeout(timer);
         const text = `${out}\n${err}`;
         const url = text.match(/https:\/\/open\.feishu\.cn\/page\/launcher[^"\s]+/)?.[0] ?? null;
+        // 已经有一个消费者在跑（通常就是 versekit 自己的长连接）——这恰恰说明订阅是生效的，
+        // 不能误判成「未订阅」。
+        if (/another consumer.*already running/i.test(text)) {
+          return resolve({ ok: true, detail: "已有消费者在运行（订阅已生效）" });
+        }
         if (/failed_precondition|not subscribed/i.test(text)) {
           return resolve({ ok: false, detail: "开发者后台还没有订阅 card.action.trigger", url });
         }

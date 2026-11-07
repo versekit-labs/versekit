@@ -130,6 +130,31 @@ process.exit(0);
   }
 });
 
+test("probeEvents(): 已有消费者在跑时视为订阅生效，不误报", async () => {
+  const bin = join(DIR, "lark-probe-busy");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "event") {
+  console.error(JSON.stringify({ ok: false, error: { type: "validation", subtype: "failed_precondition",
+    message: "cannot start consumer: another consumer (pid 1039) is already running for this subscription" } }));
+  process.exit(2);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const res = await channel.probeEvents();
+    assert.equal(res.ok, true);
+    assert.match(res.detail, /已有消费者/);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
 test("probeEvents(): 已订阅时返回 true", async () => {
   const bin = join(DIR, "lark-probe-good");
   writeFileSync(
