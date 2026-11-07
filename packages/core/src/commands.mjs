@@ -215,7 +215,7 @@ export const COMMANDS = [
     summary: "配对飞书账号（用 lark-cli 已登录的人）",
     remote: false,
     localOnly: true,
-    args: { openId: "string" },
+    args: { openId: "string?" },
     http: { method: "POST", path: "/api/channels/feishu/bind" },
     cli: { usage: "vk channel bind feishu" },
     card: null,

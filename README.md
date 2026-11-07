@@ -113,7 +113,7 @@ flowchart LR
 | 守护进程（unix socket + 本地 HTTP 共用一份 dispatch · 审计） | ✅ |
 | Chrome CDP 驱动（每账号 profile/端口 · 真实鼠标 · shadow DOM · 响应拦截） | ✅ |
 | CLI（19 条命令，含 publish / account / collect / stats / runs / events） | ✅ |
-| **本地 Web 控制台**（账号墙 / 发布台 / 作品 / 总览 / 任务日志） | ✅ 真浏览器验收 |
+| **本地 Web 控制台**（账号墙 / 发布台 / 作品 / 总览 / 任务日志 / 自检） | ✅ 真浏览器验收 + SSE 实时刷新 |
 | 适配器 B站（biliup 发布 + 创作中心采集 + 登录体检） | ✅ 待真机验收 |
 | 适配器 TikTok（Studio 发布 + 后台拦截采集 + 登录探测） | ✅ 待真机验收 |
 | 飞书通道（卡片投递 + 按钮回执，走 lark-cli） | ✅ 端到端已验证：点按钮 → 执行命令 → 原地更新卡片 |

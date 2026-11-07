@@ -167,3 +167,30 @@ test("空文件上传会被拒绝，而不是留下一个 0 字节素材", async
   assert.equal(res.status, 400);
   assert.equal((await res.json()).error.code, "empty_asset");
 });
+
+test("GET /api/stream 推实时状态，第一帧就带队列与通道", async () => {
+  const res = await new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port: daemon.port, path: "/api/stream", headers: { accept: "text/event-stream" } }, resolve);
+    req.on("error", reject);
+    req.end();
+  });
+  assert.match(res.headers["content-type"], /text\/event-stream/);
+
+  const dataLine = await new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error(`3 秒内没有收到 data 帧：${buf.slice(0, 120)}`)), 3000);
+    res.on("data", (chunk) => {
+      buf += chunk.toString();
+      const line = buf.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) return;
+      clearTimeout(timer);
+      resolve(line.slice(6));
+    });
+  });
+
+  const frame = JSON.parse(dataLine);
+  assert.ok(frame.status.queue && typeof frame.status.queue.queued === "number");
+  assert.ok(Array.isArray(frame.publishes));
+  assert.ok(Array.isArray(frame.runs));
+  res.destroy();
+});

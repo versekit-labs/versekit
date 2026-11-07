@@ -61,7 +61,8 @@ const METRIC_LABEL = { play: "播放", like: "点赞", fav: "收藏", comment: "
 // ---------------------------------------------------------------- 账号
 
 async function viewAccounts() {
-  const [{ accounts }, { platforms }] = await Promise.all([api("/api/accounts"), api("/api/platforms")]);
+  const [{ accounts }, { platforms }, now] = await Promise.all([api("/api/accounts"), api("/api/platforms"), api("/api/now")]);
+  const channel = now.channel;
   const usable = platforms.filter((p) => p.publish !== "none");
 
   const cards = accounts
@@ -86,6 +87,19 @@ async function viewAccounts() {
     <h1>账号墙</h1>
     <p class="hint">一个账号一份 Chrome profile，互不串号。状态由每 6 小时的体检和发布/采集失败共同驱动。</p>
     ${accounts.length ? `<div class="grid cols-2">${cards}</div>` : `<div class="empty">还没有账号。先在下面添加一个。</div>`}
+
+    <h2>飞书通道</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="chip"><i class="dot ${channel.feishu === "bound" ? "ok" : "bad"}"></i>${channel.feishu === "bound" ? "已配对" : "未配对"}</span>
+        <span class="meta">${channel.binding ? `配对于 ${fmtTime(channel.binding.paired_at)}` : "配对后，发布失败 / 登录失效会推卡片到手机"}</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div class="tight"><button id="ch-bind">${channel.feishu === "bound" ? "重新配对" : "配对飞书"}</button></div>
+        <div class="tight"><button class="ghost" id="ch-test" ${channel.feishu !== "bound" ? "disabled" : ""}>发测试卡</button></div>
+      </div>
+      <p class="meta" id="ch-note">配对用 lark-cli 当前登录的人，不需要手抄 open_id。</p>
+    </div>
 
     <h2>添加账号</h2>
     <div class="card">
@@ -112,6 +126,31 @@ async function viewAccounts() {
       toast(err.message, true);
     }
   };
+
+  const chBind = $("#ch-bind");
+  if (chBind) {
+    chBind.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
+        $("#ch-note").textContent = `已配对：${r.who ?? r.externalUserId}`;
+        toast("飞书已配对");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+  const chTest = $("#ch-test");
+  if (chTest) {
+    chTest.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
+        toast("测试卡已发送，去飞书看看");
+        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
 
   for (const btn of document.querySelectorAll("[data-act]")) {
     btn.onclick = async () => {
@@ -338,6 +377,31 @@ async function viewWorks(selectedId = null) {
     confirm: (id) => api(`/api/publishes/${encodeURIComponent(id)}/confirm`, { method: "POST", body: { publishId: id } }),
     release: (id) => api(`/api/publishes/${encodeURIComponent(id)}/release`, { method: "POST", body: { publishId: id } }),
   };
+  const chBind = $("#ch-bind");
+  if (chBind) {
+    chBind.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
+        $("#ch-note").textContent = `已配对：${r.who ?? r.externalUserId}`;
+        toast("飞书已配对");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+  const chTest = $("#ch-test");
+  if (chTest) {
+    chTest.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/test", { method: "POST", body: {} });
+        toast("测试卡已发送，去飞书看看");
+        $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
   for (const btn of document.querySelectorAll("[data-act]")) {
     btn.onclick = async (e) => {
       e.stopPropagation();
@@ -529,17 +593,65 @@ async function render(arg) {
   }
 }
 
-async function ping() {
+let lastSignature = "";
+let renderTimer = null;
+
+function paintPill(status) {
   const pill = $("#pill");
+  if (!pill || !status) return;
+  const bad = status.accounts.by_state.expired + status.accounts.by_state.banned;
+  pill.textContent = `${status.accounts.total} 个账号 · 队列 ${status.queue.queued}${status.queue.running ? `/${status.queue.running}` : ""} · ${bad ? `${bad} 个需重登` : "连接正常"}`;
+  pill.className = `pill ${bad ? "bad" : "ok"}`;
+}
+
+async function ping() {
   try {
-    const now = await api("/api/now");
-    const bad = now.accounts.by_state.expired + now.accounts.by_state.banned;
-    pill.textContent = `${now.accounts.total} 个账号 · 队列 ${now.queue.queued} · ${bad ? `${bad} 个需重登` : "连接正常"}`;
-    pill.className = `pill ${bad ? "bad" : "ok"}`;
+    paintPill(await api("/api/now"));
   } catch {
-    pill.textContent = "守护进程未连接";
-    pill.className = "pill bad";
+    $("#pill").textContent = "守护进程未连接";
+    $("#pill").className = "pill bad";
   }
+}
+
+const signatureOf = (d) =>
+  JSON.stringify([
+    d.status.accounts,
+    d.status.queue,
+    d.status.publishes,
+    d.status.channel,
+    (d.publishes ?? []).map((p) => [p.id, p.state]),
+    (d.runs ?? []).map((r) => [r.id, r.state, r.attempts]),
+  ]);
+
+/** 状态真的变了才重渲染；正在输入时不打扰。 */
+function onStreamFrame(d) {
+  paintPill(d.status);
+  const sig = signatureOf(d);
+  if (sig === lastSignature) return;
+  lastSignature = sig;
+  if (document.activeElement?.matches("input,select,textarea")) return;
+  if (!["overview", "tasks", "accounts", "works"].includes(current())) return;
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => render(), 400);
+}
+
+function connectStream() {
+  if (!("EventSource" in window)) return null;
+  const es = new EventSource("/api/stream");
+  es.onmessage = (e) => {
+    let d;
+    try {
+      d = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    onStreamFrame(d);
+  };
+  // 断了就交给浏览器自动重连；这里是排障用的提示。
+  es.onerror = () => {
+    $("#pill").textContent = "实时流断开，自动重连中";
+  };
+  return es;
 }
 
 window.addEventListener("hashchange", () => render());
@@ -547,10 +659,7 @@ $("#refresh").onclick = () => {
   ping();
   render();
 };
-setInterval(() => {
-  ping();
-  if (["overview", "tasks", "accounts", "doctor"].includes(current()) && !document.activeElement?.matches("input,select,textarea")) render();
-}, 20000);
 
 ping();
+connectStream();
 render();

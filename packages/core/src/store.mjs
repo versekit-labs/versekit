@@ -170,9 +170,13 @@ export function statusSnapshot() {
       needs_human: count("SELECT COUNT(*) n FROM publish WHERE state='notify_pending'"),
       failed: count("SELECT COUNT(*) n FROM publish WHERE state='failed'"),
     },
-    channel: {
-      feishu: count("SELECT COUNT(*) n FROM channel_binding WHERE channel='feishu'") > 0 ? "bound" : "unbound",
-    },
+    channel: (() => {
+      const binding = getBinding("feishu");
+      return {
+        feishu: binding ? "bound" : "unbound",
+        binding: binding ? { external_user_id: binding.external_user_id, paired_at: binding.paired_at } : null,
+      };
+    })(),
   };
 }
 

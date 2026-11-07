@@ -20,7 +20,7 @@ import { applyTerminalFailure } from "./publish-flow.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, executeAction } from "./notify.mjs";
 import { resultCard } from "./cards.mjs";
-import { getBinding } from "./store.mjs";
+import { getBinding, statusSnapshot, listPublishes, listRuns } from "./store.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -168,6 +168,49 @@ function send(res, status, payload) {
   res.end(body);
 }
 
+/**
+ * 实时状态流（SSE）。控制台靠它把「刚发出去 / 刚失败」立刻显示出来，
+ * 而不是每 20 秒才发现。只发变化摘要，不发整页数据——渲染仍在客户端。
+ */
+function streamState(req, res, { log }) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.write("retry: 3000\n\n");
+
+  let closed = false;
+  const frame = () => {
+    const status = statusSnapshot();
+    const { list, ...accounts } = status.accounts;
+    return {
+      at: Date.now(),
+      status: { ...status, accounts },
+      publishes: listPublishes({ limit: 20 }).map((p) => ({ id: p.id, state: p.state, updated_at: p.updated_at, platform: p.platform })),
+      runs: listRuns({ limit: 20 }).map((r) => ({ id: r.id, kind: r.kind, state: r.state, target_id: r.target_id, attempts: r.attempts })),
+    };
+  };
+  const push = () => {
+    if (closed) return;
+    try {
+      res.write(`data: ${JSON.stringify(frame())}\n\n`);
+    } catch (err) {
+      closed = true;
+      log(`[daemon] 实时流写入失败：${err.message}`);
+    }
+  };
+
+  push();
+  const timer = setInterval(push, 2000);
+  timer.unref?.();
+  req.on("close", () => {
+    closed = true;
+    clearInterval(timer);
+  });
+}
+
 /** Path exists but with a different verb → 405, which is a different bug from 404. */
 function pathExists(pathname) {
   return ROUTES.some((route) => route.regex.test(pathname));
@@ -187,6 +230,9 @@ export function createDispatcher({ handlers, log = () => {}, webRoot = WEB_ROOT,
     }
     if (req.method === "POST" && pathname === "/api/assets") {
       return receiveAsset(req, res, { assetsDir, log });
+    }
+    if (req.method === "GET" && pathname === "/api/stream") {
+      return streamState(req, res, { log });
     }
 
     const hit = matchRoute(req.method, pathname);

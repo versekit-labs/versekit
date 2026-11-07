@@ -14,7 +14,7 @@ import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/src/store.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
@@ -168,6 +168,11 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
+    "channel.bind": async ({ openId }) => {
+      const who = openId ? { openId, name: null } : await channelFeishu.whoami();
+      const bound = bindChannel("feishu", who.openId);
+      return { ...bound, who: who.name ?? null };
+    },
     "channel.test": async () => {
       const binding = getBinding("feishu");
       if (!binding) throw new Error("还没有配对：先运行 vk channel bind feishu");
