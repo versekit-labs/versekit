@@ -164,7 +164,7 @@ const LOGIN_URL = {
 };
 
 function daemonHandlers(adapters, log) {
-  const core = createCoreHandlers({ adapters, log });
+  const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
@@ -248,7 +248,7 @@ async function cmdServe() {
   const { adapters, errors } = await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
   const handlers = daemonHandlers(adapters, log);
-  const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787), channels: [channelFeishu] });
+  const daemon = await startDaemon({ handlers, log, port: Number(val("--port") ?? 8787), channels: [channelFeishu], doctor: doctorReport });
 
   const web = `http://127.0.0.1:${daemon.port}`;
   if (has("--open")) openBrowser(web);
@@ -388,6 +388,21 @@ async function cmdCollect() {
   return data;
 }
 
+async function cmdSetup() {
+  const data = await send("setup.status", {});
+  if (human) {
+    console.log(`接入进度 ${data.done}/${data.total}${data.nextStep ? ` · 下一步：${data.steps.find((s) => s.id === data.nextStep)?.title}` : ""}`);
+    for (const step of data.steps) {
+      const mark = step.status === "ok" ? "✓" : step.status === "blocked" ? "✗" : "○";
+      console.log(`${mark} ${step.title.padEnd(12)}${step.intent}`);
+      for (const c of step.checks) {
+        console.log(`    ${c.ok ? "·" : "!"} ${c.detail}`);
+      }
+    }
+  } else out(data);
+  return data;
+}
+
 async function cmdPlatforms() {
   const data = await send("platform.list", {});
   if (human) {
@@ -486,7 +501,7 @@ function usage() {
       "  vk stats works [--range 7d] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
       "  vk platforms | runs [--state failed] | events [--since <ms>]",
-      "  vk channel bind feishu | test feishu",
+      "  vk setup [--json] | vk channel bind feishu | test feishu",
       "  vk --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
@@ -511,6 +526,7 @@ try {
   else if (cmd === "collect") await cmdCollect();
   else if (cmd === "stats") await cmdStats();
   else if (cmd === "platforms") await cmdPlatforms();
+  else if (cmd === "setup") await cmdSetup();
   else if (cmd === "runs") await cmdRuns();
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();

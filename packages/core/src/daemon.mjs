@@ -20,7 +20,8 @@ import { applyTerminalFailure } from "./publish-flow.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, executeAction } from "./notify.mjs";
 import { resultCard } from "./cards.mjs";
-import { getBinding, statusSnapshot, listPublishes, listRuns } from "./store.mjs";
+import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
+import { setupStatus } from "./setup.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -172,7 +173,20 @@ function send(res, status, payload) {
  * 实时状态流（SSE）。控制台靠它把「刚发出去 / 刚失败」立刻显示出来，
  * 而不是每 20 秒才发现。只发变化摘要，不发整页数据——渲染仍在客户端。
  */
-function streamState(req, res, { log }) {
+function streamState(req, res, { log, doctor = null }) {
+  let doctorCache = null;
+  let doctorAt = 0;
+  const getDoctor = async () => {
+    if (!doctor) return null;
+    if (Date.now() - doctorAt < 5 * 60e3) return doctorCache;
+    try {
+      doctorCache = await doctor();
+    } catch {
+      doctorCache = null;
+    }
+    doctorAt = Date.now();
+    return doctorCache;
+  };
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
@@ -182,23 +196,37 @@ function streamState(req, res, { log }) {
   res.write("retry: 3000\n\n");
 
   let closed = false;
-  const frame = () => {
+  const frame = async () => {
     const status = statusSnapshot();
     const { list, ...accounts } = status.accounts;
+    const binding = getBinding("feishu");
+    const setup = setupStatus({
+      doctor: await getDoctor(),
+      accounts: listAccounts(),
+      channel: { bound: Boolean(binding), who: binding?.external_user_id ?? null },
+      publishedCount: countPublished(),
+    });
     return {
       at: Date.now(),
       status: { ...status, accounts },
+      setup: { nextStep: setup.nextStep, done: setup.done, total: setup.total, steps: setup.steps.map((s) => ({ id: s.id, status: s.status })) },
       publishes: listPublishes({ limit: 20 }).map((p) => ({ id: p.id, state: p.state, updated_at: p.updated_at, platform: p.platform })),
       runs: listRuns({ limit: 20 }).map((r) => ({ id: r.id, kind: r.kind, state: r.state, target_id: r.target_id, attempts: r.attempts })),
     };
   };
-  const push = () => {
-    if (closed) return;
+
+  let pushing = false;
+  const push = async () => {
+    if (closed || pushing) return;
+    pushing = true;
     try {
-      res.write(`data: ${JSON.stringify(frame())}\n\n`);
+      const data = await frame();
+      if (!closed) res.write(`data: ${JSON.stringify(data)}\n\n`);
     } catch (err) {
       closed = true;
       log(`[daemon] 实时流写入失败：${err.message}`);
+    } finally {
+      pushing = false;
     }
   };
 
@@ -216,7 +244,7 @@ function pathExists(pathname) {
   return ROUTES.some((route) => route.regex.test(pathname));
 }
 
-export function createDispatcher({ handlers, log = () => {}, webRoot = WEB_ROOT, assetsDir = join(paths().state, "assets") }) {
+export function createDispatcher({ handlers, log = () => {}, doctor = null, webRoot = WEB_ROOT, assetsDir = join(paths().state, "assets") }) {
   return async function dispatch(req, res) {
     const started = Date.now();
     const url = new URL(req.url, "http://127.0.0.1");
@@ -232,7 +260,7 @@ export function createDispatcher({ handlers, log = () => {}, webRoot = WEB_ROOT,
       return receiveAsset(req, res, { assetsDir, log });
     }
     if (req.method === "GET" && pathname === "/api/stream") {
-      return streamState(req, res, { log });
+      return streamState(req, res, { log, doctor });
     }
 
     const hit = matchRoute(req.method, pathname);
@@ -292,7 +320,7 @@ function listen(server, options) {
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot, channels = [] } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null } = {}) {
   const runner = createRunner({
     handlers,
     log,
@@ -302,7 +330,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     },
   });
 
-  const dispatch = createDispatcher({ handlers, log, ...(webRoot ? { webRoot } : {}) });
+  const dispatch = createDispatcher({ handlers, log, doctor, ...(webRoot ? { webRoot } : {}) });
   const httpServer = createServer(dispatch);
   const socketServer = createServer(dispatch);
 

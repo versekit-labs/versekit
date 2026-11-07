@@ -148,6 +148,10 @@ export function accountsForPlatforms(platforms) {
 
 // ------------------------------------------------------------------ status / stats
 
+export function countPublished() {
+  return open().prepare("SELECT COUNT(*) n FROM publish WHERE state IN ('published','published_limited')").get().n;
+}
+
 export function statusSnapshot() {
   const conn = open();
   const count = (sql, ...params) => conn.prepare(sql).get(...params)?.n ?? 0;

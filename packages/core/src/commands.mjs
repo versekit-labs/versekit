@@ -46,6 +46,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "setup.status",
+    summary: "接入进度：环境 / 账号 / 通道 / 第一条发布",
+    remote: false,
+    args: {},
+    http: { method: "GET", path: "/api/setup" },
+    cli: { usage: "vk setup [--json]" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "platform.list",
     summary: "已安装的平台适配器与可用状态",
     remote: false,

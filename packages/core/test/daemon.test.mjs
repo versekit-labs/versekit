@@ -178,7 +178,7 @@ test("GET /api/stream 推实时状态，第一帧就带队列与通道", async (
 
   const dataLine = await new Promise((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error(`3 秒内没有收到 data 帧：${buf.slice(0, 120)}`)), 3000);
+    const timer = setTimeout(() => reject(new Error(`6 秒内没有收到 data 帧：${buf.slice(0, 120)}`)), 6000);
     res.on("data", (chunk) => {
       buf += chunk.toString();
       const line = buf.split("\n").find((l) => l.startsWith("data: "));

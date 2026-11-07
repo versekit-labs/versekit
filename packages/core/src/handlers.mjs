@@ -11,6 +11,7 @@ import { open, transitionPublish, enqueue } from "./index.mjs";
 import { queuePublish, queueCollect } from "./runner.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
+import { setupStatus } from "./setup.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -28,7 +29,7 @@ const platformList = (to) => {
 
 const RETRYABLE_STATES = new Set(["failed", "blocked", "expired", "notify_pending", "draft_pending"]);
 
-export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
+export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
 
   return {
@@ -37,6 +38,16 @@ export function createCoreHandlers({ adapters = [], log = () => {} } = {}) {
     "account.list": () => ({ accounts: store.listAccounts() }),
 
     "channel.bind": ({ openId }) => store.bindChannel("feishu", openId),
+
+    "setup.status": async () => {
+      const binding = store.getBinding("feishu");
+      return setupStatus({
+        doctor: doctor ? await doctor() : null,
+        accounts: store.listAccounts(),
+        channel: { bound: Boolean(binding), who: binding?.external_user_id ?? null },
+        publishedCount: store.countPublished(),
+      });
+    },
 
     "platform.list": () => ({
       platforms: adapters.map((a) => ({
