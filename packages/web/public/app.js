@@ -75,6 +75,7 @@ async function viewAccounts() {
         </div>
         <p class="meta">${a.last_checked_at ? `最近体检 ${fmtTime(a.last_checked_at)}` : "还没体检过"} · ${a.credential_ref ? "已有凭证文件" : "无凭证文件"}</p>
         <div class="row" style="margin-top:10px">
+          <button class="small" data-check="${esc(a.id)}">验证登录</button>
           <button class="small" data-act="mode" data-id="${esc(a.id)}" data-mode="${a.is_manual ? "auto" : "manual"}">${a.is_manual ? "改为自动发布" : "改为手动"}</button>
           <button class="small ghost" data-act="reauth" data-id="${esc(a.id)}">重新授权</button>
         </div>
@@ -97,8 +98,10 @@ async function viewAccounts() {
       <div class="row" style="margin-top:10px">
         <div class="tight"><button id="ch-bind">${channel.feishu === "bound" ? "重新配对" : "配对飞书"}</button></div>
         <div class="tight"><button class="ghost" id="ch-test" ${channel.feishu !== "bound" ? "disabled" : ""}>发测试卡</button></div>
+        <div class="tight"><button class="ghost" id="ch-diag">诊断</button></div>
       </div>
       <p class="meta" id="ch-note">配对用 lark-cli 当前登录的人，不需要手抄 open_id。</p>
+      <div id="ch-diag-box" class="meta" style="margin-top:8px"></div>
     </div>
 
     <h2>添加账号</h2>
@@ -111,7 +114,20 @@ async function viewAccounts() {
         <div><label>凭证文件（B站：biliup 的 cookies.json）</label><input id="acc-credential" placeholder="/Users/you/cookies.json（可留空）" /></div>
         <div class="tight"><button class="primary" id="acc-add">添加</button></div>
       </div>
-      <p class="meta" style="margin-top:10px">B站：先运行 <span class="mono">biliup -u ~/cookies.json login</span>，选「浏览器登录」，再把路径填到上面。TikTok：在账号卡的浏览器里登录一次即可，脚本会复用。</p>
+      <details class="meta" style="margin-top:10px">
+        <summary style="cursor:pointer">B站要准备什么？</summary>
+        <div style="margin-top:8px">
+          <div class="row" style="align-items:center;gap:8px">
+            <pre class="mono" style="flex:1;margin:0">biliup -u ~/cookies.json login</pre>
+            <button class="small" data-copy="biliup -u ~/cookies.json login">复制</button>
+          </div>
+          <p class="meta">选择「浏览器登录」，在打开的窗口里登录 B站。完成后把 <span class="mono">~/cookies.json</span> 填到上面的「凭证文件」。</p>
+        </div>
+      </details>
+      <details class="meta" style="margin-top:6px">
+        <summary style="cursor:pointer">TikTok 要怎么登录？</summary>
+        <p class="meta" style="margin-top:8px">在上面的平台里选 tiktok 并添加，然后在账号卡上点「重新授权」——会在这个账号自己的浏览器里打开登录页。登录完点「验证登录」确认。</p>
+      </details>
     </div>`;
 
   $("#acc-add").onclick = async () => {
@@ -126,6 +142,39 @@ async function viewAccounts() {
       toast(err.message, true);
     }
   };
+
+  for (const btn of document.querySelectorAll("[data-check]")) {
+    btn.onclick = async () => {
+      const id = btn.dataset.check;
+      const note = document.querySelector(`[data-note="${id}"]`);
+      if (note) note.textContent = "验证中…";
+      try {
+        const r = await api(`/api/accounts/${encodeURIComponent(id)}/check`, { method: "POST", body: { accountId: id } });
+        toast(`验证完成：${r.state}`);
+        // 状态变化会触发 SSE 重渲染，旧的节点会被替换掉；先渲染再写结果，才不会被冲掉。
+        await render();
+        const fresh = document.querySelector(`[data-note="${id}"]`);
+        if (fresh) fresh.textContent = `验证结果：${r.state}${r.detail ? `（${r.detail}）` : ""}`;
+      } catch (err) {
+        toast(err.message, true);
+        const fresh = document.querySelector(`[data-note="${id}"]`);
+        if (fresh) fresh.textContent = `验证失败：${err.message}`;
+      }
+    };
+  }
+
+  const chDiag = $("#ch-diag");
+  if (chDiag) {
+    chDiag.onclick = async () => {
+      const box = $("#ch-diag-box");
+      box.textContent = "诊断中…（约 10 秒，要等飞书事件总线就绪）";
+      try {
+        renderDiagnose(box);
+      } catch (err) {
+        box.textContent = err.message;
+      }
+    };
+  }
 
   const chBind = $("#ch-bind");
   if (chBind) {
@@ -148,6 +197,17 @@ async function viewAccounts() {
         $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
       } catch (err) {
         toast(err.message, true);
+      }
+    };
+  }
+
+  for (const btn of document.querySelectorAll("[data-copy]")) {
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        toast("已复制");
+      } catch {
+        toast("复制失败，请手动选中那行命令", true);
       }
     };
   }
@@ -377,6 +437,39 @@ async function viewWorks(selectedId = null) {
     confirm: (id) => api(`/api/publishes/${encodeURIComponent(id)}/confirm`, { method: "POST", body: { publishId: id } }),
     release: (id) => api(`/api/publishes/${encodeURIComponent(id)}/release`, { method: "POST", body: { publishId: id } }),
   };
+  for (const btn of document.querySelectorAll("[data-check]")) {
+    btn.onclick = async () => {
+      const id = btn.dataset.check;
+      const note = document.querySelector(`[data-note="${id}"]`);
+      if (note) note.textContent = "验证中…";
+      try {
+        const r = await api(`/api/accounts/${encodeURIComponent(id)}/check`, { method: "POST", body: { accountId: id } });
+        toast(`验证完成：${r.state}`);
+        // 状态变化会触发 SSE 重渲染，旧的节点会被替换掉；先渲染再写结果，才不会被冲掉。
+        await render();
+        const fresh = document.querySelector(`[data-note="${id}"]`);
+        if (fresh) fresh.textContent = `验证结果：${r.state}${r.detail ? `（${r.detail}）` : ""}`;
+      } catch (err) {
+        toast(err.message, true);
+        const fresh = document.querySelector(`[data-note="${id}"]`);
+        if (fresh) fresh.textContent = `验证失败：${err.message}`;
+      }
+    };
+  }
+
+  const chDiag = $("#ch-diag");
+  if (chDiag) {
+    chDiag.onclick = async () => {
+      const box = $("#ch-diag-box");
+      box.textContent = "诊断中…（约 10 秒，要等飞书事件总线就绪）";
+      try {
+        renderDiagnose(box);
+      } catch (err) {
+        box.textContent = err.message;
+      }
+    };
+  }
+
   const chBind = $("#ch-bind");
   if (chBind) {
     chBind.onclick = async () => {
@@ -398,6 +491,17 @@ async function viewWorks(selectedId = null) {
         $("#ch-note").textContent = r.messageId ? `测试消息 ${r.messageId}` : "测试卡已发送";
       } catch (err) {
         toast(err.message, true);
+      }
+    };
+  }
+
+  for (const btn of document.querySelectorAll("[data-copy]")) {
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        toast("已复制");
+      } catch {
+        toast("复制失败，请手动选中那行命令", true);
       }
     };
   }
@@ -572,9 +676,135 @@ async function viewDoctor() {
     </div>`;
 }
 
+// ---------------------------------------------------------------- 飞书诊断
+
+async function renderDiagnose(el) {
+  el.textContent = "诊断中…（约 10 秒，要等飞书事件总线就绪）";
+  const d = await api("/api/channels/feishu/diagnose");
+  el.innerHTML = `
+    <div class="meta" style="margin-bottom:6px">${d.healthy ? "诊断结果：全部通过" : "诊断结果：有需要处理的地方"}</div>
+    <div class="grid" style="gap:4px">
+      ${d.checks.map((c) => `<div>${c.ok ? "✓" : "✗"} <span class="meta">${esc(c.id)}</span> ${esc(c.detail)}</div>`).join("")}
+    </div>
+    ${d.subscribeUrl ? `<p style="margin-top:8px"><a class="btn" href="${esc(d.subscribeUrl)}" target="_blank" rel="noreferrer">去后台订阅 card.action.trigger ↗</a></p>` : ""}`;
+}
+
+// ---------------------------------------------------------------- 接入
+
+const COMMAND_ROUTES = {
+  "account.reauth": (a) => `/api/accounts/${encodeURIComponent(a.accountId)}/reauth`,
+  "account.mode": (a) => `/api/accounts/${encodeURIComponent(a.accountId)}/mode`,
+  "publish.retry": (a) => `/api/publishes/${encodeURIComponent(a.publishId)}/retry`,
+};
+
+function fixHtml(fix) {
+  if (!fix) return "";
+  if (fix.kind === "page") return `<a class="btn" href="${esc(fix.href)}">${esc(fix.label)}</a>`;
+  if (fix.kind === "link") return `<a class="btn" href="${esc(fix.url)}" target="_blank" rel="noreferrer">${esc(fix.label)} ↗</a>`;
+  if (fix.kind === "copy") {
+    return `<div class="row" style="align-items:center;gap:8px"><pre class="mono" style="flex:1;margin:0">${esc(fix.text)}</pre><button class="small" data-copy="${esc(fix.text)}">复制</button></div>`;
+  }
+  if (fix.kind === "command" && COMMAND_ROUTES[fix.command]) {
+    return `<button class="primary" data-fix="${esc(fix.command)}" data-args="${esc(JSON.stringify(fix.args ?? {}))}">${esc(fix.label)}</button>`;
+  }
+  return "";
+}
+
+async function viewSetup() {
+  const setup = await api("/api/setup");
+  const chips = { ok: ["ok", "完成"], todo: ["warn", "待做"], blocked: ["bad", "卡住"] };
+
+  const steps = setup.steps
+    .map((step) => {
+      const [dot, word] = chips[step.status] ?? ["", step.status];
+      const bad = step.checks.filter((c) => !c.ok);
+      return `
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div>
+            <h3>${esc(step.title)} <span class="meta">${esc(step.intent)}</span></h3>
+          </div>
+          <span class="chip"><i class="dot ${dot}"></i>${esc(word)}</span>
+        </div>
+        <div class="grid" style="gap:4px;margin-top:10px">
+          ${step.checks.map((c) => `<div>${c.ok ? "✓" : "✗"} <span class="meta">${esc(c.id)}</span> ${esc(c.detail)}</div>`).join("")}
+        </div>
+        ${bad.length || step.fix ? `<div class="row" style="margin-top:12px">${step.fix ? fixHtml(step.fix) : ""}${
+          step.id === "channel" && !step.done
+            ? `<div class="tight"><button id="setup-bind">配对飞书</button></div><div class="tight"><button class="ghost" id="setup-diag">诊断</button></div>`
+            : ""
+        }</div>` : ""}
+        ${step.id === "channel" && !step.done ? `<div id="setup-diag-box" class="meta" style="margin-top:8px"></div>` : ""}
+      </div>`;
+    })
+    .join("");
+
+  $("#view").innerHTML = `
+    <h1>接入</h1>
+    <p class="hint">四步走完，就能在电脑上发、在手机上拍板。第一个不是绿色的步骤，就是你现在该做的事。</p>
+    <div class="card" style="margin-bottom:14px">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="kpi">${setup.done}/${setup.total}<small>步完成</small></div>
+        <span class="meta">${setup.nextStep ? `下一步：${esc(setup.steps.find((s) => s.id === setup.nextStep)?.title ?? setup.nextStep)}` : "全部就绪"}</span>
+      </div>
+      <div class="bar" style="margin-top:10px"><i style="width:${(setup.done / setup.total) * 100}%"></i></div>
+    </div>
+    ${steps}`;
+
+  for (const btn of document.querySelectorAll("[data-copy]")) {
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        toast("已复制");
+      } catch {
+        toast("复制失败，请手动选中", true);
+      }
+    };
+  }
+
+  for (const btn of document.querySelectorAll("[data-fix]")) {
+    btn.onclick = async () => {
+      try {
+        const args = JSON.parse(btn.dataset.args ?? "{}");
+        const path = COMMAND_ROUTES[btn.dataset.fix](args);
+        await api(path, { method: "POST", body: { ...args } });
+        toast("已提交，稍后刷新");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const bind = $("#setup-bind");
+  if (bind) {
+    bind.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/bind", { method: "POST", body: {} });
+        toast(`已配对：${r.who ?? r.externalUserId}`);
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const diag = $("#setup-diag");
+  if (diag) {
+    diag.onclick = async () => {
+      const box = $("#setup-diag-box");
+      try {
+        await renderDiagnose(box);
+      } catch (err) {
+        box.textContent = err.message;
+      }
+    };
+  }
+}
+
 // ---------------------------------------------------------------- 路由
 
-const VIEWS = { accounts: viewAccounts, publish: viewPublish, works: viewWorks, overview: viewOverview, tasks: viewTasks, doctor: viewDoctor };
+const VIEWS = { setup: viewSetup, accounts: viewAccounts, publish: viewPublish, works: viewWorks, overview: viewOverview, tasks: viewTasks, doctor: viewDoctor };
 
 function current() {
   const name = location.hash.replace("#", "") || "overview";
@@ -660,6 +890,19 @@ $("#refresh").onclick = () => {
   render();
 };
 
-ping();
-connectStream();
-render();
+async function boot() {
+  ping();
+  connectStream();
+  if (!location.hash) {
+    try {
+      const setup = await api("/api/setup");
+      location.hash = setup.nextStep ? "#setup" : "#overview";
+      return; // 改 hash 会触发 hashchange → render
+    } catch {
+      location.hash = "#overview";
+      return;
+    }
+  }
+  render();
+}
+boot();

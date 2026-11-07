@@ -51,6 +51,16 @@ export default {
     return { openId, name: json.identities?.user?.userName ?? null };
   },
 
+  /** 当前身份（bot/user）与 bind 的 app，给诊断用。 */
+  async status() {
+    const json = await lark(["auth", "status"]);
+    return {
+      appId: json.appId ?? json.identity?.appId ?? null,
+      bot: json.identities?.bot ?? json.identity?.bot ?? null,
+      user: json.identities?.user ?? json.identity?.user ?? null,
+    };
+  },
+
   /** 发一张交互卡片。idempotencyKey 让「同一事件重发」在飞书侧也不会重复。 */
   async send({ openId, card, idempotencyKey = null }) {
     if (!openId) throw new Error("发飞书消息需要 openId");
@@ -83,11 +93,11 @@ export default {
    * 事件订阅探活：短跑一次 consume，看后台是否真的订阅了 card.action.trigger。
    * 失败时把后台的订阅链接捞出来——这是唯一能让人自助修复的信息。
    */
-  async probeEvents({ timeout = 4500 } = {}) {
+  async probeEvents({ timeout = 12e3 } = {}) {
     return new Promise((resolve) => {
       let child;
       try {
-        child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--timeout", "3s"], { stdio: ["pipe", "pipe", "pipe"] });
+        child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--timeout", "4s"], { stdio: ["pipe", "pipe", "pipe"] });
       } catch (err) {
         return resolve({ ok: false, detail: err.message, url: null });
       }

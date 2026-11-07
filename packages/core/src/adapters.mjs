@@ -55,6 +55,62 @@ export async function loadAdapters({ only = null, root = PACKAGES } = {}) {
  * adapters would eventually disagree about the order of "外部 id 落库" and "转 published", and the
  * difference would only show up as a publish stuck mid-flight for one platform.
  */
+export async function checkAccount(adapters, accountId) {
+  {
+    const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
+    const account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
+    if (!account) throw new Error(`没有这个账号：${accountId}`);
+    const adapter = byPlatform.get(account.platform);
+    const at = Date.now();
+    const mark = (patch) => {
+      const sets = Object.keys(patch).map((k) => `${k}=?`).join(", ");
+      open().prepare(`UPDATE account SET ${sets} WHERE id=?`).run(...Object.values(patch), accountId);
+    };
+
+    if (!adapter?.adapter?.check) {
+      mark({ last_checked_at: at });
+      return { skipped: true, reason: `${account.platform} 适配器没有 check()`, passive_only: true };
+    }
+
+    try {
+      const health = await adapter.adapter.check({ accountId });
+      const states = ["ok", "expiring", "expired", "banned", "manual"];
+      if (!states.includes(health?.state)) {
+        throw new Error(`${account.platform} 的 check() 返回了未知状态：${JSON.stringify(health?.state)}`);
+      }
+      const patch = { state: health.state, last_checked_at: at };
+      if (health.state === "ok") patch.last_ok_at = at;
+      if (Number.isInteger(health.expiresAt)) patch.expires_at = health.expiresAt;
+      mark(patch);
+
+      if (health.state !== account.state && ["expiring", "expired", "banned"].includes(health.state)) {
+        emit({
+          type: `account.${health.state}`,
+          severity: health.state === "expiring" ? "warn" : "critical",
+          payload: { accountId, platform: account.platform, handle: account.handle, detail: health.detail ?? null },
+          // One card per account per state per day; a probe every six hours must not become spam.
+          dedupeKey: `account:${accountId}:${health.state}:${new Date(at).toISOString().slice(0, 10)}`,
+        });
+      }
+      return { accountId, state: health.state, detail: health.detail ?? null };
+    } catch (err) {
+      const error = toAdapterError(err);
+      if (error.code === "auth") {
+        mark({ state: "expired", last_checked_at: at });
+        emit({
+          type: "account.expired",
+          severity: "critical",
+          payload: { accountId, platform: account.platform, handle: account.handle, detail: String(error.message).slice(0, 300) },
+          dedupeKey: `account:${accountId}:expired:${new Date(at).toISOString().slice(0, 10)}`,
+        });
+      } else {
+        mark({ last_checked_at: at });
+      }
+      throw error;
+    }
+  }
+}
+
 export function buildHandlers(adapters, { log = () => {} } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   const handlers = {};
@@ -155,59 +211,7 @@ export function buildHandlers(adapters, { log = () => {} } = {}) {
   }
   // Health checks target an account, not a publish, so this handler exists even when no adapter
   // implements check(): the run then records "probed, but this platform cannot be probed".
-  handlers.check = async (run) => {
-    const accountId = run.target_id;
-    const account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
-    if (!account) throw new Error(`没有这个账号：${accountId}`);
-    const adapter = byPlatform.get(account.platform);
-    const at = Date.now();
-    const mark = (patch) => {
-      const sets = Object.keys(patch).map((k) => `${k}=?`).join(", ");
-      open().prepare(`UPDATE account SET ${sets} WHERE id=?`).run(...Object.values(patch), accountId);
-    };
-
-    if (!adapter?.adapter?.check) {
-      mark({ last_checked_at: at });
-      return { skipped: true, reason: `${account.platform} 适配器没有 check()`, passive_only: true };
-    }
-
-    try {
-      const health = await adapter.adapter.check({ accountId });
-      const states = ["ok", "expiring", "expired", "banned", "manual"];
-      if (!states.includes(health?.state)) {
-        throw new Error(`${account.platform} 的 check() 返回了未知状态：${JSON.stringify(health?.state)}`);
-      }
-      const patch = { state: health.state, last_checked_at: at };
-      if (health.state === "ok") patch.last_ok_at = at;
-      if (Number.isInteger(health.expiresAt)) patch.expires_at = health.expiresAt;
-      mark(patch);
-
-      if (health.state !== account.state && ["expiring", "expired", "banned"].includes(health.state)) {
-        emit({
-          type: `account.${health.state}`,
-          severity: health.state === "expiring" ? "warn" : "critical",
-          payload: { platform: account.platform, handle: account.handle, detail: health.detail ?? null },
-          // One card per account per state per day; a probe every six hours must not become spam.
-          dedupeKey: `account:${accountId}:${health.state}:${new Date(at).toISOString().slice(0, 10)}`,
-        });
-      }
-      return { accountId, state: health.state, detail: health.detail ?? null };
-    } catch (err) {
-      const error = toAdapterError(err);
-      if (error.code === "auth") {
-        mark({ state: "expired", last_checked_at: at });
-        emit({
-          type: "account.expired",
-          severity: "critical",
-          payload: { platform: account.platform, handle: account.handle, detail: String(error.message).slice(0, 300) },
-          dedupeKey: `account:${accountId}:expired:${new Date(at).toISOString().slice(0, 10)}`,
-        });
-      } else {
-        mark({ last_checked_at: at });
-      }
-      throw error;
-    }
-  };
+  handlers.check = (run) => checkAccount(adapters, run.target_id);
 
   return handlers;
 }

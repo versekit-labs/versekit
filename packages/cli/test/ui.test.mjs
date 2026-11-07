@@ -37,18 +37,24 @@ test("控制台在真浏览器里能打开：五页都在、没有横向溢出�
     await tab.waitFor(`document.querySelector("#view h1")?.innerText`, [], { timeout: 20e3, what: "控制台首页" });
     await tab.eval(`window.__errors = []; window.addEventListener("error", (e) => window.__errors.push(String(e.message)))`);
 
-    assert.equal(await tab.eval(`document.querySelectorAll(".tabs a").length`), 6);
+    assert.equal(await tab.eval(`document.querySelectorAll(".tabs a").length`), 7);
     assert.equal(await tab.eval(`document.documentElement.scrollWidth > window.innerWidth + 1`), false);
 
     const seen = [];
-    for (const name of ["accounts", "publish", "works", "overview", "tasks", "doctor"]) {
+    for (const name of ["setup", "accounts", "publish", "works", "overview", "tasks", "doctor"]) {
       await tab.eval(`location.hash = "#${name}"`);
       await tab.waitFor(`document.querySelector("#view h1")?.innerText`, [], { timeout: 10e3, what: `${name} 视图` });
       seen.push(await tab.eval(`document.querySelector("#view h1").innerText`));
       assert.equal(await tab.eval(`document.documentElement.scrollWidth > window.innerWidth + 1`), false, `${name} 出现横向溢出`);
     }
-    assert.deepEqual(seen, ["账号墙", "发布台", "作品", "总览", "任务与日志", "自检"]);
+    assert.deepEqual(seen, ["接入", "账号墙", "发布台", "作品", "总览", "任务与日志", "自检"]);
     assert.deepEqual(await tab.eval(`window.__errors`), [], "页面不应有未捕获的 JS 错误");
+
+    // 没有账号时，打开根地址应该直接落在「接入」，而不是空的总览。
+    core.open().prepare("DELETE FROM account").run();
+    await tab.goto(`${base}/`);
+    await tab.waitFor(`document.querySelector("#view h1")?.innerText === "接入"`, [], { timeout: 15e3, what: "无账号首启落在接入页" });
+    assert.equal(await tab.eval(`location.hash`), "#setup");
   } finally {
     await tab.close();
     await daemon.close();

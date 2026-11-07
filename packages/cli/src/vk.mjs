@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { basename, extname, join } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
-import { loadAdapters, buildHandlers } from "../../core/src/adapters.mjs";
+import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/src/store.mjs";
@@ -168,6 +168,38 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
+    "account.check": ({ accountId }) => checkAccount(adapters, accountId),
+
+    "channel.diagnose": async () => {
+      const checks = [];
+      const add = (id, ok, detail, extra = {}) => checks.push({ id, ok, detail, ...extra });
+
+      const missing = channelFeishu.ready();
+      add("lark-cli", missing === null, missing ?? "lark-cli 已安装");
+
+      let status = null;
+      try {
+        status = await channelFeishu.status();
+        add("identity", status.bot?.status === "ready", status.bot?.status === "ready" ? `bot 身份可用${status.appId ? `（${status.appId}）` : ""}` : `bot 身份不可用：${status.bot?.message ?? "未知"}`);
+      } catch (err) {
+        add("identity", false, `读不到登录身份：${err.message}`);
+      }
+
+      const binding = getBinding("feishu");
+      add("binding", Boolean(binding), binding ? `已配对（${binding.external_user_id}）` : "还没有配对：vk channel bind feishu");
+
+      let probe = { ok: false, detail: "未执行探活", url: null };
+      try {
+        probe = await channelFeishu.probeEvents();
+      } catch (err) {
+        probe = { ok: false, detail: `探活失败：${err.message}`, url: null };
+      }
+      add("subscription", probe.ok, probe.detail, probe.url ? { url: probe.url } : {});
+
+      const healthy = checks.every((c) => c.ok);
+      return { ok: true, healthy, checks, subscribeUrl: probe.url ?? null };
+    },
+
     "channel.bind": async ({ openId }) => {
       const who = openId ? { openId, name: null } : await channelFeishu.whoami();
       const bound = bindChannel("feishu", who.openId);
@@ -320,6 +352,14 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
+  if (sub === "check") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account check <accountId>");
+    const data = await send("account.check", { accountId }, { log });
+    if (human) console.log(`${accountId} → ${data.state}${data.detail ? `（${data.detail}）` : ""}`);
+    else out(data);
+    return data;
+  }
   if (sub === "reauth") {
     const accountId = pos[2];
     if (!accountId) throw new Error("用法：vk account reauth <accountId>");
@@ -447,6 +487,16 @@ async function cmdChannel() {
       console.log(`已配对飞书：${who.name ?? who.openId}`);
       if (bound.existed) console.log("（之前配过，已刷新配对时间）");
       console.log(`测试卡片已发送${test.messageId ? `（${test.messageId}）` : ""}，去飞书里看一眼。`);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "diagnose") {
+    const data = await send("channel.diagnose", {});
+    if (human) {
+      console.log(`飞书诊断：${data.healthy ? "全部通过" : "有需要处理的地方"}`);
+      for (const c of data.checks) console.log(`${c.ok ? "✓" : "✗"} ${c.id.padEnd(14)}${c.detail}`);
+      if (data.subscribeUrl) console.log(`\n去订阅：${data.subscribeUrl}`);
     } else out(data);
     return data;
   }

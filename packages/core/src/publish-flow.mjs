@@ -123,7 +123,7 @@ export function applyPublishError(publishId, err) {
       type: ACCOUNT_EVENT.auth,
       severity: "critical",
       publishId,
-      payload: { platform: row.platform, handle: row.handle },
+      payload: { accountId: row.account_id, platform: row.platform, handle: row.handle },
       dedupeKey: `account:${row.account_id}:expired`,
     });
     return { terminal: true, retryable: false, code: "auth" };

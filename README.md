@@ -102,7 +102,7 @@ flowchart LR
 失败会降级、状态会落库、数据会按节奏回收。飞书通道还没接。
 
 <p align="center">
-  <img src="docs/screenshots/overview.png" alt="versekit 控制台总览" width="820"/>
+  <img src="docs/screenshots/setup.png" alt="versekit 接入向导" width="820"/>
   <br/><sub>总览：成功、失败、待处理与账号健康在一屏（真实运行截图）</sub>
 </p>
 
@@ -113,7 +113,8 @@ flowchart LR
 | 守护进程（unix socket + 本地 HTTP 共用一份 dispatch · 审计） | ✅ |
 | Chrome CDP 驱动（每账号 profile/端口 · 真实鼠标 · shadow DOM · 响应拦截） | ✅ |
 | CLI（19 条命令，含 publish / account / collect / stats / runs / events） | ✅ |
-| **本地 Web 控制台**（账号墙 / 发布台 / 作品 / 总览 / 任务日志 / 自检） | ✅ 真浏览器验收 + SSE 实时刷新 |
+| **本地 Web 控制台**（接入 / 账号墙 / 发布台 / 作品 / 总览 / 任务 / 自检） | ✅ 真浏览器验收 + SSE 实时刷新 |
+| **接入向导**（四步：环境 → 账号 → 通道 → 第一条） | ✅ 无账号时首启自动落地，动作/检查/深链齐备 |
 | 适配器 B站（biliup 发布 + 创作中心采集 + 登录体检） | ✅ 待真机验收 |
 | 适配器 TikTok（Studio 发布 + 后台拦截采集 + 登录探测） | ✅ 待真机验收 |
 | 飞书通道（卡片投递 + 按钮回执，走 lark-cli） | ✅ 端到端已验证：点按钮 → 执行命令 → 原地更新卡片 |
@@ -127,6 +128,8 @@ node -v                     # 需要 ≥ 22.5（用到 node:sqlite）
 npm run vk -- init          # 建库 + 配置
 npm run vk -- serve         # 启动守护进程，打开 http://127.0.0.1:8787
 ```
+
+第一次打开如果还没有账号，会自动落在「接入」页：四步走完即可发布，不需要先读文档。
 
 浏览器里就是控制台：加账号 → 拖素材 → 勾平台 → 发布。也可以全部用 CLI：
 
