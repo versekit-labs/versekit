@@ -207,6 +207,7 @@ function forget(accountId) {
       /* 已经断开的 socket 不用再管 */
     }
   }
+  clearTimeout(instance.idleTimer);
   instance.tabs.clear();
   if (instance.slotHeld) {
     instance.slotHeld = false;
@@ -292,6 +293,19 @@ async function startInstance(accountId) {
         ready = await up(port);
       }
       if (!ready) throw new Error(`Chrome 没有在端口 ${port} 上启动（profile: ${profile}）`);
+
+      // Chrome 启动时会自带一个 about:blank 标签页；不清掉的话，每次自动化都会
+      // 在用户屏幕上留一个空白窗口。
+      try {
+        const targets = await (await fetch(`${base(port)}/json/list`, { signal: AbortSignal.timeout(5000) })).json();
+        for (const t of targets) {
+          if (t.type === "page" && /about:blank|^$/.test(t.url)) {
+            await fetch(`${base(port)}/json/close/${t.id}`, { signal: AbortSignal.timeout(3000) }).catch(() => {});
+          }
+        }
+      } catch {
+        /* 清不掉也不影响后续开 tab */
+      }
     }
 
     claimedPorts.set(port, accountId);
@@ -369,7 +383,24 @@ function killByPid(pid) {
 
 // ------------------------------------------------------------------ tab
 
+/**
+ * 没有标签页时不要立刻关浏览器：登录态要复用，适配器也可能马上再开一个 tab。
+ * 空闲 10 分钟后再收，避免用户屏幕上堆一排空窗口。
+ */
+const IDLE_CLOSE_MS = 10 * 60e3;
+function scheduleIdleClose(instance) {
+  if (instance.tabs.size > 0) return;
+  clearTimeout(instance.idleTimer);
+  instance.idleTimer = setTimeout(() => {
+    if (instance.tabs.size === 0) {
+      closeAccount(instance.accountId).catch(() => {});
+    }
+  }, IDLE_CLOSE_MS);
+  instance.idleTimer.unref?.();
+}
+
 async function newTab(instance) {
+  clearTimeout(instance.idleTimer);
   let res;
   try {
     res = await fetch(`${base(instance.port)}/json/new?${encodeURIComponent("about:blank")}`, {
@@ -802,6 +833,7 @@ async function newTab(instance) {
       if (closed) return;
       closed = true;
       instance.tabs.delete(tab);
+      scheduleIdleClose(instance);
       try {
         ws.close();
       } catch {
@@ -838,6 +870,7 @@ async function newTab(instance) {
     throw err;
   }
 
+  clearTimeout(instance.idleTimer);
   instance.tabs.add(tab);
   return tab;
 }

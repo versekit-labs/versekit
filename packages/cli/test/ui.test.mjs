@@ -58,6 +58,8 @@ test("控制台在真浏览器里能打开：五页都在、没有横向溢出�
     assert.equal(await tab.eval(`location.hash`), "#setup");
   } finally {
     await tab.close();
+    // 浏览器验收最容易漏的一步：只关标签页会留下一个空 Chrome，堆在用户屏幕上。
+    await driver.closeAccount("ui-check");
     await daemon.close();
   }
 });
