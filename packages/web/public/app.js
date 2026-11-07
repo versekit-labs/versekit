@@ -653,6 +653,9 @@ function channelBlockHtml(st) {
   const configured = Boolean(st.configured);
   const authorized = Boolean(st.authorized);
   const bound = Boolean(st.bound);
+  const sub = st.subscription;
+  // 已配对但订阅没生效 = 卡片能收到、按钮点不动。这是最容易被误判成「已打通」的状态。
+  const needSubscribe = bound && sub && !sub.subscribed;
 
   if (st.skipped && !bound) {
     return `
@@ -710,6 +713,20 @@ function channelBlockHtml(st) {
     }
 
     ${authorized ? step(3, "配对", bound, bound ? "已配对，测试卡已发送" : "正在自动配对…") : ""}
+    ${
+      needSubscribe
+        ? `<div class="need-line">
+             <div><b>还差一步：让按钮能点</b>
+               <div class="meta">飞书要在后台订阅一次 card.action.trigger，否则卡片收到、点按钮没反应。</div>
+             </div>
+             <div class="row" style="margin-top:8px">
+               ${sub.url ? `<a class="btn" href="${esc(sub.url)}" target="_blank" rel="noreferrer">去订阅 ↗</a>` : ""}
+               <button class="mini ghost" id="ch-recheck">我点完了，重新检测</button>
+             </div>
+           </div>`
+        : ""
+    }
+    ${bound && sub?.subscribed ? `<div class="meta line">✓ 按钮已可用（卡片点击会回到这台电脑执行）</div>` : ""}
 
     ${
       bound
@@ -754,6 +771,19 @@ function wireChannelBlock(st = {}) {
       try {
         await api("/api/channels/feishu/skip", { method: "POST", body: {} });
         toast("已跳过手机通道，可以直接发布");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+
+  const recheck = $("#ch-recheck");
+  if (recheck) {
+    recheck.onclick = async () => {
+      try {
+        const r = await api("/api/channels/feishu/subscription");
+        toast(r.subscribed ? "订阅已生效，按钮可以点了" : r.detail ?? "还没检测到订阅", !r.subscribed);
         render();
       } catch (err) {
         toast(err.message, true);

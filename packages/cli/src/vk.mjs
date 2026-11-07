@@ -164,12 +164,29 @@ const LOGIN_URL = {
   youtube: "https://studio.youtube.com/",
 };
 
+let subscriptionCache = null;
+
 function daemonHandlers(adapters, log) {
   const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
     "account.check": ({ accountId }) => checkAccount(adapters, accountId),
+
+    /**
+     * 订阅状态探活很贵（要等事件总线就绪，约 10 秒），所以只在绑定后探一次并缓存。
+     * 卡片按钮能不能点，全看这一项——它必须是可见的，不能假装通了。
+     */
+    "channel.subscription": async () => {
+      const now = Date.now();
+      if (subscriptionCache && now - subscriptionCache.at < 120e3) return subscriptionCache.value;
+      const probe = await channelFeishu.probeEvents();
+      // 注意：这是「探测结果」，不是「请求失败」。用 subscribed 表达结论，
+      // 顶层 ok 留给传输层，否则客户端会把正常结果当成错误抛出来。
+      const value = { subscribed: Boolean(probe.ok), detail: probe.detail ?? null, url: probe.url ?? null, checkedAt: now };
+      subscriptionCache = { at: now, value };
+      return value;
+    },
 
     "channel.status": () => {
       const ready = channelFeishu.ready();
@@ -179,6 +196,7 @@ function daemonHandlers(adapters, log) {
       return {
         create,
         auth: channelFeishu.authStatus(),
+        subscription: subscriptionCache?.value ?? null,
         ready,
         skipped: Boolean(cfg.skipped),
         configured: Boolean(cfg.app_id) || create.configured,
@@ -221,6 +239,13 @@ function daemonHandlers(adapters, log) {
       const who = await channelFeishu.whoami();
       const bound = bindChannel("feishu", who.openId);
       updateConfig({ channel: { feishu: { authorized_at: Date.now() } } });
+      // 顺手探一次订阅：没订阅时按钮收不到点击，界面要能立刻说出来。
+      channelFeishu
+        .probeEvents()
+        .then((probe) => {
+          subscriptionCache = { at: Date.now(), value: { subscribed: Boolean(probe.ok), detail: probe.detail ?? null, url: probe.url ?? null, checkedAt: Date.now() } };
+        })
+        .catch(() => {});
       return { ...bound, who: who.name ?? null };
     },
 
@@ -625,6 +650,15 @@ async function cmdChannel() {
     return data;
   }
 
+  if (sub === "subscription") {
+    const data = await send("channel.subscription", {});
+    if (human) {
+      console.log(data.subscribed ? "✓ 事件订阅已生效（按钮可以点）" : `✗ ${data.detail ?? "还没有订阅 card.action.trigger"}`);
+      if (!data.subscribed && data.url) console.log(`去订阅：${data.url}`);
+    } else out(data);
+    return data;
+  }
+
   if (sub === "test") {
     const test = await send("channel.test", {});
     if (human) console.log(`测试卡片已发送${test.messageId ? `（${test.messageId}）` : ""}`);
@@ -632,7 +666,7 @@ async function cmdChannel() {
     return test;
   }
 
-  throw new Error("用法：vk channel bind feishu [--open-id ou_xxx] | vk channel test feishu");
+  throw new Error("用法：vk channel bind | test | status | diagnose | subscription feishu");
 }
 
 async function cmdStats() {

@@ -181,3 +181,10 @@ svg.chart text { fill: var(--muted); font-size: 10px; }
 .step-side .chev { color: var(--muted); font-size: 12px; }
 .step-dot.done { border-color: var(--good); color: var(--good); }
 .step-body { padding: 2px 4px 16px 38px; }
+
+/* 还差一步的提示：不能装成已打通 */
+.need-line {
+  margin-top: 10px; padding: 12px; border-radius: 10px;
+  border: 1px solid #5a4620; background: #241c10;
+}
+.need-line b { font-size: 14px; }

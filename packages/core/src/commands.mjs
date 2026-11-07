@@ -261,6 +261,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "channel.subscription",
+    summary: "飞书事件订阅是否生效（按钮能不能点）",
+    remote: false,
+    args: {},
+    http: { method: "GET", path: "/api/channels/feishu/subscription" },
+    cli: { usage: "vk channel subscription feishu" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "channel.skip",
     summary: "先跳过手机通道（不挡发布）",
     remote: false,
