@@ -80,6 +80,46 @@ export default {
   },
 
   /**
+   * 事件订阅探活：短跑一次 consume，看后台是否真的订阅了 card.action.trigger。
+   * 失败时把后台的订阅链接捞出来——这是唯一能让人自助修复的信息。
+   */
+  async probeEvents({ timeout = 4500 } = {}) {
+    return new Promise((resolve) => {
+      let child;
+      try {
+        child = spawn(bin(), ["event", "consume", "card.action.trigger", "--as", "bot", "--timeout", "3s"], { stdio: ["pipe", "pipe", "pipe"] });
+      } catch (err) {
+        return resolve({ ok: false, detail: err.message, url: null });
+      }
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (c) => (out += c));
+      child.stderr.on("data", (c) => (err += c));
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* 已经退了 */
+        }
+        resolve({ ok: false, detail: "探活超时", url: null });
+      }, timeout);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        resolve({ ok: false, detail: e.message, url: null });
+      });
+      child.on("exit", () => {
+        clearTimeout(timer);
+        const text = `${out}\n${err}`;
+        const url = text.match(/https:\/\/open\.feishu\.cn\/page\/launcher[^"\s]+/)?.[0] ?? null;
+        if (/failed_precondition|not subscribed/i.test(text)) {
+          return resolve({ ok: false, detail: "开发者后台还没有订阅 card.action.trigger", url });
+        }
+        resolve({ ok: true, detail: "事件订阅正常" });
+      });
+    });
+  },
+
+  /**
    * 订阅按钮事件。lark-cli 负责长连接与重连；我们只解析 NDJSON。
    * 返回 stop()，daemon 退出时调用。
    */

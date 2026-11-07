@@ -101,3 +101,55 @@ test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", asyn
     stop();
   }
 });
+
+test("probeEvents(): 未订阅时返回 false 并带上后台订阅链接", async () => {
+  const bin = join(DIR, "lark-probe-bad");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "event") {
+  console.error(JSON.stringify({ ok: false, error: { type: "validation", subtype: "failed_precondition",
+    message: "EventKey card.action.trigger requires callbacks not subscribed in console: card.action.trigger",
+    hint: "subscribe these callbacks by scanning: https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc" } }));
+  process.exit(2);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const res = await channel.probeEvents();
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /没有订阅|未订阅/);
+    assert.equal(res.url, "https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc");
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("probeEvents(): 已订阅时返回 true", async () => {
+  const bin = join(DIR, "lark-probe-good");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "event") {
+  console.error("[source] feishu-websocket: connected");
+  setTimeout(() => process.exit(0), 200);
+  return;
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+  process.env.VK_LARK_BIN = bin;
+  try {
+    const res = await channel.probeEvents();
+    assert.equal(res.ok, true);
+  } finally {
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
