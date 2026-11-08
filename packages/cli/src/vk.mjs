@@ -170,6 +170,56 @@ let subscriptionCache = null;
 // 网页登录会话：验证码要跨两次请求，标签页得留在内存里。
 // 只放进程内存，不落库；daemon 重启就失效，这是有意的（验证码是一次性的）。
 const loginSessions = new Map();
+// 最近一次二维码：页面生成要 3 秒，重复点「扫码登录」时直接给这个。
+const qrCache = new Map();
+
+/** 拿到这个账号的登录页（复用已有标签页；浏览器没了就重新起）。 */
+async function loginTab(accountId, { fresh = false } = {}) {
+  const tab = await openAccount({
+    accountId,
+    headless: true,
+    reuse: !fresh,
+    ...(fresh ? { url: "https://www.xiaohongshu.com/login" } : {}),
+  });
+  if (!fresh) {
+    const here = await tab.url().catch(() => "");
+    if (!/login|xiaohongshu/.test(here)) {
+      await tab.goto("https://www.xiaohongshu.com/login", { waitUntil: "domcontentloaded" }).catch(() => {});
+    }
+  }
+  return tab;
+}
+
+/** 二维码可能是 data URI 也可能是外链图；两种都返回。 */
+async function readQr(tab) {
+  try {
+    return await tab.waitFor(`document.querySelector('.qrcode-img')?.src || null`, [], { timeout: 20e3, every: 100, what: "小红书扫码登录二维码" });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 登录成功的可靠信号。三个证据任一成立即可：
+ *   · cookie 里有 web_session（主站会话）
+ *   · cookie 里有 access-token / customer-session（创作平台）
+ *   · 当前页已经离开 /login 且能看到发布页控件
+ * 只靠页面文案会漏：扫码确认后页面会自己跳转，文案是空的。
+ */
+async function loginConfirmed(accountId) {
+  try {
+    const tab = await openAccount({ accountId, headless: true, reuse: true });
+    const cookies = await tab.cookies();
+    const names = new Set(cookies.map((c) => c.name));
+    if (names.has("web_session") || names.has("access-token") || names.has("customer-session")) return true;
+
+    const here = await tab.url().catch(() => "");
+    if (/\/login/.test(here)) return false;
+    return await tab.eval(`!!document.querySelector('input.upload-input, input[type=file]')`).catch(() => false);
+  } catch {
+    return false;
+  }
+}
 
 function daemonHandlers(adapters, log) {
   const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
@@ -189,88 +239,59 @@ function daemonHandlers(adapters, log) {
         throw new Error(`${account.platform} 不走网页登录：在账号卡上点「登录 / 重新授权」会打开登录页`);
       }
       const phone = String(rawPhone ?? "").trim();
-
-      const old = loginSessions.get(accountId);
-      if (old) await old.tab.close().catch(() => {});
       loginSessions.delete(accountId);
 
-      // 不带手机号 = 扫码登录。小红书主站有二维码；创作平台没有，但主站登录后
-      // 同一账号的会话通常能带到创作平台，登录完再切过去确认。
       if (!phone) {
-        // 登录会话用无头 Chrome：二维码只在我们的页面里出现，不再弹出小红书窗口。
-        // 登录态仍写进账号 profile，之后发布用正常窗口即可复用。
-        await closeAccount(accountId).catch(() => {});
-        const tab = await openAccount({ accountId, headless: true });
-        await tab.goto("https://www.xiaohongshu.com/login");
-        await tab.waitFor(`document.querySelector('.qrcode-img')?.src?.startsWith('data:image')`, [], { timeout: 30e3, what: "小红书扫码登录二维码" });
-        const qr = await tab.eval(`document.querySelector('.qrcode-img').src`);
-        loginSessions.set(accountId, { tab, mode: "qr" });
+        // 二维码是小红书服务端生成的（约 3 秒），缓存 90 秒：点开就能看到。
+        const cached = qrCache.get(accountId);
+        if (cached && Date.now() - cached.at < 90e3) {
+          loginSessions.set(accountId, { mode: "qr", startedAt: Date.now() });
+          return { mode: "qr", qr: cached.qr, cached: true, next: "用小红书 App 扫码；扫完页面会自动检测" };
+        }
+        const tab = await loginTab(accountId, { fresh: true });
+        const qr = await readQr(tab);
+        if (qr) qrCache.set(accountId, { qr, at: Date.now() });
+        loginSessions.set(accountId, { mode: "qr", startedAt: Date.now() });
         return { mode: "qr", qr, next: "用小红书 App 扫码；扫完页面会自动检测" };
       }
 
       if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位");
-      await closeAccount(accountId).catch(() => {});
-      const tab = await openAccount({ accountId, headless: true });
-      loginSessions.set(accountId, { tab, mode: "sms", phone });
-      await tab.goto("https://creator.xiaohongshu.com/login");
-      await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]')`, [], { timeout: 30e3, what: "小红书登录页" });
-
-      // 填手机号并发验证码。按钮是文字节点，按 rect 点比猜 class 稳。
+      const tab = await openAccount({ accountId, headless: true, reuse: true, url: "https://creator.xiaohongshu.com/login" });
+      loginSessions.set(accountId, { mode: "sms", phone, startedAt: Date.now() });
+      await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]')`, [], { timeout: 30e3, every: 200, what: "小红书登录页" });
       await tab.eval(`(() => { const e = document.querySelector('input[placeholder*="手机号"]'); e.focus(); })()`);
       await tab.type(phone);
       const sent = await tab.eval(`(() => {
-        const hit = [...document.querySelectorAll('span,button,div')].filter((e) => e.offsetParent && e.children.length <= 1 && /发送验证码|获取验证码/.test(e.innerText || '')).pop();
+        const hit = [...document.querySelectorAll('span,button,div')].filter((e) => e.children.length <= 1 && /发送验证码|获取验证码/.test(e.innerText || '')).pop();
         if (!hit) return false;
         hit.click();
         return true;
       })()`);
       if (!sent) throw new Error("小红书上没找到「发送验证码」按钮，页面可能改版了");
-      return { sent: true, phone, next: "把手机收到的验证码填进来" };
+      return { mode: "sms", sent: true, phone, next: "把手机收到的验证码填进来" };
     },
 
     "account.login.status": async ({ accountId }) => {
       const session = loginSessions.get(accountId);
       if (!session) throw new Error("登录会话已过期，重新点一次登录");
-      const { tab, mode } = session;
 
-      if (mode === "sms") {
-        const moved = !/\/login/.test(await tab.url().catch(() => ""));
-        return { state: moved ? "ok" : "pending", mode };
+      // 自愈：浏览器可能被关掉、页面可能重载、二维码可能过期。
+      // 每次轮询都重新确认「实例在、页面在」，而不是信任内存里的那个 tab。
+      const loggedIn = await loginConfirmed(accountId);
+      if (loggedIn) {
+        loginSessions.delete(accountId);
+        qrCache.delete(accountId);
+        await closeAccount(accountId).catch(() => {});
+        return { state: "ok", mode: session.mode };
       }
 
-      // 扫码后主站会离开 /login。切创作平台确认这一步要跳转 + 等页面，
-      // 放在轮询里同步做会把每次 status 拖到 20 秒（前端 2 秒一拉就全堵住）。
-      // 所以：立刻返回 confirming，同时在后台跑一次确认，结果写进 session。
-      if (session.creatorCheck) return { ...session.creatorCheck, mode };
-      const here = await tab.url().catch(() => "");
-      if (!/\/login/.test(here)) {
-        if (!session.confirming) {
-          session.confirming = true;
-          (async () => {
-            try {
-              await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
-              const where = await tab
-                .waitFor(
-                  `location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`,
-                  [],
-                  { timeout: 15e3, what: "创作平台登录态" },
-                )
-                .catch(() => "login");
-              if (where === "form") {
-                session.creatorCheck = { state: "ok" };
-                loginSessions.delete(accountId);
-                await closeAccount(accountId).catch(() => {});
-              } else {
-                session.creatorCheck = { state: "pending", note: "主站已登录，创作平台还没放行；在手机上再确认一次" };
-              }
-            } catch (err) {
-              session.creatorCheck = { state: "pending", note: `创作平台确认失败：${err.message}` };
-            } finally {
-              session.confirming = false;
-            }
-          })();
-        }
-        return { state: "confirming", mode, note: "已扫码，正在确认登录态…" };
+      if (session.mode === "sms") return { state: "pending", mode: "sms" };
+
+      let tab;
+      try {
+        tab = await loginTab(accountId);
+      } catch (err) {
+        return { state: "pending", mode: "qr", note: `浏览器没起来：${err.message}` };
       }
 
       const phase = await tab
@@ -278,27 +299,22 @@ function daemonHandlers(adapters, log) {
           const t = document.body.innerText || "";
           if (/短信验证码验证/.test(t)) return "sms";
           if (/扫码成功|请在手机上确认/.test(t)) return "confirm";
-          return "scan";
+          if (document.querySelector('.qrcode-img')) return "scan";
+          return "loading";
         })()`)
-        .catch(() => "scan");
-      const qr = await tab.eval(`document.querySelector('.qrcode-img')?.src ?? null`).catch(() => null);
-      const phone = await tab
-        .eval(`(() => { const m = (document.body.innerText||"").match(/验证码已发送至[\s\S]{0,8}(\+86[^\n]+)/); return m ? m[1].trim() : null; })()`)
-        .catch(() => null);
+        .catch(() => "loading");
+
+      if (phase === "confirm") return { state: "confirm_phone", mode: "qr", note: "扫码成功，请在手机上点确认" };
+
       if (phase === "sms") {
         let sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => false);
-        // 弹窗刚出现时它只是「将发送」；直接替用户点一下「获取验证码」，
-        // 免得再出现「码没发、填了也没用」。
         if (!sent && !session.sentOnce) {
           const clicked = await tab
             .eval(`(() => {
               const hit = [...document.querySelectorAll('span,div,button')].find((e) => {
-                const t = (e.innerText || '').trim();
-                if (!/^(获取验证码|发送验证码|重新发送)$/.test(t)) return false;
+                if (!/^(获取验证码|发送验证码|重新发送)$/.test((e.innerText || '').trim())) return false;
                 const r = e.getBoundingClientRect();
                 return r.width > 0 && r.height > 0;
-
-
               });
               if (!hit) return false;
               hit.click();
@@ -311,23 +327,31 @@ function daemonHandlers(adapters, log) {
             sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => true);
           }
         }
+        const phone = await tab
+          .eval(`(() => { const m = (document.body.innerText||"").match(/验证码已发送至[\s\S]{0,8}(\+86[^\n]+)/); return m ? m[1].trim() : null; })()`)
+          .catch(() => null);
         return {
           state: "sms_required",
-          mode,
-          qr,
+          mode: "qr",
           phone,
           sent,
           note: sent ? "验证码已发到手机，请填最新的验证码" : "还需要点「发送验证码」，让小红书发一条新的",
         };
       }
-      if (phase === "confirm") return { state: "confirm_phone", mode, qr, note: "扫码成功，请在手机上点确认" };
-      return { state: "pending", mode, qr };
+
+      // scan / loading：把最新的二维码给出去（过期的码会自动换新）。
+      let qr = await readQr(tab);
+      if (!qr) {
+        await tab.goto("https://www.xiaohongshu.com/login", { waitUntil: "domcontentloaded" }).catch(() => {});
+        qr = await readQr(tab);
+      }
+      if (qr) qrCache.set(accountId, { qr, at: Date.now() });
+      return { state: "pending", mode: "qr", qr };
     },
 
     "account.login.resend": async ({ accountId }) => {
-      const session = loginSessions.get(accountId);
-      if (!session || session.mode !== "qr") throw new Error("当前没有扫码登录会话");
-      const clicked = await session.tab.eval(`(() => {
+      const tab = await loginTab(accountId);
+      const clicked = await tab.eval(`(() => {
         const hit = [...document.querySelectorAll('span,div,button')].find((e) => e.offsetParent && /^(获取验证码|重新发送)$/.test((e.innerText || '').trim()));
         if (!hit) return false;
         hit.click();
@@ -344,120 +368,81 @@ function daemonHandlers(adapters, log) {
       const code = String(rawCode ?? "").trim();
       if (!/^\d{4,8}$/.test(code)) throw new Error("验证码格式不对");
 
-      const { tab, mode } = session;
-
-      // 扫码后的二次验证：弹窗里填短信验证码，点「验证」，等它放行。
-      if (mode === "qr") {
-        const typed = await tab.eval(`(() => {
-          const e = [...document.querySelectorAll('input[placeholder="请输入验证码"]')].find((x) => x.offsetParent);
-          if (!e) return false;
-          e.focus();
-          return true;
-        })()`);
-        if (!typed) throw new Error("页面上没有短信验证码输入框，可能已经验证过或页面改版");
-        await tab.type(code);
-        // 三条路依次试：看得见的坐标点 → 任意元素的 JS 点击 → 输入框回车。
-        // 固定定位弹窗里 offsetParent 常为 null，所以不能用它做可见性判断。
-        let clicked = false;
-        try {
-          const spot = await tab.eval(`(() => {
-            const cands = [...document.querySelectorAll('div,button,span')].filter((e) => {
-              if (!/验\s*证/.test((e.innerText || '').trim())) return false;
-              const r = e.getBoundingClientRect();
-              return r.width > 0 && r.height > 0 && r.width < 240;
-            });
-            // 命中最小的那个：外层容器也含「验证」，点它没用。
-            cands.sort((a, b) => {
-              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-              return ra.width * ra.height - rb.width * rb.height;
-            });
-            const b = cands[0];
-            if (!b) return null;
-            b.scrollIntoView({ block: 'center', behavior: 'instant' });
-            const r = b.getBoundingClientRect();
-            return JSON.stringify([r.x + r.width / 2, r.y + r.height / 2]);
-          })()`);
-          if (spot) {
-            await tab.click(JSON.parse(spot));
-            clicked = true;
-          }
-        } catch {
-          /* 落到下一条路 */
-        }
-        if (!clicked) {
-          clicked = await tab
-            .eval(`(() => {
-              const cands = [...document.querySelectorAll('div,button,span')].filter((e) => /验\s*证/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width < 240);
-              cands.sort((a, b) => {
-                const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-                return ra.width * ra.height - rb.width * rb.height;
-              });
-              const b = cands[0];
-              if (!b) return false;
-              b.click();
-              return true;
-            })()`)
-            .catch(() => false);
-        }
-        if (!clicked) {
-          await tab.key("Enter", "Enter", 13);
-          clicked = true;
-        }
-
-        const gone = await tab
-          .waitFor(`!document.body.innerText.includes('短信验证码验证') || !location.pathname.includes('/login')`, [], { timeout: 12e3, what: "短信验证通过" })
-          .then(() => true)
-          .catch(() => false);
-        if (!gone) {
-          const state = await tab.eval(`(() => {
-            const t = document.body.innerText || "";
-            if (/验证码将发送至/.test(t)) return "还没点「获取验证码」，这一轮没有发码";
-            const err = [...document.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && /错误|失败|不正确|过期|频繁|稍后|无效/.test(e.innerText || "")).map((e) => e.innerText.trim()).slice(0, 2).join("；");
-            return err || "验证码没有通过";
-          })()`).catch(() => "验证码没有通过");
-          throw new Error(`验证失败：${state}`);
-        }
-
-        // 验证通过后，主站可能已经登录；切到创作平台确认。
-        const here = await tab.url().catch(() => "");
-        if (!/\/login/.test(here)) {
-          await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
-        }
-        const where = await tab
-          .waitFor(`location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`, [], { timeout: 20e3, what: "创作平台登录态" })
-          .catch(() => "login");
-        if (where === "form") {
-          loginSessions.delete(accountId);
-          await closeAccount(accountId).catch(() => {});
-          return { ok: true, state: "ok", next: "验证通过，点「验证登录」确认状态" };
-        }
-        return { ok: true, state: "pending", next: "验证通过，但创作平台还没登录；在手机上再确认一次" };
-      }
-      await tab.eval(`(() => { const e = document.querySelector('input[placeholder*="验证码"]'); e.focus(); })()`);
-      await tab.type(code);
-      const clicked = await tab.eval(`(() => {
-        const btn = [...document.querySelectorAll('button,span')].filter((e) => e.offsetParent && /登\s*录/.test(e.innerText || '')).pop();
-        if (!btn) return false;
-        btn.click();
+      const tab = await loginTab(accountId);
+      const filled = await tab.eval(`(() => {
+        const e = [...document.querySelectorAll('input')].find((x) => {
+          const p = x.placeholder || '';
+          const r = x.getBoundingClientRect();
+          return r.width > 0 && /验证码/.test(p) && !/手机/.test(p);
+        });
+        if (!e) return false;
+        e.focus();
         return true;
       })()`);
-      if (!clicked) throw new Error("小红书上没找到登录按钮，页面可能改版了");
+      if (!filled) throw new Error("页面上找不到验证码输入框，可能已经验证过或页面改版");
+      await tab.type(code);
 
-      const moved = await tab
-        .waitFor(`!location.pathname.includes('/login')`, [], { timeout: 20e3, every: 500, what: "登录完成" })
-        .then(() => true)
-        .catch(() => false);
-      if (!moved) throw new Error("验证码没有通过，或还需要额外验证；页面还在登录页");
+      // 三条路依次试：坐标点 → JS 点击 → 回车。
+      let clicked = false;
+      try {
+        const spot = await tab.eval(`(() => {
+          const cands = [...document.querySelectorAll('div,button,span')].filter((e) => {
+            if (!/验\s*证/.test((e.innerText || '').trim())) return false;
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.width < 240;
+          });
+          cands.sort((a, b) => {
+            const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+            return ra.width * ra.height - rb.width * rb.height;
+          });
+          const b = cands[0];
+          if (!b) return null;
+          b.scrollIntoView({ block: 'center', behavior: 'instant' });
+          const r = b.getBoundingClientRect();
+          return JSON.stringify([r.x + r.width / 2, r.y + r.height / 2]);
+        })()`);
+        if (spot) {
+          await tab.click(JSON.parse(spot));
+          clicked = true;
+        }
+      } catch {
+        /* 落到下一条路 */
+      }
+      if (!clicked) {
+        clicked = await tab
+          .eval(`(() => {
+            const cands = [...document.querySelectorAll('div,button,span')].filter((e) => /验\s*证/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width < 240);
+            if (!cands.length) return false;
+            cands[cands.length - 1].click();
+            return true;
+          })()`)
+          .catch(() => false);
+      }
+      if (!clicked) await tab.key("Enter", "Enter", 13);
 
-      loginSessions.delete(accountId);
-      await closeAccount(accountId).catch(() => {});
-      return { ok: true, state: "ok", next: "登录成功，点「验证登录」确认状态" };
+      // 成功判定仍以 cookie 为准；页面文案只用来解释失败原因。
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (await loginConfirmed(accountId)) {
+          loginSessions.delete(accountId);
+          await closeAccount(accountId).catch(() => {});
+          return { ok: true, state: "ok", next: "登录成功，点「验证登录」确认状态" };
+        }
+        const bad = await tab
+          .eval(`(() => {
+            const t = document.body.innerText || "";
+            if (/验证码将发送至/.test(t)) return "这一轮还没发码";
+            return [...document.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && /错误|失败|不正确|过期|频繁|无效/.test(e.innerText || "")).map((e) => e.innerText.trim()).slice(0, 2).join("；");
+          })()`)
+          .catch(() => "");
+        if (bad) throw new Error(`验证失败：${bad}`);
+      }
+      throw new Error("验证码提交了，但登录态还没建立；可能还需要在手机上确认");
     },
 
     "account.login.cancel": async ({ accountId }) => {
-      const session = loginSessions.get(accountId);
-      if (!session) return { canceled: false };
       loginSessions.delete(accountId);
+      qrCache.delete(accountId);
       await closeAccount(accountId).catch(() => {});
       return { canceled: true };
     },

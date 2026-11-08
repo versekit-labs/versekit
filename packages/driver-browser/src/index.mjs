@@ -364,7 +364,10 @@ async function closeBrowser(port) {
     };
   });
   ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+  // 等它真的退出：Chrome 是在退出流程里把 cookie 刷到磁盘的，
+  // 400ms 就返回会让后面的读取（和下次启动）看不到刚登录的会话。
   await sleep(400);
+  await waitDown(port, 8e3);
   try {
     ws.close();
   } catch {
@@ -807,12 +810,20 @@ async function newTab(instance) {
       return found;
     },
 
+    /** 读某个域名下的 cookie。登录态判定不能只看页面文案：页面会重载、文案会变。 */
+    async cookies(domain = null) {
+      // 不 enable 的话 getCookies 会静默返回空数组——之前就是这样误判过登录态。
+      await send("Network.enable");
+      const res = await send("Network.getCookies", domain ? { urls: [domain] } : {});
+      return (res?.cookies ?? []).map((c) => ({ name: c.name, domain: c.domain, value: c.value, expires: c.expires }));
+    },
+
     async screenshot() {
       return Buffer.from((await send("Page.captureScreenshot")).data, "base64");
     },
 
     /** 导航并等 load；返回时页面已经稳定，而不是「navigate 发出去就算完」。 */
-    async goto(url, { timeout = 30e3 } = {}) {
+    async goto(url, { timeout = 30e3, waitUntil = "load" } = {}) {
       if (typeof url !== "string" || !url.trim()) throw new TypeError("goto 需要 URL 字符串");
 
       // 只改 hash 的「导航」不会触发 load，等 load 会白等到超时。SPA 里这是常态。
@@ -826,7 +837,13 @@ async function newTab(instance) {
       }
 
       await send("Page.enable");
-      const loaded = waitEvent("Page.loadEventFired", { timeout, what: `页面加载（${url}）` });
+      if (waitUntil === "domcontentloaded") {
+        // 重页面（小红书登录页 4 秒才 load）只要 DOM 就绪就能继续：
+        // 二维码是页面自己的异步请求，跟 load 事件没有先后关系。
+        await tab.eval("document.readyState");
+      }
+      const loadedEvent = waitUntil === "domcontentloaded" ? "Page.domContentEventFired" : "Page.loadEventFired";
+      const loaded = waitEvent(loadedEvent, { timeout, what: `页面加载（${url}）` });
       loaded.catch(() => {}); // 下面若因 errorText 提前抛出，别留下未处理的 rejection
       const res = await send("Page.navigate", { url });
       if (res?.errorText) throw new Error(`打不开 ${url}：${res.errorText}`);
@@ -893,7 +910,7 @@ async function newTab(instance) {
  */
 export async function openAccount(options = {}) {
   if (!options || typeof options !== "object") throw new TypeError("openAccount 需要 { accountId, url?, headless? }");
-  const { accountId, url, headless = false } = options;
+  const { accountId, url, headless = false, reuse = false } = options;
   const id = requireAccountId(accountId);
   if (url !== undefined && url !== null) {
     if (typeof url !== "string" || !url.trim()) throw new TypeError("url 必须是非空字符串（或省略）");
@@ -907,6 +924,16 @@ export async function openAccount(options = {}) {
   }
 
   const instance = await ensureInstance(id, { headless });
+  // reuse：登录轮询每次都要拿到「同一页」而不是不停开新页。
+  const existing = reuse ? [...instance.tabs][0] : null;
+  if (existing) {
+    try {
+      if (url) await existing.goto(url);
+      return existing;
+    } catch {
+      /* 旧的废了就开新的 */
+    }
+  }
   const tab = await newTab(instance);
   try {
     if (url) await tab.goto(url);
