@@ -2,19 +2,24 @@
 
 这份文档是 `docs/design/` 下九个页面的开发契约。界面已定稿（commit `5075bbc`），代码按这里实现；实现完用同一套闸门验收。
 
-> **基线提醒**：设计分支基于旧的 `main`（`4dafc91`），而 `main` 已前进 **53 个提交**，
-> 已经包含 daemon、`packages/web`、路由派生、小红书登录重做。开始编码前先把设计合到当前 `main`，
-> 否则会对着一份已经不存在的代码写实现。
+> **基线已同步**：设计分支已合并 `main`（merge commit `125ada0`），工作区含 daemon、
+> `packages/web`、路由派生与登录重做。直接从这里开工即可。
 
-## 0. 先做的事：同步基线
+## 0. 开工前
 
 ```bash
 git checkout fangyouxi/product-design
-git fetch origin && git merge origin/main      # 或 rebase；有冲突集中在 docs/ 与 .impeccable/
-npm run design:check                           # 合并后闸门仍要绿
+npm ci 2>/dev/null || true          # 零依赖仓库，这步可跳过
+npm test                            # 214 项，全绿再动手
+npm run design:check                # 设计闸门，全绿再动手
+npm run serve                       # 起 http://127.0.0.1:8787，看现有 UI
 ```
 
-合并只带文档与原型，预期冲突小；若 `packages/` 有冲突，说明设计分支误改了代码，应回退那部分。
+现有 UI 在 `packages/web/public/`（单页，7 个视图）；设计稿在 `docs/design/`（9 页）。
+两者并存是预期状态，按本文第 5 节逐步替换。
+
+**给实现方的一句话**：设计稿是规范，`docs/design/*.html` 是像素参考，`DESIGN.md` 是 token 与规则；
+任何与三者冲突的实现都是 bug，不是"优化"。
 
 ## 1. 现状差距（以当前 main 为准）
 

@@ -42,7 +42,6 @@ function briefSlug(file){
   return 'docs-design-' + file.replace(/\.html$/, '') + '-html.md';
 }
 for (const page of PAGES) {
-  if (page === 'groups.html') continue;          // 入口页是流程页，不承载产品界面
   const slug = briefSlug(page);
   if (!existsSync(join(SURFACES, slug))) {
     add('brief-missing', `docs/design/${page} 没有 surface brief（应为 .impeccable/surfaces/${slug}）`);
@@ -148,11 +147,11 @@ async function withChrome(fn) {
 }
 
 async function runtimeChecks() {
-  const cases = PAGES.filter(p => !ENTRY.has(p)).map(p => ({
+  const cases = PAGES.map(p => ({
     page: p,
     url: URL_ARG
-      ? URL_ARG.replace(/\/$/, '') + '/' + p + '?group=ai'
-      : 'file://' + join(DESIGN, p) + '?group=ai'
+      ? URL_ARG.replace(/\/$/, '') + '/' + p + (p === 'groups.html' ? '' : '?group=ai')
+      : 'file://' + join(DESIGN, p) + (p === 'groups.html' ? '' : '?group=ai')
   }));
   const STATES = [
     { name: 'default', run: '' },
@@ -163,6 +162,14 @@ async function runtimeChecks() {
 
   await withChrome(async send => {
     for (const { page, url } of cases) {
+      if (URL_ARG) {
+        try {
+          const r0 = await fetch(url);
+          if (r0.status !== 200) { add('page-missing', `${page} 在 ${URL_ARG} 返回 ${r0.status}`); continue; }
+        } catch (e) {
+          add('page-missing', `${page} 无法访问 ${URL_ARG}：${e.message}`); continue;
+        }
+      }
       for (const width of [1440, 390]) {
         await send('Emulation.setDeviceMetricsOverride', {
           width, height: width === 1440 ? 900 : 844,
