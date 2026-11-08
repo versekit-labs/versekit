@@ -24,6 +24,7 @@
     "design:check": "node scripts/design-check.mjs",
     "check": "npm test && npm run design:check",
     "ci": "npm run check:parity && npm run check:contract && npm run check:backdoor && npm test && npm run design:check",
-    "design:accept": "node scripts/design-accept.mjs"
+    "design:accept": "node scripts/design-accept.mjs",
+    "agentctl": "node bin/agentctl.mjs"
   }
 }
