@@ -160,6 +160,7 @@ async function cmdDoctor() {
 const LOGIN_URL = {
   tiktok: "https://www.tiktok.com/login",
   xiaohongshu: "https://creator.xiaohongshu.com/login",
+  xiaohongshu: "https://creator.xiaohongshu.com/login",
   douyin: "https://creator.douyin.com/",
   youtube: "https://studio.youtube.com/",
 };
@@ -502,6 +503,8 @@ async function cmdPublish() {
     asset,
     to,
     ...(val("--title") ? { title: val("--title") } : {}),
+    ...(val("--body") ? { body: val("--body") } : {}),
+    ...(val("--tags") ? { tags: String(val("--tags")).split(",").map((s) => s.trim()).filter(Boolean) } : {}),
     ...(val("--visibility") ? { visibility: val("--visibility") } : {}),
     ...(parseSchedule(val("--schedule")) ? { schedule: parseSchedule(val("--schedule")) } : {}),
     ...(has("--dry-run") ? { dryRun: true } : {}),

@@ -1,0 +1,9 @@
+{
+  "name": "@fangyouxi/adapter-xiaohongshu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "小红书适配器：创作服务平台网页发布 + 数据看板采集",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}

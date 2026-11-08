@@ -83,7 +83,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
     },
 
-    "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title }) => {
+    "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags }) => {
       const platforms = platformList(to);
       if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
 
@@ -100,7 +100,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         return { dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false };
       }
 
-      const work = store.createWork({ title: workTitle, assetPath: asset });
+      // 正文/话题是平台相关的素材（小红书用），放进 work.meta，不塞进 publish 的通用列。
+      const meta = body || tags?.length ? { ...(body ? { body } : {}), ...(tags?.length ? { tags } : {}) } : null;
+      const work = store.createWork({ title: workTitle, assetPath: asset, meta });
       const created = [];
       for (const account of accounts) {
         const { id } = store.createPublish({

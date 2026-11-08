@@ -299,7 +299,7 @@ async function startInstance(accountId) {
       try {
         const targets = await (await fetch(`${base(port)}/json/list`, { signal: AbortSignal.timeout(5000) })).json();
         for (const t of targets) {
-          if (t.type === "page" && /about:blank|^$/.test(t.url)) {
+          if (t.type === "page" && /about:blank|^$|chrome:\/\/newtab/.test(t.url)) {
             await fetch(`${base(port)}/json/close/${t.id}`, { signal: AbortSignal.timeout(3000) }).catch(() => {});
           }
         }
