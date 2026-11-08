@@ -23,6 +23,10 @@ const DESIGN = join(ROOT, 'docs/design');
 const SURFACES = join(ROOT, '.impeccable/surfaces');
 const IMPECCABLE = join(ROOT, '.claude/skills/impeccable/scripts/impeccable');
 const JSON_OUT = process.argv.includes('--json');
+const URL_ARG = (() => {
+  const i = process.argv.indexOf('--url');
+  return i > -1 ? process.argv[i + 1] : null;
+})();
 
 const problems = [];
 const warn = [];
@@ -146,7 +150,9 @@ async function withChrome(fn) {
 async function runtimeChecks() {
   const cases = PAGES.filter(p => !ENTRY.has(p)).map(p => ({
     page: p,
-    url: 'file://' + join(DESIGN, p) + '?group=ai'
+    url: URL_ARG
+      ? URL_ARG.replace(/\/$/, '') + '/' + p + '?group=ai'
+      : 'file://' + join(DESIGN, p) + '?group=ai'
   }));
   const STATES = [
     { name: 'default', run: '' },
@@ -232,7 +238,7 @@ for (const p of problems) (byKind[p.kind] ||= []).push(p.msg);
 if (JSON_OUT) {
   console.log(JSON.stringify({ ok: problems.length === 0, problems, warnings: warn }, null, 2));
 } else {
-  console.log('\n设计闸门 — versekit\n');
+  console.log('\n设计闸门 — versekit' + (URL_ARG ? '（目标：' + URL_ARG + '）' : '（目标：静态文件）') + '\n');
   if (!problems.length) {
     console.log(`  通过：${PAGES.length} 个页面，全部有任务书、导航一致、无死链、检测器干净、触控与溢出合规。`);
   } else {
