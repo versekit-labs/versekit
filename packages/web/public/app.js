@@ -183,6 +183,7 @@ async function viewAccounts() {
       const mount = () => document.querySelector(`[data-login-box="${id}"]`);
       const box0 = mount();
       if (!box0) return;
+      loginPaused = true;
       box0.textContent = "正在生成二维码…";
       try {
         const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/start`, { method: "POST", body: { accountId: id } });
@@ -204,6 +205,7 @@ async function viewAccounts() {
             if (s.qr && im && s.qr !== im.src) im.src = s.qr;
             if (s.state === "ok") {
               clearInterval(timer);
+              loginPaused = false;
               toast("扫码登录成功");
               render();
             } else {
@@ -247,6 +249,7 @@ async function viewAccounts() {
         if (cancel) {
           cancel.onclick = async () => {
             clearInterval(timer);
+            loginPaused = false;
             await api(`/api/accounts/${encodeURIComponent(id)}/login/cancel`, { method: "POST", body: { accountId: id } }).catch(() => {});
             const b = mount();
             if (b) b.innerHTML = "";
@@ -263,6 +266,7 @@ async function viewAccounts() {
       const id = btn.dataset.sms;
       const box = document.querySelector(`[data-login-box="${id}"]`);
       if (!box) return;
+      loginPaused = true;
       box.innerHTML = `<div class="login-box">
         <input data-phone="${esc(id)}" placeholder="手机号（11 位）" inputmode="numeric"/>
         <button class="small" data-send="${esc(id)}">发送验证码</button>
@@ -285,6 +289,7 @@ async function viewAccounts() {
         try {
           const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
           toast(r.next ?? "登录成功");
+          loginPaused = false;
           render();
         } catch (err) {
           toast(err.message, true);
@@ -293,6 +298,7 @@ async function viewAccounts() {
       box.querySelector(`[data-cancel="${id}"]`).onclick = async () => {
         try {
           await api(`/api/accounts/${encodeURIComponent(id)}/login/cancel`, { method: "POST", body: { accountId: id } });
+          loginPaused = false;
           box.innerHTML = "";
         } catch (err) {
           toast(err.message, true);
@@ -1191,6 +1197,9 @@ async function ping() {
   }
 }
 
+// 登录面板打开时暂停 SSE 重渲染：验证码输入框不能被整页刷新冲掉。
+let loginPaused = false;
+
 const signatureOf = (d) =>
   JSON.stringify([
     d.status.accounts,
@@ -1207,6 +1216,7 @@ function onStreamFrame(d) {
   const sig = signatureOf(d);
   if (sig === lastSignature) return;
   lastSignature = sig;
+  if (loginPaused) return;
   if (document.activeElement?.matches("input,select,textarea")) return;
   if (!["overview", "tasks", "accounts", "works"].includes(current())) return;
   clearTimeout(renderTimer);
