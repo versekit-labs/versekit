@@ -193,3 +193,7 @@ svg.chart text { fill: var(--muted); font-size: 10px; }
 .login-box { display: grid; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
 .login-box input { width: 100%; box-sizing: border-box; }
 .login-box .row { display: flex; gap: 8px; }
+
+/* 网页内扫码登录 */
+.qr-login { justify-items: start; }
+.qr-login img { width: 180px; height: 180px; background: #fff; padding: 6px; border-radius: 8px; }

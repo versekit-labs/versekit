@@ -22,7 +22,7 @@
 
 | 平台 | 工厂实际做法 | 资质 |
 |---|---|---|
-| 小红书 | 驱动 `creator.xiaohongshu.com` 的发布页，在账号自己的 Chrome 里填标题/正文/话题；采集走数据看板接口 | **无**（账号需登录一次） |
+| 小红书 | 驱动 `creator.xiaohongshu.com` 的发布页；登录有两个入口：主站扫码（网页内展示二维码）或短信验证码；采集走数据看板接口 | **无**（账号需登录一次） |
 | B站 | `biliup` CLI + 你自己的 cookie（`~/.config/assurelane/bilibili-cookies.json`） | **无** |
 | YouTube | 官方 Data API v3（唯一走官方 API 的） | 无（未审核项目会被锁私享） |
 | TikTok | ⚠️ 目前是 5 行 `manual()` 占位，**还没跑通自动** | — |

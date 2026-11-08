@@ -186,16 +186,28 @@ function daemonHandlers(adapters, log) {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
       if (account.platform !== "xiaohongshu") {
-        throw new Error(`${account.platform} 不走短信登录：在账号卡上点「登录 / 重新授权」会打开登录页`);
+        throw new Error(`${account.platform} 不走网页登录：在账号卡上点「登录 / 重新授权」会打开登录页`);
       }
       const phone = String(rawPhone ?? "").trim();
-      if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位");
 
       const old = loginSessions.get(accountId);
-      if (old) await old.close().catch(() => {});
+      if (old) await old.tab.close().catch(() => {});
+      loginSessions.delete(accountId);
 
+      // 不带手机号 = 扫码登录。小红书主站有二维码；创作平台没有，但主站登录后
+      // 同一账号的会话通常能带到创作平台，登录完再切过去确认。
+      if (!phone) {
+        const tab = await openAccount({ accountId });
+        await tab.goto("https://www.xiaohongshu.com/login");
+        await tab.waitFor(`document.querySelector('.qrcode-img')?.src?.startsWith('data:image')`, [], { timeout: 30e3, what: "小红书扫码登录二维码" });
+        const qr = await tab.eval(`document.querySelector('.qrcode-img').src`);
+        loginSessions.set(accountId, { tab, mode: "qr" });
+        return { mode: "qr", qr, next: "用小红书 App 扫码；扫完页面会自动检测" };
+      }
+
+      if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位");
       const tab = await openAccount({ accountId });
-      loginSessions.set(accountId, { tab, phone });
+      loginSessions.set(accountId, { tab, mode: "sms", phone });
       await tab.goto("https://creator.xiaohongshu.com/login");
       await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]')`, [], { timeout: 30e3, what: "小红书登录页" });
 
@@ -210,6 +222,35 @@ function daemonHandlers(adapters, log) {
       })()`);
       if (!sent) throw new Error("小红书上没找到「发送验证码」按钮，页面可能改版了");
       return { sent: true, phone, next: "把手机收到的验证码填进来" };
+    },
+
+    "account.login.status": async ({ accountId }) => {
+      const session = loginSessions.get(accountId);
+      if (!session) throw new Error("登录会话已过期，重新点一次登录");
+      const { tab, mode } = session;
+
+      if (mode === "sms") {
+        const moved = !/\/login/.test(await tab.url().catch(() => ""));
+        return { state: moved ? "ok" : "pending", mode };
+      }
+
+      // 扫码后主站会离开 /login。切到创作平台确认，能进发布页才算真的登录。
+      const here = await tab.url().catch(() => "");
+      if (!/\/login/.test(here)) {
+        await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
+        const where = await tab
+          .waitFor(`location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`, [], { timeout: 20e3, what: "创作平台登录态" })
+          .catch(() => "login");
+        if (where === "form") {
+          loginSessions.delete(accountId);
+          await tab.close().catch(() => {});
+          return { state: "ok", mode };
+        }
+        return { state: "pending", mode, note: "主站已登录，但创作平台还没进发布页" };
+      }
+
+      const qr = await tab.eval(`document.querySelector('.qrcode-img')?.src ?? null`).catch(() => null);
+      return { state: "pending", mode, qr };
     },
 
     "account.login.verify": async ({ accountId, code: rawCode }) => {
@@ -538,6 +579,7 @@ async function cmdAccount() {
     if (!accountId) throw new Error("用法：vk account login <accountId> --phone 138... | --code 123456 | --cancel");
     let data;
     if (has("--cancel")) data = await send("account.login.cancel", { accountId });
+    else if (has("--status")) data = await send("account.login.status", { accountId });
     else if (val("--code")) data = await send("account.login.verify", { accountId, code: val("--code") });
     else if (val("--phone")) data = await send("account.login.start", { accountId, phone: val("--phone") });
     else throw new Error("要指定 --phone 或 --code 或 --cancel");

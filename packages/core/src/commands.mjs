@@ -109,6 +109,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "account.login.status",
+    summary: "扫码登录是否完成（顺带刷新二维码）",
+    remote: false,
+    args: { accountId: "string" },
+    http: { method: "POST", path: "/api/accounts/:accountId/login/status" },
+    cli: { usage: "vk account login <accountId> --status" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.login.verify",
     summary: "提交网页登录的验证码",
     remote: false,

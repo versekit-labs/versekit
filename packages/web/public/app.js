@@ -82,7 +82,7 @@ async function viewAccounts() {
         <div class="row" style="margin-top:10px">
           <button class="small" data-check="${esc(a.id)}">验证登录</button>
           <button class="small" data-act="mode" data-id="${esc(a.id)}" data-mode="${a.is_manual ? "auto" : "manual"}">${a.is_manual ? "改为自动发布" : "改为手动"}</button>
-          ${a.platform === "xiaohongshu" ? `<button class="small primary" data-sms="${esc(a.id)}">短信登录</button>` : ""}
+          ${a.platform === "xiaohongshu" ? `<button class="small primary" data-qr="${esc(a.id)}">扫码登录</button><button class="small ghost" data-sms="${esc(a.id)}">手机号登录</button>` : ""}
           <button class="small ghost" data-act="reauth" data-id="${esc(a.id)}">登录 / 重新授权</button>
         </div>
         <div data-login-box="${esc(a.id)}"></div>
@@ -173,6 +173,58 @@ async function viewAccounts() {
         toast("已复制");
       } catch {
         toast("复制失败，请手动选中那行命令", true);
+      }
+    };
+  }
+
+  for (const btn of document.querySelectorAll("[data-qr]")) {
+    btn.onclick = async () => {
+      const id = btn.dataset.qr;
+      const mount = () => document.querySelector(`[data-login-box="${id}"]`);
+      const box0 = mount();
+      if (!box0) return;
+      box0.textContent = "正在生成二维码…";
+      try {
+        const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/start`, { method: "POST", body: { accountId: id } });
+        // 这段时间页面可能因为 SSE 重渲染换掉了节点，必须重新取。
+        const box = mount();
+        if (!box) return;
+        box.innerHTML = `<div class="login-box qr-login">
+          <p class="meta">用小红书 App 扫码登录；扫完这里会自动检测。</p>
+          <img data-qr-img src="${esc(r.qr)}" alt="小红书登录二维码"/>
+          <p class="meta" data-qr-state>等待扫码…</p>
+          <button class="small ghost" data-cancel="${esc(id)}">取消</button>
+        </div>`;
+        const img = () => mount()?.querySelector("[data-qr-img]");
+        const stateEl = () => mount()?.querySelector("[data-qr-state]");
+        const timer = setInterval(async () => {
+          try {
+            const s = await api(`/api/accounts/${encodeURIComponent(id)}/login/status`, { method: "POST", body: { accountId: id } });
+            const im = img();
+            if (s.qr && im && s.qr !== im.src) im.src = s.qr;
+            if (s.state === "ok") {
+              clearInterval(timer);
+              toast("扫码登录成功");
+              render();
+            } else if (stateEl()) {
+              stateEl().textContent = s.note ?? "已扫码？正在确认登录态…";
+            }
+          } catch (err) {
+            clearInterval(timer);
+            stateEl.textContent = err.message;
+          }
+        }, 2000);
+        const cancel = mount()?.querySelector("[data-cancel]");
+        if (cancel) {
+          cancel.onclick = async () => {
+            clearInterval(timer);
+            await api(`/api/accounts/${encodeURIComponent(id)}/login/cancel`, { method: "POST", body: { accountId: id } }).catch(() => {});
+            const b = mount();
+            if (b) b.innerHTML = "";
+          };
+        }
+      } catch (err) {
+        toast(err.message, true);
       }
     };
   }
