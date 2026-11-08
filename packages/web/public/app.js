@@ -206,8 +206,37 @@ async function viewAccounts() {
               clearInterval(timer);
               toast("扫码登录成功");
               render();
-            } else if (stateEl()) {
-              stateEl().textContent = s.note ?? "已扫码？正在确认登录态…";
+            } else {
+              if (stateEl()) {
+                stateEl().textContent =
+                  s.state === "confirm_phone"
+                    ? (s.note ?? "扫码成功，请在手机上点确认")
+                    : s.state === "sms_required"
+                      ? `${s.note ?? "需要短信验证"}${s.phone ? `（${s.phone}）` : ""}`
+                      : "等待扫码…";
+              }
+              const box = mount();
+              if (s.state === "sms_required" && box && !box.querySelector("[data-sms-code]")) {
+                const rowEl = document.createElement("div");
+                rowEl.className = "row";
+                rowEl.innerHTML = `<input data-sms-code placeholder="短信验证码" inputmode="numeric"/><button class="small primary" data-sms-ok>验证</button>`;
+                box.querySelector(".qr-login")?.append(rowEl);
+                rowEl.querySelector("[data-sms-ok]").onclick = async () => {
+                  const code = rowEl.querySelector("[data-sms-code]").value.trim();
+                  try {
+                    const v = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
+                    if (v.state === "ok") {
+                      clearInterval(timer);
+                      toast("验证通过，登录成功");
+                      render();
+                    } else {
+                      toast(v.next ?? "验证通过，等平台确认");
+                    }
+                  } catch (err) {
+                    toast(err.message, true);
+                  }
+                };
+              }
             }
           } catch (err) {
             clearInterval(timer);

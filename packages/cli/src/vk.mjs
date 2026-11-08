@@ -253,17 +253,70 @@ function daemonHandlers(adapters, log) {
         return { state: "pending", mode, note: "主站已登录，但创作平台还没进发布页" };
       }
 
+      const phase = await tab
+        .eval(`(() => {
+          const t = document.body.innerText || "";
+          if (/短信验证码验证/.test(t)) return "sms";
+          if (/扫码成功|请在手机上确认/.test(t)) return "confirm";
+          return "scan";
+        })()`)
+        .catch(() => "scan");
       const qr = await tab.eval(`document.querySelector('.qrcode-img')?.src ?? null`).catch(() => null);
+      const phone = await tab
+        .eval(`(() => { const m = (document.body.innerText||"").match(/验证码已发送至[\s\S]{0,8}(\+86[^\n]+)/); return m ? m[1].trim() : null; })()`)
+        .catch(() => null);
+      if (phase === "sms") return { state: "sms_required", mode, qr, phone, note: "小红书要求短信验证，验证码已发到手机" };
+      if (phase === "confirm") return { state: "confirm_phone", mode, qr, note: "扫码成功，请在手机上点确认" };
       return { state: "pending", mode, qr };
     },
 
     "account.login.verify": async ({ accountId, code: rawCode }) => {
       const session = loginSessions.get(accountId);
-      if (!session) throw new Error("登录会话已过期，重新发一次验证码");
+      if (!session) throw new Error("登录会话已过期，重新点一次登录");
       const code = String(rawCode ?? "").trim();
       if (!/^\d{4,8}$/.test(code)) throw new Error("验证码格式不对");
 
-      const { tab } = session;
+      const { tab, mode } = session;
+
+      // 扫码后的二次验证：弹窗里填短信验证码，点「验证」，等它放行。
+      if (mode === "qr") {
+        const typed = await tab.eval(`(() => {
+          const e = [...document.querySelectorAll('input[placeholder="请输入验证码"]')].find((x) => x.offsetParent);
+          if (!e) return false;
+          e.focus();
+          return true;
+        })()`);
+        if (!typed) throw new Error("页面上没有短信验证码输入框，可能已经验证过或页面改版");
+        await tab.type(code);
+        const clicked = await tab.eval(`(() => {
+          const b = [...document.querySelectorAll('div.btn,button')].find((e) => e.offsetParent && e.innerText.trim() === '验证');
+          if (!b) return false;
+          b.click();
+          return true;
+        })()`);
+        if (!clicked) throw new Error("没找到「验证」按钮");
+
+        const gone = await tab
+          .waitFor(`!document.body.innerText.includes('短信验证码验证') || !location.pathname.includes('/login')`, [], { timeout: 20e3, what: "短信验证通过" })
+          .then(() => true)
+          .catch(() => false);
+        if (!gone) throw new Error("验证码没有通过，或还需要在手机上确认");
+
+        // 验证通过后，主站可能已经登录；切到创作平台确认。
+        const here = await tab.url().catch(() => "");
+        if (!/\/login/.test(here)) {
+          await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
+        }
+        const where = await tab
+          .waitFor(`location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`, [], { timeout: 20e3, what: "创作平台登录态" })
+          .catch(() => "login");
+        if (where === "form") {
+          loginSessions.delete(accountId);
+          await closeAccount(accountId).catch(() => {});
+          return { ok: true, state: "ok", next: "验证通过，点「验证登录」确认状态" };
+        }
+        return { ok: true, state: "pending", next: "验证通过，但创作平台还没登录；在手机上再确认一次" };
+      }
       await tab.eval(`(() => { const e = document.querySelector('input[placeholder*="验证码"]'); e.focus(); })()`);
       await tab.type(code);
       const clicked = await tab.eval(`(() => {
