@@ -371,8 +371,10 @@ export default {
           } catch {
             continue;
           }
-          const evt = obj?.data?.action_value !== undefined ? obj.data : obj;
-          if (!evt || evt.action_value === undefined) continue;
+          // lark-cli 可能把事件放在顶层、data 或 event 里；三种都认，避免因为一层包装
+          // 就让「点了没反应」重演。
+          const evt = [obj, obj?.data, obj?.event, obj?.data?.event].find((c) => c && c.action_value !== undefined);
+          if (!evt) continue;
           backoff = 1000;
           Promise.resolve(onAction(evt)).catch((err) => log(`[feishu] 处理按钮失败：${err.message}`));
         }

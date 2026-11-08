@@ -332,3 +332,38 @@ process.exit(0);
     process.env.VK_LARK_BIN = BIN;
   }
 });
+
+test("start(): 事件被 data/event 包一层时仍能收到", async () => {
+  const bin = join(DIR, "lark-nested");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const a = process.argv.slice(2);
+if (a[0] === "event" && a[1] === "consume") {
+  process.stdin.resume();
+  const send = (o) => console.log(JSON.stringify(o));
+  setTimeout(() => {
+    send({ type: "event", event_key: "card.action.trigger", data: { action_value: JSON.stringify({ cmd: "publish.confirm", args: { publishId: "p1" } }), operator_id: "ou_nested", message_id: "om_1", token: "t" } });
+  }, 150);
+  setInterval(() => {}, 1000);
+  return;
+}
+process.exit(0);
+`,
+  );
+  chmodSync(bin, 0o755);
+
+  process.env.VK_LARK_BIN = bin;
+  const got = [];
+  const stop = channel.start({ onAction: (e) => got.push(e) });
+  try {
+    const end = Date.now() + 5000;
+    while (!got.length && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(got.length, 1);
+    assert.equal(got[0].operator_id, "ou_nested");
+    assert.equal(JSON.parse(got[0].action_value).cmd, "publish.confirm");
+  } finally {
+    stop();
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
