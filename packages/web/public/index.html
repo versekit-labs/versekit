@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>versekit</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>◈</text></svg>" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand"><span class="mark">◈</span> versekit <span class="sub">本地发布控制台</span></div>
+      <div class="top-right">
+        <span id="pill" class="pill">连接中…</span>
+        <button id="refresh" class="ghost" title="刷新">刷新</button>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <a href="#setup" data-view="setup">接入</a>
+      <a href="#accounts" data-view="accounts">账号</a>
+      <a href="#publish" data-view="publish">发布</a>
+      <a href="#works" data-view="works">作品</a>
+      <a href="#overview" data-view="overview">总览</a>
+      <a href="#tasks" data-view="tasks">任务</a>
+      <a href="#doctor" data-view="doctor">自检</a>
+    </nav>
+
+    <main id="view" class="view"></main>
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
+import { eventForTransition, isKnownEvent } from "./events.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = join(HERE, "schema.sql");
@@ -24,6 +25,7 @@ export function paths() {
     state,
     configFile: join(config, "config.json"),
     db: join(state, "vk.db"),
+    socket: join(state, "vk.sock"),
     log: join(state, "vk.log"),
     browserProfile: join(state, "browser"),
     credentials: join(config, "credentials"),
@@ -44,14 +46,44 @@ export function ensureDirs() {
   return p;
 }
 
-let db = null;
+// One process, one home. Connections are cached per database path so a test (or a daemon test
+// file) can point VK_HOME at a fresh directory without sharing state between cases.
+let cache = { path: null, write: null, read: null };
 
+/**
+ * Open the database.
+ *
+ * `readonly: true` must never create a file: `vk doctor` runs before `vk init` and a doctor run
+ * that leaves an empty `vk.db` behind would make `isInitialised()` lie forever after. So a
+ * read-only open checks the file first and otherwise refuses with the sentence the person needs.
+ */
 export function open({ readonly = false } = {}) {
-  if (db) return db;
   const p = paths();
-  mkdirSync(dirname(p.db), { recursive: true, mode: 0o700 });
-  db = new DatabaseSync(p.db, { readOnly: readonly });
-  return db;
+  if (cache.path !== p.db) cache = { path: p.db, write: null, read: null };
+  if (!readonly) {
+    if (!cache.write) {
+      mkdirSync(dirname(p.db), { recursive: true, mode: 0o700 });
+      cache.write = new DatabaseSync(p.db);
+    }
+    return cache.write;
+  }
+  if (cache.write) return cache.write;
+  if (!existsSync(p.db)) throw new Error("还没有初始化：先运行 vk init");
+  if (!cache.read) cache.read = new DatabaseSync(p.db, { readOnly: true });
+  return cache.read;
+}
+
+/** Close cached connections (used by tests and by a clean daemon shutdown). */
+export function close() {
+  for (const key of ["write", "read"]) {
+    try {
+      cache[key]?.close();
+    } catch {
+      /* already closed */
+    }
+    cache[key] = null;
+  }
+  cache.path = null;
 }
 
 export function migrate() {
@@ -80,7 +112,9 @@ export function migrate() {
 /** SQLite has no "ADD COLUMN IF NOT EXISTS"; keep re-runs cheap and idempotent. */
 const COLUMNS = {
   run: { lane: "TEXT" },
-  publish: {},
+  publish: { published_at: "INTEGER" },
+  account: { last_checked_at: "INTEGER" },
+  command_audit: { idempotency_key: "TEXT" },
 };
 
 function addMissingColumns(conn) {
@@ -93,11 +127,26 @@ function addMissingColumns(conn) {
 }
 
 export function getMeta(key) {
-  return open().prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value ?? null;
+  // A database file can exist without the schema (an interrupted init, a stray empty file). Ask
+  // the schema first so this never creates a table, never throws `no such table`, and never turns
+  // "not initialised" into "initialised" by accident.
+  if (!isInitialised()) return null;
+  return open({ readonly: true }).prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value ?? null;
 }
 
+/**
+ * "Initialised" means the schema is there, not merely that a file exists. The old check let one
+ * `vk doctor` (which used to open a writable connection) flip this to true on an empty database.
+ */
 export function isInitialised() {
-  return existsSync(paths().db);
+  const p = paths();
+  if (!existsSync(p.db)) return false;
+  try {
+    const conn = open({ readonly: true });
+    return Boolean(conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get());
+  } catch {
+    return false;
+  }
 }
 
 // ------------------------------------------------------------------ ids
@@ -121,6 +170,9 @@ export const sha256 = (value) => createHash("sha256").update(value).digest("hex"
  * dedupeKey makes delivery idempotent — the same logical fact is never sent twice.
  */
 export function emit({ type, severity = "info", publishId = null, payload = null, dedupeKey = null }) {
+  // A typo'd event type used to land in the table and never be deliverable. The catalog is the
+  // contract with the channels, so an unregistered type is a bug, not a row.
+  if (!isKnownEvent(type)) throw new Error(`未登记的事件类型：${type}（见 core/src/events.mjs）`);
   const conn = open();
   const id = newId("evt");
   try {
@@ -139,11 +191,11 @@ export function emit({ type, severity = "info", publishId = null, payload = null
  * code path fails loudly instead of writing a state nobody handles.
  */
 export const PUBLISH_TRANSITIONS = {
-  queued: ["auto_running", "draft_running", "failed", "canceled", "blocked"],
+  queued: ["auto_running", "draft_running", "notify_pending", "failed", "canceled", "blocked"],
   auto_running: ["published", "published_limited", "draft_running", "notify_pending", "failed", "blocked", "canceled"],
   draft_running: ["draft_pending", "notify_pending", "failed", "blocked", "canceled"],
   draft_pending: ["published", "notify_pending", "failed", "canceled"],
-  notify_pending: ["published", "failed", "canceled", "expired"],
+  notify_pending: ["published", "failed", "canceled", "expired", "queued"],
   published: [],
   published_limited: ["published"],
   failed: ["queued", "notify_pending", "canceled"],
@@ -163,9 +215,10 @@ export function transitionPublish(publishId, to, { reason = null, patch = {} } =
   const fields = { ...patch, state: to, updated_at: Date.now() };
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(", ");
   conn.prepare(`UPDATE publish SET ${sets} WHERE id = ?`).run(...Object.values(fields), publishId);
+  const event = eventForTransition(to);
   emit({
-    type: `publish.${to === "published" ? "published" : to}`,
-    severity: to === "failed" ? "warn" : "info",
+    type: event.type,
+    severity: event.severity,
     publishId,
     payload: { from: row.state, to, reason },
     dedupeKey: `${publishId}:${row.state}->${to}:${row.updated_at}`,

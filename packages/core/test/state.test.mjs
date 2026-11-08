@@ -26,8 +26,11 @@ test("new publish starts queued", () => {
 test("legal transition moves the row and leaves an event", () => {
   const res = core.transitionPublish("p1", "auto_running");
   assert.deepEqual(res, { from: "queued", to: "auto_running" });
-  const events = core.open().prepare("SELECT type FROM event WHERE publish_id='p1' ORDER BY created_at").all();
-  assert.ok(events.some((e) => e.type === "publish.auto_running"));
+  const events = core.open().prepare("SELECT type, payload_json FROM event WHERE publish_id='p1' ORDER BY created_at").all();
+  // Running states are bookkeeping, so they land on the generic trace rather than a card event.
+  const trace = events.find((e) => e.type === "publish.state_changed");
+  assert.ok(trace, "每个迁移都要留事件");
+  assert.equal(JSON.parse(trace.payload_json).to, "auto_running");
 });
 
 test("illegal transition throws instead of writing a state nobody handles", () => {

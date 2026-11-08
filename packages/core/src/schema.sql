@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS account (
   is_manual      INTEGER NOT NULL DEFAULT 0,
   expires_at     INTEGER,
   last_ok_at     INTEGER,
+  last_checked_at INTEGER,          -- 最近一次主动探测（成功失败都算），调度靠它
   created_at     INTEGER NOT NULL,
   UNIQUE (platform, handle)
 );
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS publish (
   attempts        INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
+  published_at    INTEGER,           -- 首次进入 published/published_limited；采集节奏从它起算
   UNIQUE (work_id, account_id)
 );
 CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at);
@@ -117,8 +119,10 @@ CREATE TABLE IF NOT EXISTS command_audit (
   args_json  TEXT,
   result     TEXT,
   reason     TEXT,
+  idempotency_key TEXT,          -- 卡片按钮的幂等键：同一张卡点两次只执行一次
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_idem ON command_audit(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_binding (
   id               TEXT PRIMARY KEY,

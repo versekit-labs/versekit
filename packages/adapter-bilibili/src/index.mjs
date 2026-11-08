@@ -9,12 +9,33 @@
 //     这里改成三条 followup：可追踪、可核实、可关闭
 
 import { execFile } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
-import { open, transitionPublish, emit, newId, enqueue } from "../../core/src/index.mjs";
+import { readFileSync, existsSync, accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
+import { open } from "../../core/src/index.mjs";
+import { AdapterError } from "../../core/src/errors.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 const ARCHIVES = "https://member.bilibili.com/x/web/archives";
+
+/**
+ * biliup 在不在。不能只 existsSync("biliup")：那查的是 cwd 下的相对路径，
+ * 而用户装在哪都有可能。先看显式配置，再按 PATH 找可执行文件。
+ */
+function hasBiliup() {
+  const configured = process.env.VK_BILIUP_BIN;
+  if (configured) return existsSync(configured);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, "biliup"), constants.X_OK);
+      return true;
+    } catch {
+      /* not here */
+    }
+  }
+  return false;
+}
 
 /** 平台怪癖写在这里，不进业务逻辑：延时发布必须 ≥4 小时，否则立即发。 */
 const MIN_SCHEDULE_MS = 4.2 * 3600e3;
@@ -69,7 +90,7 @@ function cookiesOf(credentialRef) {
 // ------------------------------------------------------------------ 发布
 
 async function publish({ publishId, dryRun = false }) {
-  const { db, row, meta, overrides } = load(publishId);
+  const { row, meta, overrides } = load(publishId);
   const title = String(overrides.title ?? meta.title ?? row.work_title).slice(0, 80);
   const desc = String(overrides.desc ?? meta.description ?? "").slice(0, 2000);
   const tags = (overrides.tags ?? meta.tags ?? []).map((t) => String(t).replace(/[,，]/g, " ").trim().slice(0, 20)).filter(Boolean).slice(0, 10);
@@ -77,16 +98,13 @@ async function publish({ publishId, dryRun = false }) {
   const cover = overrides.cover ?? meta.bilibili?.cover ?? null;
   const asset = row.asset_path;
 
-  if (!asset || !existsSync(asset)) throw new Error(`找不到成片：${asset}`);
-  if (row.state === "queued") transitionPublish(publishId, "auto_running");
+  if (!asset || !existsSync(asset)) throw new AdapterError("asset_invalid", `找不到成片：${asset}`);
 
   const at = row.scheduled_at ? Number(row.scheduled_at) : null;
   const dtime = at && at > Date.now() + MIN_SCHEDULE_MS ? ["--dtime", String(Math.floor(at / 1000))] : [];
   const args = ["upload", asset, "--title", title, "--desc", desc, "--tag", tags.join(","), "--tid", String(tid), "--copyright", "1", ...(cover && existsSync(cover) ? ["--cover", cover] : []), ...dtime];
 
-  if (dryRun) {
-    return { dryRun: true, args, title, tags, tid, bid: null };
-  }
+  if (dryRun) return { dryRun: true, args, title, tags, tid };
 
   try {
     cookiesOf(row.credential_ref); // 先判登录态，避免传给 biliup 一个坏文件
@@ -98,40 +116,21 @@ async function publish({ publishId, dryRun = false }) {
       const list = await biliup(["-u", row.credential_ref, "list"]).catch(() => "");
       bvid = list.split("\n").find((l) => l.includes(title))?.match(/BV[0-9A-Za-z]{10}/)?.[0];
     }
-    if (!bvid) throw new Error(`biliup 投稿完成但没有拿到 BV 号，请在创作中心核对：\n${out.slice(-800)}`);
+    if (!bvid) throw new AdapterError("unknown", `biliup 投稿完成但没有拿到 BV 号，请在创作中心核对：\n${out.slice(-800)}`);
 
     const url = `https://www.bilibili.com/video/${bvid}/`;
-    transitionPublish(publishId, "published", { patch: { external_id: bvid, external_url: url } });
-
-    // 三件平台要求人做的事 → followup（不是一句提示就完）
+    // 平台要求人做的事是 followup，不是一句备注：可追踪、可核实、可关闭。
     const followups = [
       { kind: "declare_ai_generated", hint: "创作中心：勾选「AI 生成内容」声明" },
-      { kind: "upload_captions", hint: "创作中心：上传字幕文件" },
-      ...(overrides.collection ? [{ kind: "add_to_collection", hint: `创作中心：加入合集「${overrides.collection}」` }] : []),
+      { kind: "upload_captions", hint: "创作中心：上传字幕文件", verify: "captions" },
+      ...(overrides.collection ? [{ kind: "add_to_collection", hint: `创作中心：加入合集「${overrides.collection}」`, verify: "collection" }] : []),
     ];
-    for (const f of followups) {
-      db.prepare("INSERT INTO followup (id, publish_id, kind, state, verify_hint) VALUES (?,?,?,'open',?)").run(newId("fu"), publishId, f.kind, f.hint);
-      emit({
-        type: "publish.needs_followup",
-        severity: "warn",
-        publishId,
-        payload: { kind: f.kind, hint: f.hint },
-        dedupeKey: `publish:${publishId}:followup:${f.kind}`,
-      });
-    }
 
-    enqueue({ kind: "collect", targetType: "publish", targetId: publishId, lane: row.account_id, priority: 200, runAfter: Date.now() + 60 * 60e3 });
-
-    return { id: bvid, url, visibility: "public", state: "published", followups: followups.map((f) => f.kind) };
+    return { id: bvid, url, visibility: "public", state: "published", followups };
   } catch (err) {
-    if (isAuthError(err)) {
-      db.prepare("UPDATE account SET state='expired' WHERE id=?").run(row.account_id);
-      transitionPublish(publishId, "blocked", { patch: { error_code: "auth_error", error_message: String(err.message).slice(0, 500) } });
-      emit({ type: "account.expired", severity: "critical", publishId, payload: { platform: "bilibili", handle: row.handle }, dedupeKey: `account:${row.account_id}:expired:${Date.now()}` });
-    } else {
-      transitionPublish(publishId, "failed", { patch: { error_code: "publish_failed", error_message: String(err.message).slice(0, 500) } });
-    }
-    throw err;
+    if (err instanceof AdapterError) throw err;
+    const message = String(err?.message ?? err);
+    throw new AdapterError(isAuthError(err) ? "auth" : "unknown", message);
   }
 }
 
@@ -165,16 +164,14 @@ async function fetchArchives(cookies, { pages = 20 } = {}) {
 }
 
 async function collect({ publishId }) {
-  const { db, row } = load(publishId);
-  if (!row.external_id) throw new Error("这条发布还没有 B站 BV 号，无法采集");
+  const { row } = load(publishId);
+  if (!row.external_id) throw new AdapterError("unknown", "这条发布还没有 B站 BV 号，无法采集");
 
   let cookies;
   try {
     cookies = cookiesOf(row.credential_ref);
   } catch (err) {
-    db.prepare("UPDATE account SET state='expired' WHERE id=?").run(row.account_id);
-    emit({ type: "collect.degraded", severity: "warn", publishId, payload: { reason: "auth", message: err.message }, dedupeKey: `collect:${publishId}:auth:${Date.now()}` });
-    throw err;
+    throw new AdapterError("auth", String(err.message), { cause: err });
   }
 
   let archives;
@@ -183,34 +180,43 @@ async function collect({ publishId }) {
   } catch (err) {
     // 页面改版 / 风控 / 登录过期 三者要分开，否则排障只能靠猜
     const auth = isAuthError(err);
-    if (auth) db.prepare("UPDATE account SET state='expired' WHERE id=?").run(row.account_id);
-    emit({
-      type: "collect.degraded",
-      severity: auth ? "critical" : "warn",
-      publishId,
-      payload: { reason: auth ? "auth" : "endpoint", message: String(err.message).slice(0, 300) },
-      dedupeKey: `collect:${publishId}:${auth ? "auth" : "endpoint"}:${new Date().toISOString().slice(0, 13)}`,
-    });
-    throw err;
+    throw new AdapterError(auth ? "auth" : "flaky_ui", String(err.message).slice(0, 300), { cause: err });
   }
 
   const stat = archives.get(row.external_id);
-  if (!stat) {
-    emit({ type: "collect.degraded", severity: "warn", publishId, payload: { reason: "not_found", bvid: row.external_id }, dedupeKey: `collect:${publishId}:not_found:${Date.now()}` });
-    throw new Error(`创作中心稿件列表里找不到 ${row.external_id}`);
-  }
+  if (!stat) throw new AdapterError("unknown", `创作中心稿件列表里找不到 ${row.external_id}`);
 
   const metrics = metricsFrom(stat);
-  const capturedAt = Date.now();
-  db.prepare("INSERT INTO snapshot (id, publish_id, captured_at, source, status, metrics_json) VALUES (?,?,?,?,?,?)").run(
-    newId("snap"),
-    publishId,
-    capturedAt,
-    "intercept",
-    metrics.play == null ? "partial" : "ok",
-    JSON.stringify(metrics),
-  );
-  return { publishId, capturedAt, source: "intercept", metrics };
+  return {
+    source: "intercept",
+    status: metrics.play == null ? "partial" : "ok",
+    metrics,
+    capturedAt: Date.now(),
+  };
+}
+
+// ------------------------------------------------------------------ 登录态
+
+/**
+ * 主动探测登录态：能读 cookie 文件，且 biliup 愿意用它 refresh。
+ * `renew` 会顺带续期，这是我们想要的副作用——每 6 小时一次，登录态不容易放到过期。
+ */
+async function check({ accountId }) {
+  if (!accountId) throw new AdapterError("unknown", "check 需要 accountId");
+  const row = open().prepare("SELECT credential_ref FROM account WHERE id = ?").get(accountId);
+  if (!row) throw new AdapterError("unknown", `没有这个账号：${accountId}`);
+  try {
+    cookiesOf(row.credential_ref);
+  } catch (err) {
+    throw new AdapterError("auth", String(err.message), { cause: err });
+  }
+  try {
+    await biliup(["-u", row.credential_ref, "renew"], { timeout: 60e3 });
+  } catch (err) {
+    if (isAuthError(err)) throw new AdapterError("auth", `biliup 续期失败：${err.message}`.slice(0, 300), { cause: err });
+    throw new AdapterError("flaky_ui", `biliup 调不动：${err.message}`.slice(0, 300), { cause: err });
+  }
+  return { state: "ok" };
 }
 
 // ------------------------------------------------------------------ 契约
@@ -218,18 +224,19 @@ async function collect({ publishId }) {
 export default {
   platform: "bilibili",
   capabilities: {
-    publish: "web", // biliup 是模拟官方客户端的 CLI，归到 web 路线
-    collect: "web",
+    publish: "cli", // biliup 是模拟官方客户端的 CLI，按契约归 cli 路线
+    collect: "web", // 指标读创作中心接口，不是 biliup
+    draft: false, // biliup 没有草稿箱：要么发，要么不发
     requiresQualification: false,
-    visibility: null, // 稿件先过审再公开，不提供发布时可见性开关
+    visibility: [], // 稿件先过审再公开，发布时不能选可见性
     minScheduleLeadMs: MIN_SCHEDULE_MS,
   },
   ready() {
-    if (!existsSync(BILIUP()) && !process.env.VK_BILIUP_BIN) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
+    if (!hasBiliup()) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
     return null;
   },
   login: null, // 登录在 biliup CLI 里做（浏览器登录），不需要我们实现
-  check: null,
+  check,
   publish,
   collect,
 };

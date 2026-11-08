@@ -59,7 +59,7 @@ test("publish handler routes to the adapter of the publish's platform", async ()
       platform: "fake",
       capabilities: { publish: "web", collect: "web" },
       ready: () => null,
-      async publish({ publishId }) { globalThis.__seen = publishId; },
+      async publish({ publishId }) { globalThis.__seen = publishId; return { id: "vid1", url: "https://t.test/vid1", visibility: "public", state: "published" }; },
       async collect() { return {}; },
     };`);
   const { adapters } = await loadAdapters({ root });
@@ -71,6 +71,10 @@ test("publish handler routes to the adapter of the publish's platform", async ()
 
   assert.equal(globalThis.__seen, "p9");
   assert.equal(db.prepare("SELECT state FROM run WHERE target_id='p9'").get().state, "done");
+  const row = db.prepare("SELECT state, external_id, external_url FROM publish WHERE id='p9'").get();
+  assert.equal(row.state, "published");
+  assert.equal(row.external_id, "vid1");
+  assert.match(row.external_url, /vid1$/);
 });
 
 test("a publish with no installed adapter fails with a readable reason", async () => {

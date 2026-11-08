@@ -299,19 +299,28 @@ defineCommand({
 | `vk serve [--port]` | 前台/后台运行守护进程 | 否 |
 | `vk now [--human]` | 一屏状态：账号健康 / 队列 / 通道 / 下次采集 | 是 |
 | `vk account add <platform> --name` | 加账号，输出扫码页链接（自动开 Web） | 否 |
-| `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 只能本地（需扫码） |
+| `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 可远程发起，但扫码必须在电脑前完成 |
 | `vk account mode <id> auto\|manual` | 该号是否自动 | 是 |
 | `vk publish <asset> --to a,b --schedule --visibility --dry-run` | 创建发布 | 否（本地） |
-| `vk publish retry <id>` / `cancel <id>` | 队列操作 | 是 |
+| `vk publish list` / `retry <id>` / `release <id>` / `confirm <id>` | 列表与队列操作 | 是 |
+| `vk platforms` | 已安装适配器与可用状态（Web 发布台的数据源） | 否 |
 | `vk publish approve <work>` / `reject <work> --reason` | 审批门禁（可选） | 是 |
 | `vk collect [--now] [--platform]` | 立即采集 / 查看下次计划 | `--now` 是 |
-| `vk stats works [--range]` / `overview` | 数据查询（JSON） | 否 |
+| `vk stats works [--range]` / `series <id>` | 数据查询（最新值 / 全部快照） | 否 |
+| `vk runs [--state]` / `events [--since]` | 队列与事件排障 | 是 |
 | `vk channel bind feishu` / `test` | 配对 + 探活 | 否 |
 | `vk commands [--json]` | 导出注册表（CI 用） | 否 |
 | `vk doctor [--json]` | 32 项自检 | 否 |
 | `vk event list [--since]` / `replay <id>` | 事件排查 | 是 |
 
 `--json` 是默认，`--human` 才给人看；`--dry-run` 对 `publish` 与 `collect` 都必须可用。
+
+**传输端点（不属于命令表）**：Web 有两个只能由浏览器用的端点，它们不是新能力，所以不占命令位：
+
+| 端点 | 用途 | 为什么不是命令 |
+|---|---|---|
+| `POST /api/assets` | 浏览器把文件传成素材，返回本机路径 | CLI 直接用文件路径，能力等价 |
+| `GET /api/stream` | SSE 实时状态（2s 一帧），控制台靠它自动刷新 | 纯推送，没有任何写操作 |
 
 ---
 
@@ -337,7 +346,7 @@ type EventType =
 | 接入方式 | **长连接（WebSocket）**，不是公网回调 → 不需要域名/内网穿透（与视频工厂"轮询不依赖公网"同一思路） |
 | 卡片 | 交互卡片 v2；`actions` 里每个按钮带 `command_id` + `idempotency_key` + `exp`（24h） |
 | 回执 | 收到 `card.action.trigger` 事件 → 校验 `exp` / 白名单 / 幂等键 → 执行 → **原地更新卡片**为结果态 |
-| 配对 | 本机 `vk channel bind feishu` 显示 6 位码 → 飞书里发给机器人 → 落 `channel_binding` |
+| 配对 | `vk channel bind feishu`：用 lark-cli 已登录身份取 open_id → 落 `channel_binding` → 发测试卡（不需要 6 位码，也不需要公网回调） |
 | 脱敏 | 卡片只放业务字段；路径、凭证、内部 id 一律不出 |
 | 降级 | 长连接断开 → 事件积压在 `delivery(pending)`，恢复后按 `created_at` 补投并按类型合并 |
 
@@ -377,6 +386,8 @@ WHERE id = (SELECT id FROM run
 
 ```
 发布后：+1h · +6h · +24h · +3d · +7d · 之后每天（上限 30 天）
+由 `core/collect-plan.mjs` 的纯函数排下一个点（依据 `publish.published_at`），
+每次采集成功后自动排下一次；重启不影响，手动补抓也不会打乱节奏。
 每条快照：{ captured_at, source, status, metrics_json }
 ```
 

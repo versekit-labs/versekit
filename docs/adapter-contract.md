@@ -37,16 +37,18 @@ interface PlatformAdapter {
 
 interface Capabilities {
   publish: "api" | "web" | "cli" | "none";
-  //   api = 官方接口；web = 浏览器自动化；cli = 借助平台生态的 CLI（如 biliup）
+  //   api = 官方接口；web = 浏览器自动化；cli = 借助平台生态的 CLI（biliup → cli）
   collect: "api" | "web" | "cli" | "none";
   visibility: Array<"public" | "private" | "friends">;
-  //   [] = 发布时不能选（平台自己决定，如 B站先审后公开）
+  //   必填数组，不写 null。[] = 发布时不能选（平台自己决定，如 B站先审后公开）
   //   非空 = 这些值可以在发布时指定
   draft: boolean;                          // 能否存平台草稿箱（决定 draft 模式是否可用）
   requiresQualification: boolean;          // 只有官方 API 路线为 true
   minScheduleLeadMs?: number;              // 平台对定时发布的最小提前量（B站 4h）
   maxFileSizeMb?: number;
 }
+// 缺省规则（core/src/contract.mjs 的 normaliseCapabilities）：没写 publish/collect 时，
+// 有 publish() 就按 "web"，否则 "none"；draft 默认 false，visibility 默认 []。
 
 interface AccountHealth {
   state: "ok" | "expiring" | "expired" | "banned" | "manual";
@@ -58,7 +60,9 @@ interface PublishResult {
   id: string;                              // 平台作品 id（发布后回读核实得到）
   url: string;
   visibility: "public" | "private" | "friends";
-  state: "published" | "published_limited";  // limited = 平台侧还有必须先做的事
+  state: "published" | "published_limited" | "draft_pending" | "notify_pending";
+  //   published / published_limited / draft_pending / notify_pending 四选一。
+  //   失败不是结果——抛错，见下方「错误约定」。
   followups?: Followup[];                  // 见下
   evidence?: { screenshot?: string; log?: string };
 }
@@ -69,6 +73,14 @@ interface Followup {
   verify?: "collection" | "captions" | "visibility";  // 有则系统自己核实（见 ARCHITECTURE §4.1）
 }
 ```
+
+**错误约定**：适配器只抛 `AdapterError(code, detail)`（`core/src/errors.mjs`），`code` 只能是
+`auth` / `platform_reject` / `quota` / `flaky_ui` / `asset_invalid` / `unknown` 之一。
+人话、重试策略、卡片按钮由核心按这张表生成——适配器拼文案是反模式。
+普通 `Error` 会被归为 `unknown` 并保留原文，不会丢失。
+
+**可执行版本**：上面的形状不是靠文档自觉，`core/src/contract.mjs` 是唯一校验实现，
+loader、`vk doctor`、契约测试共用它；`packages/core/test/contract.test.mjs` 钉住这些断言。
 
 **`ready()` 的返回文案是产品的一部分**。工厂里的写法值得照抄：
 
@@ -127,7 +139,8 @@ ready: () => !hasBiliup() ? 'B站 未配置：没有安装 biliup（见 README�
 | 在适配器里直接写 SQLite / 飞书 API | 违反零后门律（PRD §5.3） |
 | 用 `sleep` 代替 `waitFor` 作为主同步手段 | 慢且脆；只允许作为"过渡动画"级别的短等待 |
 | 把平台 id 硬编码在业务逻辑里（如固定账号名） | 账号是数据，不是常量 |
-| 静默 catch | 失败必须有 `error_code` + 人话 + 取证 |
+| 静默 catch | 失败必须有 `error_code` + 人话 + 取证；抛 `AdapterError`，不要自己拼文案 |
+| 自己迁移 `publish.state` | 状态机只有一个写入口（`transitionPublish`）；适配器只返回结果 |
 | 用逆向签名调国内平台私有接口 | 合规红线 |
 | 一个平台一份浏览器启动代码 | CDP 驱动必须共享 |
 
