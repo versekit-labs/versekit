@@ -1,8 +1,8 @@
-<p align="center">
-  <b>makerset</b> · 给创作者的开源工具集
-</p>
-
 <h1 align="center">versekit</h1>
+
+<p align="center">
+  给创作者的开源工具集
+</p>
 
 <p align="center">
   跑在你电脑上的<strong>多平台发布 + 自有账号数据</strong>控制面<br/>
@@ -193,4 +193,4 @@ docs/
 
 ---
 
-<p align="center"><sub>MIT · makerset</sub></p>
+<p align="center"><sub>MIT · versekit</sub></p>
