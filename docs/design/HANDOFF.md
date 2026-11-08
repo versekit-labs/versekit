@@ -2,13 +2,13 @@
 
 这份文档是 `docs/design/` 下九个页面的开发契约。界面已定稿（commit `5075bbc`），代码按这里实现；实现完用同一套闸门验收。
 
-> **基线已同步**：设计分支已合并 `main`（merge commit `125ada0`），工作区含 daemon、
+> **基线**：设计成果已合入 `main`，直接用 `main` 开工：仓库地址 `versekit-app/versekit`，含 daemon、
 > `packages/web`、路由派生与登录重做。直接从这里开工即可。
 
 ## 0. 开工前
 
 ```bash
-git checkout fangyouxi/product-design
+git checkout main
 npm ci 2>/dev/null || true          # 零依赖仓库，这步可跳过
 npm test                            # 214 项，全绿再动手
 npm run design:check                # 设计闸门，全绿再动手

@@ -4,12 +4,12 @@
 
 ## 1. GitHub 身份（重要）
 
-这个仓库属于组织 **`fangyouxi`**，用**独立账号**推送，与本机另一个账号（`buxibuxi`，另一个项目的）并存。
+这个仓库属于组织 **`versekit-app`**，用**独立账号**推送，与本机另一个账号（`buxibuxi`，另一个项目的）并存。
 
 | 层 | 配置 | 说明 |
 |---|---|---|
-| `git push` | remote = `git@github-fangyouxi:fangyouxi/versekit.git` | SSH 别名，身份绑在 URL 上，**不会推错账号** |
-| 仓库内 git 身份 | `user.name=fangyouxi` · `user.email=creater.omnikit@gmail.com` | 仅本仓库，不改全局 |
+| `git push` | remote = `git@github-versekit-app:versekit-app/versekit.git` | SSH 别名，身份绑在 URL 上，**不会推错账号** |
+| 仓库内 git 身份 | `user.name=versekit-app` · `user.email=creater.omnikit@gmail.com` | 仅本仓库，不改全局 |
 | `gh` 命令 | `.pi/gh-account`（内容 `creator-omnikit`） | 由 pi 扩展自动注入 `GH_TOKEN` |
 
 **硬规则**
@@ -17,7 +17,7 @@
 - ✅ 用 `bin/ghx <...>` 或 `GH_TOKEN="$(gh auth token --user creator-omnikit)" gh <...>`
 - ❌ **禁止 `gh auth switch`** —— 那是全局状态，会污染本机其他项目
 - ❌ 不要把 token 写进任何文件；只现取现用
-- 新增仓库沿用同一套：`.pi/gh-account` + SSH alias + 局部 git 身份
+- 新增仓库沿用同一套：`.pi/gh-account` + SSH alias（`github-versekit-app`）+ 局部 git 身份
 
 ## 2. 动手前必读
 
@@ -50,9 +50,9 @@
 npm run vk -- init                 # 建库
 npm run vk -- doctor --human       # 自检
 npm run vk -- serve --once         # 跑一轮队列
-npm test                           # 全部测试（当前 29 项）
+npm test                           # 全部测试（当前 214 项）
 npm run design:check               # 设计闸门：任务书/导航/死链/检测器/触控/溢出
-bin/ghx issue list                 # 以 fangyouxi 身份操作 GitHub
+bin/ghx issue list                 # 以 creator-omnikit 身份操作 GitHub
 ```
 
 ## 6. 改界面之前（设计协议）

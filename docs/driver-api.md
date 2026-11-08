@@ -17,7 +17,7 @@ TikTok / 小红书 / 抖音 三个适配器共用一套 CDP。接口一 freeze�
 ## 2. 入口
 
 ```js
-import { openAccount, browserReady, accountProfile, accountPort } from "@fangyouxi/driver-browser";
+import { openAccount, browserReady, accountProfile, accountPort } from "@versekit-app/driver-browser";
 
 const tab = await openAccount({ accountId: "acc_xxx" });   // 复用/新建该账号的 tab
 await tab.goto("https://www.tiktok.com/tiktokstudio/content");

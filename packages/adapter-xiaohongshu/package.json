@@ -1,5 +1,5 @@
 {
-  "name": "@fangyouxi/adapter-xiaohongshu",
+  "name": "@versekit-app/adapter-xiaohongshu",
   "version": "0.1.0",
   "private": true,
   "type": "module",
