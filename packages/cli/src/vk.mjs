@@ -197,7 +197,10 @@ function daemonHandlers(adapters, log) {
       // 不带手机号 = 扫码登录。小红书主站有二维码；创作平台没有，但主站登录后
       // 同一账号的会话通常能带到创作平台，登录完再切过去确认。
       if (!phone) {
-        const tab = await openAccount({ accountId });
+        // 登录会话用无头 Chrome：二维码只在我们的页面里出现，不再弹出小红书窗口。
+        // 登录态仍写进账号 profile，之后发布用正常窗口即可复用。
+        await closeAccount(accountId).catch(() => {});
+        const tab = await openAccount({ accountId, headless: true });
         await tab.goto("https://www.xiaohongshu.com/login");
         await tab.waitFor(`document.querySelector('.qrcode-img')?.src?.startsWith('data:image')`, [], { timeout: 30e3, what: "小红书扫码登录二维码" });
         const qr = await tab.eval(`document.querySelector('.qrcode-img').src`);
@@ -206,7 +209,8 @@ function daemonHandlers(adapters, log) {
       }
 
       if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位");
-      const tab = await openAccount({ accountId });
+      await closeAccount(accountId).catch(() => {});
+      const tab = await openAccount({ accountId, headless: true });
       loginSessions.set(accountId, { tab, mode: "sms", phone });
       await tab.goto("https://creator.xiaohongshu.com/login");
       await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]')`, [], { timeout: 30e3, what: "小红书登录页" });
@@ -243,7 +247,7 @@ function daemonHandlers(adapters, log) {
           .catch(() => "login");
         if (where === "form") {
           loginSessions.delete(accountId);
-          await tab.close().catch(() => {});
+          await closeAccount(accountId).catch(() => {});
           return { state: "ok", mode };
         }
         return { state: "pending", mode, note: "主站已登录，但创作平台还没进发布页" };
@@ -277,7 +281,7 @@ function daemonHandlers(adapters, log) {
       if (!moved) throw new Error("验证码没有通过，或还需要额外验证；页面还在登录页");
 
       loginSessions.delete(accountId);
-      await tab.close().catch(() => {});
+      await closeAccount(accountId).catch(() => {});
       return { ok: true, state: "ok", next: "登录成功，点「验证登录」确认状态" };
     },
 
@@ -285,7 +289,7 @@ function daemonHandlers(adapters, log) {
       const session = loginSessions.get(accountId);
       if (!session) return { canceled: false };
       loginSessions.delete(accountId);
-      await session.tab.close().catch(() => {});
+      await closeAccount(accountId).catch(() => {});
       return { canceled: true };
     },
 

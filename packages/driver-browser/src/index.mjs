@@ -235,7 +235,7 @@ async function pickPort(accountId, profile) {
   throw new Error(`账号 ${accountId} 没有可用端口（从 ${preferred} 起探测了 64 个）`);
 }
 
-async function startInstance(accountId) {
+async function startInstance(accountId, { headless = false } = {}) {
   const profile = accountProfile(accountId);
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   try {
@@ -245,7 +245,7 @@ async function startInstance(accountId) {
   }
 
   await acquireSlot();
-  const instance = { accountId, profile, port: null, pid: null, tabs: new Set(), slotHeld: true };
+  const instance = { accountId, profile, port: null, pid: null, tabs: new Set(), slotHeld: true, headless };
 
   try {
     const { port, adopted, pid } = await pickPort(accountId, profile);
@@ -264,6 +264,16 @@ async function startInstance(accountId) {
           `--user-data-dir=${profile}`,
           "--no-first-run",
           "--no-default-browser-check",
+          ...(headless
+            ? [
+                "--headless=new",
+                "--disable-gpu",
+                "--window-size=1600,1000",
+                // 小红书会拦 HeadlessChrome UA；伪装成同版本普通 Chrome。
+                "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "--disable-blink-features=AutomationControlled",
+              ]
+            : []),
           // 后台窗口会被节流；不关掉这三个开关，上传到一半会停在原地。
           "--disable-backgrounding-occluded-windows",
           "--disable-renderer-backgrounding",
@@ -322,7 +332,7 @@ async function startInstance(accountId) {
   }
 }
 
-async function ensureInstance(accountId) {
+async function ensureInstance(accountId, opts = {}) {
   const live = instances.get(accountId);
   if (live) {
     if (await up(live.port)) return live;
@@ -330,7 +340,7 @@ async function ensureInstance(accountId) {
   }
   const pending = starting.get(accountId);
   if (pending) return pending;
-  const task = startInstance(accountId).finally(() => starting.delete(accountId));
+  const task = startInstance(accountId, opts).finally(() => starting.delete(accountId));
   starting.set(accountId, task);
   return task;
 }
@@ -882,8 +892,8 @@ async function newTab(instance) {
  * 复用粒度是 Chrome 实例：同账号已有实例就只开新 tab，绝不另起一个实例（那会串登录态）。
  */
 export async function openAccount(options = {}) {
-  if (!options || typeof options !== "object") throw new TypeError("openAccount 需要 { accountId, url? }");
-  const { accountId, url } = options;
+  if (!options || typeof options !== "object") throw new TypeError("openAccount 需要 { accountId, url?, headless? }");
+  const { accountId, url, headless = false } = options;
   const id = requireAccountId(accountId);
   if (url !== undefined && url !== null) {
     if (typeof url !== "string" || !url.trim()) throw new TypeError("url 必须是非空字符串（或省略）");
@@ -896,7 +906,7 @@ export async function openAccount(options = {}) {
     if (!["http:", "https:", "about:"].includes(parsed.protocol)) throw new TypeError(`url 只支持 http/https：${url}`);
   }
 
-  const instance = await ensureInstance(id);
+  const instance = await ensureInstance(id, { headless });
   const tab = await newTab(instance);
   try {
     if (url) await tab.goto(url);

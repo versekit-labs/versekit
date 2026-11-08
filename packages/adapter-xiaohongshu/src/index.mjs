@@ -13,7 +13,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
-import { openAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
+import { openAccount, closeAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
 const LOGIN = "https://creator.xiaohongshu.com/login";
@@ -302,7 +302,8 @@ async function check(ctx = {}) {
   if (typeof accountId !== "string" || !accountId.trim()) throw new AdapterError("unknown", "check 需要 accountId");
   let tab = null;
   try {
-    tab = await openAccount({ accountId });
+    // 只探测登录态，不需要人看窗口：用无头 Chrome，避免验证时又弹一个浏览器。
+    tab = await openAccount({ accountId, headless: true });
     await tab.goto(LOGIN);
     const state = await tab.waitFor(
       `location.pathname.includes('/login') ? 'login' : (document.querySelector('input, textarea, .tiptap') ? 'ok' : '')`,
@@ -314,7 +315,7 @@ async function check(ctx = {}) {
   } catch (err) {
     throw await wrap(tab, accountId, "check")(err);
   } finally {
-    await tab?.close().catch(() => {});
+    await closeAccount(accountId).catch(() => {});
   }
 }
 
