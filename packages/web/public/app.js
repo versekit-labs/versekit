@@ -213,9 +213,11 @@ async function viewAccounts() {
                 stateEl().textContent =
                   s.state === "confirm_phone"
                     ? (s.note ?? "扫码成功，请在手机上点确认")
-                    : s.state === "sms_required"
-                      ? `${s.note ?? "需要短信验证"}${s.phone ? `（${s.phone}）` : ""}`
-                      : "等待扫码…";
+                    : s.state === "confirming"
+                      ? (s.note ?? "已扫码，正在确认…")
+                      : s.state === "sms_required"
+                        ? `${s.note ?? "需要短信验证"}${s.phone ? `（${s.phone}）` : ""}`
+                        : "等待扫码…";
               }
               const box = mount();
               if (s.state === "sms_required" && box && !box.querySelector("[data-sms-send]") && !box.querySelector("[data-sms-code]")) {

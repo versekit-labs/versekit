@@ -238,19 +238,39 @@ function daemonHandlers(adapters, log) {
         return { state: moved ? "ok" : "pending", mode };
       }
 
-      // 扫码后主站会离开 /login。切到创作平台确认，能进发布页才算真的登录。
+      // 扫码后主站会离开 /login。切创作平台确认这一步要跳转 + 等页面，
+      // 放在轮询里同步做会把每次 status 拖到 20 秒（前端 2 秒一拉就全堵住）。
+      // 所以：立刻返回 confirming，同时在后台跑一次确认，结果写进 session。
+      if (session.creatorCheck) return { ...session.creatorCheck, mode };
       const here = await tab.url().catch(() => "");
       if (!/\/login/.test(here)) {
-        await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
-        const where = await tab
-          .waitFor(`location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`, [], { timeout: 20e3, what: "创作平台登录态" })
-          .catch(() => "login");
-        if (where === "form") {
-          loginSessions.delete(accountId);
-          await closeAccount(accountId).catch(() => {});
-          return { state: "ok", mode };
+        if (!session.confirming) {
+          session.confirming = true;
+          (async () => {
+            try {
+              await tab.goto("https://creator.xiaohongshu.com/publish/publish?source=official");
+              const where = await tab
+                .waitFor(
+                  `location.pathname.includes('/login') ? 'login' : (document.querySelector('input.upload-input, input[type=file]') ? 'form' : '')`,
+                  [],
+                  { timeout: 15e3, what: "创作平台登录态" },
+                )
+                .catch(() => "login");
+              if (where === "form") {
+                session.creatorCheck = { state: "ok" };
+                loginSessions.delete(accountId);
+                await closeAccount(accountId).catch(() => {});
+              } else {
+                session.creatorCheck = { state: "pending", note: "主站已登录，创作平台还没放行；在手机上再确认一次" };
+              }
+            } catch (err) {
+              session.creatorCheck = { state: "pending", note: `创作平台确认失败：${err.message}` };
+            } finally {
+              session.confirming = false;
+            }
+          })();
         }
-        return { state: "pending", mode, note: "主站已登录，但创作平台还没进发布页" };
+        return { state: "confirming", mode, note: "已扫码，正在确认登录态…" };
       }
 
       const phase = await tab
