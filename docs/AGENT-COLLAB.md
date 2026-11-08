@@ -43,7 +43,7 @@
 
 **为什么"改状态"必须收归脚本**：状态一旦可由 agent 写，就会出现"实现 agent 自己标 review、自己标 accept"的自证循环。GitHub 的 label 权限没法细粒度到"只准改状态不准 approve"，所以用**约定 + 审计**：任何 `s:*` 变更都必须在 issue 时间线上有对应的脚本事件（`bin/agentctl` 写入的评论），人工抽检能一眼看出越权。
 
-现状（2026-11-08 已处理）：`main` 已加 ruleset `main-protection`，连 admin 都不可绕过（`current_user_can_bypass: never`）。但**required status checks 至今不能设**——实测发现这个仓库的 Actions 从未触发过任何 workflow run（PR #36 推送后 `check-runs` 恒为 0），此时若填 required checks，所有 PR 会永久卡在 "Expected — waiting for status to be reported"。详见 §10.1。
+现状（2026-11-08 已处理）：`main` 已加 ruleset `main-protection`，连 admin 都不可绕过（`current_user_can_bypass: never`）。但**required status checks 至今不能设**——实测确认 Actions 被平台按账号禁用（`422 Actions has been disabled for this user`），填 required checks 会让所有 PR 永久卡在 "Expected — waiting for status to be reported"。详见 §10.1。
 
 **一个必须知道的约束**：这个仓库所有操作都用同一个 GitHub 账号 `creator-omnikit`，而 **GitHub 不允许 approve 自己开的 PR**。所以分支保护**不能**用 `required_approving_review_count >= 1`，那样会让所有 PR 永久卡死。正确做法是 ruleset 里 `required_approving_review_count: 0` + 只开 `required_review_thread_resolution`——**"必须走 PR"由规则强制，"通过与否"由 `agentctl` 判**，不假装有个人在点 approve。
 
@@ -244,31 +244,54 @@ must_not_change: [api 形状, 数据库 schema]   # 防止"顺手重构"
 
 **先只读，再写状态，最后才允许自动合并。** 顺序反了，你会得到一台自动制造未验收代码的机器。
 
-### 10.1 实测：CI 从未跑过（2026-11-08）
+### 10.1 实测：Actions 被平台按账号禁用（2026-11-08）
 
-第一阶段的验证发现了一个比"没设 required checks"严重得多的问题。
+第一阶段的验证挖出一个比"没设 required checks"严重得多的问题，而且一开始我判断错了方向（先怀疑仓库配置、再怀疑组织策略，都不对）。
 
-| 检查 | 结果 |
+**决定性证据**——手动调度 workflow 时 GitHub 直接回：
+
+```json
+POST /repos/versekit-app/versekit/actions/workflows/ci.yml/dispatches
+→ 422 {"message": "Actions has been disabled for this user."}
+```
+
+不是"push 没触发"，是**这个账号的 Actions 被平台关掉了**，账号级，没有自助开关。
+
+**同一根因的第二个症状**（对照实验，同机器同出口 IP，只换 token）：
+
+| 用的 token | core | graphql | search |
+|---|---|---|---|
+| `buxibuxi`（2013 年注册的老账号） | 5000 | 5000 | 30 |
+| `creator-omnikit`（2026-10-27 注册，12 天） | **60** | **0** | 10 |
+| 不带 token（匿名） | 60 | 0 | 10 |
+
+`creator-omnikit` 的表现和完全匿名一模一样，但它的 scope 确实被读到了（`project, read:org, repo, workflow`）、`GET /user` 返回 200。**token 没问题、网络没问题、仓库配置没问题，是账号被限。**
+
+两个症状同一根因：账号被反滥用系统标记。这类账号没有自助恢复入口。
+
+**排查过程中被排除掉的假设**（省得下次重走）：
+
+| 怀疑对象 | 怎么排除的 |
 |---|---|
-| `GET /actions/runs`（全仓库） | `total_count: 0` —— 仓库 2026-10-28 建好至今，**一次都没跑过** |
-| PR #36 推分支后 `GET /commits/<sha>/check-runs` | `0` |
-| 同上 `check-suites` | `0` |
-| repo 级 `actions/permissions` | `{enabled: true, allowed_actions: "all"}` |
-| workflow `ci` 的 state | `active` |
-| 是否 fork / archived | 都不是 |
+| 仓库没开 Actions | `actions/permissions` = `{enabled:true, allowed_actions:"all"}` |
+| workflow 被禁用 | `actions/workflows` 里 `ci` 是 `active` |
+| 仓库是 fork / archived | 都不是 |
+| push 事件没触发 | 加 `workflow_dispatch` 手动调度，直接报 422 |
+| 组织策略拦截 | 查不到（token 缺 `admin:org`），但 422 已给出更准确的答案 |
+| 仓库转移导致 | 组织从 `fangyouxi` 改名为 `versekit-app`、仓库 301 重定向过，但新路径下症状相同 |
 
-也就是说：**看起来一切正常，但 Actions 就是不启动。** 唯一没查到的是 org 级策略——token 缺 `admin:org`，`GET /orgs/fangyouxi/actions/permissions` 返回 403。
+**唯一出路：GitHub Support。** https://support.github.com/ 提工单，附上：
 
-**排查顺序**（需要有 org 权限的人做）：
+- 原文 `Failed to queue workflow run: Bad Request - Actions has been disabled for this user`（422 的完整 body）
+- 账号 `creator-omnikit`、仓库 `versekit-app/versekit`、workflow `ci.yml`
+- `/rate_limit` 显示 core=60 / graphql=0 的截图（说明是账号级限制而非仓库配置）
+- 说明这是正常开源项目开发，非挖矿/滥用
 
-1. GitHub UI → Settings → Actions → General，确认没有 "Disable actions"。
-2. Organization settings → Actions → General，看是否限制了 `fangyouxi` 下的仓库。
-3. Actions 页面首次可能要手动点一次 "I understand my workflows, go ahead and enable them"（导入型仓库常见）。
-4. 幂等验证：随便推一个 commit，`GET /actions/runs` 应出现 `push` 事件。**这一步没通过之前，不要往下做自动化。**
+**在那之前，required status checks 一律不能设**——填了会让每个 PR 永久卡在 `Expected — waiting for status to be reported`，且 `bypass_actors: 0` 连 admin 都解不开。
 
-**在那之前，required status checks 一律不能设**——填了就会让每个 PR 永久卡在 `Expected — waiting for status to be reported`，而且因为 `bypass_actors: 0`，连 admin 都解不开，只能改 ruleset。
+**这段空窗期怎么办**：CI 名义上存在、实际不跑，等于**所有 PR 都是裸奔**。所以 `agentctl merge` 必须在本地跑 `npm run ci`，把真实输出（含时间戳与 commit SHA）写进证据包——这是唯一可信的门禁。Actions 恢复后再补 required checks，本地跑退化为"提前发现问题"而不是"唯一防线"。
 
-**这段空窗期怎么办**：CI 名义上存在、实际不跑，等于**所有 PR 都是裸奔**。所以 `agentctl merge` 必须在本地跑 `npm run ci`，把真实输出（含时间戳与 commit SHA）写进证据包——这是唯一可信的门禁。等 Actions 恢复后，再把 required checks 补上，本地跑退化为"提前发现问题"而不是"唯一防线"。
+**这件事对 harness 设计的直接影响**：任何"等 CI 绿了再继续"的自动化，在这条链路上都是空转。`agentctl` 必须把「门禁结果的来源」做成可插拔的（本地跑 / Actions / 人工签名），而不是硬编码 `gh run watch`。
 
 ---
 
