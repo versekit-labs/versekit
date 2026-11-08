@@ -43,7 +43,7 @@
 
 **为什么"改状态"必须收归脚本**：状态一旦可由 agent 写，就会出现"实现 agent 自己标 review、自己标 accept"的自证循环。GitHub 的 label 权限没法细粒度到"只准改状态不准 approve"，所以用**约定 + 审计**：任何 `s:*` 变更都必须在 issue 时间线上有对应的脚本事件（`bin/agentctl` 写入的评论），人工抽检能一眼看出越权。
 
-现状（2026-11-08 已处理）：`main` 已加 ruleset `main-protection`，连 admin 都不可绕过（`current_user_can_bypass: never`）。但**机器人 token 仍是 admin，且 required status checks 还没设**——后者要等第一次 PR 跑出真实 check 名才能配（见 §10）。在那之前，`main` 只能防直推和 force push，**不能防"CI 红了照样合并"**，所以 `agentctl merge` 的双门禁校验此刻是唯一防线。
+现状（2026-11-08 已处理）：`main` 已加 ruleset `main-protection`，连 admin 都不可绕过（`current_user_can_bypass: never`）。但**required status checks 至今不能设**——实测发现这个仓库的 Actions 从未触发过任何 workflow run（PR #36 推送后 `check-runs` 恒为 0），此时若填 required checks，所有 PR 会永久卡在 "Expected — waiting for status to be reported"。详见 §10.1。
 
 **一个必须知道的约束**：这个仓库所有操作都用同一个 GitHub 账号 `creator-omnikit`，而 **GitHub 不允许 approve 自己开的 PR**。所以分支保护**不能**用 `required_approving_review_count >= 1`，那样会让所有 PR 永久卡死。正确做法是 ruleset 里 `required_approving_review_count: 0` + 只开 `required_review_thread_resolution`——**"必须走 PR"由规则强制，"通过与否"由 `agentctl` 判**，不假装有个人在点 approve。
 
@@ -98,7 +98,7 @@ any → blocked → (回到进入前的状态)
 ```
 
 **守卫**：
-- `review → accept` 需要三个条件同时成立：CI 四门禁全绿、验收 verdict=PASS、verdict 里引用了**全部**验收条目 id。缺一个就 `verdict` 无效。
+- `review → accept` 需要三个条件同时成立：CI **五门禁**全绿（`test` / `parity` / `adapter-contract` / `no-backdoor` / `design`）、验收 verdict=PASS、verdict 里引用了**全部**验收条目 id。缺一个就 `verdict` 无效。
 - **人工干预用 `hold:human`，不直接改状态**。直接改会被下一 tick 的 reconcile 覆盖回去，而且丢了"谁改的、为什么"。`hold:human` 是唯一的冻结开关，撤掉后状态机自己恢复。
 - 同一 issue 的第 3 轮 `changes → doing` 之后仍 FAIL → 强制 `s:blocked`，不再自动重试。**不设上限的重试是烧钱机器。**
 - `doing` 超过 90 分钟没有新 commit 且无心跳 → 协调器标 `s:blocked`（`reason: stale`），不自动重启（重启会掩盖真问题）。
@@ -235,7 +235,7 @@ must_not_change: [api 形状, 数据库 schema]   # 防止"顺手重构"
 | 步骤 | 产出 | 验收 |
 |---|---|---|
 | 1 ✅ | **已完成**：9 个 label（8 个 `s:*` + `hold:human`）+ ruleset `main-protection`（禁删、禁 force push、必须走 PR、线性历史、只允许 squash、评论必须 resolve） | `gh api repos/fangyouxi/versekit/rules/branches/main` 能查到 4 条规则；直推会报 `protected branch` |
-| 1.5 | **待补**：required status checks（需等第一次 PR 跑出真实 check 名，名字对不上会把 PR 永久卡死） | 故意让 CI 红，PR 显示 "Required" 且无法 merge |
+| 1.5 | **阻塞中**：required status checks —— 原因见 §10.1，Actions 根本没在工作 | 故意让 CI 红，PR 显示 "Required" 且无法 merge |
 | 2 | `bin/agentctl` 只读模式：`tick --dry-run` 打印"该派谁、为什么" | 连跑 10 轮不产生任何写操作 |
 | 3 | `agentctl dispatch`：issue → `orca worktree create` → 注入 spec → 等 PR | 一个真 issue 走完 ready→review |
 | 4 | 验收侧：`agentctl review <pr>` 组装证据包 + 调验收 agent | FAIL 能产出结构化评论与 `s:changes` |
@@ -243,6 +243,32 @@ must_not_change: [api 形状, 数据库 schema]   # 防止"顺手重构"
 | 6 | 抽检与棘轮 | 每周 5 个，记录在案 |
 
 **先只读，再写状态，最后才允许自动合并。** 顺序反了，你会得到一台自动制造未验收代码的机器。
+
+### 10.1 实测：CI 从未跑过（2026-11-08）
+
+第一阶段的验证发现了一个比"没设 required checks"严重得多的问题。
+
+| 检查 | 结果 |
+|---|---|
+| `GET /actions/runs`（全仓库） | `total_count: 0` —— 仓库 2026-10-28 建好至今，**一次都没跑过** |
+| PR #36 推分支后 `GET /commits/<sha>/check-runs` | `0` |
+| 同上 `check-suites` | `0` |
+| repo 级 `actions/permissions` | `{enabled: true, allowed_actions: "all"}` |
+| workflow `ci` 的 state | `active` |
+| 是否 fork / archived | 都不是 |
+
+也就是说：**看起来一切正常，但 Actions 就是不启动。** 唯一没查到的是 org 级策略——token 缺 `admin:org`，`GET /orgs/fangyouxi/actions/permissions` 返回 403。
+
+**排查顺序**（需要有 org 权限的人做）：
+
+1. GitHub UI → Settings → Actions → General，确认没有 "Disable actions"。
+2. Organization settings → Actions → General，看是否限制了 `fangyouxi` 下的仓库。
+3. Actions 页面首次可能要手动点一次 "I understand my workflows, go ahead and enable them"（导入型仓库常见）。
+4. 幂等验证：随便推一个 commit，`GET /actions/runs` 应出现 `push` 事件。**这一步没通过之前，不要往下做自动化。**
+
+**在那之前，required status checks 一律不能设**——填了就会让每个 PR 永久卡在 `Expected — waiting for status to be reported`，而且因为 `bypass_actors: 0`，连 admin 都解不开，只能改 ruleset。
+
+**这段空窗期怎么办**：CI 名义上存在、实际不跑，等于**所有 PR 都是裸奔**。所以 `agentctl merge` 必须在本地跑 `npm run ci`，把真实输出（含时间戳与 commit SHA）写进证据包——这是唯一可信的门禁。等 Actions 恢复后，再把 required checks 补上，本地跑退化为"提前发现问题"而不是"唯一防线"。
 
 ---
 
