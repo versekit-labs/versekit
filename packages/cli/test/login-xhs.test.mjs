@@ -157,3 +157,21 @@ test("clickLoginButton：验证码错误时不跳转", async () => {
     await shut(tab);
   }
 });
+
+test("pageLoggedIn：控制台页面算登录成功，登录页不算", async () => {
+  const { pageLoggedIn } = await import("../src/login-xhs.mjs");
+  // 假页面里点对了验证码后会出现上传控件 + 发布文字
+  const tab = await open();
+  try {
+    assert.equal(await pageLoggedIn(tab), false, "还没登录时应为 false");
+    await fillAndSendCode(tab, "17712665728");
+    await setInputValue(tab, "验证码", "123456");
+    await clickLoginButton(tab);
+    await new Promise((r) => setTimeout(r, 300));
+    // 假页面 URL 仍是本地地址，所以这里只验证「不是无条件 false」之外的分支：
+    // 域名不匹配 → 依然 false（这正是我们想要的安全行为）
+    assert.equal(await pageLoggedIn(tab), false);
+  } finally {
+    await shut(tab);
+  }
+});

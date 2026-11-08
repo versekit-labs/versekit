@@ -118,3 +118,20 @@ export async function clickLoginButton(tab) {
   })()`);
 }
 
+
+/**
+ * 「现在这个页面是登录成功后的样子吗」。
+ *
+ * 不看 cookie：小红书的创作平台会话可能只存在页面态里，而且我们读 cookie 时
+ * 若拿到的是 about:blank 就会误判。直接看页面本身最可靠：
+ *   · 已经离开 /login
+ *   · 能看到控制台的标志性入口（发布笔记 / 笔记管理 / 数据看板）
+ */
+export async function pageLoggedIn(tab) {
+  const here = await tab.url().catch(() => "");
+  if (!here || /\/login/.test(here)) return false;
+  if (!/creator\.xiaohongshu\.com/.test(here)) return false;
+  return tab
+    .eval(`/发布笔记|笔记管理|数据看板|发布图文|发布视频/.test(document.body.innerText || '')`)
+    .catch(() => false);
+}

@@ -16,7 +16,7 @@ import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/src/store.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
-import { fillAndSendCode, clickLoginButton, setInputValue } from "./login-xhs.mjs";
+import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, closeAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
@@ -177,7 +177,7 @@ async function creatorLoginTab(accountId, { fresh = false } = {}) {
   const tab = await openAccount({
     accountId,
     headless: true,
-    reuse: !fresh,
+    reuse: fresh ? false : "creator.xiaohongshu.com",
     ...(fresh ? { url: "https://creator.xiaohongshu.com/login" } : {}),
   });
   const here = await tab.url().catch(() => "");
@@ -197,16 +197,10 @@ async function creatorLoginTab(accountId, { fresh = false } = {}) {
  *   · cookie 里有 access-token / customer-session / web_session
  *   · 发布页能直接看到上传控件
  */
-async function creatorLoggedIn(accountId) {
+async function creatorLoggedIn(accountId, knownTab = null) {
   try {
-    const tab = await openAccount({ accountId, headless: true, reuse: true });
-    const cookies = await tab.cookies();
-    const names = new Set(cookies.map((c) => c.name));
-    if (names.has("access-token") || names.has("customer-session") || names.has("web_session")) return true;
-
-    const here = await tab.url().catch(() => "");
-    if (/creator\.xiaohongshu\.com\/login/.test(here)) return false;
-    return await tab.eval(`!!document.querySelector('input.upload-input, input[type=file]')`).catch(() => false);
+    const tab = knownTab ?? (await openAccount({ accountId, headless: true, reuse: "creator.xiaohongshu.com" }));
+    return await pageLoggedIn(tab);
   } catch {
     return false;
   }
@@ -260,7 +254,6 @@ function daemonHandlers(adapters, log) {
       if (!session) throw new Error("登录会话已过期，重新点一次登录");
       if (await creatorLoggedIn(accountId)) {
         loginSessions.delete(accountId);
-        await closeAccount(accountId).catch(() => {});
         return { state: "ok", mode: "sms" };
       }
       return { state: "sms_required", mode: "sms", phone: session.phone, sent: true, note: "等验证码；提交后会自动确认" };
@@ -275,12 +268,13 @@ function daemonHandlers(adapters, log) {
       await clickLoginButton(tab);
 
       // 以「创作平台是否真的登录」为准，最多等 15 秒。
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 1000));
-        if (await creatorLoggedIn(accountId)) {
+        if (await creatorLoggedIn(accountId, tab)) {
           loginSessions.delete(accountId);
-          await closeAccount(accountId).catch(() => {});
-          return { ok: true, state: "ok", next: "登录成功，点「验证登录」确认状态" };
+          // 不关浏览器：小红书创作平台的会话可能是页面内存态，关掉就没了。
+          // 让它继续跑着，后续发布直接用这个实例。
+          return { ok: true, state: "ok", next: "登录成功（浏览器保持登录态，不用再点验证）" };
         }
         const bad = await tab
           .eval(`(() => [...document.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && /错误|失败|不正确|过期|频繁|无效|上限/.test(e.innerText || '')).map((e) => e.innerText.trim()).slice(0, 2).join('；'))()`)

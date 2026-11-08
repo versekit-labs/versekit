@@ -924,8 +924,20 @@ export async function openAccount(options = {}) {
   }
 
   const instance = await ensureInstance(id, { headless });
-  // reuse：登录轮询每次都要拿到「同一页」而不是不停开新页。
-  const existing = reuse ? [...instance.tabs][0] : null;
+  // reuse：复用已有标签页。传字符串时按 URL 匹配，避免拿到 about:blank
+  // 这种空页（会把「已登录」误判成未登录）。
+  let existing = null;
+  if (typeof reuse === "string") {
+    for (const t of instance.tabs) {
+      const here = await t.url().catch(() => "");
+      if (here.includes(reuse)) {
+        existing = t;
+        break;
+      }
+    }
+  } else if (reuse) {
+    existing = [...instance.tabs][0] ?? null;
+  }
   if (existing) {
     try {
       if (url) await existing.goto(url);
