@@ -293,6 +293,32 @@ POST /repos/versekit-app/versekit/actions/workflows/ci.yml/dispatches
 
 **这件事对 harness 设计的直接影响**：任何"等 CI 绿了再继续"的自动化，在这条链路上都是空转。`agentctl` 必须把「门禁结果的来源」做成可插拔的（本地跑 / Actions / 人工签名），而不是硬编码 `gh run watch`。
 
+### 10.2 处置：把仓库搬到干净账号
+
+被标记的是**账号**，不是仓库——所以换账号就能立刻恢复，不用等 Support。
+
+**为什么不能直接转移**：
+
+```
+POST /repos/versekit-app/versekit/transfer {"new_owner":"buxibuxi"}
+→ 422 "You can only transfer a repository from an organization to yourself at this time"
+```
+
+组织仓库只能转给发起转移的人自己，而那个人正是被标记的账号，死循环。
+
+**实际做法**（2026-11-08 完成）：
+
+1. `buxibuxi`（2013 年老账号，API 5000/h、Actions 正常）新建组织 `versekit-labs`
+2. 新建仓库 `versekit-labs/versekit`，push 全部三个分支
+3. 重建 9 个 `s:*` label + ruleset `main-protection`
+4. 本地：remote 切 HTTPS + `gh auth setup-git`，`.pi/gh-account` 改为 `buxibuxi`，git 身份改为 `versekit-labs`
+
+**顺手验证了「标记会传染」这条**：把 `buxibuxi` 升为 `versekit-app` 的 owner 之后，组织 Actions **仍然不跑**。说明禁用标记挂在组织上，不是挂在成员权限上。所以旧组织**只能整体弃用**，不要试图打补丁。
+
+**铁律**：`creator-omnikit` 不得再加入任何需要 Actions 的组织。它的价值只剩「旧仓库的历史访问权」，别的都不要给它。
+
+**代价**：PR 号从 #36 变成 #1，GitHub URL 全变。对一个刚起步的仓库，这个代价远小于「没有 CI 也没有验收门禁」。
+
 ---
 
 ## 11. 反模式（照着踩过的人写的）
