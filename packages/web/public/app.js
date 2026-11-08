@@ -82,8 +82,10 @@ async function viewAccounts() {
         <div class="row" style="margin-top:10px">
           <button class="small" data-check="${esc(a.id)}">验证登录</button>
           <button class="small" data-act="mode" data-id="${esc(a.id)}" data-mode="${a.is_manual ? "auto" : "manual"}">${a.is_manual ? "改为自动发布" : "改为手动"}</button>
+          ${a.platform === "xiaohongshu" ? `<button class="small primary" data-sms="${esc(a.id)}">短信登录</button>` : ""}
           <button class="small ghost" data-act="reauth" data-id="${esc(a.id)}">登录 / 重新授权</button>
         </div>
+        <div data-login-box="${esc(a.id)}"></div>
         <p class="meta" data-note="${esc(a.id)}"></p>
       </div>`,
     )
@@ -172,6 +174,49 @@ async function viewAccounts() {
       } catch {
         toast("复制失败，请手动选中那行命令", true);
       }
+    };
+  }
+
+  for (const btn of document.querySelectorAll("[data-sms]")) {
+    btn.onclick = () => {
+      const id = btn.dataset.sms;
+      const box = document.querySelector(`[data-login-box="${id}"]`);
+      if (!box) return;
+      box.innerHTML = `<div class="login-box">
+        <input data-phone="${esc(id)}" placeholder="手机号（11 位）" inputmode="numeric"/>
+        <button class="small" data-send="${esc(id)}">发送验证码</button>
+        <input data-code="${esc(id)}" placeholder="短信验证码" inputmode="numeric"/>
+        <button class="small primary" data-verify="${esc(id)}">登录</button>
+        <button class="small ghost" data-cancel="${esc(id)}">取消</button>
+      </div>`;
+      box.querySelector(`[data-send="${id}"]`).onclick = async () => {
+        const phone = box.querySelector(`[data-phone="${id}"]`).value.trim();
+        try {
+          const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/start`, { method: "POST", body: { accountId: id, phone } });
+          toast(r.next ?? "验证码已发送");
+          box.querySelector(`[data-send="${id}"]`).disabled = true;
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+      box.querySelector(`[data-verify="${id}"]`).onclick = async () => {
+        const code = box.querySelector(`[data-code="${id}"]`).value.trim();
+        try {
+          const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
+          toast(r.next ?? "登录成功");
+          render();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+      box.querySelector(`[data-cancel="${id}"]`).onclick = async () => {
+        try {
+          await api(`/api/accounts/${encodeURIComponent(id)}/login/cancel`, { method: "POST", body: { accountId: id } });
+          box.innerHTML = "";
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
     };
   }
 

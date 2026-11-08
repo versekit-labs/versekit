@@ -188,3 +188,8 @@ svg.chart text { fill: var(--muted); font-size: 10px; }
   border: 1px solid #5a4620; background: #241c10;
 }
 .need-line b { font-size: 14px; }
+
+/* 网页内短信登录 */
+.login-box { display: grid; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.login-box input { width: 100%; box-sizing: border-box; }
+.login-box .row { display: flex; gap: 8px; }

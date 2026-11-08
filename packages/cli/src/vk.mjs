@@ -18,7 +18,7 @@ import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
-import { browserReady, openAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { browserReady, openAccount, closeAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
@@ -167,12 +167,86 @@ const LOGIN_URL = {
 
 let subscriptionCache = null;
 
+// 网页登录会话：验证码要跨两次请求，标签页得留在内存里。
+// 只放进程内存，不落库；daemon 重启就失效，这是有意的（验证码是一次性的）。
+const loginSessions = new Map();
+
 function daemonHandlers(adapters, log) {
   const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
     "account.check": ({ accountId }) => checkAccount(adapters, accountId),
+
+    /**
+     * 小红书创作平台只有短信登录，没有扫码。把「填手机号 → 发验证码 → 填验证码」做进
+     * 网页，而不是让人切到一个单独的 Chrome 窗口。
+     */
+    "account.login.start": async ({ accountId, phone: rawPhone }) => {
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+      if (account.platform !== "xiaohongshu") {
+        throw new Error(`${account.platform} 不走短信登录：在账号卡上点「登录 / 重新授权」会打开登录页`);
+      }
+      const phone = String(rawPhone ?? "").trim();
+      if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位");
+
+      const old = loginSessions.get(accountId);
+      if (old) await old.close().catch(() => {});
+
+      const tab = await openAccount({ accountId });
+      loginSessions.set(accountId, { tab, phone });
+      await tab.goto("https://creator.xiaohongshu.com/login");
+      await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]')`, [], { timeout: 30e3, what: "小红书登录页" });
+
+      // 填手机号并发验证码。按钮是文字节点，按 rect 点比猜 class 稳。
+      await tab.eval(`(() => { const e = document.querySelector('input[placeholder*="手机号"]'); e.focus(); })()`);
+      await tab.type(phone);
+      const sent = await tab.eval(`(() => {
+        const hit = [...document.querySelectorAll('span,button,div')].filter((e) => e.offsetParent && e.children.length <= 1 && /发送验证码|获取验证码/.test(e.innerText || '')).pop();
+        if (!hit) return false;
+        hit.click();
+        return true;
+      })()`);
+      if (!sent) throw new Error("小红书上没找到「发送验证码」按钮，页面可能改版了");
+      return { sent: true, phone, next: "把手机收到的验证码填进来" };
+    },
+
+    "account.login.verify": async ({ accountId, code: rawCode }) => {
+      const session = loginSessions.get(accountId);
+      if (!session) throw new Error("登录会话已过期，重新发一次验证码");
+      const code = String(rawCode ?? "").trim();
+      if (!/^\d{4,8}$/.test(code)) throw new Error("验证码格式不对");
+
+      const { tab } = session;
+      await tab.eval(`(() => { const e = document.querySelector('input[placeholder*="验证码"]'); e.focus(); })()`);
+      await tab.type(code);
+      const clicked = await tab.eval(`(() => {
+        const btn = [...document.querySelectorAll('button,span')].filter((e) => e.offsetParent && /登\s*录/.test(e.innerText || '')).pop();
+        if (!btn) return false;
+        btn.click();
+        return true;
+      })()`);
+      if (!clicked) throw new Error("小红书上没找到登录按钮，页面可能改版了");
+
+      const moved = await tab
+        .waitFor(`!location.pathname.includes('/login')`, [], { timeout: 20e3, every: 500, what: "登录完成" })
+        .then(() => true)
+        .catch(() => false);
+      if (!moved) throw new Error("验证码没有通过，或还需要额外验证；页面还在登录页");
+
+      loginSessions.delete(accountId);
+      await tab.close().catch(() => {});
+      return { ok: true, state: "ok", next: "登录成功，点「验证登录」确认状态" };
+    },
+
+    "account.login.cancel": async ({ accountId }) => {
+      const session = loginSessions.get(accountId);
+      if (!session) return { canceled: false };
+      loginSessions.delete(accountId);
+      await session.tab.close().catch(() => {});
+      return { canceled: true };
+    },
 
     /**
      * 订阅状态探活很贵（要等事件总线就绪，约 10 秒），所以只在绑定后探一次并缓存。
@@ -459,6 +533,19 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
+  if (sub === "login") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account login <accountId> --phone 138... | --code 123456 | --cancel");
+    let data;
+    if (has("--cancel")) data = await send("account.login.cancel", { accountId });
+    else if (val("--code")) data = await send("account.login.verify", { accountId, code: val("--code") });
+    else if (val("--phone")) data = await send("account.login.start", { accountId, phone: val("--phone") });
+    else throw new Error("要指定 --phone 或 --code 或 --cancel");
+    if (human) console.log(data.next ?? JSON.stringify(data));
+    else out(data);
+    return data;
+  }
+
   if (sub === "reauth") {
     const accountId = pos[2];
     if (!accountId) throw new Error("用法：vk account reauth <accountId>");
