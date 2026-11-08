@@ -99,6 +99,16 @@ export const COMMANDS = [
     audit: "always",
   },
   {
+    name: "account.login.open",
+    summary: "打开这个账号的登录窗口（由人完成登录，浏览器保持不关）",
+    remote: false,
+    args: { accountId: "string" },
+    http: { method: "POST", path: "/api/accounts/:accountId/login/open" },
+    cli: { usage: "vk account login <accountId> --open" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.login.start",
     summary: "开始网页登录（小红书短信验证码；其他平台走窗口）",
     remote: false,

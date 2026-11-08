@@ -129,7 +129,7 @@ async function viewAccounts() {
       </details>
       <details class="meta" style="margin-top:6px">
         <summary style="cursor:pointer">小红书要怎么登录？</summary>
-        <p class="meta" style="margin-top:8px">选 xiaohongshu 添加（不需要凭证文件）→ 在账号卡上点「登录」→ 填手机号收验证码 → 登录成功会自动确认。小红书创作平台只支持短信登录，没有扫码。</p>
+        <p class="meta" style="margin-top:8px">选 xiaohongshu 添加（不需要凭证文件）→ 在账号卡上点「登录」→ 会打开这个账号专属的浏览器窗口 → 在里面用手机验证码登录 → 回来时页面会自动识别，不用点任何按钮。</p>
       </details>
     </div>`;
 
@@ -178,65 +178,45 @@ async function viewAccounts() {
   }
 
   for (const btn of document.querySelectorAll("[data-sms]")) {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const id = btn.dataset.sms;
       const box = document.querySelector(`[data-login-box="${id}"]`);
       if (!box) return;
       loginPaused = true;
-      box.innerHTML = `<div class="login-box">
-        <p class="meta">小红书创作平台只支持短信登录：填手机号 → 收验证码 → 登录。</p>
-        <div class="row">
-          <input data-phone="${esc(id)}" placeholder="手机号（11 位）" inputmode="numeric" style="flex:1"/>
-          <button class="small" data-send="${esc(id)}">发送验证码</button>
-        </div>
-        <div class="row">
-          <input data-code="${esc(id)}" placeholder="短信验证码" inputmode="numeric" style="flex:1"/>
-          <button class="small primary" data-verify="${esc(id)}">登录</button>
-        </div>
-        <p class="meta" data-state="${esc(id)}"></p>
-        <button class="small ghost" data-cancel="${esc(id)}">取消</button>
-      </div>`;
-      const stateEl = () => box.querySelector(`[data-state="${id}"]`);
-      const sendBtn = box.querySelector(`[data-send="${id}"]`);
-
-      sendBtn.onclick = async () => {
-        const phone = box.querySelector(`[data-phone="${id}"]`).value.trim();
-        if (!/^\d{11}$/.test(phone)) return toast("手机号要填 11 位", true);
-        sendBtn.disabled = true;
-        sendBtn.textContent = "发送中…";
-        try {
-          const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/start`, { method: "POST", body: { accountId: id, phone } });
-          if (stateEl()) stateEl().textContent = r.next ?? "验证码已发送";
-          sendBtn.textContent = "重新发送";
-        } catch (err) {
-          toast(err.message, true);
-          if (stateEl()) stateEl().textContent = err.message;
-          sendBtn.textContent = "发送验证码";
-        } finally {
-          sendBtn.disabled = false;
-        }
-      };
-
-      box.querySelector(`[data-verify="${id}"]`).onclick = async () => {
-        const code = box.querySelector(`[data-code="${id}"]`).value.trim();
-        if (!code) return toast("先填验证码", true);
-        if (stateEl()) stateEl().textContent = "正在登录…";
-        try {
-          const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
+      try {
+        const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/open`, { method: "POST", body: { accountId: id } });
+        box.innerHTML = `<div class="login-box">
+          <p class="meta">${esc(r.next ?? "已打开登录窗口")}</p>
+          <p class="meta" data-state="${esc(id)}">等待你在窗口里登录…</p>
+          <button class="small ghost" data-cancel="${esc(id)}">关闭</button>
+        </div>`;
+        let timer = setInterval(async () => {
+          try {
+            const st = await api(`/api/accounts/${encodeURIComponent(id)}/login/status`, { method: "POST", body: { accountId: id } });
+            if (st.state === "ok") {
+              clearInterval(timer);
+              loginPaused = false;
+              toast("已识别到登录成功");
+              render();
+            } else {
+              const el = box.querySelector(`[data-state="${id}"]`);
+              if (el) el.textContent = st.note ?? "等待你在窗口里登录…";
+            }
+          } catch (err) {
+            clearInterval(timer);
+            const el = box.querySelector(`[data-state="${id}"]`);
+            if (el) el.textContent = err.message;
+          }
+        }, 2500);
+        box.querySelector(`[data-cancel="${id}"]`).onclick = () => {
+          clearInterval(timer);
           loginPaused = false;
-          toast(r.next ?? "登录成功");
-          render();
-        } catch (err) {
-          toast(err.message, true);
-          if (stateEl()) stateEl().textContent = err.message;
-        }
-      };
-
-      box.querySelector(`[data-cancel="${id}"]`).onclick = async () => {
+          box.innerHTML = "";
+        };
+      } catch (err) {
         loginPaused = false;
-        await api(`/api/accounts/${encodeURIComponent(id)}/login/cancel`, { method: "POST", body: { accountId: id } }).catch(() => {});
-        box.innerHTML = "";
-      };
+        toast(err.message, true);
+      }
     };
   }
 

@@ -14,7 +14,7 @@ import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding, bindChannel } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState } from "../../core/src/store.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
@@ -218,6 +218,32 @@ function daemonHandlers(adapters, log) {
      * 网页，而不是让人切到一个单独的 Chrome 窗口。
      */
     /**
+     * 打开登录窗口，由人自己登录。
+     *
+     * 为什么不再自动填手机号/验证码：那一段是小红书风控最敏感的地方（受控输入框、
+     * 嵌套按钮、倒计时、滑块），自动化踩过的坑比省下的时间多得多；而人自己输一次
+     * 只要 20 秒。这里的职责只有两件：把窗口打开、把结果认出来。
+     */
+    "account.login.open": async ({ accountId }) => {
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+      const url =
+        account.platform === "xiaohongshu"
+          ? "https://creator.xiaohongshu.com/login"
+          : LOGIN_URL[account.platform];
+      if (!url) throw new Error(`${account.platform} 没有网页登录地址`);
+
+      // 有头浏览器：人能看见、能操作。登录成功后这个实例保持运行，发布直接复用。
+      const tab = await openAccount({ accountId, url, headless: false });
+      loginSessions.set(accountId, { openedAt: Date.now() });
+      return {
+        opened: true,
+        url,
+        next: `已在 ${account.platform} 的浏览器窗口打开登录页，登录完不用回来点任何按钮，页面会自动识别`,
+      };
+    },
+
+    /**
      * 小红书登录：只有一条路——创作服务平台的短信登录。
      *
      * 审计结论（2026-11-07，无头/有头各验一次）：
@@ -250,13 +276,19 @@ function daemonHandlers(adapters, log) {
     },
 
     "account.login.status": async ({ accountId }) => {
-      const session = loginSessions.get(accountId);
-      if (!session) throw new Error("登录会话已过期，重新点一次登录");
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+
+      // 只认页面：人在窗口里登录成功后，这里自然变成 ok，不依赖任何内存会话。
       if (await creatorLoggedIn(accountId)) {
         loginSessions.delete(accountId);
-        return { state: "ok", mode: "sms" };
+        if (account.state !== "ok") setAccountState(accountId, "ok");
+        return { state: "ok", mode: "manual" };
       }
-      return { state: "sms_required", mode: "sms", phone: session.phone, sent: true, note: "等验证码；提交后会自动确认" };
+      if (!loginSessions.has(accountId)) {
+        return { state: "idle", mode: "manual", note: "点「打开登录窗口」，在窗口里登录" };
+      }
+      return { state: "pending", mode: "manual", note: "等你在浏览器里登录…" };
     },
 
     "account.login.verify": async ({ accountId, code: rawCode }) => {

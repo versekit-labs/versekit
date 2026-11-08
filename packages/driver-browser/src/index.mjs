@@ -335,7 +335,14 @@ async function startInstance(accountId, { headless = false } = {}) {
 async function ensureInstance(accountId, opts = {}) {
   const live = instances.get(accountId);
   if (live) {
-    if (await up(live.port)) return live;
+    // 想看得见（headless:false）却只有一个无头实例时，必须换：否则用户点了
+    // 「打开登录窗口」，屏幕上什么都不会出现。
+    const wantsVisible = opts.headless === false;
+    if (wantsVisible && live.headless) {
+      await closeAccount(accountId).catch(() => {});
+    } else if (await up(live.port)) {
+      return live;
+    }
     forget(accountId); // Chrome 已经挂了，重新起
   }
   const pending = starting.get(accountId);
