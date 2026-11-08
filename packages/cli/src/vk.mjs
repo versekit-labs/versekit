@@ -266,7 +266,31 @@ function daemonHandlers(adapters, log) {
         .eval(`(() => { const m = (document.body.innerText||"").match(/验证码已发送至[\s\S]{0,8}(\+86[^\n]+)/); return m ? m[1].trim() : null; })()`)
         .catch(() => null);
       if (phase === "sms") {
-        const sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => false);
+        let sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => false);
+        // 弹窗刚出现时它只是「将发送」；直接替用户点一下「获取验证码」，
+        // 免得再出现「码没发、填了也没用」。
+        if (!sent && !session.sentOnce) {
+          const clicked = await tab
+            .eval(`(() => {
+              const hit = [...document.querySelectorAll('span,div,button')].find((e) => {
+                const t = (e.innerText || '').trim();
+                if (!/^(获取验证码|发送验证码|重新发送)$/.test(t)) return false;
+                const r = e.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+
+
+              });
+              if (!hit) return false;
+              hit.click();
+              return true;
+            })()`)
+            .catch(() => false);
+          if (clicked) {
+            session.sentOnce = true;
+            await new Promise((r) => setTimeout(r, 800));
+            sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => true);
+          }
+        }
         return {
           state: "sms_required",
           mode,
@@ -312,13 +336,53 @@ function daemonHandlers(adapters, log) {
         })()`);
         if (!typed) throw new Error("页面上没有短信验证码输入框，可能已经验证过或页面改版");
         await tab.type(code);
-        const clicked = await tab.eval(`(() => {
-          const b = [...document.querySelectorAll('div.btn,button')].find((e) => e.offsetParent && e.innerText.trim() === '验证');
-          if (!b) return false;
-          b.click();
-          return true;
-        })()`);
-        if (!clicked) throw new Error("没找到「验证」按钮");
+        // 三条路依次试：看得见的坐标点 → 任意元素的 JS 点击 → 输入框回车。
+        // 固定定位弹窗里 offsetParent 常为 null，所以不能用它做可见性判断。
+        let clicked = false;
+        try {
+          const spot = await tab.eval(`(() => {
+            const cands = [...document.querySelectorAll('div,button,span')].filter((e) => {
+              if (!/验\s*证/.test((e.innerText || '').trim())) return false;
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && r.height > 0 && r.width < 240;
+            });
+            // 命中最小的那个：外层容器也含「验证」，点它没用。
+            cands.sort((a, b) => {
+              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+              return ra.width * ra.height - rb.width * rb.height;
+            });
+            const b = cands[0];
+            if (!b) return null;
+            b.scrollIntoView({ block: 'center', behavior: 'instant' });
+            const r = b.getBoundingClientRect();
+            return JSON.stringify([r.x + r.width / 2, r.y + r.height / 2]);
+          })()`);
+          if (spot) {
+            await tab.click(JSON.parse(spot));
+            clicked = true;
+          }
+        } catch {
+          /* 落到下一条路 */
+        }
+        if (!clicked) {
+          clicked = await tab
+            .eval(`(() => {
+              const cands = [...document.querySelectorAll('div,button,span')].filter((e) => /验\s*证/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width < 240);
+              cands.sort((a, b) => {
+                const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+                return ra.width * ra.height - rb.width * rb.height;
+              });
+              const b = cands[0];
+              if (!b) return false;
+              b.click();
+              return true;
+            })()`)
+            .catch(() => false);
+        }
+        if (!clicked) {
+          await tab.key("Enter", "Enter", 13);
+          clicked = true;
+        }
 
         const gone = await tab
           .waitFor(`!document.body.innerText.includes('短信验证码验证') || !location.pathname.includes('/login')`, [], { timeout: 12e3, what: "短信验证通过" })
