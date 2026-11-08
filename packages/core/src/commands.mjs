@@ -119,6 +119,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "account.login.resend",
+    summary: "重发小红书短信验证码",
+    remote: false,
+    args: { accountId: "string" },
+    http: { method: "POST", path: "/api/accounts/:accountId/login/resend" },
+    cli: { usage: "vk account login <accountId> --resend" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.login.verify",
     summary: "提交网页登录的验证码",
     remote: false,

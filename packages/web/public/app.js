@@ -218,26 +218,49 @@ async function viewAccounts() {
                       : "等待扫码…";
               }
               const box = mount();
-              if (s.state === "sms_required" && box && !box.querySelector("[data-sms-code]")) {
+              if (s.state === "sms_required" && box && !box.querySelector("[data-sms-send]") && !box.querySelector("[data-sms-code]")) {
                 const rowEl = document.createElement("div");
                 rowEl.className = "row";
-                rowEl.innerHTML = `<input data-sms-code placeholder="短信验证码" inputmode="numeric"/><button class="small primary" data-sms-ok>验证</button>`;
-                box.querySelector(".qr-login")?.append(rowEl);
-                rowEl.querySelector("[data-sms-ok]").onclick = async () => {
-                  const code = rowEl.querySelector("[data-sms-code]").value.trim();
-                  try {
-                    const v = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
-                    if (v.state === "ok") {
-                      clearInterval(timer);
-                      toast("验证通过，登录成功");
-                      render();
-                    } else {
-                      toast(v.next ?? "验证通过，等平台确认");
+                if (s.sent === false) {
+                  rowEl.innerHTML = `<button class="small primary" data-sms-send>发送验证码</button>`;
+                  rowEl.querySelector("[data-sms-send]").onclick = async () => {
+                    try {
+                      const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/resend`, { method: "POST", body: { accountId: id } });
+                      toast(r.next ?? "验证码已发送");
+                      rowEl.remove();
+                    } catch (err) {
+                      toast(err.message, true);
                     }
-                  } catch (err) {
-                    toast(err.message, true);
-                  }
-                };
+                  };
+                } else {
+                  rowEl.innerHTML = `<input data-sms-code placeholder="最新短信验证码" inputmode="numeric"/><button class="small primary" data-sms-ok>验证</button><button class="small ghost" data-sms-resend>重新发送</button>`;
+                  rowEl.querySelector("[data-sms-ok]").onclick = async () => {
+                    const code = rowEl.querySelector("[data-sms-code]").value.trim();
+                    try {
+                      const v = await api(`/api/accounts/${encodeURIComponent(id)}/login/verify`, { method: "POST", body: { accountId: id, code } });
+                      if (v.state === "ok") {
+                        clearInterval(timer);
+                        loginPaused = false;
+                        toast("验证通过，登录成功");
+                        render();
+                      } else {
+                        toast(v.next ?? "验证通过，等平台确认");
+                      }
+                    } catch (err) {
+                      toast(err.message, true);
+                      if (stateEl()) stateEl().textContent = err.message;
+                    }
+                  };
+                  rowEl.querySelector("[data-sms-resend]").onclick = async () => {
+                    try {
+                      const r = await api(`/api/accounts/${encodeURIComponent(id)}/login/resend`, { method: "POST", body: { accountId: id } });
+                      toast(r.next ?? "验证码已重新发送");
+                    } catch (err) {
+                      toast(err.message, true);
+                    }
+                  };
+                }
+                box.querySelector(".qr-login")?.append(rowEl);
               }
             }
           } catch (err) {

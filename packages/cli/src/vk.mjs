@@ -265,9 +265,33 @@ function daemonHandlers(adapters, log) {
       const phone = await tab
         .eval(`(() => { const m = (document.body.innerText||"").match(/验证码已发送至[\s\S]{0,8}(\+86[^\n]+)/); return m ? m[1].trim() : null; })()`)
         .catch(() => null);
-      if (phase === "sms") return { state: "sms_required", mode, qr, phone, note: "小红书要求短信验证，验证码已发到手机" };
+      if (phase === "sms") {
+        const sent = await tab.eval(`!/验证码将发送至/.test(document.body.innerText)`).catch(() => false);
+        return {
+          state: "sms_required",
+          mode,
+          qr,
+          phone,
+          sent,
+          note: sent ? "验证码已发到手机，请填最新的验证码" : "还需要点「发送验证码」，让小红书发一条新的",
+        };
+      }
       if (phase === "confirm") return { state: "confirm_phone", mode, qr, note: "扫码成功，请在手机上点确认" };
       return { state: "pending", mode, qr };
+    },
+
+    "account.login.resend": async ({ accountId }) => {
+      const session = loginSessions.get(accountId);
+      if (!session || session.mode !== "qr") throw new Error("当前没有扫码登录会话");
+      const clicked = await session.tab.eval(`(() => {
+        const hit = [...document.querySelectorAll('span,div,button')].find((e) => e.offsetParent && /^(获取验证码|重新发送)$/.test((e.innerText || '').trim()));
+        if (!hit) return false;
+        hit.click();
+        return true;
+      })()`);
+      if (!clicked) throw new Error("页面上没有「获取验证码」");
+      await new Promise((r) => setTimeout(r, 800));
+      return { sent: true, next: "新验证码已发送，用最新一条" };
     },
 
     "account.login.verify": async ({ accountId, code: rawCode }) => {
@@ -297,10 +321,18 @@ function daemonHandlers(adapters, log) {
         if (!clicked) throw new Error("没找到「验证」按钮");
 
         const gone = await tab
-          .waitFor(`!document.body.innerText.includes('短信验证码验证') || !location.pathname.includes('/login')`, [], { timeout: 20e3, what: "短信验证通过" })
+          .waitFor(`!document.body.innerText.includes('短信验证码验证') || !location.pathname.includes('/login')`, [], { timeout: 12e3, what: "短信验证通过" })
           .then(() => true)
           .catch(() => false);
-        if (!gone) throw new Error("验证码没有通过，或还需要在手机上确认");
+        if (!gone) {
+          const state = await tab.eval(`(() => {
+            const t = document.body.innerText || "";
+            if (/验证码将发送至/.test(t)) return "还没点「获取验证码」，这一轮没有发码";
+            const err = [...document.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && /错误|失败|不正确|过期|频繁|稍后|无效/.test(e.innerText || "")).map((e) => e.innerText.trim()).slice(0, 2).join("；");
+            return err || "验证码没有通过";
+          })()`).catch(() => "验证码没有通过");
+          throw new Error(`验证失败：${state}`);
+        }
 
         // 验证通过后，主站可能已经登录；切到创作平台确认。
         const here = await tab.url().catch(() => "");
@@ -637,6 +669,7 @@ async function cmdAccount() {
     let data;
     if (has("--cancel")) data = await send("account.login.cancel", { accountId });
     else if (has("--status")) data = await send("account.login.status", { accountId });
+    else if (has("--resend")) data = await send("account.login.resend", { accountId });
     else if (val("--code")) data = await send("account.login.verify", { accountId, code: val("--code") });
     else if (val("--phone")) data = await send("account.login.start", { accountId, phone: val("--phone") });
     else throw new Error("要指定 --phone 或 --code 或 --cancel");
