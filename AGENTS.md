@@ -51,10 +51,35 @@ npm run vk -- init                 # 建库
 npm run vk -- doctor --human       # 自检
 npm run vk -- serve --once         # 跑一轮队列
 npm test                           # 全部测试（当前 29 项）
+npm run design:check               # 设计闸门：任务书/导航/死链/检测器/触控/溢出
 bin/ghx issue list                 # 以 fangyouxi 身份操作 GitHub
 ```
 
-## 6. 提交规范
+## 6. 改界面之前（设计协议）
+
+过去的教训：先写页面、再按反馈修补，结果每个页面都没有任务书，产品模型错了却"检测器 0 条"。
+**顺序不能反。** 动 `docs/design/` 下任何页面之前：
+
+1. **写任务书**：`.claude/skills/impeccable/scripts/impeccable context --target docs/design/<page>.html`，
+   然后用 `surface-brief write` 落盘。任务书必须回答：这个页面为谁、解决什么问题、
+   成功长什么样、什么是明确不做、数据从哪来。**没有任务书的页面不允许开始写。**
+2. **先定结构，再写代码**：先定对象模型（一个排期是作品还是平台？）、页面职责（一页一个任务）、
+   状态词表；结构错了，颜色再合规也是白做。
+3. **提交前跑闸门**：`npm run design:check`。它会拦：
+   - 页面缺任务书
+   - 导航各页不一致 / 页面互相不可达
+   - `href="#"` 死链接（点了没反应）
+   - `hidden` 被 `display` 覆盖（"点了不跳转"的根因）
+   - 机械检测不通过（颜色/字号/圆角/对比度）
+   - 手机横向溢出、触控目标小于 32px
+4. **有争议的页面跑 critique**：两个独立 agent（设计评审 + 检测证据），不要自己判自己。
+   `detect` 只查机械项，**它通过不代表产品成立**。
+
+跨项目沿用：把 `scripts/design-check.mjs` 和本节一起复制到新仓库，
+在 `package.json` 加 `"design:check"`，并在 CI 里跑 `npm run check`。
+闸门是仓库自带的，不依赖任何人的记忆。
+
+## 7. 提交规范
 
 `<type>(<scope>): <句子>`
 

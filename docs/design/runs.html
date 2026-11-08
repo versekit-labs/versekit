@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>任务与日志 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.queue{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+.q{display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.q-k{display:flex;align-items:center;gap:6px;color:var(--faint);font-size:12px}
+.q-v{font-family:var(--mono);font-size:25px;font-weight:500;line-height:1.15;letter-spacing:-.02em}
+.q-d{color:var(--muted);font-size:12px}
+.q.run .q-v{color:var(--navy)}
+.q.fail{border-color:var(--red-line);background:var(--red-bg)}
+.q.fail .q-v{color:var(--red)}
+
+.filterbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 10px}
+.filterbar .grow{flex:1}
+.filterbar .hint{color:var(--faint);font-size:12px}
+
+.runs{display:flex;flex-direction:column;padding:4px}
+.run{border-bottom:1px solid var(--line-soft)}
+.run:last-child{border-bottom:0}
+.run-main{display:flex;align-items:center;gap:12px;padding:12px 16px}
+.run-kind{width:76px;flex:none;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.run-who{flex:1;min-width:0}
+.run-title{font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-sub{margin-top:2px;color:var(--muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-time{width:120px;flex:none;font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.run-act{flex:none;display:flex;gap:6px}
+
+/* 失败现场 */
+.scene{display:none;padding:12px 16px 14px;background:var(--red-bg);border-top:1px solid var(--red-line)}
+.scene.on{display:block}
+.scene-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;padding-top:12px}
+.scene h2{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--red)}
+.scene .kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px 10px;font-size:12px}
+.scene .kv dt{color:var(--faint)}
+.scene .kv dd{color:var(--ink);font-family:var(--mono);word-break:break-word}
+.scene p{font-size:13px;line-height:1.55;color:var(--ink)}
+.scene .fix{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.scene .cmd{background:var(--paper)}
+.done{display:none;padding:10px 16px;background:var(--paper-subtle);border-top:1px solid var(--line-soft);color:var(--muted);font-size:12px}
+.done.on{display:block}
+
+@media (max-width:1100px){
+  .queue{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .scene-grid{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:900px){
+  .run-main{flex-wrap:wrap;gap:8px 12px}
+  .run-kind{width:auto}
+  .run-time{width:auto;text-align:left;order:3}
+  .run-act{width:100%;order:4}
+  .run-act .btn{flex:1;min-height:40px}
+  .run-title,.run-sub{white-space:normal}
+  .scene .fix .btn{flex:1;min-height:40px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html" aria-current="page">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div><h1>任务与日志</h1><p class="sub">队列、失败现场与重试；失败一定会留下原因</p></div>
+      <button class="btn" id="pause" type="button">暂停队列</button>
+    </header>
+
+    <section class="queue" aria-label="队列概况">
+      <div class="q run"><span class="q-k"><span class="dot ok"></span>正在执行</span><span class="q-v">1</span><span class="q-d">B站 · 采集指标</span></div>
+      <div class="q"><span class="q-k"><span class="dot mute"></span>排队中</span><span class="q-v">3</span><span class="q-d">下一批 19:41</span></div>
+      <div class="q fail"><span class="q-k"><span class="dot bad"></span>失败待处理</span><span class="q-v">2</span><span class="q-d">都带原因，可单条重试</span></div>
+      <div class="q"><span class="q-k"><span class="dot ok"></span>今天完成</span><span class="q-v">38</span><span class="q-d">发布 9 · 采集 27 · 检查 2</span></div>
+    </section>
+
+    <div class="filterbar">
+      <div class="tabs" role="group" aria-label="按状态筛选任务">
+        <input type="radio" name="f" id="f-all" checked><label for="f-all">全部 44</label>
+        <input type="radio" name="f" id="f-fail"><label for="f-fail">失败 2</label>
+        <input type="radio" name="f" id="f-run"><label for="f-run">进行中 4</label>
+      </div>
+      <span class="hint">点开失败条目看现场</span>
+      <span class="grow"></span>
+      <span class="hint">最近刷新 19:26</span>
+    </div>
+
+    <section class="panel" aria-label="任务列表">
+      <div class="runs" id="runs">
+        <div class="run" data-state="fail" data-open="1">
+          <div class="run-main">
+            <span class="run-kind">publish</span>
+            <div class="run-who">
+              <div class="run-title">小红书 · @AI工具研究所 · 《AI 剪辑 30 天》</div>
+              <div class="run-sub">E_RISK_BLOCKED · 风控拦截，重试 2 次仍失败 · 已降级为 notify</div>
+            </div>
+            <span class="run-time">10-31 20:10</span>
+            <div class="run-act"><button class="btn sm" data-toggle="scene1" type="button">看现场</button></div>
+          </div>
+          <div class="scene on" id="scene1">
+            <h2>失败现场</h2>
+            <div class="scene-grid">
+              <div>
+                <dl class="kv">
+                  <dt>错误码</dt><dd>E_RISK_BLOCKED</dd>
+                  <dt>HTTP</dt><dd>412 Precondition Failed</dd>
+                  <dt>平台原文</dt><dd>当前操作存在风险，请稍后再试</dd>
+                  <dt>尝试</dt><dd>2 / 3</dd>
+                  <dt>任务号</dt><dd>r_9f2c1</dd>
+                </dl>
+              </div>
+              <div>
+                <p><strong>发生了什么：</strong>自动化通道被平台风控拦截，连续两次。系统已按降级链把这条发布改为 <em>notify</em>，等你手动发布。</p>
+                <p style="margin-top:8px"><strong>下一步：</strong>先重登小红书恢复登录态；再决定重试还是转手动。</p>
+              </div>
+            </div>
+            <div class="fix">
+              <button class="btn primary sm" data-done="scene1" type="button">转手动跟踪</button>
+              <button class="btn sm" data-done="scene1" type="button">重试一次</button>
+              <a class="btn sm" href="account-wall.html">去重登账号</a>
+            </div>
+            <div style="margin-top:10px" class="cmd"><b>等价命令</b><code>vk publish retry p_1e --max 1</code></div>
+          </div>
+          <div class="done" id="done1"></div>
+        </div>
+
+        <div class="run" data-state="fail">
+          <div class="run-main">
+            <span class="run-kind">collect</span>
+            <div class="run-who">
+              <div class="run-title">小红书 · @AI工具研究所 · 指标采集</div>
+              <div class="run-sub">E_AUTH_EXPIRED · 登录已失效，连续 2 次采集失败</div>
+            </div>
+            <span class="run-time">11-03 09:40</span>
+            <div class="run-act"><a class="btn sm" href="account-wall.html">去重登</a></div>
+          </div>
+        </div>
+
+        <div class="run" data-state="run">
+          <div class="run-main">
+            <span class="run-kind">collect</span>
+            <div class="run-who">
+              <div class="run-title">B站 · AI工具研究所 · 指标采集</div>
+              <div class="run-sub">进行中 · 已运行 6 秒 · 公开接口</div>
+            </div>
+            <span class="run-time">19:26</span>
+            <div class="run-act"><span class="badge">running</span></div>
+          </div>
+        </div>
+
+        <div class="run" data-state="run">
+          <div class="run-main">
+            <span class="run-kind">publish</span>
+            <div class="run-who">
+              <div class="run-title">TikTok · @ai-tools-lab · 《AI 剪辑 30 天》</div>
+              <div class="run-sub">已发，仅自己可见 · 等待你放行</div>
+            </div>
+            <span class="run-time">11-04 21:30</span>
+            <div class="run-act"><button class="btn sm" data-done="pending" type="button">放行公开</button></div>
+          </div>
+          <div class="done" id="done-pending"></div>
+        </div>
+
+        <div class="run" data-state="run">
+          <div class="run-main">
+            <span class="run-kind">check</span>
+            <div class="run-who">
+              <div class="run-title">登录态巡检 · 8 个账号</div>
+              <div class="run-sub">排队中 · 下一次 19:41 · 每 15 分钟</div>
+            </div>
+            <span class="run-time">19:41</span>
+            <div class="run-act"><span class="pill">queued</span></div>
+          </div>
+        </div>
+
+        <div class="run" data-state="run">
+          <div class="run-main">
+            <span class="run-kind">collect</span>
+            <div class="run-who">
+              <div class="run-title">YouTube · @cutdiary · 指标采集</div>
+              <div class="run-sub">排队中 · API 配额已用完，等待重置后自动恢复</div>
+            </div>
+            <span class="run-time">20:00</span>
+            <div class="run-act"><span class="pill">delayed</span></div>
+          </div>
+        </div>
+
+        <div class="run" data-state="ok">
+          <div class="run-main">
+            <span class="run-kind">publish</span>
+            <div class="run-who">
+              <div class="run-title">B站 · AI工具研究所 · 《AI 剪辑 30 天》</div>
+              <div class="run-sub">已发布 · 公开 · 20:00:41 平台确认</div>
+            </div>
+            <span class="run-time">昨天 20:00</span>
+            <div class="run-act"><a class="btn sm" href="work.html">看作品</a></div>
+          </div>
+        </div>
+
+        <div class="run" data-state="ok">
+          <div class="run-main">
+            <span class="run-kind">collect</span>
+            <div class="run-who">
+              <div class="run-title">全平台 · 指标快照</div>
+              <div class="run-sub">38 条快照 · 3 个来源 · 0 个静默失败</div>
+            </div>
+            <span class="run-time">19:12</span>
+            <div class="run-act"><a class="btn sm" href="overview.html">看总览</a></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="pagefoot">
+      <span>重试有上限；到上限就停下来告诉人，不无限重试、不静默放弃。</span>
+      <a href="overview.html">回顾数据 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script>
+const runs = [...document.querySelectorAll('.run')];
+
+function applyFilter(){
+  const v = document.querySelector('.tabs input:checked').id;
+  runs.forEach(r=>{
+    const st = r.dataset.state;
+    const show = v==='f-all' ? true : v==='f-fail' ? st==='fail' : st==='run';
+    r.style.display = show ? '' : 'none';
+  });
+}
+document.querySelectorAll('.tabs input').forEach(i=>i.addEventListener('change',applyFilter));
+
+document.querySelectorAll('[data-toggle]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const el = document.getElementById(b.dataset.toggle);
+    const on = el.classList.toggle('on');
+    b.textContent = on ? '收起' : '看现场';
+  });
+});
+
+document.querySelectorAll('[data-done]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const key = b.dataset.done;
+    if(key==='pending'){
+      const el = document.getElementById('done-pending');
+      el.textContent = '已提交放行：TikTok 将在几十秒内转为公开，结果会写进这条任务的记录。';
+      el.classList.add('on');
+      b.textContent = '已放行'; b.disabled = true;
+      return;
+    }
+    const el = document.getElementById('done1');
+    el.textContent = '已记录：' + b.textContent + '。队列会创建一条新任务并保留这次失败现场。';
+    el.classList.add('on');
+  });
+});
+
+document.getElementById('pause').addEventListener('click', function(){
+  const paused = this.textContent === '暂停队列';
+  this.textContent = paused ? '恢复队列' : '暂停队列';
+  document.querySelectorAll('.q .q-d')[0].textContent = paused ? '已暂停：不再取新任务，运行中的会跑完' : 'B站 · 采集指标';
+});
+</script>
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+(function scope(){
+  const g = VK.current();
+  const list = VK.accounts(g);
+  const names = new Set(list.map(a=>a.handle));
+  document.querySelectorAll('.run').forEach(r=>{
+    const t = r.querySelector('.run-title');
+    if(!t) return;
+    const txt = t.textContent;
+    const isGlobal = /全平台|登录态巡检/.test(txt);
+    const mine = [...names].some(h=>txt.indexOf(h)>=0);
+    if(!isGlobal && !mine) r.style.display='none';
+  });
+  const sub = document.querySelector('.pagehead .sub');
+  if(sub) sub.textContent = VK.groupLabel() + ' · 队列、失败现场与重试';
+})();
+</script>
+</body>
+</html>

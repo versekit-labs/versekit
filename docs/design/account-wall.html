@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账号 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+/* 单组账号页：五个平台槽位；接入的显示状态，未接入的显示缺口与添加入口 */
+.slots{display:flex;flex-direction:column;margin-top:14px;overflow:hidden;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.slot{display:grid;grid-template-columns:minmax(170px,1.05fr) minmax(112px,.62fr) minmax(196px,1.15fr) minmax(150px,.9fr) auto;gap:14px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+.slot:last-child{border-bottom:0}
+.slot.connected{cursor:pointer}
+.slot.connected:hover{background:var(--paper-subtle)}
+.slot.selected{background:var(--ground);box-shadow:inset 2px 0 0 var(--navy)}
+.slot-who{display:flex;align-items:center;gap:10px;min-width:0}
+.plogo{width:22px;height:22px;flex:none;border-radius:4px}
+.slot-name{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-sub{display:block;margin-top:2px;color:var(--muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-col{min-width:0}
+.slot-k{display:none;color:var(--faint);font-size:12px}
+.slot-v{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot-m{margin-top:2px;color:var(--muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot .pubm{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.slot-act{display:flex;justify-content:flex-end;gap:8px}
+.slot.empty .slot-act{justify-content:flex-end}
+.gap-text{color:var(--faint);font-size:13px}
+
+.detail{margin-top:14px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:16px 18px 17px}
+.detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding-bottom:12px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+.detail-location{color:var(--faint);font-size:12px}
+.detail-title{margin-top:2px;font-size:18px;font-weight:650;letter-spacing:-.015em}
+.detail-issue{margin-top:4px;color:var(--muted);font-size:13px}
+.detail-issue.bad{color:var(--red)}.detail-issue.warn{color:var(--amber)}
+.detail-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;padding-top:12px}
+.fact-label{margin-bottom:5px;color:var(--faint);font-size:12px}
+.fact-value{font-size:13px;font-weight:500}
+.fact-value.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
+
+@media (max-width:1100px){
+  .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
+  .col-collect{display:none}
+}
+@media (max-width:900px){
+  .slot{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:14px}
+  .slot-col{grid-column:1/-1}
+  .slot-k{display:block;margin-bottom:1px}
+  .slot-act{grid-row:1;grid-column:2;align-self:start}
+  .slot-act .btn{min-height:40px}
+  .gap{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%}
+  .gap .btn{min-height:40px}
+  .detail-grid{grid-template-columns:1fr;gap:12px}
+  .fact{padding-bottom:10px;border-bottom:1px solid var(--line-soft)}.fact:last-child{border-bottom:0;padding-bottom:0}
+  .detail-actions{width:100%}.detail-actions .btn{flex:1;min-height:40px}
+}
+</style>
+</head>
+<body data-page="account-wall">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html" aria-current="page">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span data-group-label>当前账号组</span></div>
+        <h1>账号</h1>
+        <p class="sub" id="sub">正在加载…</p>
+      </div>
+      <div class="detail-actions">
+        <a class="btn" href="matrix.html" data-no-group>看全部账号组</a>
+        <a class="btn primary" id="add-btn" href="add.html">+ 添加账号</a>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="todo-links" id="todos" aria-label="待处理事项"></div>
+      <span>登录检查 19:26 · 每 15 分钟</span>
+    </div>
+
+    <section class="slots" id="slots" aria-label="当前账号组的平台账号"></section>
+
+    <section class="detail" id="detail" aria-live="polite" hidden>
+      <div class="detail-head">
+        <div>
+          <p class="detail-location" id="d-location"></p>
+          <h2 class="detail-title" id="d-title"></h2>
+          <p class="detail-issue" id="d-issue"></p>
+        </div>
+        <div class="detail-actions">
+          <a class="btn" id="d-work" href="work.html">看这条作品</a>
+          <a class="btn primary" id="d-action" href="account-wall.html" data-no-group>账号详情</a>
+        </div>
+      </div>
+      <div class="detail-grid">
+        <div class="fact"><div class="fact-label">最近发布</div><div class="fact-value mono" id="d-publish"></div><div class="fact-meta" id="d-publish-meta"></div></div>
+        <div class="fact"><div class="fact-label">最近采集</div><div class="fact-value mono" id="d-collect"></div><div class="fact-meta" id="d-collect-meta"></div></div>
+        <div class="fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
+      </div>
+    </section>
+
+    <footer class="pagefoot">
+      <span>凭证仅保存在本机，不会上传到 versekit 服务器。</span>
+      <a href="runs.html">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+const group = VK.current();
+const platforms = VK.platforms;
+let selected = null;
+
+const levelText = {bad:'登录已失效', warn:'登录将过期', '':'登录正常'};
+
+function accounts(){ return VK.accounts(group); }
+
+function render(){
+  const list = accounts();
+  const bad = list.filter(a=>a.level==='bad').length;
+  const warn = list.filter(a=>a.level==='warn').length;
+  const parts = [list.length + ' / 5 个平台已接入'];
+  if(bad) parts.push(bad + ' 个登录异常');
+  if(warn) parts.push(warn + ' 个将过期');
+  if(!bad && !warn) parts.push('登录正常');
+  document.getElementById('sub').textContent = parts.join(' · ');
+
+  const todos = document.getElementById('todos');
+  todos.innerHTML = '';
+  const need = list.filter(a=>a.level);
+  if(need.length){
+    const s = document.createElement('strong');
+    s.textContent = '待处理';
+    todos.appendChild(s);
+    need.forEach(a=>{
+      const b = document.createElement('button');
+      b.className = 'todo-link';
+      b.type = 'button';
+      b.textContent = platforms[a.platform].name + (a.level==='bad' ? '重登' : '续期');
+      b.addEventListener('click', ()=>select(a.id));
+      todos.appendChild(b);
+    });
+  } else {
+    const s = document.createElement('span');
+    s.className = 'hint';
+    s.textContent = '这个账号组没有需要处理的事项';
+    todos.appendChild(s);
+  }
+
+  const slots = document.getElementById('slots');
+  slots.innerHTML = '';
+
+  Object.entries(platforms).forEach(([key,p])=>{
+    const a = list.find(x=>x.platform===key);
+    if(a){
+      const row = document.createElement('div');
+      row.className = 'slot connected' + (selected===a.id ? ' selected' : '');
+      row.tabIndex = 0;
+      row.setAttribute('role','button');
+      row.dataset.account = a.id;
+      row.setAttribute('aria-label', p.name + ' · ' + a.handle + ' · ' + levelText[a.level]);
+      row.innerHTML =
+        '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#'+p.logo+'"/></svg>'+
+          '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>'+
+        '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span></div>'+
+        '<div class="slot-col"><span class="slot-k">最近发布</span><div class="slot-v pub"></div><div class="slot-m pubm"></div></div>'+
+        '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>'+
+        '<div class="slot-act"></div>';
+      row.querySelector('.slot-name').textContent = a.handle;
+      row.querySelector('.slot-sub').textContent = p.name + (a.level==='bad'?' · 发布与采集已暂停':a.level==='warn'?' · 建议提前续期':' · 运行中');
+      row.querySelector('.slot-status').innerHTML = a.level
+        ? '<span class="badge '+(a.level==='bad'?'bad':'warn')+'">'+levelText[a.level]+'</span>'
+        : '<span class="status-ok"><i></i>登录正常</span>';
+      row.querySelector('.pub').textContent = a.publish;
+      row.querySelector('.pubm').textContent = a.publishMeta;
+      row.querySelector('.col').textContent = a.collect;
+      row.querySelector('.colm').textContent = a.collectMeta;
+
+      const act = row.querySelector('.slot-act');
+      const btn = document.createElement('a');
+      btn.className = 'btn sm' + (a.level ? ' primary' : '');
+      btn.textContent = a.action;
+      if(a.level==='bad'){
+        btn.href = VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth';
+      } else {
+        btn.href = '#detail';
+        btn.addEventListener('click', ev=>{ ev.preventDefault(); select(a.id); });
+      }
+      act.appendChild(btn);
+
+      row.addEventListener('click', ev=>{ if(ev.target.closest('a')) return; select(a.id); });
+      row.addEventListener('keydown', ev=>{
+        if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); select(a.id); }
+      });
+      slots.appendChild(row);
+    } else {
+      const row = document.createElement('div');
+      row.className = 'slot empty';
+      row.innerHTML =
+        '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#'+p.logo+'"/></svg>'+
+          '<div><span class="slot-name"></span><span class="slot-sub">这个平台还没有接入账号</span></div></div>'+
+        '<div class="slot-col"><span class="slot-k">登录状态</span><span class="gap-text">未接入</span></div>'+
+        '<div class="gap"><div class="slot-col"><span class="slot-k">接入方式</span><span class="gap-text"></span></div>'+
+        '<a class="btn sm">添加账号</a></div>';
+      row.querySelector('.slot-name').textContent = p.name;
+      row.querySelector('.slot-col .gap-text').textContent = p.auth;
+      const link = row.querySelector('.gap .btn');
+      link.href = VK.url('add.html',group) + '&platform=' + key;
+      link.textContent = '+ 添加' + p.name;
+      slots.appendChild(row);
+    }
+  });
+
+  const add = document.getElementById('add-btn');
+  add.href = VK.url('add.html',group);
+
+  const first = list.find(a=>a.level==='bad') || list.find(a=>a.level==='warn') || list[0];
+  const keep = selected && list.some(a=>a.id===selected) ? selected : (first ? first.id : null);
+  if(keep) select(keep,false);
+  else document.getElementById('detail').hidden = true;
+}
+
+function select(id,scroll){
+  const a = VK.account(id);
+  if(!a){ document.getElementById('detail').hidden = true; return; }
+  selected = id;
+  document.querySelectorAll('.slot.connected').forEach(r=>{
+    r.classList.toggle('selected', r.dataset.account===id);
+  });
+  const d = document.getElementById('detail');
+  d.hidden = false;
+  document.getElementById('d-location').textContent = VK.group(a.group).label + ' · ' + VK.platforms[a.platform].name;
+  document.getElementById('d-title').textContent = a.handle;
+  const issue = document.getElementById('d-issue');
+  issue.textContent = a.issue;
+  issue.className = 'detail-issue' + (a.level ? ' ' + a.level : '');
+  document.getElementById('d-publish').textContent = a.publish;
+  document.getElementById('d-publish-meta').textContent = a.publishMeta;
+  document.getElementById('d-collect').textContent = a.collect;
+  document.getElementById('d-collect-meta').textContent = a.collectMeta;
+  document.getElementById('d-cmd').textContent = a.cmd;
+
+  const act = document.getElementById('d-action');
+  act.textContent = a.action;
+  act.classList.toggle('primary', !!a.primary);
+  act.href = a.level==='bad'
+    ? VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth'
+    : '#account/' + a.id;
+
+  const work = document.getElementById('d-work');
+  work.style.display = a.level==='bad' ? 'none' : '';
+  work.href = VK.url('work.html',group);
+
+  if(scroll) d.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+
+render();
+</script>
+</body>
+</html>

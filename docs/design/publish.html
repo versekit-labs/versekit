@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>发布台 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.pub{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.12fr);gap:16px;margin-top:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* 素材 */
+.asset{display:flex;gap:14px;align-items:center}
+.poster{width:76px;height:76px;flex:none;padding:8px;border-radius:6px;background:var(--navy);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:var(--mono);font-size:12px;line-height:1.3;text-align:center}
+.poster b{font-weight:500;letter-spacing:.02em}
+.asset-name{font-size:14px;font-weight:600}
+.asset-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.5}
+.asset-src{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap}
+
+/* 目标账号 */
+.acct{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-soft)}
+.acct:last-child{border-bottom:0}
+.acct.off .acct-handle{color:var(--muted);font-weight:500}
+.acct.off .plogo{opacity:.55}
+.acct.off .acct-sub{color:var(--faint)}
+.check{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;cursor:pointer}
+.check input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;cursor:pointer}
+.box{width:18px;height:18px;border:1px solid var(--muted);border-radius:4px;background:var(--paper);display:grid;place-items:center}
+.check input:checked+.box{background:var(--navy);border-color:var(--navy)}
+.check input:checked+.box:after{content:"";width:9px;height:5px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) translateY(-1px)}
+.check input:focus-visible+.box{outline:2px solid var(--amber);outline-offset:2px}
+.check input:disabled+.box{border-style:dashed;background:transparent}
+.acct-main{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:0;border:0;background:transparent;text-align:left;font-family:var(--sans);cursor:pointer;border-radius:4px}
+.acct-main.on{outline:2px solid var(--navy);outline-offset:6px}
+.acct-main:focus-visible{outline:2px solid var(--amber);outline-offset:4px}
+.plogo{width:18px;height:18px;flex:none;border-radius:4px}
+.acct-who{min-width:0;flex:1}
+.acct-handle{display:block;font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct-sub{display:block;margin-top:1px;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group-tag{padding:8px 16px 6px;color:var(--faint);font-size:12px;background:var(--paper-subtle);border-bottom:1px solid var(--line-soft)}
+
+/* 字段 */
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fields .full{grid-column:1/-1}
+.ov-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.ov-head .plogo{width:20px;height:20px}
+.ov-title{font-size:14px;font-weight:650}
+.ov-note{margin-top:5px;color:var(--faint);font-size:12px;line-height:1.45}
+
+/* 底部动作 */
+.actionbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line);background:var(--paper-subtle);border-radius:0 0 8px 8px}
+.actionbar .grow{flex:1}
+.count{color:var(--muted);font-size:12px}
+.preview{display:none;border-top:1px solid var(--line-soft);padding:12px 16px;background:var(--paper)}
+.preview.on{display:block}
+.preview h3{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px}
+.preview ol{display:flex;flex-direction:column;gap:6px;padding-left:18px;font-size:13px;line-height:1.5}
+.preview li::marker{color:var(--faint);font-family:var(--mono);font-size:12px}
+.preview .warn-note{margin-top:10px;padding:8px 10px;border:1px solid var(--amber-line);border-radius:6px;background:var(--amber-bg);color:var(--amber);font-size:12px;line-height:1.5}
+.cmd-wrap{padding:0 16px 14px;background:var(--paper);border-radius:0 0 8px 8px}
+
+
+/* ── 发布台模式切换 ─────────────────────────────────── */
+.modes{display:inline-flex;gap:2px;margin:16px 0 12px;padding:3px;background:var(--paper);border:1px solid var(--line);border-radius:6px}
+.mode-btn{min-height:32px;padding:0 14px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:500 13px var(--sans);cursor:pointer}
+.mode-btn:hover{color:var(--ink)}
+.mode-btn[aria-selected="true"]{background:var(--navy);color:#fff}
+.mode-btn:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+
+@media (max-width:1080px){
+  .pub{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:900px){
+  .fields{grid-template-columns:1fr}
+  .asset{flex-wrap:wrap}
+  .actionbar{gap:8px}
+  .actionbar .grow{display:none}
+  .actionbar .btn{flex:1;min-height:40px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html">账号</a>
+      <a href="publish.html" aria-current="page">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <div class="crumb"><a href="account-wall.html">账号</a> / <span>发布台</span></div>
+    <header class="pagehead">
+      <div><h1>发布台</h1><p class="sub" id="page-sub">一条作品发到多个账号 · 可立即发，也可排到某个时间</p></div>
+      <div class="detail-actions"><a class="btn" href="calendar.html">看发布计划</a><a class="btn" href="runs.html">看队列</a></div>
+    </header>
+
+    <div class="pub" id="mode-compose">
+      <div class="stack">
+        <section class="panel" aria-label="主素材">
+          <div class="panel-head"><h2>主素材</h2><span class="hint">一条作品共用</span></div>
+          <div class="panel-body">
+            <div class="asset">
+              <div class="poster" aria-hidden="true"><b>4:12</b><span>1080×1920</span></div>
+              <div style="min-width:0">
+                <div class="asset-name">ai-tools-ep12.mp4</div>
+                <div class="asset-meta">236 MB · H.264 · 今天 16:40 导入</div>
+                <div class="asset-src"><span class="pill">主稿已锁定</span><span class="pill">封面已选</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="发布到哪些账号">
+          <div class="panel-head"><h2>发布到</h2><span class="hint" id="sel-count">已选 4 个账号</span></div>
+          <div class="rows">
+            <div class="group-tag" data-group="ai">AI 工具研究所</div>
+            <div class="acct off" data-acct="ai-xhs" data-group="ai">
+              <label class="check"><input type="checkbox" disabled aria-label="小红书不可选，登录已失效"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-xhs"/></svg>
+              <span class="acct-who"><span class="acct-handle">@AI工具研究所</span><span class="acct-sub">小红书 · <b style="color:var(--red);font-weight:500">登录已失效</b> · 需先重登</span></span>
+              <a class="btn sm" href="account-wall.html">去重登</a>
+            </div>
+            <div class="acct" data-acct="ai-dy" data-group="ai">
+              <label class="check"><input type="checkbox" checked aria-label="选择抖音"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-douyin"/></svg>
+              <button class="acct-main" data-edit="ai-dy"><span class="acct-who"><span class="acct-handle">@AI工具研究所</span><span class="acct-sub">抖音 · 主账号 · auto</span></span></button>
+              <span class="badge warn">将过期</span>
+            </div>
+            <div class="acct" data-acct="ai-bili" data-group="ai">
+              <label class="check"><input type="checkbox" checked aria-label="选择 B站"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-bili"/></svg>
+              <button class="acct-main" data-edit="ai-bili"><span class="acct-who"><span class="acct-handle">AI工具研究所</span><span class="acct-sub">B站 · 主账号 · auto</span></span></button>
+              <span class="badge">正常</span>
+            </div>
+            <div class="acct" data-acct="ai-yt" data-group="ai">
+              <label class="check"><input type="checkbox" checked aria-label="选择 YouTube"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-youtube"/></svg>
+              <button class="acct-main" data-edit="ai-yt"><span class="acct-who"><span class="acct-handle">@ai-tools-lab</span><span class="acct-sub">YouTube · 主账号 · auto</span></span></button>
+              <span class="badge">正常</span>
+            </div>
+            <div class="acct" data-acct="ai-tt" data-group="ai">
+              <label class="check"><input type="checkbox" checked aria-label="选择 TikTok"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-tiktok"/></svg>
+              <button class="acct-main" data-edit="ai-tt"><span class="acct-who"><span class="acct-handle">@ai-tools-lab</span><span class="acct-sub">TikTok · 主账号 · auto → notify</span></span></button>
+              <span class="badge warn">需放行</span>
+            </div>
+            <div class="group-tag" data-group="cut">剪辑日记 · 未选</div>
+            <div class="acct" data-acct="cut-dy" data-group="cut">
+              <label class="check"><input type="checkbox" checked aria-label="选择剪辑日记的抖音"><span class="box"></span></label>
+              <svg class="plogo" aria-hidden="true"><use href="#pl-douyin"/></svg>
+              <button class="acct-main" data-edit="cut-dy"><span class="acct-who"><span class="acct-handle">剪辑日记</span><span class="acct-sub">抖音 · 矩阵账号 · auto</span></span></button>
+              <span class="badge">正常</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel" aria-label="主稿字段">
+          <div class="panel-head"><h2>主稿</h2><span class="hint">未覆盖的字段沿用这里</span></div>
+          <div class="panel-body">
+            <div class="fields">
+              <div class="field full">
+                <label class="field-label" for="m-title">标题</label>
+                <input class="input" id="m-title" value="我用了 30 天 AI 剪辑，发现 3 个反常识结论">
+              </div>
+              <div class="field full">
+                <label class="field-label" for="m-body">正文</label>
+                <textarea class="textarea" id="m-body">三个反常识：1）先剪后写稿更快；2）转场越少完播越高；3）字幕要提前半秒出现。完整流程在评论区。</textarea>
+              </div>
+              <div class="field full">
+                <label class="field-label" for="m-tags">话题</label>
+                <input class="input" id="m-tags" value="#AI工具 #效率 #剪辑">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="平台差异字段">
+          <div class="panel-head"><h2>平台差异</h2><span class="hint" id="ov-hint">正在编辑：抖音</span></div>
+          <div class="panel-body">
+            <div class="ov-head">
+              <svg class="plogo" aria-hidden="true"><use id="ov-logo" href="#pl-douyin"/></svg>
+              <span class="ov-title" id="ov-title">抖音 · @AI工具研究所</span>
+            </div>
+            <div class="fields" id="ov-fields"></div>
+            <p class="ov-note" id="ov-note">只有这一个平台需要的字段才出现在这里；其余沿用主稿。</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="发布设置">
+          <div class="panel-head"><h2>发布设置</h2><span class="hint">默认全自动</span></div>
+          <div class="fields" style="padding:14px 16px">
+            <div class="field">
+              <label class="field-label" for="sched">定时</label>
+              <input class="input" id="sched" type="datetime-local" value="2026-11-07T20:00">
+            </div>
+            <div class="field">
+              <label class="field-label" for="mode">模式</label>
+              <select class="select" id="mode">
+                <option>auto · 点一次就发</option>
+                <option>draft · 先存草稿</option>
+                <option>notify · 只提醒，我手动发</option>
+              </select>
+            </div>
+          </div>
+          <div class="preview" id="preview" aria-live="polite">
+            <h3>预演结果 · 不会真的发布</h3>
+            <ol id="preview-list"></ol>
+            <p class="warn-note" id="preview-warn"></p>
+          </div>
+          <div class="actionbar">
+            <span class="count" id="action-count">将发布到 4 个账号</span>
+            <span class="grow"></span>
+            <button class="btn" id="dry" type="button">预演</button>
+            <button class="btn primary" id="go" type="button">发布到 4 个账号</button>
+          </div>
+          <div class="cmd-wrap">
+            <div class="cmd"><b>等价命令</b><code id="cmd-line">vk publish ./ai-tools-ep12.mp4 --to ai-dy,ai-bili,ai-yt,ai-tt --schedule 20:00</code></div>
+            <span class="cmd-note">Web 只是调用同一条命令；关掉网页，CLI 仍能做同样的事。</span>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="pagefoot">
+      <span>发布结果会逐平台回报，失败会留下 error_code 与原因。</span>
+      <a href="calendar.html">排到某天 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+const targets = {
+  'ai-dy':   {platform:'抖音', logo:'pl-douyin', handle:'@AI工具研究所', note:'抖音的自动化通道可能被风控拦截；失败会自动降级为 notify。',
+         fields:[{k:'标题',v:'',p:'沿用主稿'},{k:'话题',v:'#AI工具 #效率'},{k:'位置',v:'不添加'},{k:'允许下载',v:'允许'}]},
+  'ai-bili': {platform:'B站', logo:'pl-bili', handle:'AI工具研究所', note:'B站需要分区与标签；标题上限 80 字。',
+         fields:[{k:'标题',v:'我用了 30 天 AI 剪辑，3 个反常识结论'},{k:'分区',v:'科技 · 人工智能'},{k:'标签',v:'AI工具 效率'},{k:'简介',v:'',p:'沿用主稿'}]},
+  'ai-yt':   {platform:'YouTube', logo:'pl-youtube', handle:'@ai-tools-lab', note:'YouTube 用官方 API，可见性与播放列表只在这里设置。',
+         fields:[{k:'标题',v:'',p:'沿用主稿'},{k:'可见性',v:'公开'},{k:'播放列表',v:'不加入'},{k:'字幕',v:'自动生成'}]},
+  'cut-dy':  {platform:'抖音', logo:'pl-douyin', handle:'剪辑日记', note:'矩阵账号：标题可沿用主稿，但话题建议换成栏目相关词。',
+         fields:[{k:'标题',v:'',p:'沿用主稿'},{k:'话题',v:'#剪辑 #练习'},{k:'位置',v:'不添加'},{k:'允许下载',v:'允许'}]},
+  'ai-tt':   {platform:'TikTok', logo:'pl-tiktok', handle:'@ai-tools-lab', note:'TikTok 只能先发“仅自己可见”，等你放行后才公开；这条会多一个待办。',
+         fields:[{k:'可见性',v:'先私密后公开'},{k:'标题',v:'',p:'沿用主稿'},{k:'允许评论',v:'允许'},{k:'允许合拍',v:'关闭'}]}
+};
+
+let current = 'ai-dy';
+
+function renderFields(key){
+  const t = targets[key];
+  const box = document.getElementById('ov-fields');
+  box.innerHTML = t.fields.map(f => `
+    <div class="field">
+      <label class="field-label">${f.k}</label>
+      <input class="input" value="${f.v || ''}" placeholder="${f.p || ''}">
+    </div>`).join('');
+  document.getElementById('ov-logo').setAttribute('href','#'+t.logo);
+  document.getElementById('ov-title').textContent = t.platform + ' · ' + t.handle;
+  document.getElementById('ov-hint').textContent = '正在编辑：' + t.platform;
+  document.getElementById('ov-note').textContent = t.note;
+  document.querySelectorAll('.acct-main').forEach(b=>b.classList.toggle('on', b.dataset.edit===key));
+}
+
+document.querySelectorAll('.acct-main').forEach(btn=>{
+  btn.addEventListener('click', ()=>{ current = btn.dataset.edit; renderFields(current); });
+});
+
+function selected(){
+  return [...document.querySelectorAll('.acct')]
+    .filter(a=>a.style.display!=='none')
+    .filter(a=>{const i=a.querySelector('input'); return i && i.checked;})
+    .map(a=>a.dataset.acct);
+}
+
+function refresh(){
+  const sel = selected();
+  const n = sel.length;
+  document.getElementById('sel-count').textContent = '已选 ' + n + ' 个账号';
+  document.getElementById('action-count').textContent = n ? ('将发布到 ' + n + ' 个账号') : '至少选一个账号';
+  document.getElementById('go').textContent = n ? ('发布到 ' + n + ' 个账号') : '发布';
+  document.getElementById('go').disabled = n === 0;
+  document.getElementById('cmd-line').textContent =
+    'vk publish ./ai-tools-ep12.mp4 --to ' + (sel.length?sel.join(','):'<未选>') + ' --schedule 20:00';
+}
+
+document.querySelectorAll('.acct input[type=checkbox]').forEach(i=>{
+  i.addEventListener('change', ()=>{
+    i.closest('.acct').classList.toggle('off', !i.checked && !i.disabled);
+    refresh();
+  });
+});
+
+document.getElementById('dry').addEventListener('click', ()=>{
+  const sel = selected();
+  const list = document.getElementById('preview-list');
+  const items = sel.map(k=>{
+    const t = targets[k];
+    if(!t) return '';
+    if(k==='ai-tt') return 'TikTok：先发“仅自己可见”，生成一条放行待办';
+    if(k==='ai-dy') return '抖音：定时 20:00 自动发布（可能降级为 notify）';
+    return t.platform + '：定时 20:00 自动发布';
+  }).filter(Boolean);
+  list.innerHTML = items.map(x=>'<li>'+x+'</li>').join('') || '<li>没有选中任何账号</li>';
+  const warn = document.getElementById('preview-warn');
+  if(sel.includes('ai-tt')){
+    warn.style.display='block';
+    warn.textContent = '1 条发布不会直接公开：TikTok 需要你在手机或这里点一次“放行”。';
+  } else { warn.style.display='none'; }
+  document.getElementById('preview').classList.add('on');
+});
+
+document.getElementById('go').addEventListener('click', ()=>{
+  document.getElementById('preview').classList.remove('on');
+  const n = selected().length;
+  const bar = document.getElementById('action-count');
+  bar.textContent = '已排队 ' + n + ' 条发布 · 去任务里看进度';
+});
+
+// 只显示当前账号组的账号，并把示例内容换成本组的
+(function scope(){
+  const g = VK.current();
+  document.querySelectorAll('[data-group]').forEach(el=>{
+    el.style.display = (el.dataset.group===g) ? '' : 'none';
+  });
+  const label = VK.groupLabel();
+  const sub = document.querySelector('.pagehead .sub');
+  if(sub) sub.textContent = '当前账号组：' + label + ' · 选择要发布的平台账号';
+
+  if(g==='cut'){
+    document.getElementById('m-title').value = '一周的剪辑练习：把 3 个废镜头救回来';
+    document.getElementById('m-body').value = '这周挑了三个原本要删的镜头，试着用变速和声音把它们接回去。过程比结果有意思。';
+    document.getElementById('m-tags').value = '#剪辑 #练习 #幕后';
+    document.querySelector('.asset-name').textContent = 'cut-diary-ep08.mp4';
+    document.querySelector('.asset-meta').textContent = '184 MB · H.264 · 今天 15:10 导入';
+    document.querySelector('.poster').innerHTML = '<b>3:48</b><span>1080×1920</span>';
+  }
+
+  // 默认编辑第一个可见账号，避免面板停在别的组的账号上
+  const visible = [...document.querySelectorAll('.acct-main')]
+    .filter(b => b.closest('.acct').style.display !== 'none');
+  if(visible.length){ current = visible[0].dataset.edit; }
+
+  const any = [...document.querySelectorAll('.acct')].filter(e=>e.style.display!=='none').length;
+  if(!any){
+    const box = document.querySelector('.acct')?.closest('.rows');
+    if(box){
+      const note = document.createElement('p');
+      note.className = 'hint';
+      note.style.padding = '16px';
+      note.textContent = '这个账号组还没有接入账号，先去账号页添加一个。';
+      box.appendChild(note);
+    }
+  }
+})();
+
+// 从计划页跳过来时，把日期填进定时（consume-schedule）
+(function consumeSchedule(){
+  const v = new URLSearchParams(location.search).get('schedule');
+  if(!v) return;
+  const f = document.getElementById('sched');
+  if(f){
+    const hasTime = v.indexOf('T') > -1;
+    f.value = hasTime ? v : v + 'T20:00';
+  }
+})();
+
+refresh();
+renderFields(current);
+
+
+</script>
+</body>
+</html>

@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>发布计划 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+/* ── 发布计划：周 / 月 / 列表 ───────────────────────── */
+.plan-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.views{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.view-btn{min-height:32px;padding:0 13px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:500 12px var(--sans);cursor:pointer}
+.view-btn:hover{color:var(--ink)}
+.view-btn[aria-selected="true"]{background:var(--navy);color:#fff}
+.view-btn:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+.plan-nav{display:flex;align-items:center;gap:6px}
+.plan-nav strong{font-size:13px;font-weight:650;min-width:132px;text-align:center}
+.plan-bar .grow{flex:1}
+.plan-summary{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 13px;border:1px solid var(--line);border-radius:6px;background:var(--paper-subtle);color:var(--muted);font-size:12px;margin-bottom:12px}
+.plan-summary b{color:var(--ink);font-weight:600}
+.plan-summary .split{color:var(--line)}
+.plan-summary .warn{color:var(--amber)}
+
+.wk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.wk-col{display:flex;flex-direction:column;min-height:280px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.wk-col.today{border-color:var(--navy)}
+.wk-head{display:flex;align-items:baseline;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line-soft)}
+.wk-head b{font-size:12px;font-weight:600;color:var(--ink)}
+.wk-head .d{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.wk-head .n{margin-left:auto;color:var(--faint);font-size:12px}
+.wk-body{display:flex;flex-direction:column;gap:6px;padding:8px;flex:1}
+.wk-col.today .wk-head b,.wk-col.today .wk-head .d{color:var(--navy)}
+
+.post{display:flex;flex-direction:column;gap:5px;padding:8px 9px;border:1px solid var(--line);border-left:3px solid var(--navy);border-radius:6px;background:var(--paper);text-align:left;font-family:var(--sans);cursor:pointer}
+.post:hover{background:var(--paper-subtle)}
+.post:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+.post.published{border-left-color:var(--green)}
+.post.limited{border-left-color:var(--amber)}
+.post.failed{border-left-color:var(--red)}
+.post.past{opacity:.75}
+.post-top{display:flex;align-items:center;gap:6px}
+.post-time{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.post-state{margin-left:auto;font-size:12px;color:var(--muted)}
+.post-title{font-size:12px;font-weight:600;line-height:1.4;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.post-plats{display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+.post-plats .plogo{width:14px;height:14px;border-radius:4px}
+.post-more{font-size:12px;color:var(--faint)}
+.post-actions{display:none;gap:6px;flex-wrap:wrap;margin-top:2px}
+.post.open .post-actions{display:flex}
+.post-actions .btn{min-height:32px;padding:0 10px;font-size:12px}
+.post-editor{display:flex;flex-direction:column;gap:5px;margin-top:2px}
+.post-editor .input{min-height:36px;font-size:13px}
+.wk-add{min-height:32px;border:1px dashed var(--line);border-radius:6px;background:transparent;color:var(--faint);font:400 12px var(--sans);cursor:pointer}
+.wk-add:hover{border-color:var(--muted);color:var(--muted)}
+
+.mo{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line-soft);border:1px solid var(--line-soft);border-radius:8px;overflow:hidden}
+.mo-dow{display:flex;align-items:center;justify-content:center;min-height:30px;background:var(--paper-subtle);color:var(--faint);font-size:12px}
+.mo-cell{display:flex;flex-direction:column;gap:4px;min-height:78px;padding:7px 8px;border:0;background:var(--paper);color:var(--ink);font-family:var(--sans);text-align:left;cursor:pointer}
+.mo-cell:hover{background:var(--paper-subtle)}
+.mo-cell.out{background:var(--ground);color:var(--faint);cursor:default}
+.mo-cell:focus-visible{outline:2px solid var(--amber);outline-offset:-2px}
+.mo-date{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.mo-cell.today .mo-date{color:var(--navy);font-weight:650}
+.mo-bars{display:flex;gap:2px;flex-wrap:wrap}
+.mo-bar{width:6px;height:6px;border-radius:4px;background:var(--navy)}
+.mo-bar.published{background:var(--green)}
+.mo-bar.limited{background:var(--amber)}
+.mo-bar.failed{background:var(--red)}
+.mo-label{margin-top:auto;font-size:12px;color:var(--faint);line-height:1.35}
+.mo-cell.has .mo-label{color:var(--muted)}
+
+.agenda{display:flex;flex-direction:column;gap:10px}
+.ag-day{border:1px solid var(--line);border-radius:8px;background:var(--paper);overflow:hidden}
+.ag-head{display:flex;align-items:baseline;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line-soft);background:var(--paper-subtle)}
+.ag-head b{font-size:13px;font-weight:650}
+.ag-head span{font-size:12px;color:var(--muted)}
+.ag-head .n{margin-left:auto;color:var(--faint);font-size:12px}
+.ag-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+.ag-row:last-child{border-bottom:0}
+.ag-time{width:52px;flex:none;font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.ag-title{flex:1;min-width:0;font-size:13px;font-weight:600;line-height:1.4}
+.ag-plats{display:flex;gap:3px}
+.ag-plats .plogo{width:16px;height:16px;border-radius:4px}
+.ag-act{display:flex;gap:6px}
+.ag-act .btn{min-height:32px;padding:0 10px;font-size:12px}
+.plan-empty{padding:34px 18px;border:1px dashed var(--line);border-radius:8px;text-align:center;color:var(--muted);font-size:13px}
+
+
+.confirm{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--red-line);border-radius:6px;background:var(--red-bg)}
+.confirm p{font-size:12px;line-height:1.45;color:var(--red)}
+.confirm-act{display:flex;gap:6px;flex-wrap:wrap}
+.confirm-act .btn{min-height:32px;padding:0 10px;font-size:12px}
+.undo-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:var(--ink);color:#fff;font-size:12px;z-index:20}
+.undo-bar button{min-height:32px;padding:0 10px;border:1px solid #fff;border-radius:6px;background:transparent;color:#fff;font:500 12px var(--sans);cursor:pointer}
+.undo-bar button:hover{background:rgba(255,255,255,.12)}
+
+
+.chip-warn{display:inline-flex;align-items:center;min-height:20px;padding:1px 6px;border:1px solid var(--red-line);border-radius:4px;background:var(--red-bg);color:var(--red);font-size:12px;line-height:1.3}
+.post.conflict{border-color:var(--red-line);border-left-color:var(--red)}
+.warn-link{min-height:32px;padding:0 6px;border:0;background:transparent;color:var(--amber);font:500 12px var(--sans);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.warn-link:hover{color:var(--red)}
+.ag-gap{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px dashed var(--line);border-radius:8px;color:var(--faint);font-size:12px;background:transparent}
+.ag-gap span:first-child{color:var(--muted)}
+.ag-gap .btn{margin-left:auto}
+
+
+/* 平台 chip、快捷改期、内联警告 */
+.chip-warn{white-space:nowrap;flex:none;display:inline-flex;align-items:center;min-height:20px;padding:1px 6px;border:1px solid var(--amber);border-radius:4px;background:var(--amber-bg);color:var(--amber);font-size:12px;line-height:1.3}
+.post.conflict{border-left-color:var(--amber);border-color:var(--amber-line)}
+.post .post-state{white-space:nowrap}
+.pcount{color:var(--faint);font-size:12px;margin-left:2px}
+.post-detail{display:none;flex-wrap:wrap;gap:4px;margin-top:2px}
+.post.open .post-detail{display:flex}
+.ppill{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:var(--muted);font-size:12px;line-height:1.35;white-space:nowrap}
+.ppill .plogo{width:12px;height:12px;border-radius:4px}
+.ppill.published{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.ppill.limited{border-color:var(--amber-line);background:var(--amber-bg);color:var(--amber)}
+.ppill.failed{border-color:var(--red-line);background:var(--red-bg);color:var(--red)}
+.ppill .pstate{color:inherit;opacity:.85}
+.post.open .post-title{-webkit-line-clamp:4}
+.quick{display:flex;gap:6px;flex-wrap:wrap}
+.quick .btn{min-height:32px;padding:0 10px;font-size:12px}
+.inline-warn{margin:2px 0;padding:6px 8px;border:1px solid var(--amber-line);border-radius:4px;background:var(--amber-bg);color:var(--amber);font-size:12px;line-height:1.45}
+.post-editor .input{width:100%;min-height:36px;font-size:13px}
+.day-picks{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.day-pick{min-width:32px;min-height:32px;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:var(--muted);font:500 12px var(--mono);cursor:pointer}
+.day-pick:hover{border-color:var(--navy);color:var(--navy)}
+.plan-hint{margin-top:8px;color:var(--faint);font-size:12px}
+.plan-nav .btn{min-width:36px}
+
+@media (max-width:1180px){
+  .wk{gap:6px}
+}
+@media (max-width:900px){
+  .plan-bar{gap:8px}
+  .plan-nav strong{min-width:0;font-size:12px}
+  .views{flex:1}
+  .view-btn{flex:1;min-height:34px}
+  .wk{grid-template-columns:minmax(0,1fr);gap:10px}
+  .wk-col{min-height:0}
+  .post-title{-webkit-line-clamp:3}
+  .mo-cell{min-height:52px;padding:5px}
+  .mo-label{display:none}
+  .ag-title{flex:1 1 100%;order:3;font-weight:500}
+  .ag-act{order:4;width:100%}
+  .ag-act .btn{flex:1;min-height:34px}
+}
+</style>
+</head>
+<body data-page="plan">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html" aria-current="page">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span data-group-label>当前账号组</span></div>
+        <h1>发布计划</h1>
+        <p class="sub">一个作品一张卡，卡上是它要去的平台；点卡片可改期或取消</p>
+      </div>
+      <a class="btn primary" id="cal-new" href="publish.html">+ 排一条</a>
+    </header>
+
+    <div class="plan-bar">
+      <div class="views" role="tablist" aria-label="计划视图">
+        <button class="view-btn" data-view="week" role="tab" aria-selected="true" type="button">周</button>
+        <button class="view-btn" data-view="month" role="tab" aria-selected="false" type="button">月</button>
+        <button class="view-btn" data-view="list" role="tab" aria-selected="false" type="button">列表</button>
+      </div>
+      <div class="plan-nav">
+        <button class="btn sm" id="cal-prev" type="button" aria-label="上一段">‹</button>
+        <strong id="cal-range">—</strong>
+        <button class="btn sm" id="cal-next" type="button" aria-label="下一段">›</button>
+        <button class="btn sm" id="cal-today" type="button">今天</button>
+      </div>
+      <span class="grow"></span>
+    </div>
+
+    <div class="plan-summary" id="plan-summary"></div>
+
+    <div id="view-week" class="view"></div>
+    <div id="view-month" class="view" hidden></div>
+    <div id="view-list" class="view" hidden></div>
+
+    <div class="cmd" style="margin-top:12px"><b>等价命令</b><code id="cal-cmd">vk schedule list --group ai --from 2026-11-01 --to 2026-11-30</code></div>
+
+    <footer class="pagefoot">
+      <span>改期与取消只影响排期；已发布的结果不会回滚。</span>
+      <a href="publish.html">去写一条 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+/* ── 发布计划：周 / 月 / 列表 ─────────────────────── */
+const TODAY = (()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})();
+const DOW = ['一','二','三','四','五','六','日'];
+
+let planView = 'week';
+let anchor = TODAY;
+let openId = null;
+
+const pad = n => String(n).padStart(2,'0');
+const isoOf = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parseDay = str => new Date(str+'T00:00');
+const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return x; };
+const mondayOf = d => { const x = new Date(d); const off = (x.getDay()+6)%7; x.setDate(x.getDate()-off); return x; };
+
+function labelOf(dateStr){
+  const d = parseDay(dateStr);
+  return (d.getMonth()+1)+' 月 '+d.getDate()+' 日 周'+DOW[(d.getDay()+6)%7];
+}
+function conflictSet(){
+  return VK.conflictIds(VK.current());
+}
+function itemsOn(dateStr){
+  return VK.scheduled(VK.current()).filter(x=>x.at.slice(0,10)===dateStr);
+}
+function composeOn(date){
+  location.href = VK.url('publish.html', VK.current()) + '&schedule=' + date;
+}
+
+function stateText(st){
+  return st==='published' ? '已发布' : st==='limited' ? '仅自见' : st==='failed' ? '失败' : '已排期';
+}
+function platPills(it){
+  return VK.platsOf(it).map(p=>{
+    const name = VK.platforms[p.id] ? VK.platforms[p.id].name : p.id;
+    return '<span class="ppill '+p.state+'" title="'+name+' · '+stateText(p.state)+'">'+
+      '<svg class="plogo" aria-hidden="true"><use href="#'+VK.platforms[p.id].logo+'"/></svg>'+
+      '<span>'+name+'</span><span class="pstate">'+stateText(p.state)+'</span></span>';
+  }).join('');
+}
+function platIcons(it){
+  return VK.platsOf(it).map(p=>'<svg class="plogo" aria-hidden="true"><use href="#'+VK.platforms[p.id].logo+'"/></svg>').join('');
+}
+
+function postCard(it){
+  const plats = VK.platsOf(it);
+  const clash = conflictSet().has(it.id);
+  const cls = ['post', it.state];
+  if(it.state!=='scheduled' && it.state!=='limited') cls.push('past');
+  if(openId===it.id) cls.push('open');
+  if(clash) cls.push('conflict');
+  const label = it.title + '；' + it.at.slice(5,10) + ' ' + it.at.slice(11,16) +
+    (clash ? '；同平台撞车' : '') + '；' + stateText(it.state);
+  return '<div class="'+cls.join(' ')+'" data-id="'+it.id+'" tabindex="0" role="group" aria-label="'+label.replace(/"/g,'&quot;')+'" aria-expanded="'+(openId===it.id)+'">'+
+    '<div class="post-top"><span class="post-time">'+it.at.slice(11,16)+'</span>'+
+      (clash?'<span class="chip-warn">撞车</span>':'')+
+      '<span class="post-state">'+stateText(it.state)+'</span></div>'+
+    '<div class="post-title" title="'+it.title.replace(/"/g,'&quot;')+'">'+it.title+'</div>'+
+    '<div class="post-plats">'+platIcons(it)+'<span class="pcount">'+plats.length+' 个平台</span></div>'+
+    '<div class="post-detail">'+platPills(it)+'</div>'+
+    '<div class="post-actions">'+
+      (it.state==='scheduled' || it.state==='limited'
+        ? '<button class="btn sm" data-move="'+it.id+'" type="button">改期</button>'+
+          (it.state==='scheduled' ? '<button class="btn sm danger" data-cancel="'+it.id+'" type="button">取消</button>' : '')+
+          '<a class="btn sm" href="work.html">看作品</a>'
+        : '<a class="btn sm" href="work.html">看作品</a>')+
+    '</div>'+
+  '</div>';
+}
+
+function bindPosts(scope){
+  scope.querySelectorAll('.post').forEach(el=>{
+    el.addEventListener('click', ev=>{
+      if(ev.target.closest('button,a,input')) return;
+      openId = openId===el.dataset.id ? null : el.dataset.id;
+      const id = el.dataset.id;
+      renderPlan();
+      const again = document.querySelector('.post[data-id="'+id+'"]');
+      if(again) again.focus({preventScroll:true});
+    });
+    el.addEventListener('keydown', ev=>{
+      if(ev.key==='Enter' || ev.key===' '){
+        ev.preventDefault();
+        openId = openId===el.dataset.id ? null : el.dataset.id;
+        renderPlan();
+      }
+    });
+  });
+  scope.querySelectorAll('[data-cancel]').forEach(b=>b.addEventListener('click',()=>confirmCancel(b)));
+  scope.querySelectorAll('[data-move]').forEach(b=>b.addEventListener('click',()=>openEditor(b)));
+}
+
+function renderWeek(){
+  const start = mondayOf(parseDay(anchor));
+  const days = Array.from({length:7},(_,i)=>isoOf(addDays(start,i)));
+  const html = days.map((d,i)=>{
+    const items = itemsOn(d);
+    return '<div class="wk-col'+(d===TODAY?' today':'')+'">'+
+      '<div class="wk-head"><b>周'+DOW[i]+'</b><span class="d">'+d.slice(5)+'</span>'+
+        '<span class="n">'+(items.length?items.length+' 条':'')+'</span></div>'+
+      '<div class="wk-body">'+
+        items.map(it=>postCard(it)).join('')+
+        '<button class="wk-add" data-add="'+d+'" type="button">+ 排一条</button>'+
+      '</div></div>';
+  }).join('');
+  const box = document.getElementById('view-week');
+  box.innerHTML = '<div class="wk">'+html+'</div>';
+  bindPosts(box);
+  box.querySelectorAll('[data-add]').forEach(b=>b.addEventListener('click',()=>composeOn(b.dataset.add)));
+}
+
+function renderMonth(){
+  const d = parseDay(anchor);
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const start = mondayOf(first);
+  let cells = DOW.map(x=>'<div class="mo-dow">'+x+'</div>').join('');
+  for(let i=0;i<42;i++){
+    const day = addDays(start,i);
+    const key = isoOf(day);
+    const out = day.getMonth()!==first.getMonth();
+    const items = itemsOn(key);
+    const bars = items.slice(0,5).map(it=>'<i class="mo-bar '+it.state+'"></i>').join('');
+    const label = out ? '' : (items.length ? items.length+' 个作品' : '');
+    cells += '<button class="mo-cell'+(out?' out':'')+(key===TODAY?' today':'')+(items.length?' has':'')+'" type="button" data-day="'+key+'"'+
+      (out?' tabindex="-1"':'')+(key===TODAY?' aria-current="date"':'')+
+      ' aria-label="'+labelOf(key)+(items.length?'，'+items.length+' 个作品':'，没有安排')+'">'+
+      '<span class="mo-date">'+day.getDate()+'</span>'+
+      (out?'':'<span class="mo-bars">'+bars+'</span><span class="mo-label">'+label+'</span>')+
+    '</button>';
+  }
+  const box = document.getElementById('view-month');
+  const monthHas = VK.scheduled(VK.current()).some(x=>x.at.slice(0,7)===anchor.slice(0,7));
+  box.innerHTML = '<div class="mo">'+cells+'</div>'+
+    (monthHas ? '<p class="plan-hint">点一天会切到那一周。</p>'
+              : '<p class="plan-hint">本月还没有安排。点上方「+ 排一条」开始。</p>');
+  box.querySelectorAll('.mo-cell:not(.out)').forEach(c=>c.addEventListener('click',()=>{
+    anchor = c.dataset.day;
+    planView = 'week';
+    renderPlan();
+  }));
+}
+
+function listRange(){
+  const from = anchor;
+  const to = isoOf(addDays(parseDay(anchor),19));
+  return {from,to};
+}
+function renderList(){
+  const {from,to} = listRange();
+  const items = VK.scheduledBetween(VK.current(), from, to);
+  const box = document.getElementById('view-list');
+  if(!items.length){
+    box.innerHTML = '<p class="plan-empty">这 20 天还没有安排。点上方「+ 排一条」开始。</p>';
+    return;
+  }
+  const byDay = new Map();
+  items.forEach(it=>{
+    const k = it.at.slice(0,10);
+    if(!byDay.has(k)) byDay.set(k,[]);
+    byDay.get(k).push(it);
+  });
+
+  const dayList = Array.from({length:20},(_,i)=>isoOf(addDays(parseDay(from),i)));
+  let html = '<div class="agenda">';
+  let gapStart = null, gapLen = 0;
+
+  function flushGap(){
+    if(!gapLen) return;
+    const end = isoOf(addDays(parseDay(gapStart), gapLen-1));
+    const label = gapLen===1 ? labelOf(gapStart) : labelOf(gapStart)+' – '+(parseDay(end).getMonth()+1)+'/'+parseDay(end).getDate();
+    const gapDays = Array.from({length:gapLen},(_,i)=>isoOf(addDays(parseDay(gapStart),i)));
+    const picks = gapDays.slice(0,7).map(d=>'<button class="day-pick" data-add="'+d+'" type="button" aria-label="排到 '+labelOf(d)+'">'+Number(d.slice(8,10))+'</button>').join('');
+    html += '<div class="ag-gap"><span>'+label+'</span><span>'+gapLen+' 天没有安排</span>'+
+      '<span class="day-picks">'+picks+(gapDays.length>7?'<span class="post-more">…</span>':'')+'</span></div>';
+    gapStart = null; gapLen = 0;
+  }
+
+  dayList.forEach(k=>{
+    const list = byDay.get(k);
+    if(!list){ if(!gapLen) gapStart = k; gapLen++; return; }
+    flushGap();
+    html += '<section class="ag-day"><div class="ag-head"><b>'+labelOf(k)+'</b>'+
+      (k===TODAY?'<span>今天</span>':'')+
+      '<span class="n">'+list.length+' 条</span></div>'+
+      list.map(it=>{
+        const plats = (it.platforms||[]).filter(p=>VK.platforms[p]);
+        return '<div class="ag-row" data-id="'+it.id+'">'+
+          '<span class="ag-time">'+it.at.slice(11,16)+'</span>'+
+          '<span class="ag-title" title="'+it.title.replace(/"/g,'&quot;')+'">'+(VK.conflictIds(VK.current()).has(it.id)?'<span class="chip-warn">撞车</span>':'')+it.title+'</span>'+
+          '<span class="ag-plats">'+VK.platsOf(it).map(p=>'<span class="ppill '+p.state+'" title="'+(VK.platforms[p.id]?VK.platforms[p.id].name:p.id)+' · '+stateText(p.state)+'"><svg class="plogo" aria-hidden="true"><use href="#'+VK.platforms[p.id].logo+'"/></svg></span>').join('')+'</span>'+
+          '<span class="ag-act">'+(it.state==='scheduled'
+            ? '<button class="btn sm" data-move="'+it.id+'" type="button">改期</button>'+
+              '<button class="btn sm danger" data-cancel="'+it.id+'" type="button">取消</button>'
+            : '<a class="btn sm" href="work.html">看作品</a>')+'</span>'+
+        '</div>';
+      }).join('')+
+    '</section>';
+  });
+  flushGap();
+  html += '</div>';
+  box.innerHTML = html;
+
+  box.querySelectorAll('[data-add]').forEach(b=>b.addEventListener('click',()=>composeOn(b.dataset.add)));
+  box.querySelectorAll('[data-cancel]').forEach(b=>b.addEventListener('click',()=>confirmCancel(b)));
+  box.querySelectorAll('[data-move]').forEach(b=>b.addEventListener('click',()=>openEditor(b)));
+}
+
+function tomorrowOf(at){ return isoOf(addDays(parseDay(at.slice(0,10)),1)) + 'T' + at.slice(11,16); }
+function nextWeekOf(at){ return isoOf(addDays(parseDay(at.slice(0,10)),7)) + 'T' + at.slice(11,16); }
+
+function conflictAt(id, at, platformIds){
+  return VK.scheduled(VK.current()).filter(o=>{
+    if(o.id===id) return false;
+    const gap = Math.abs(new Date(o.at) - new Date(at)) / 60000;
+    if(gap > 30) return false;
+    return VK.platsOf(o).some(p=>platformIds.includes(p.id));
+  });
+}
+
+function openEditor(btn){
+  const id = btn.dataset.move;
+  const it = VK.scheduled(VK.current()).find(x=>x.id===id);
+  if(!it) return;
+  const row = btn.closest('.post') || btn.closest('.ag-row');
+  const myPlats = VK.platsOf(it).map(p=>p.id);
+  const holder = document.createElement('div');
+  holder.className = 'post-editor';
+  holder.innerHTML =
+    '<div class="quick">'+
+      '<button class="btn sm" data-set="'+tomorrowOf(it.at)+'" type="button">明天 '+it.at.slice(11,16)+'</button>'+
+      '<button class="btn sm" data-set="'+nextWeekOf(it.at)+'" type="button">下周同日</button>'+
+    '</div>'+
+    '<input class="input" type="datetime-local" value="'+it.at+'" min="'+TODAY+'T00:00" aria-label="新的发布时间">'+
+    '<p class="inline-warn" hidden></p>'+
+    '<div class="post-actions" style="display:flex">'+
+      '<button class="btn sm primary" type="button" data-save>保存</button>'+
+      '<button class="btn sm" type="button" data-cancel-edit>取消</button>'+
+    '</div>';
+  const target = row.querySelector('.post-actions') || row.querySelector('.ag-act');
+  target.replaceWith(holder);
+  const input = holder.querySelector('input');
+  const warn = holder.querySelector('.inline-warn');
+
+  function check(){
+    warn.hidden = true;
+    const v = input.value;
+    if(!v){ warn.hidden = false; warn.textContent = '请选择时间'; return false; }
+    if(v.slice(0,10) < TODAY){
+      warn.hidden = false;
+      warn.textContent = '这个时间已经过去（今天是 '+TODAY+'）。再点一次保存表示补发。';
+      return 'past';
+    }
+    const hits = conflictAt(id, v, myPlats);
+    if(hits.length){
+      const clashPf = VK.platsOf(hits[0]).find(p=>myPlats.includes(p.id));
+      const pfName = clashPf && VK.platforms[clashPf.id] ? VK.platforms[clashPf.id].name : '同平台';
+      warn.hidden = false;
+      warn.textContent = pfName+' 在 '+hits[0].at.slice(11,16)+' 前后 30 分钟内已经排了 '+hits[0].title+'。再点一次保存仍要排。';
+      return 'clash';
+    }
+    return true;
+  }
+
+  function save(){
+    const v = input.value;
+    if(!v){ check(); return; }
+    if(check() !== true && !holder.dataset.confirmed){ holder.dataset.confirmed = '1'; return; }
+    const old = it.at;
+    VK.scheduleMove(id, v);
+    anchor = v.slice(0,10);
+    openId = null;
+    renderPlan();
+    toast('已改到 '+labelOf(v.slice(0,10))+' '+v.slice(11,16)+' · <button type="button" id="undo-move">撤销</button>');
+    const undo = document.getElementById('undo-move');
+    if(undo) undo.addEventListener('click', ()=>{
+      VK.scheduleMove(id, old);
+      anchor = old.slice(0,10);
+      renderPlan();
+      hideToast();
+    });
+    const moved = document.querySelector('.post[data-id="'+id+'"]');
+    if(moved){ moved.focus({preventScroll:true}); moved.scrollIntoView({block:'nearest'}); }
+  }
+
+  input.addEventListener('change', ()=>{ holder.dataset.confirmed=''; check(); });
+  holder.querySelector('[data-save]').addEventListener('click', save);
+  holder.querySelector('[data-cancel-edit]').addEventListener('click', renderPlan);
+  holder.querySelectorAll('[data-set]').forEach(b=>b.addEventListener('click', ()=>{
+    input.value = b.dataset.set;
+    holder.dataset.confirmed = '';
+    save();
+  }));
+  input.focus();
+}
+
+let undoState = null;
+
+function confirmCancel(btn){
+  const row = btn.closest('.post') || btn.closest('.ag-row');
+  const id = btn.dataset.cancel;
+  const holder = document.createElement('div');
+  holder.className = 'confirm';
+  holder.setAttribute('role','alertdialog');
+  holder.setAttribute('aria-label','确认取消排期');
+  holder.innerHTML = '<p>取消这次排期？作品本身不会被删除。</p>'+
+    '<div class="confirm-act"><button class="btn sm danger" type="button">确认取消</button>'+
+    '<button class="btn sm" type="button">保留</button></div>';
+  const target = row.querySelector('.post-actions') || row.querySelector('.ag-act');
+  target.replaceWith(holder);
+  const [yes, no] = holder.querySelectorAll('button');
+  yes.focus();
+  yes.addEventListener('click', ()=>{
+    VK.scheduleRemove(id);
+    openId = null;
+    renderPlan();
+    toast('已取消一条排期 · <button type="button" id="undo-cancel">撤销</button>');
+    const undo = document.getElementById('undo-cancel');
+    if(undo) undo.addEventListener('click', ()=>{
+      VK.scheduleRestore(id);
+      renderPlan();
+      hideToast();
+    });
+  });
+  no.addEventListener('click', renderPlan);
+}
+
+function toast(html){
+  let bar = document.getElementById('undo-bar');
+  if(!bar){
+    bar = document.createElement('div');
+    bar.id = 'undo-bar';
+    bar.className = 'undo-bar';
+    bar.setAttribute('role','status');
+    bar.setAttribute('aria-live','polite');
+    document.getElementById('main').appendChild(bar);
+  }
+  bar.innerHTML = '<span>'+html+'</span><button type="button" id="undo-close" aria-label="关闭">×</button>';
+  bar.hidden = false;
+  document.getElementById('undo-close').addEventListener('click', hideToast);
+  clearTimeout(toast.t);
+  toast.t = setTimeout(hideToast, 8000);
+}
+function hideToast(){
+  const bar = document.getElementById('undo-bar');
+  if(bar) bar.hidden = true;
+}
+
+function visibleDays(){
+  if(planView==='month'){
+    const d = parseDay(anchor);
+    const first = new Date(d.getFullYear(), d.getMonth(), 1);
+    const start = mondayOf(first);
+    return Array.from({length:42},(_,i)=>isoOf(addDays(start,i)));
+  }
+  if(planView==='list'){
+    const {from} = listRange();
+    return Array.from({length:20},(_,i)=>isoOf(addDays(parseDay(from),i)));
+  }
+  const start = mondayOf(parseDay(anchor));
+  return Array.from({length:7},(_,i)=>isoOf(addDays(start,i)));
+}
+
+function renderSummary(){
+  const list = VK.scheduled(VK.current());
+  const days = visibleDays();
+  const scope0 = list.filter(x=>days.includes(x.at.slice(0,10)));
+  const inMonth = planView==='month' ? anchor.slice(0,7) : null;
+  const countable = inMonth ? days.filter(d=>d.slice(0,7)===inMonth) : days;
+  const scope = inMonth ? scope0.filter(x=>x.at.slice(0,7)===inMonth) : scope0;
+  const empty = countable.filter(d=>!list.some(x=>x.at.slice(0,10)===d)).length;
+  const conflicts = VK.conflicts(VK.current()).filter(c=>{
+    const d = c.at.slice(0,10);
+    return days.includes(d) && (!inMonth || d.slice(0,7)===inMonth);
+  });
+  const label = planView==='month' ? '本月' : planView==='list' ? '这 20 天' : '本周';
+  const c = VK.counts(scope);
+  const future = countable.filter(d=>d>=TODAY);
+  const openDays = future.filter(d=>!list.some(x=>x.at.slice(0,10)===d)).length;
+  const parts = [
+    '<span><b>'+VK.groupLabel()+'</b></span>',
+    '<span class="split">|</span>',
+    '<span>'+label+' <b>'+c.works+'</b> 个作品 · <b>'+c.publishes+'</b> 条平台发布</span>',
+    '<span>还能排 <b>'+openDays+'</b> 天</span>'
+  ];
+  if(conflicts.length) parts.push('<button class="warn-link" id="jump-conflict" type="button">同平台撞车 '+conflicts.length+' 处 · 去看</button>');
+  document.getElementById('plan-summary').innerHTML = parts.join('');
+  const jump = document.getElementById('jump-conflict');
+  if(jump) jump.addEventListener('click', ()=>{
+    anchor = conflicts[0].at.slice(0,10);
+    planView = 'week';
+    renderPlan();
+  });
+}
+
+function renderRange(){
+  const d = parseDay(anchor);
+  const el = document.getElementById('cal-range');
+  if(planView==='month'){ el.textContent = d.getFullYear()+' 年 '+(d.getMonth()+1)+' 月'; return; }
+  if(planView==='list'){
+    const {from,to} = listRange();
+    const a = parseDay(from), b = parseDay(to);
+    el.textContent = (a.getMonth()+1)+'/'+a.getDate()+' – '+(b.getMonth()+1)+'/'+b.getDate();
+    return;
+  }
+  const start = mondayOf(d), end = addDays(start,6);
+  el.textContent = (start.getMonth()+1)+'/'+start.getDate()+' – '+(end.getMonth()+1)+'/'+end.getDate();
+}
+
+function renderPlan(){
+  document.getElementById('view-week').hidden = planView!=='week';
+  document.getElementById('view-month').hidden = planView!=='month';
+  document.getElementById('view-list').hidden = planView!=='list';
+  document.querySelectorAll('.view-btn').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===planView)));
+  if(planView==='week') renderWeek();
+  if(planView==='month') renderMonth();
+  if(planView==='list') renderList();
+  renderSummary();
+  renderRange();
+  let from, to;
+  if(planView==='month'){
+    from = anchor.slice(0,7)+'-01';
+    to = anchor.slice(0,7)+'-'+new Date(Number(anchor.slice(0,4)), Number(anchor.slice(5,7)), 0).getDate();
+  } else if(planView==='list'){
+    const r = listRange(); from = r.from; to = r.to;
+  } else {
+    const st = mondayOf(parseDay(anchor));
+    from = isoOf(st); to = isoOf(addDays(st,6));
+  }
+  document.getElementById('cal-cmd').textContent =
+    'vk schedule list --group '+VK.current()+' --from '+from+' --to '+to;
+}
+
+document.querySelectorAll('.view-btn').forEach(b=>b.addEventListener('click',()=>{
+  planView = b.dataset.view;
+  renderPlan();
+}));
+const step = dir => {
+  const d = parseDay(anchor);
+  if(planView==='month') return isoOf(new Date(d.getFullYear(), d.getMonth()+dir, 1));
+  return isoOf(addDays(d, planView==='list' ? dir*20 : dir*7));
+};
+document.getElementById('cal-prev').addEventListener('click', ()=>{ anchor = step(-1); renderPlan(); });
+document.getElementById('cal-next').addEventListener('click', ()=>{ anchor = step(1); renderPlan(); });
+document.getElementById('cal-today').addEventListener('click', ()=>{ anchor = TODAY; renderPlan(); });
+document.getElementById('cal-new').href = VK.url('publish.html', VK.current());
+
+// 手机上列表比七列更可读
+if(window.matchMedia('(max-width:900px)').matches) planView = 'list';
+renderPlan();
+</script>
+</body>
+</html>

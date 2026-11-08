@@ -1,0 +1,593 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T01:40:45.529Z",
+  "title": "Design System: versekit",
+  "extensions": {
+    "colorMeta": {
+      "departure-navy": {
+        "role": "primary",
+        "displayName": "Departure Navy",
+        "canonical": "#16324f",
+        "tonalRamp": [
+          "oklch(16.0% 0.033 251.2)",
+          "oklch(27.1% 0.046 251.2)",
+          "oklch(38.3% 0.056 251.2)",
+          "oklch(49.4% 0.062 251.2)",
+          "oklch(60.6% 0.062 251.2)",
+          "oklch(71.7% 0.056 251.2)",
+          "oklch(82.9% 0.046 251.2)",
+          "oklch(94.0% 0.033 251.2)"
+        ]
+      },
+      "hangar-navy": {
+        "role": "primary",
+        "displayName": "Hangar Navy",
+        "canonical": "#0f2438",
+        "tonalRamp": [
+          "oklch(16.0% 0.025 249.1)",
+          "oklch(27.1% 0.035 249.1)",
+          "oklch(38.3% 0.042 249.1)",
+          "oklch(49.4% 0.046 249.1)",
+          "oklch(60.6% 0.046 249.1)",
+          "oklch(71.7% 0.042 249.1)",
+          "oklch(82.9% 0.035 249.1)",
+          "oklch(94.0% 0.025 249.1)"
+        ]
+      },
+      "apron-ground": {
+        "role": "neutral",
+        "displayName": "Apron Ground",
+        "canonical": "#f4f4f2",
+        "tonalRamp": [
+          "oklch(16.0% 0.001 106.4)",
+          "oklch(27.1% 0.002 106.4)",
+          "oklch(38.3% 0.002 106.4)",
+          "oklch(49.4% 0.003 106.4)",
+          "oklch(60.6% 0.003 106.4)",
+          "oklch(71.7% 0.002 106.4)",
+          "oklch(82.9% 0.002 106.4)",
+          "oklch(94.0% 0.001 106.4)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(16.0% 0.000 89.9)",
+          "oklch(27.1% 0.000 89.9)",
+          "oklch(38.3% 0.000 89.9)",
+          "oklch(49.4% 0.000 89.9)",
+          "oklch(60.6% 0.000 89.9)",
+          "oklch(71.7% 0.000 89.9)",
+          "oklch(82.9% 0.000 89.9)",
+          "oklch(94.0% 0.000 89.9)"
+        ]
+      },
+      "paper-hover": {
+        "role": "neutral",
+        "displayName": "Paper Hover",
+        "canonical": "#ececeb",
+        "tonalRamp": [
+          "oklch(16.0% 0.001 106.4)",
+          "oklch(27.1% 0.001 106.4)",
+          "oklch(38.3% 0.001 106.4)",
+          "oklch(49.4% 0.001 106.4)",
+          "oklch(60.6% 0.001 106.4)",
+          "oklch(71.7% 0.001 106.4)",
+          "oklch(82.9% 0.001 106.4)",
+          "oklch(94.0% 0.001 106.4)"
+        ]
+      },
+      "paper-subtle": {
+        "role": "neutral",
+        "displayName": "Paper Subtle",
+        "canonical": "#fafaf9",
+        "tonalRamp": [
+          "oklch(16.0% 0.001 106.4)",
+          "oklch(27.1% 0.001 106.4)",
+          "oklch(38.3% 0.001 106.4)",
+          "oklch(49.4% 0.001 106.4)",
+          "oklch(60.6% 0.001 106.4)",
+          "oklch(71.7% 0.001 106.4)",
+          "oklch(82.9% 0.001 106.4)",
+          "oklch(94.0% 0.001 106.4)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#17191c",
+        "tonalRamp": [
+          "oklch(16.0% 0.004 258.4)",
+          "oklch(27.1% 0.005 258.4)",
+          "oklch(38.3% 0.006 258.4)",
+          "oklch(49.4% 0.007 258.4)",
+          "oklch(60.6% 0.007 258.4)",
+          "oklch(71.7% 0.006 258.4)",
+          "oklch(82.9% 0.005 258.4)",
+          "oklch(94.0% 0.004 258.4)"
+        ]
+      },
+      "slate": {
+        "role": "neutral",
+        "displayName": "Slate",
+        "canonical": "#5f666d",
+        "tonalRamp": [
+          "oklch(16.0% 0.008 248.1)",
+          "oklch(27.1% 0.010 248.1)",
+          "oklch(38.3% 0.013 248.1)",
+          "oklch(49.4% 0.014 248.1)",
+          "oklch(60.6% 0.014 248.1)",
+          "oklch(71.7% 0.013 248.1)",
+          "oklch(82.9% 0.010 248.1)",
+          "oklch(94.0% 0.008 248.1)"
+        ]
+      },
+      "slate-faint": {
+        "role": "neutral",
+        "displayName": "Slate Faint",
+        "canonical": "#646b73",
+        "tonalRamp": [
+          "oklch(16.0% 0.008 251.7)",
+          "oklch(27.1% 0.011 251.7)",
+          "oklch(38.3% 0.014 251.7)",
+          "oklch(49.4% 0.015 251.7)",
+          "oklch(60.6% 0.015 251.7)",
+          "oklch(71.7% 0.014 251.7)",
+          "oklch(82.9% 0.011 251.7)",
+          "oklch(94.0% 0.008 251.7)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#d9dcdf",
+        "tonalRamp": [
+          "oklch(16.0% 0.003 247.9)",
+          "oklch(27.1% 0.004 247.9)",
+          "oklch(38.3% 0.005 247.9)",
+          "oklch(49.4% 0.005 247.9)",
+          "oklch(60.6% 0.005 247.9)",
+          "oklch(71.7% 0.005 247.9)",
+          "oklch(82.9% 0.004 247.9)",
+          "oklch(94.0% 0.003 247.9)"
+        ]
+      },
+      "hairline-soft": {
+        "role": "neutral",
+        "displayName": "Hairline Soft",
+        "canonical": "#e8eaec",
+        "tonalRamp": [
+          "oklch(16.0% 0.002 247.9)",
+          "oklch(27.1% 0.003 247.9)",
+          "oklch(38.3% 0.003 247.9)",
+          "oklch(49.4% 0.003 247.9)",
+          "oklch(60.6% 0.003 247.9)",
+          "oklch(71.7% 0.003 247.9)",
+          "oklch(82.9% 0.003 247.9)",
+          "oklch(94.0% 0.002 247.9)"
+        ]
+      },
+      "changed-amber": {
+        "role": "secondary",
+        "displayName": "Changed Amber",
+        "canonical": "#a85c06",
+        "tonalRamp": [
+          "oklch(16.0% 0.069 58.9)",
+          "oklch(27.1% 0.096 58.9)",
+          "oklch(38.3% 0.116 58.9)",
+          "oklch(49.4% 0.128 58.9)",
+          "oklch(60.6% 0.128 58.9)",
+          "oklch(71.7% 0.116 58.9)",
+          "oklch(82.9% 0.096 58.9)",
+          "oklch(94.0% 0.069 58.9)"
+        ]
+      },
+      "changed-amber-bg": {
+        "role": "secondary",
+        "displayName": "Changed Amber Bg",
+        "canonical": "#fff7e9",
+        "tonalRamp": [
+          "oklch(16.0% 0.011 81.8)",
+          "oklch(27.1% 0.015 81.8)",
+          "oklch(38.3% 0.018 81.8)",
+          "oklch(49.4% 0.020 81.8)",
+          "oklch(60.6% 0.020 81.8)",
+          "oklch(71.7% 0.018 81.8)",
+          "oklch(82.9% 0.015 81.8)",
+          "oklch(94.0% 0.011 81.8)"
+        ]
+      },
+      "changed-amber-line": {
+        "role": "secondary",
+        "displayName": "Changed Amber Line",
+        "canonical": "#e4c28e",
+        "tonalRamp": [
+          "oklch(16.0% 0.042 77.9)",
+          "oklch(27.1% 0.058 77.9)",
+          "oklch(38.3% 0.070 77.9)",
+          "oklch(49.4% 0.077 77.9)",
+          "oklch(60.6% 0.077 77.9)",
+          "oklch(71.7% 0.070 77.9)",
+          "oklch(82.9% 0.058 77.9)",
+          "oklch(94.0% 0.042 77.9)"
+        ]
+      },
+      "changed-amber-bright": {
+        "role": "secondary",
+        "displayName": "Changed Amber Bright",
+        "canonical": "#ffc46b",
+        "tonalRamp": [
+          "oklch(16.0% 0.067 76.0)",
+          "oklch(27.1% 0.093 76.0)",
+          "oklch(38.3% 0.114 76.0)",
+          "oklch(49.4% 0.125 76.0)",
+          "oklch(60.6% 0.125 76.0)",
+          "oklch(71.7% 0.114 76.0)",
+          "oklch(82.9% 0.093 76.0)",
+          "oklch(94.0% 0.067 76.0)"
+        ]
+      },
+      "healthy-green": {
+        "role": "tertiary",
+        "displayName": "Healthy Green",
+        "canonical": "#1f6b52",
+        "tonalRamp": [
+          "oklch(16.0% 0.045 167.0)",
+          "oklch(27.1% 0.062 167.0)",
+          "oklch(38.3% 0.076 167.0)",
+          "oklch(49.4% 0.083 167.0)",
+          "oklch(60.6% 0.083 167.0)",
+          "oklch(71.7% 0.076 167.0)",
+          "oklch(82.9% 0.062 167.0)",
+          "oklch(94.0% 0.045 167.0)"
+        ]
+      },
+      "healthy-green-bg": {
+        "role": "tertiary",
+        "displayName": "Healthy Green Bg",
+        "canonical": "#eef7f2",
+        "tonalRamp": [
+          "oklch(16.0% 0.006 162.1)",
+          "oklch(27.1% 0.009 162.1)",
+          "oklch(38.3% 0.010 162.1)",
+          "oklch(49.4% 0.011 162.1)",
+          "oklch(60.6% 0.011 162.1)",
+          "oklch(71.7% 0.010 162.1)",
+          "oklch(82.9% 0.009 162.1)",
+          "oklch(94.0% 0.006 162.1)"
+        ]
+      },
+      "healthy-green-line": {
+        "role": "tertiary",
+        "displayName": "Healthy Green Line",
+        "canonical": "#b8d5c7",
+        "tonalRamp": [
+          "oklch(16.0% 0.019 164.8)",
+          "oklch(27.1% 0.027 164.8)",
+          "oklch(38.3% 0.033 164.8)",
+          "oklch(49.4% 0.036 164.8)",
+          "oklch(60.6% 0.036 164.8)",
+          "oklch(71.7% 0.033 164.8)",
+          "oklch(82.9% 0.027 164.8)",
+          "oklch(94.0% 0.019 164.8)"
+        ]
+      },
+      "expired-red": {
+        "role": "tertiary",
+        "displayName": "Expired Red",
+        "canonical": "#a32b20",
+        "tonalRamp": [
+          "oklch(16.0% 0.084 29.4)",
+          "oklch(27.1% 0.117 29.4)",
+          "oklch(38.3% 0.143 29.4)",
+          "oklch(49.4% 0.156 29.4)",
+          "oklch(60.6% 0.156 29.4)",
+          "oklch(71.7% 0.143 29.4)",
+          "oklch(82.9% 0.117 29.4)",
+          "oklch(94.0% 0.084 29.4)"
+        ]
+      },
+      "expired-red-bg": {
+        "role": "tertiary",
+        "displayName": "Expired Red Bg",
+        "canonical": "#fff2f0",
+        "tonalRamp": [
+          "oklch(16.0% 0.008 28.0)",
+          "oklch(27.1% 0.011 28.0)",
+          "oklch(38.3% 0.013 28.0)",
+          "oklch(49.4% 0.014 28.0)",
+          "oklch(60.6% 0.014 28.0)",
+          "oklch(71.7% 0.013 28.0)",
+          "oklch(82.9% 0.011 28.0)",
+          "oklch(94.0% 0.008 28.0)"
+        ]
+      },
+      "expired-red-line": {
+        "role": "tertiary",
+        "displayName": "Expired Red Line",
+        "canonical": "#e5b7b1",
+        "tonalRamp": [
+          "oklch(16.0% 0.029 26.9)",
+          "oklch(27.1% 0.040 26.9)",
+          "oklch(38.3% 0.049 26.9)",
+          "oklch(49.4% 0.054 26.9)",
+          "oklch(60.6% 0.054 26.9)",
+          "oklch(71.7% 0.049 26.9)",
+          "oklch(82.9% 0.040 26.9)",
+          "oklch(94.0% 0.029 26.9)"
+        ]
+      },
+      "nav-text": {
+        "role": "neutral",
+        "displayName": "Nav Text",
+        "canonical": "#c9d7e3",
+        "tonalRamp": [
+          "oklch(16.0% 0.012 243.8)",
+          "oklch(27.1% 0.017 243.8)",
+          "oklch(38.3% 0.020 243.8)",
+          "oklch(49.4% 0.022 243.8)",
+          "oklch(60.6% 0.022 243.8)",
+          "oklch(71.7% 0.020 243.8)",
+          "oklch(82.9% 0.017 243.8)",
+          "oklch(94.0% 0.012 243.8)"
+        ]
+      },
+      "nav-muted": {
+        "role": "neutral",
+        "displayName": "Nav Muted",
+        "canonical": "#a9bccc",
+        "tonalRamp": [
+          "oklch(16.0% 0.017 243.5)",
+          "oklch(27.1% 0.023 243.5)",
+          "oklch(38.3% 0.028 243.5)",
+          "oklch(49.4% 0.031 243.5)",
+          "oklch(60.6% 0.031 243.5)",
+          "oklch(71.7% 0.028 243.5)",
+          "oklch(82.9% 0.023 243.5)",
+          "oklch(94.0% 0.017 243.5)"
+        ]
+      },
+      "nav-hover": {
+        "role": "neutral",
+        "displayName": "Nav Hover",
+        "canonical": "#1d3d5c",
+        "tonalRamp": [
+          "oklch(16.0% 0.035 249.6)",
+          "oklch(27.1% 0.049 249.6)",
+          "oklch(38.3% 0.060 249.6)",
+          "oklch(49.4% 0.066 249.6)",
+          "oklch(60.6% 0.066 249.6)",
+          "oklch(71.7% 0.060 249.6)",
+          "oklch(82.9% 0.049 249.6)",
+          "oklch(94.0% 0.035 249.6)"
+        ]
+      },
+      "nav-line": {
+        "role": "neutral",
+        "displayName": "Nav Line",
+        "canonical": "#2a4a68",
+        "tonalRamp": [
+          "oklch(16.0% 0.034 248.2)",
+          "oklch(27.1% 0.047 248.2)",
+          "oklch(38.3% 0.057 248.2)",
+          "oklch(49.4% 0.063 248.2)",
+          "oklch(60.6% 0.063 248.2)",
+          "oklch(71.7% 0.057 248.2)",
+          "oklch(82.9% 0.047 248.2)",
+          "oklch(94.0% 0.034 248.2)"
+        ]
+      },
+      "nav-paper-hover": {
+        "role": "neutral",
+        "displayName": "Nav Paper Hover",
+        "canonical": "#eaf0f5",
+        "tonalRamp": [
+          "oklch(16.0% 0.005 242.8)",
+          "oklch(27.1% 0.007 242.8)",
+          "oklch(38.3% 0.008 242.8)",
+          "oklch(49.4% 0.009 242.8)",
+          "oklch(60.6% 0.009 242.8)",
+          "oklch(71.7% 0.008 242.8)",
+          "oklch(82.9% 0.007 242.8)",
+          "oklch(94.0% 0.005 242.8)"
+        ]
+      },
+      "local-green": {
+        "role": "tertiary",
+        "displayName": "Local Green",
+        "canonical": "#7fd1b0",
+        "tonalRamp": [
+          "oklch(16.0% 0.050 166.5)",
+          "oklch(27.1% 0.070 166.5)",
+          "oklch(38.3% 0.085 166.5)",
+          "oklch(49.4% 0.093 166.5)",
+          "oklch(60.6% 0.093 166.5)",
+          "oklch(71.7% 0.085 166.5)",
+          "oklch(82.9% 0.070 166.5)",
+          "oklch(94.0% 0.050 166.5)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "界面文字层级。"
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "界面文字层级。"
+      },
+      "brand": {
+        "displayName": "Brand",
+        "purpose": "界面文字层级。"
+      },
+      "brand-compact": {
+        "displayName": "Brand Compact",
+        "purpose": "界面文字层级。"
+      },
+      "brand-small": {
+        "displayName": "Brand Small",
+        "purpose": "界面文字层级。"
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "界面文字层级。"
+      },
+      "body-small": {
+        "displayName": "Body Small",
+        "purpose": "界面文字层级。"
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "界面文字层级。"
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "时间、编号与需要对齐的数据。"
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "desktop-compact",
+        "value": "1180px"
+      },
+      {
+        "name": "top-navigation",
+        "value": "1020px"
+      },
+      {
+        "name": "mobile",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Publish Button",
+      "kind": "button",
+      "refersTo": "button-publish",
+      "description": "全局唯一主动作，固定在导航顶部。",
+      "html": "<a class=\"ds-publish\" href=\"#\"><b>+</b> 发布内容</a>",
+      "css": ".ds-publish{display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:0 14px;background:#fff;color:#16324f;border:1px solid #fff;border-radius:6px;font:600 14px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;text-decoration:none}.ds-publish:hover{background:#eaf0f5}.ds-publish:focus-visible{outline:2px solid #ffc46b;outline-offset:3px}.ds-publish b{font-size:18px;font-weight:400}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "当前最需要处理的行内动作。",
+      "html": "<button class=\"ds-primary\">重新登录</button>",
+      "css": ".ds-primary{min-height:36px;padding:0 13px;background:#16324f;color:#fff;border:1px solid #16324f;border-radius:6px;font:500 13px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;cursor:pointer}.ds-primary:hover{background:#0f2438}.ds-primary:focus-visible{outline:2px solid #a85c06;outline-offset:3px}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "详情、续期等次操作。",
+      "html": "<button class=\"ds-secondary\">续期</button>",
+      "css": ".ds-secondary{min-height:36px;padding:0 13px;background:#fff;color:#17191c;border:1px solid #d9dcdf;border-radius:6px;font:500 13px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;cursor:pointer}.ds-secondary:hover{background:#ececeb}.ds-secondary:focus-visible{outline:2px solid #a85c06;outline-offset:3px}"
+    },
+    {
+      "name": "Status Badges",
+      "kind": "chip",
+      "refersTo": "status-ok",
+      "description": "登录状态三种口径：正常只有绿点灰绿字（无填充），将过期与已失效才用琥珀/红浅底签。",
+      "html": "<div class=\"ds-badges\"><span class=\"ds-status-ok\"><i></i>登录正常</span><span class=\"ds-badge warn\">登录将过期</span><span class=\"ds-badge bad\">登录已失效</span></div>",
+      "css": ".ds-badges{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ds-status-ok{display:inline-flex;align-items:center;gap:6px;color:#1f6b52;font:500 12px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-status-ok i{width:6px;height:6px;border-radius:50%;background:#1f6b52}.ds-badge{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border:1px solid;border-radius:4px;font:500 12px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;white-space:nowrap}.ds-badge.warn{color:#a85c06;background:#fff7e9;border-color:#e4c28e}.ds-badge.bad{color:#a32b20;background:#fff2f0;border-color:#e5b7b1}"
+    },
+    {
+      "name": "Todo Strip",
+      "kind": "nav",
+      "refersTo": "status-warning",
+      "description": "标题下的待处理文字链，按严重度排序；点击直达对应格并展开组内详情。按所需动作去重。",
+      "html": "<div class=\"ds-todos\"><strong>待处理</strong><button class=\"ds-todo\">小红书重登</button><button class=\"ds-todo\">抖音续期</button><button class=\"ds-todo\">TikTok 放行</button></div>",
+      "css": ".ds-todos{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font:400 12px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-todos strong{margin-right:3px;color:#5f666d;font-weight:500}.ds-todo{min-height:32px;padding:2px 6px;border:0;background:transparent;color:#16324f;font:500 12px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;text-decoration:underline;text-underline-offset:3px;cursor:pointer}.ds-todo+.ds-todo:before{content:\"·\";margin-right:6px;color:#646b73;text-decoration:none}.ds-todo:focus-visible{outline:2px solid #a85c06;outline-offset:2px}"
+    },
+    {
+      "name": "Matrix Cell",
+      "kind": "custom",
+      "refersTo": "matrix-cell",
+      "description": "账号组 × 平台的瓷贴：首行平台标识 + 账号名自证身份，第二行登录状态，三、四行发布/采集结果绑定时间；异常整块浅底，选中是贴内 2px 深蓝内框。",
+      "html": "<div class=\"ds-field\"><button class=\"ds-cell\" aria-label=\"B站 · AI工具研究所 · 登录正常\"><span class=\"ds-head\"><svg class=\"ds-logo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"24\" height=\"24\" rx=\"5\" fill=\"#00a1d6\"/><path d=\"M7.2 5.6 10 8.2M16.8 5.6 14 8.2\" stroke=\"#fff\" stroke-width=\"1.5\" stroke-linecap=\"round\"/><rect x=\"4\" y=\"8.2\" width=\"16\" height=\"10.6\" rx=\"3\" fill=\"#fff\"/><path d=\"M10.2 11.4 14.4 13.5 10.2 15.6Z\" fill=\"#00a1d6\"/></svg><b class=\"ds-handle\">AI工具研究所</b></span><span class=\"ds-ok\"><i></i>登录正常</span><span class=\"ds-mini\"><i>发</i><b>昨天 20:00</b></span><span class=\"ds-mini\"><i>采</i><b>12 分钟前</b></span></button><button class=\"ds-cell ds-bad selected\" aria-label=\"小红书 · @AI工具研究所 · 登录已失效\" aria-pressed=\"true\"><span class=\"ds-head\"><svg class=\"ds-logo\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"24\" height=\"24\" rx=\"5\" fill=\"#ff2442\"/><text x=\"12\" y=\"17\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#fff\" font-family=\"-apple-system,PingFang SC,sans-serif\">红</text></svg><b class=\"ds-handle\">@AI工具研究所</b></span><span class=\"ds-badge2\">登录已失效</span><span class=\"ds-mini bad\"><i>发</i><b>失败 · 10-31</b></span><span class=\"ds-mini bad\"><i>采</i><b>失败 · 3 天前</b></span></button></div>",
+      "css": ".ds-field{display:flex;gap:6px;padding:6px;background:#f4f4f2;font-family:-apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-cell{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:104px;min-width:150px;padding:10px 11px;background:#fff;color:#17191c;border:1px solid #d9dcdf;border-radius:8px;font:400 14px inherit;text-align:left;cursor:pointer;transition:border-color .15s ease-out}.ds-cell:hover{border-color:#c3c8cd}.ds-cell.selected{outline:2px solid #16324f;outline-offset:1px}.ds-cell:focus-visible{outline:2px solid #a85c06;outline-offset:2px}.ds-cell.ds-bad{background:#fff2f0;border-color:#e5b7b1}.ds-head{display:flex;align-items:center;gap:7px;min-width:0;width:100%}.ds-logo{width:18px;height:18px;flex:none;border-radius:4px}.ds-handle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:650;letter-spacing:-.01em}.ds-ok{display:inline-flex;align-items:center;gap:6px;min-height:20px;color:#1f6b52;font-size:12px;font-weight:500}.ds-ok i{width:6px;height:6px;border-radius:50%;background:#1f6b52}.ds-badge2{display:inline-flex;align-items:center;min-height:20px;padding:1px 7px;border:1px solid #e5b7b1;border-radius:4px;background:#fff2f0;color:#a32b20;font-size:12px}.ds-mini{display:flex;align-items:baseline;gap:4px;color:#5f666d;font:400 12px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;max-width:100%}.ds-mini.bad{color:#a32b20}.ds-mini i{flex:none;color:#646b73;font-family:-apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;font-style:normal;font-size:12px}.ds-mini b{overflow:hidden;text-overflow:ellipsis;font-weight:400}"
+    },
+    {
+      "name": "Ghost Tile（未接入）",
+      "kind": "custom",
+      "refersTo": "matrix-cell",
+      "description": "虚线幽灵贴，表达矩阵缺口而不伪装成账号；点击预填账号组与平台。",
+      "html": "<div class=\"ds-ghost\"><span class=\"ds-ghost-label\">小红书</span><span>未接入</span><a class=\"ds-ghost-add\" href=\"#\">+ 添加</a></div>",
+      "css": ".ds-ghost{display:flex;flex-direction:column;gap:5px;min-height:96px;min-width:150px;padding:12px 13px;background:transparent;border:1px dashed #d9dcdf;border-radius:8px;color:#646b73;font:400 12px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-ghost-add{display:inline-flex;align-items:center;min-height:32px;color:#5f666d;font-size:12px;text-underline-offset:3px}"
+    },
+    {
+      "name": "Account Detail",
+      "kind": "card",
+      "refersTo": "account-detail",
+      "description": "选中账号的组内详情：定位小字 + handle 主标题 + 一句异常结论（含最近成功时间），两列证据，唯一主按钮指向具体对象。",
+      "html": "<section class=\"ds-detail\"><div class=\"ds-detail-head\"><div><p class=\"ds-loc\">AI 工具研究所 · 小红书</p><h3>@AI工具研究所</h3><p class=\"ds-issue bad\">登录已失效 · 发布与采集暂停 · 最近成功采集 10-24 09:12</p></div><button class=\"ds-action\">重新登录</button></div><div class=\"ds-detail-grid\"><div><label>最近发布</label><time>10-31 20:10</time><small>《AI 剪辑 30 天》 · 发布失败：风控拦截，重试 2 次</small></div><div><label>最近采集</label><time>3 天前</time><small>创作中心 · 连续失败 2 次</small></div></div></section>",
+      "css": ".ds-detail{padding:16px 20px;background:#fff;border:1px solid #d9dcdf;border-radius:8px;font:400 14px -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif;color:#17191c}.ds-detail-head{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-bottom:14px;border-bottom:1px solid #e8eaec}.ds-loc{color:#646b73;font-size:12px}.ds-detail-head h3{margin-top:3px;font-size:18px;font-weight:650}.ds-issue{margin-top:5px;color:#5f666d;font-size:13px}.ds-issue.bad{color:#a32b20}.ds-issue.warn{color:#a85c06}.ds-action{min-height:36px;padding:0 13px;background:#16324f;color:#fff;border:1px solid #16324f;border-radius:6px;font-size:13px}.ds-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;padding-top:14px}.ds-detail-grid label{display:block;margin-bottom:6px;color:#646b73;font-size:12px}.ds-detail-grid time{font:500 12px ui-monospace,Menlo,monospace}.ds-detail-grid small{display:block;margin-top:4px;color:#5f666d;font-size:12px}"
+    },
+    {
+      "name": "Local Status",
+      "kind": "custom",
+      "refersTo": "status-ok",
+      "description": "本地运行与凭证留本机的信任承诺。",
+      "html": "<div class=\"ds-local\"><strong><i></i>本地运行中</strong><span>凭证与数据只在这台电脑<br>最近检查 19:26</span></div>",
+      "css": ".ds-local{display:flex;flex-direction:column;gap:6px;padding:18px 10px 0;border-top:1px solid #2a4a68;background:#16324f;color:#a9bccc;font:400 12px/1.7 -apple-system,BlinkMacSystemFont,\"PingFang SC\",sans-serif}.ds-local strong{display:flex;align-items:center;gap:7px;color:#e7eef5;font-weight:500}.ds-local i{width:7px;height:7px;border-radius:50%;background:#7fd1b0}"
+    }
+  ],
+  "narrative": {
+    "northStar": "「出港牌」 The Departure Board（只保留一瞥可读原则，不使用航空造型）",
+    "overview": "每页只完成一个任务：账号墙以账号组为行、平台为列，直接呈现二维健康矩阵；发布台只负责发布，作品详情只解释一条作品，任务与日志只呈现队列和失败现场。信息架构先于视觉，用户不需要学习品牌隐喻。",
+    "keyCharacteristics": [
+      "一页一个主任务；全局只有发布内容一个主动作。",
+      "首页以账号组为行、平台为列，直接呈现二维矩阵；每格自带平台标识与账号名。",
+      "待处理条直达对应格；矩阵承担全局定位与缺口暴露。",
+      "正常态只有绿点灰绿字，异常才有彩色浅底签。",
+      "每个时间绑定结果（发布/采集 成功或失败），不裸放时间。",
+      "详情跟随账号组原位展开，handle 为主标题，一个主按钮指向具体对象。",
+      "手机展示同一批数据，不隐藏正常账号。"
+    ],
+    "rules": [
+      {
+        "name": "The One-Ambient-Color Rule",
+        "body": "深蓝是唯一大面积彩色区域；状态色只出现在小签、短句和极浅格底。",
+        "section": "colors"
+      },
+      {
+        "name": "The Chinese-First Rule",
+        "body": "状态与动作先写中文，等宽字体不承担句子。",
+        "section": "typography"
+      },
+      {
+        "name": "The One-Surface Rule",
+        "body": "零阴影；层级由明暗与发丝线承担。",
+        "section": "elevation"
+      },
+      {
+        "name": "The Result-Bound-Time Rule",
+        "body": "格内每个时间必须绑定结果（成功/失败/待放行），失败与数据陈旧不靠点进去才发现。",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do 让每格自证身份：平台标识 + 账号名放进格内。",
+      "Do 把待办放在首屏顶部，点击直达对应格。",
+      "Do 让每个时间绑定结果。",
+      "Do 详情跟随账号组原位展开，主按钮指向具体对象。",
+      "Do 手机保留同一批账号与字段。"
+    ],
+    "donts": [
+      "Don't 用航班、登机口、乘客等隐喻替代产品术语。",
+      "Don't 在账号墙里塞作品详情、发布队列或数据看板。",
+      "Don't 给正常账号做彩色填充徽章。",
+      "Don't 在详情里重播矩阵已有的状态签或写空话。",
+      "Don't 用阴影、玻璃、渐变或大圆角卡片制造层次。",
+      "Don't 为了手机简短而隐藏正常账号。",
+      "Don't 抄 Postiz 的紫色、近黑底或视觉识别。"
+    ]
+  }
+}

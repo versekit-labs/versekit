@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>versekit · 账号 · 机场黄色导视</title>
+<style>
+:root{
+  --yellow:#f2c400;--ink:#111111;--paper:#ffffff;--muted:#5c5c5c;--line:#e2e2e2;--grey:#2b2b2b;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:13px}
+.top{height:56px;background:var(--ink);color:#fff;display:flex;align-items:center;gap:36px;padding:0 32px}
+.mark{font-size:18px;font-weight:600}
+.mark b{font-weight:400;color:#9a9a9a}
+nav{display:flex;gap:26px;font-size:13px}
+nav a{color:#c9c9c9;text-decoration:none;padding:18px 0}
+nav a.on{color:#fff;border-bottom:3px solid var(--yellow)}
+.grow{flex:1}
+.sys{font-family:var(--mono);font-size:10.5px;color:#9a9a9a;letter-spacing:.08em}
+.band{background:var(--yellow);display:flex;align-items:center;gap:26px;padding:0 32px;height:108px}
+.bnum{font-size:64px;font-weight:700;line-height:1;letter-spacing:-.04em;width:52px}
+.blabel{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:#3d3200;margin-bottom:4px}
+.bmain{font-size:29px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+.bmain u{text-decoration:none;border-bottom:3px solid var(--ink)}
+.bmeta{font-size:12.5px;color:#3d3200;margin-top:4px}
+.bright{margin-left:auto;display:flex;align-items:center;gap:18px}
+.arrow{width:56px;height:26px;display:block}
+.arrow polygon{fill:var(--ink)}
+.dist{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:#3d3200}
+.band2{background:var(--yellow);display:flex;align-items:center;gap:18px;height:58px;padding:0 32px;border-top:2px solid var(--ink)}
+.b2label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:#3d3200}
+.b2text{font-size:15px;font-weight:600}
+.b2text span{font-weight:400;color:#3d3200;margin-left:8px;font-size:12.5px}
+.b2right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.arrow.sm{width:34px;height:16px}
+main{padding:26px 32px 0;display:flex;flex-direction:column}
+.head{display:flex;align-items:baseline;gap:18px;padding-bottom:12px}
+h1{font-size:24px;font-weight:600;letter-spacing:-.02em}
+.sub{font-size:12px;color:var(--muted)}
+.filters{display:flex;gap:20px;margin-left:8px}
+.filters b{font-weight:500;font-size:12.5px;color:var(--muted);padding-bottom:3px;border-bottom:2px solid transparent}
+.filters b.on{color:var(--ink);border-color:var(--yellow)}
+.tbl{border-top:2px solid var(--ink)}
+.thead,.row{display:grid;grid-template-columns:1.9fr 1fr 1.2fr 108px 40px;gap:18px;align-items:center}
+.thead{padding:10px 4px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--muted);border-bottom:1px solid var(--line)}
+.row{padding:13px 4px;border-bottom:1px solid var(--line)}
+.dest b{display:block;font-size:14px;font-weight:600}
+.dest span{font-size:11.5px;color:var(--muted)}
+.state{display:flex;align-items:center;gap:7px;font-size:12.5px}
+.dot{width:7px;height:7px;background:var(--ink);flex:none}
+.dot.hollow{background:transparent;border:1px solid var(--ink)}
+.dot.gone{background:transparent;border:1px dashed var(--ink)}
+.next{font-size:12.5px;color:#2b2b2b}
+.next b{font-weight:600}
+.eta{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:right}
+.go{justify-self:end;width:22px;height:22px}
+.foot{margin-top:14px;display:flex;justify-content:space-between;padding:13px 0 15px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted);letter-spacing:.05em}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="mark">versekit <b>/ vk</b></div>
+  <nav><a class="on">账号</a><a>作品</a><a>发布</a><a>总览</a></nav>
+  <div class="grow"></div>
+  <div class="sys">LOCAL · 19:26 · 8 ACCOUNTS</div>
+</header>
+
+<div class="band">
+  <div class="bnum">1</div>
+  <div>
+    <div class="blabel">下一步 / 唯一的阻塞</div>
+    <div class="bmain"><u>重新登录 小红书</u></div>
+    <div class="bmeta">登录已失效 3 天，采集连续失败 2 次 · 号码 AI 工具研究所</div>
+  </div>
+  <div class="bright">
+    <span class="dist">约 2 分钟</span>
+    <svg class="arrow" viewBox="0 0 56 26" aria-hidden="true"><polygon points="0,10 34,10 34,0 56,13 34,26 34,16 0,16"/></svg>
+  </div>
+</div>
+
+<div class="band2">
+  <span class="b2label">然后</span>
+  <span class="b2text">放行 TikTok 草稿<span>仅自己可见的那一条，等你点头</span></span>
+  <div class="b2right">
+    <span class="dist">约 10 秒</span>
+    <svg class="arrow sm" viewBox="0 0 34 16" aria-hidden="true"><polygon points="0,6 20,6 20,0 34,8 20,16 20,10 0,10"/></svg>
+  </div>
+</div>
+
+<main>
+  <header class="head">
+    <h1>所有账号</h1>
+    <p class="sub">按「还差几步」排，最近的排最前</p>
+    <div class="filters"><b class="on">全部 8</b><b>要动手 2</b><b>不用管 6</b></div>
+    <div class="grow"></div>
+  </header>
+
+  <section class="tbl">
+    <div class="thead"><span>目的地 / 账号</span><span>状态</span><span>还差什么</span><span>耗时</span><span></span></div>
+    <div class="row">
+      <div class="dest"><b>小红书 · AI 工具研究所</b><span>自动化通道</span></div>
+      <div class="state"><span class="dot"></span>登录已失效</div>
+      <div class="next"><b>扫码重新登录</b></div>
+      <div class="eta">2 分钟</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#111"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>TikTok · @ai-tools-lab</b><span>已发，仅自己可见</span></div>
+      <div class="state"><span class="dot hollow"></span>待放行</div>
+      <div class="next"><b>放行公开</b>，系统自动改可见性</div>
+      <div class="eta">10 秒</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#111"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>抖音 · AI 工具研究所</b><span>cookie 通道</span></div>
+      <div class="state"><span class="dot hollow"></span>71 小时后失效</div>
+      <div class="next"><b>提前续期</b>，现在做不用等它掉</div>
+      <div class="eta">1 分钟</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#111"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>B站 · AI 工具研究所</b><span>公开投稿接口</span></div>
+      <div class="state"><span class="dot gone"></span>正常</div>
+      <div class="next">什么都不用做</div>
+      <div class="eta">—</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#d8d8d8"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>YouTube · @ai-tools-lab</b><span>官方 API</span></div>
+      <div class="state"><span class="dot gone"></span>正常</div>
+      <div class="next">什么都不用做</div>
+      <div class="eta">—</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#d8d8d8"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>B站 · 剪辑日记</b><span>公开投稿接口 · 矩阵副号</span></div>
+      <div class="state"><span class="dot gone"></span>正常</div>
+      <div class="next">什么都不用做</div>
+      <div class="eta">—</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#d8d8d8"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>抖音 · 剪辑日记</b><span>cookie 通道 · 矩阵副号</span></div>
+      <div class="state"><span class="dot gone"></span>正常</div>
+      <div class="next">什么都不用做</div>
+      <div class="eta">—</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#d8d8d8"/></svg>
+    </div>
+    <div class="row">
+      <div class="dest"><b>YouTube · @cutdiary</b><span>官方 API · 矩阵副号</span></div>
+      <div class="state"><span class="dot gone"></span>正常</div>
+      <div class="next">什么都不用做</div>
+      <div class="eta">—</div>
+      <svg class="go" viewBox="0 0 22 22"><polygon points="0,8 13,8 13,0 22,11 13,22 13,14 0,14" fill="#d8d8d8"/></svg>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>8 个账号 · 2 个要动手 · 6 个不用管</span>
+    <span>最近一次巡逻 19:26</span>
+  </footer>
+</main>
+</body>
+</html>

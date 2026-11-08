@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>添加账号 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.flow{max-width:720px}
+.locked{display:flex;align-items:center;gap:10px;padding:10px 13px;border:1px solid var(--line);border-radius:6px;background:var(--paper-subtle);font-size:12px;color:var(--muted)}
+.locked b{color:var(--ink);font-weight:600}
+.step{margin-top:14px}
+.step[hidden]{display:none}
+.step-title{font-size:14px;font-weight:650}
+.step-hint{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.5}
+.qr{display:grid;place-items:center;width:168px;height:168px;margin-top:14px;border:1px dashed var(--line);border-radius:8px;background:var(--paper);color:var(--faint);font-size:12px;text-align:center;line-height:1.5}
+.auth-grid{display:grid;grid-template-columns:168px minmax(0,1fr);gap:18px;margin-top:14px;align-items:start}
+.auth-steps{margin:0;padding-left:18px;font-size:13px;line-height:1.7;color:var(--muted)}
+.auth-steps li::marker{color:var(--faint);font-family:var(--mono);font-size:12px}
+.done-box{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:20px;border:1px solid var(--green-line);border-radius:8px;background:var(--green-bg)}
+.done-box h2{font-size:18px;font-weight:650;color:var(--green)}
+.done-box p{color:var(--muted);font-size:13px;line-height:1.6}
+@media (max-width:900px){
+  .auth-grid{grid-template-columns:minmax(0,1fr)}
+  .qr{width:100%;max-width:220px;height:150px}
+  .form-actions .btn{flex:1;min-height:40px}
+}
+</style>
+</head>
+<body data-page="add">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html" aria-current="page">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <div class="crumb"><a href="account-wall.html">账号</a> / <span id="crumb-now">添加账号</span></div>
+    <header class="pagehead">
+      <div>
+        <h1 id="page-title">添加账号</h1>
+        <p class="sub" id="page-sub">为当前账号组接入一个平台账号</p>
+      </div>
+    </header>
+
+    <div class="flow">
+      <p class="locked">账号组：<b id="group-name">—</b><span>·</span><span>一个平台只能挂一个账号；要换号，先移除旧的。</span></p>
+
+      <div class="flow-steps" id="steps">
+        <b id="s1">1 选平台</b><i>›</i><span id="s2">2 授权</span><i>›</i><span id="s3">3 完成</span>
+      </div>
+
+      <section class="panel step" id="step-platform">
+        <div class="panel-head"><h2>选择平台</h2><span class="hint" id="platform-hint"></span></div>
+        <div class="panel-body">
+          <p class="step-hint">已接入的平台灰掉了；想换号要先在账号页移除。</p>
+          <div class="choice-grid" id="platform-grid"></div>
+        </div>
+      </section>
+
+      <section class="panel step" id="step-auth" hidden>
+        <div class="panel-head"><h2>授权</h2><span class="hint" id="auth-hint"></span></div>
+        <div class="panel-body">
+          <div class="auth-grid">
+            <div class="qr">扫码区<br>原型示意<br>不会连接真实平台</div>
+            <div>
+              <p class="step-hint" id="auth-desc"></p>
+              <ol class="auth-steps" id="auth-steps"></ol>
+              <div class="field" style="margin-top:14px">
+                <label class="field-label" for="handle">账号名（用于区分同一平台的账号）</label>
+                <input class="input" id="handle" placeholder="例如：@AI工具研究所" autocomplete="off">
+                <p class="hint" id="handle-hint">授权成功后，这个名称会显示在账号页和发布台。</p>
+              </div>
+              <p class="notice warn" style="margin-top:12px" id="auth-warn" hidden></p>
+            </div>
+          </div>
+          <div class="form-actions">
+            <a class="btn" href="account-wall.html" id="cancel-auth">取消</a>
+            <button class="btn primary" id="finish" type="button">我已扫码，完成接入</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-done" hidden>
+        <div class="done-box">
+          <h2>已接入</h2>
+          <p id="done-text"></p>
+          <div class="form-actions" style="justify-content:flex-start;margin-top:4px">
+            <a class="btn primary" id="back-account" href="account-wall.html">回到账号页</a>
+            <a class="btn" id="next-platform" href="add.html">再添加一个平台</a>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="pagefoot">
+      <span>原型：授权动作只写入本地演示状态，不会真的连接平台。</span>
+      <a href="runs.html">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const group = VK.current();
+const platforms = VK.platforms;
+const reauthId = params.get('mode')==='reauth' ? params.get('account') : null;
+const preset = params.get('platform');
+const reauthAccount = reauthId ? VK.account(reauthId) : null;
+
+document.getElementById('group-name').textContent = VK.groupLabel();
+if(reauthAccount){
+  document.getElementById('page-title').textContent = '重新登录';
+  document.getElementById('page-sub').textContent = '刷新这个账号的登录态，历史与数据不受影响';
+  document.getElementById('crumb-now').textContent = '重新登录';
+  document.getElementById('s1').textContent = '1 确认账号';
+}
+
+let chosen = reauthAccount ? reauthAccount.platform : (preset && platforms[preset] ? preset : null);
+
+function setStep(n){
+  document.getElementById('step-platform').hidden = n!==1;
+  document.getElementById('step-auth').hidden = n!==2;
+  document.getElementById('step-done').hidden = n!==3;
+  document.getElementById('s1').style.color = n>=1 ? 'var(--navy)' : '';
+  document.getElementById('s2').style.color = n>=2 ? 'var(--navy)' : '';
+  document.getElementById('s3').style.color = n>=3 ? 'var(--navy)' : '';
+}
+
+function renderPlatforms(){
+  const grid = document.getElementById('platform-grid');
+  grid.innerHTML = '';
+  Object.entries(platforms).forEach(([key,p])=>{
+    const taken = VK.hasPlatform(group,key) && !(reauthAccount && reauthAccount.platform===key);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'choice' + (key===chosen ? ' selected' : '');
+    btn.disabled = taken;
+    btn.innerHTML = '<svg class="plogo" aria-hidden="true"><use href="#'+p.logo+'"/></svg>' +
+      '<span><span class="choice-title"></span><span class="choice-sub"></span></span>';
+    btn.querySelector('.choice-title').textContent = p.name;
+    const existing = VK.accounts(group).find(a=>a.platform===key);
+    btn.querySelector('.choice-sub').textContent = taken ? ('已接入 ' + existing.handle) : p.auth;
+    if(!taken){
+      btn.addEventListener('click', ()=>{
+        chosen = key;
+        renderPlatforms();
+        goAuth();
+      });
+    }
+    grid.appendChild(btn);
+  });
+  const available = Object.keys(platforms).filter(k=>!VK.hasPlatform(group,k)).length;
+  document.getElementById('platform-hint').textContent = available ? (available + ' 个平台还可添加') : '五个平台都已接入';
+}
+
+function goAuth(){
+  if(!chosen) return;
+  const p = platforms[chosen];
+  document.getElementById('auth-hint').textContent = p.name;
+  document.getElementById('auth-desc').textContent = '在手机上打开' + p.name + '，用你要接入的账号扫码；扫码完成后回到这里点完成。';
+  const steps = {
+    xhs:['打开小红书 App → 我 → 右上角菜单','选择「扫一扫」，对准左侧二维码','确认登录后，回到这里点完成'],
+    douyin:['打开抖音 App → 我 → 设置','选择「扫码登录」，对准左侧二维码','确认后回到这里点完成'],
+    bili:['打开哔哩哔哩 App → 我的 → 设置','选择「扫一扫」，对准左侧二维码','确认后回到这里点完成'],
+    youtube:['点击左侧区域，浏览器会打开 Google 授权页','选择要接入的频道并同意权限','返回这里点完成'],
+    tiktok:['在 TikTok App 内完成授权','确认账号后回到这里点完成','首次发布只能先发“仅自己可见”']
+  };
+  document.getElementById('auth-steps').innerHTML = steps[chosen].map(s=>'<li>'+s+'</li>').join('');
+  const handle = document.getElementById('handle');
+  handle.value = reauthAccount ? reauthAccount.handle : '';
+  handle.placeholder = '例如：@AI工具研究所';
+  document.getElementById('handle-hint').textContent = reauthAccount
+    ? '重新登录会保留原来的账号名，除非你要改名。'
+    : '授权成功后，这个名称会显示在账号页和发布台。';
+  const warn = document.getElementById('auth-warn');
+  warn.hidden = true;
+  const cancel = document.getElementById('cancel-auth');
+  cancel.href = VK.url('account-wall.html',group);
+  setStep(2);
+  handle.focus();
+}
+
+document.getElementById('finish').addEventListener('click', ()=>{
+  const handle = document.getElementById('handle');
+  const warn = document.getElementById('auth-warn');
+  try{
+    const acc = VK.addAccount({
+      group, platform: chosen, handle: handle.value.trim(),
+      reauth: reauthAccount ? reauthAccount.id : null
+    });
+    document.getElementById('done-text').textContent =
+      (reauthAccount ? '重新授权完成：' : '接入完成：') + (VK.groupLabel()) + ' · ' + platforms[chosen].name + ' · ' + acc.handle +
+      '。已自动排队一次登录检查与首次采集。';
+    document.getElementById('back-account').href = VK.url('account-wall.html',group);
+    document.getElementById('next-platform').href = VK.url('add.html',group);
+    setStep(3);
+  }catch(ex){
+    warn.hidden = false;
+    warn.textContent = ex.message;
+    handle.focus();
+  }
+});
+
+renderPlatforms();
+if(reauthAccount){ goAuth(); }
+else if(chosen){ goAuth(); }
+else setStep(1);
+</script>
+</body>
+</html>

@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>总览 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.rangebar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 14px}
+.rangebar .grow{flex:1}
+.rangebar .note{color:var(--faint);font-size:12px}
+
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.stat{display:flex;flex-direction:column;gap:4px;padding:13px 15px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.stat-k{color:var(--faint);font-size:12px}
+.stat-v{font-family:var(--mono);font-size:25px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.15}
+.stat-d{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.stat-d .up{color:var(--green)}
+.stat-d .down{color:var(--red)}
+
+.grid2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* 发布节奏图 */
+.bars{display:flex;align-items:flex-end;gap:6px;height:150px;margin-top:14px;padding-top:8px;border-bottom:1px solid var(--line)}
+.barcol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:6px;min-width:0;height:100%}
+.bar{width:100%;max-width:34px;border-radius:4px 4px 0 0;background:var(--navy);min-height:2px}
+.bar.zero{background:var(--line)}
+.bar.fail{background:var(--red)}
+.baxis{display:flex;gap:6px;margin-top:6px}
+.baxis span{flex:1;text-align:center;color:var(--faint);font-size:12px;font-family:var(--mono)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:10px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:4px;display:inline-block;background:var(--navy)}
+.legend i.red{background:var(--red)}.legend i.grey{background:var(--line)}
+
+/* 平台拆分 */
+.split{display:flex;flex-direction:column}
+.sp{display:grid;grid-template-columns:minmax(0,1fr) 92px 76px 96px;gap:10px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line-soft)}
+.sp:last-child{border-bottom:0}
+.sp-head{color:var(--faint);font-size:12px;padding:9px 16px;border-bottom:1px solid var(--line);background:var(--paper-subtle)}
+.sp-who{display:flex;align-items:center;gap:8px;min-width:0}
+.plogo{width:18px;height:18px;flex:none;border-radius:4px}
+.sp-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{height:6px;border-radius:4px;background:var(--line-soft);overflow:hidden}
+.track i{display:block;height:100%;border-radius:4px;background:var(--navy)}
+.num{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;text-align:right}
+.sp-state{display:flex;align-items:center;gap:6px;justify-content:flex-end;font-size:12px;color:var(--muted);white-space:nowrap}
+
+/* 数据新鲜度 */
+.fresh{display:flex;flex-direction:column}
+.fr{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-soft);font-size:12px}
+.fr:last-child{border-bottom:0}
+.fr .grow{flex:1;min-width:0}
+.fr b{display:block;font-size:13px;font-weight:600;color:var(--ink);line-height:1.35}
+.fr span.t{display:block;margin-top:2px;color:var(--muted)}
+.fr .age{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+.fr .age.bad{color:var(--red)}
+.fr .age.warn{color:var(--amber)}
+
+/* 作品 */
+.works{display:flex;flex-direction:column}
+.wk{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-soft)}
+.wk:last-child{border-bottom:0}
+.wk .grow{flex:1;min-width:0}
+.wk b{display:block;font-size:13px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk span{display:block;margin-top:2px;color:var(--muted);font-size:12px}
+.wk .num{font-size:13px}
+
+@media (max-width:1100px){
+  .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:900px){
+  .sp{grid-template-columns:minmax(0,1fr) 76px 64px;gap:8px}
+  .sp .track-cell{display:none}
+  .sp-head{display:none}
+  .barcol span{display:none}
+  .wk b{white-space:normal;overflow:visible;text-overflow:clip}
+  .stat-v{font-size:21px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html" aria-current="page">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div><h1>总览</h1><p class="sub">最近 7 天 · 2 个账号组 · 3 个平台有数据</p></div>
+      <a class="btn" href="publish.html">+ 发布内容</a>
+    </header>
+
+    <div class="rangebar">
+      <div class="tabs" role="group" aria-label="时间范围">
+        <input type="radio" name="range" id="r7" checked><label for="r7">7 天</label>
+        <input type="radio" name="range" id="r30"><label for="r30">30 天</label>
+        <input type="radio" name="range" id="r90"><label for="r90">90 天</label>
+      </div>
+      <span class="note" id="range-note">10-31 至 11-06 · 与上一周对比</span>
+      <span class="grow"></span>
+      <a class="btn" href="matrix.html" data-no-group>全部账号组 →</a>
+    </div>
+
+    <section class="summary" aria-label="本周关键数字">
+      <div class="stat">
+        <span class="stat-k">成功发布</span>
+        <span class="stat-v" id="s-pub">12</span>
+        <span class="stat-d"><span class="up">+3</span> 比上周</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">播放</span>
+        <span class="stat-v" id="s-play">128.4k</span>
+        <span class="stat-d"><span class="up">+18.2%</span> 覆盖 3 个平台</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">互动</span>
+        <span class="stat-v" id="s-eng">7.9k</span>
+        <span class="stat-d"><span class="up">+9.1%</span> 点赞 + 收藏</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">数据可信度</span>
+        <span class="stat-v" id="s-fresh">5/8</span>
+        <span class="stat-d"><span class="down">3 个账号</span> 数据超过 1 小时</span>
+      </div>
+    </section>
+
+    <div class="grid2">
+      <div class="stack">
+        <section class="panel" aria-label="每日发布量">
+          <div class="panel-head"><h2>每日发布</h2><span class="hint">成功 / 失败 / 未排</span></div>
+          <div class="panel-body">
+            <div class="bars" id="bars" role="img" aria-label="过去七天每天成功发布的条数，其中 11-01 有一条失败"></div>
+            <div class="baxis" aria-hidden="true">
+              <span>10-31</span><span>11-01</span><span>11-02</span><span>11-03</span><span>11-04</span><span>11-05</span><span>11-06</span>
+            </div>
+            <div class="legend">
+              <span><i></i>成功发布</span>
+              <span><i class="red"></i>失败</span>
+              <span><i class="grey"></i>没有发布</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="按平台拆分">
+          <div class="panel-head"><h2>按平台</h2><span class="hint">播放 · 采集新鲜度</span></div>
+          <div class="split">
+            <div class="sp sp-head"><span>平台</span><span>播放</span><span>占比</span><span style="text-align:right">数据</span></div>
+            <div class="sp">
+              <div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#pl-douyin"/></svg><span class="sp-name">抖音</span></div>
+              <span class="num">86,120</span>
+              <span class="track-cell"><span class="track"><i style="width:80%"></i></span></span>
+              <span class="sp-state"><span class="dot ok"></span>12 分钟前</span>
+            </div>
+            <div class="sp">
+              <div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#pl-bili"/></svg><span class="sp-name">B站</span></div>
+              <span class="num">31,004</span>
+              <span class="track-cell"><span class="track"><i style="width:29%"></i></span></span>
+              <span class="sp-state"><span class="dot ok"></span>12 分钟前</span>
+            </div>
+            <div class="sp">
+              <div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#pl-youtube"/></svg><span class="sp-name">YouTube</span></div>
+              <span class="num">11,306</span>
+              <span class="track-cell"><span class="track"><i style="width:11%"></i></span></span>
+              <span class="sp-state"><span class="dot ok"></span>12 分钟前</span>
+            </div>
+            <div class="sp">
+              <div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#pl-tiktok"/></svg><span class="sp-name">TikTok</span></div>
+              <span class="num">—</span>
+              <span class="track-cell"><span class="track"><i style="width:0"></i></span></span>
+              <span class="sp-state"><span class="dot warn"></span>仅自见</span>
+            </div>
+            <div class="sp">
+              <div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#pl-xhs"/></svg><span class="sp-name">小红书</span></div>
+              <span class="num">—</span>
+              <span class="track-cell"><span class="track"><i style="width:0"></i></span></span>
+              <span class="sp-state"><span class="dot bad"></span>3 天未采</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="最近的发布">
+          <div class="panel-head"><h2>最近发布</h2><a class="hint" href="work.html">全部作品 →</a></div>
+          <div class="works">
+            <div class="wk" data-group="ai"><div class="grow"><b>《我用了 30 天 AI 剪辑，发现 3 个反常识结论》</b><span>4 个平台 · 昨天 20:00 · 1 条待放行</span></div><span class="num">128.4k</span><a class="btn sm" href="work.html">详情</a></div>
+            <div class="wk" data-group="ai"><div class="grow"><b>《AI 剪辑 30 天》</b><span>3 个平台 · 11-03 20:00 · 全部成功</span></div><span class="num">42.1k</span><a class="btn sm" href="work.html">详情</a></div>
+            <div class="wk" data-group="ai"><div class="grow"><b>《3 个封面实验》</b><span>2 个平台 · 10-29 19:00 · 1 条失败</span></div><span class="num">9.8k</span><a class="btn sm" href="work.html">详情</a></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel" aria-label="数据新鲜度">
+          <div class="panel-head"><h2>数据新鲜度</h2><span class="hint">按账号</span></div>
+          <div class="fresh">
+            <div class="fr" data-group="ai"><span class="dot bad"></span><div class="grow"><b>小红书 · @AI工具研究所</b><span class="t">采集中断 · 账号已失效</span></div><span class="age bad">3 天</span></div>
+            <div class="fr" data-group="ai"><span class="dot ok"></span><div class="grow"><b>抖音 · @AI工具研究所</b><span class="t">创作中心</span></div><span class="age">12 分</span></div>
+            <div class="fr" data-group="ai"><span class="dot ok"></span><div class="grow"><b>B站 · AI工具研究所</b><span class="t">公开接口</span></div><span class="age">12 分</span></div>
+            <div class="fr" data-group="ai"><span class="dot ok"></span><div class="grow"><b>YouTube · @ai-tools-lab</b><span class="t">官方 API</span></div><span class="age">12 分</span></div>
+            <div class="fr" data-group="ai"><span class="dot ok"></span><div class="grow"><b>TikTok · @ai-tools-lab</b><span class="t">官方 API · 仅自己可见，指标受限</span></div><span class="age">12 分</span></div>
+            <div class="fr" data-group="cut"><span class="dot warn"></span><div class="grow"><b>B站 · 剪辑日记</b><span class="t">公开接口 · 上次只拿到部分字段</span></div><span class="age warn">2 小时</span></div>
+            <div class="fr" data-group="cut"><span class="dot ok"></span><div class="grow"><b>抖音 · 剪辑日记</b><span class="t">创作中心</span></div><span class="age">12 分</span></div>
+            <div class="fr" data-group="cut"><span class="dot warn"></span><div class="grow"><b>YouTube · @cutdiary</b><span class="t">官方 API · 配额已用完，等重置</span></div><span class="age warn">5 小时</span></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="等价命令">
+          <div class="panel-head"><h2>等价命令</h2></div>
+          <div class="panel-body" style="display:flex;flex-direction:column;gap:8px">
+            <div class="cmd"><b>周报</b><code>vk stats --range 7d --json</code></div>
+            <div class="cmd"><b>按平台</b><code>vk stats --by platform</code></div>
+            <div class="cmd"><b>补采</b><code>vk collect --stale 1h</code></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="pagefoot">
+      <span>数字旁没有来源和时间，就不要相信这个数字。</span>
+      <a href="runs.html">看采集与发布任务 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script>
+const series = {
+  '7':  {note:'10-31 至 11-06 · 与上一周对比', pub:'12', play:'128.4k', eng:'7.9k', fresh:'5/8',
+         bars:[2,1,0,3,2,2,2], fail:[0,1,0,0,0,0,0]},
+  '30': {note:'10-08 至 11-06 · 与上个月对比', pub:'47', play:'512.6k', eng:'31.2k', fresh:'6/8',
+         bars:[2,1,2,3,2,1,3], fail:[0,1,0,1,0,0,0]},
+  '90': {note:'08-09 至 11-06 · 与上季度对比', pub:'138', play:'1.42m', eng:'88.4k', fresh:'6/8',
+         bars:[3,2,2,3,3,2,3], fail:[1,1,0,1,0,0,0]}
+};
+
+function render(key){
+  const d = series[key];
+  document.getElementById('range-note').textContent = d.note;
+  document.getElementById('s-pub').textContent = d.pub;
+  document.getElementById('s-play').textContent = d.play;
+  document.getElementById('s-eng').textContent = d.eng;
+  document.getElementById('s-fresh').textContent = d.fresh;
+
+  const max = Math.max(...d.bars, 1);
+  const bars = document.getElementById('bars');
+  bars.innerHTML = d.bars.map((v,i)=>{
+    const h = v===0 ? 4 : Math.round((v/max)*100);
+    const cls = v===0 ? 'bar zero' : 'bar';
+    const failH = d.fail[i] ? Math.round((d.fail[i]/max)*100) : 0;
+    const fail = failH ? `<div class="bar fail" style="height:${failH}%;max-width:34px;border-radius:4px 4px 0 0"></div>` : '';
+    return `<div class="barcol"><div class="${cls}" style="height:${h}%"></div>${fail}</div>`;
+  }).join('');
+}
+
+document.querySelectorAll('.tabs input').forEach(r=>{
+  r.addEventListener('change', ()=>render(r.id.replace('r','')));
+});
+render('7');
+</script>
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+(function scope(){
+  const rollup = VK.isRollup();
+  const g = VK.current();
+  const list = VK.accounts(rollup ? null : g);
+  const have = new Set(list.map(a=>a.platform));
+
+  if(!rollup){
+    document.querySelectorAll('[data-group]').forEach(el=>{
+      el.style.display = (el.dataset.group===g) ? '' : 'none';
+    });
+    document.querySelectorAll('.split .sp').forEach(el=>{
+      const name = el.querySelector('.sp-name');
+      if(!name) return;
+      const hit = [...have].some(k=>VK.platforms[k].name===name.textContent);
+      if(!hit) el.style.display='none';
+    });
+
+    const sub = document.querySelector('.pagehead .sub');
+    if(sub) sub.textContent = '当前账号组：' + VK.groupLabel() + ' · 最近 7 天';
+    const note = document.getElementById('range-note');
+    if(note) note.dataset.group = VK.groupLabel();
+  } else {
+    const sub = document.querySelector('.pagehead .sub');
+    if(sub) sub.textContent = '全部账号组 · ' + list.length + ' 个平台账号 · 最近 7 天';
+  }
+  const stat = document.getElementById('s-fresh');
+  if(stat){
+    const ready = list.filter(a=>a.level!=='bad').length;
+    stat.textContent = ready + '/' + list.length;
+  }
+})();
+</script>
+</body>
+</html>

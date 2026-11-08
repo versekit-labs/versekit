@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>选择账号组 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.entry{min-height:100svh;display:flex;align-items:center;justify-content:center;padding:40px 20px}
+.entry-card{width:100%;max-width:560px}
+.entry-head{margin-bottom:6px;font-size:12px;color:var(--faint);letter-spacing:.08em}
+.entry h1{font-size:28px}
+.entry .sub{margin-top:8px}
+.group-list{display:flex;flex-direction:column;gap:10px;margin-top:22px}
+.group-btn{display:flex;align-items:center;gap:14px;width:100%;min-height:72px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-family:var(--sans);text-align:left;cursor:pointer}
+.group-btn:hover{border-color:var(--navy)}
+.group-btn:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.group-mark{display:grid;place-items:center;width:40px;height:40px;flex:none;border-radius:8px;background:var(--navy);color:#fff;font-size:14px;font-weight:650}
+.group-main{flex:1;min-width:0}
+.group-name{display:block;font-size:14px;font-weight:650;letter-spacing:-.01em}
+.group-meta{display:block;margin-top:3px;color:var(--muted);font-size:12px}
+.group-go{flex:none;color:var(--muted);font-size:12px}
+.new-group{margin-top:22px;padding-top:18px;border-top:1px solid var(--line-soft)}
+.new-group .field-label{margin-bottom:6px;display:block}
+.inline-form{display:flex;gap:10px}
+.inline-form .input{flex:1}
+.entry-note{margin-top:18px}
+</style>
+</head>
+<body>
+<main class="entry">
+  <div class="entry-card">
+    <p class="entry-head">VERSEKIT / 本地控制台</p>
+    <h1>选择账号组</h1>
+    <p class="sub">一个账号组就是一套独立的账号、发布与数据。进入后可在左侧随时切换。</p>
+
+    <div class="group-list" id="groups"></div>
+
+    <div class="new-group">
+      <label class="field-label" for="new-name">新建账号组</label>
+      <form class="inline-form" id="new-form">
+        <input class="input" id="new-name" placeholder="例如：剪辑日记、出海实测" autocomplete="off">
+        <button class="btn primary" type="submit">创建并进入</button>
+      </form>
+      <p class="hint" id="new-error" style="margin-top:8px" hidden></p>
+    </div>
+
+    <p class="entry-note hint">账号组只影响“看哪些数据、发到哪些账号”，不会把凭证传到别处；凭证仍只在这台电脑。</p>
+  </div>
+</main>
+<script src="store.js"></script>
+<script>
+const groups = VK.groups();
+
+function summary(id){
+  const list = VK.accounts(id);
+  const bad = list.filter(a=>a.level==='bad').length;
+  const warn = list.filter(a=>a.level==='warn').length;
+  const parts = [];
+  parts.push(list.length + ' / 5 个平台已接入');
+  if(bad) parts.push(bad + ' 个登录异常');
+  else if(warn) parts.push(warn + ' 个将过期');
+  else if(list.length) parts.push('登录正常');
+  else parts.push('还没有账号');
+  return parts.join(' · ');
+}
+
+function render(){
+  const box = document.getElementById('groups');
+  box.innerHTML = '';
+  const all = VK.groups();
+  Object.values(all).forEach(g=>{
+    const btn = document.createElement('button');
+    btn.className = 'group-btn';
+    btn.type = 'button';
+    btn.innerHTML = '<span class="group-mark">' + g.label.slice(0,2) + '</span>' +
+      '<span class="group-main"><span class="group-name"></span><span class="group-meta"></span></span>' +
+      '<span class="group-go">进入 →</span>';
+    btn.querySelector('.group-name').textContent = g.label;
+    btn.querySelector('.group-meta').textContent = summary(g.id);
+    btn.addEventListener('click', ()=>{
+      VK.storage.rawSet('vk-current-group', g.id);
+      location.href = 'account-wall.html?group=' + encodeURIComponent(g.id);
+    });
+    box.appendChild(btn);
+  });
+}
+
+document.getElementById('new-form').addEventListener('submit', e=>{
+  e.preventDefault();
+  const input = document.getElementById('new-name');
+  const err = document.getElementById('new-error');
+  try{
+    const g = VK.addGroup(input.value);
+    VK.storage.rawSet('vk-current-group', g.id);
+    location.href = 'account-wall.html?group=' + encodeURIComponent(g.id);
+  }catch(ex){
+    err.hidden = false;
+    err.textContent = ex.message;
+    input.focus();
+  }
+});
+
+render();
+</script>
+</body>
+</html>

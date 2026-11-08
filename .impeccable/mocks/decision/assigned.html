@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>versekit · 账号 · 索引卡与借书卡</title>
+<style>
+:root{
+  --shell:#2f4f43;--ground:#efe9d8;--card:#faf6ea;--line:#d8cfb8;
+  --ink:#1d1c19;--muted:#6b6455;--red:#b0342b;--amber:#8a5a10;--ok:#2f6b5e;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13px;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:224px 1fr;height:900px}
+.rail{background:var(--shell);color:#efe9d8;padding:26px 20px 24px;display:flex;flex-direction:column}
+.mark{font-size:19px;font-weight:600;color:#f7f2e4;letter-spacing:-.01em}
+.mark b{font-weight:400;color:#a9c0b4}
+nav{margin-top:36px;display:flex;flex-direction:column;gap:2px}
+nav a{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:3px;color:#d7e0d6;text-decoration:none}
+nav a.on{background:#3d6355;color:#fff}
+nav a .n{font-family:var(--mono);font-size:11px;color:#c2d2c7}
+.railfoot{margin-top:auto;font-size:11px;line-height:1.75;color:#a5bbad}
+main{padding:26px 28px 0;display:flex;flex-direction:column;min-width:0}
+.head{display:flex;align-items:baseline;gap:20px}
+h1{font-size:27px;font-weight:600;letter-spacing:-.02em}
+.sub{font-size:12px;color:var(--muted)}
+.filters{display:flex;gap:16px;margin-left:4px}
+.filters b{font-weight:500;font-size:12.5px;color:var(--muted);padding-bottom:3px;border-bottom:2px solid transparent}
+.filters b.on{color:var(--ink);border-color:var(--ink)}
+.grow{flex:1}
+.btn{font:500 12.5px var(--sans);color:#f8f4e8;background:var(--shell);border:1px solid #243f36;border-radius:3px;padding:8px 14px}
+.btn.quiet{background:transparent;color:var(--ink);border:1px solid #bdb298}
+.body{display:grid;grid-template-columns:minmax(0,1fr) 356px;gap:26px;margin-top:20px;min-height:0}
+.table{border-top:1px solid #c6bb9e}
+.thead,.row{display:grid;grid-template-columns:1.75fr 1fr 1.05fr 1.05fr 84px;align-items:center;gap:12px}
+.thead{padding:9px 6px;font-size:10.5px;letter-spacing:.13em;color:#7e7563}
+.row{padding:16px 6px;border-bottom:1px solid #ded4bd}
+.pname{font-weight:600;font-size:13.5px}
+.pmeta{font-size:11.5px;color:var(--muted);margin-top:2px}
+.st{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.13em;padding:2px 6px;border:1px solid currentColor;border-radius:2px;transform:rotate(-1.5deg)}
+.st.ok{color:var(--ok)}.st.warn{color:var(--amber)}.st.bad{color:var(--red)}
+.cell{font-size:12px;color:#4a4438}
+.cell b{display:block;font-family:var(--mono);font-size:11.5px;font-weight:500;color:var(--ink);letter-spacing:.02em}
+.act{font:500 12px var(--sans);text-align:right;color:var(--ink);background:none;border:0;border-bottom:1px solid var(--ink);padding:0 0 2px;justify-self:end}
+.act.pri{color:var(--red);border-color:var(--red)}
+.detail{display:flex;flex-direction:column;min-width:0}
+.dhead{display:flex;justify-content:space-between;align-items:baseline;padding:0 2px 8px;border-bottom:1px solid #c6bb9e;font-size:10.5px;letter-spacing:.13em;color:#7e7563}
+.card{position:relative;margin-top:12px;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:18px 18px 16px;transform:rotate(-.35deg)}
+.cid{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:#8a8170}
+.ctitle{font-size:17px;font-weight:600;margin-top:9px;letter-spacing:-.01em}
+.cmeta{font-size:11.5px;color:var(--muted);margin-top:4px}
+.hr{height:1px;background:#e2d9c2;margin:14px 0 6px;border-top:1px dashed #cfc4a7}
+.lr{display:grid;grid-template-columns:82px 1fr auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #e7dfca}
+.lr b{font-family:var(--mono);font-size:11px;font-weight:500;color:#4a4438}
+.lr span{font-size:12px;color:#3a352b;line-height:1.35}
+.lr i{font-style:normal;font-size:10px;letter-spacing:.13em;font-family:var(--mono);padding:2px 5px;border:1px solid currentColor;border-radius:2px;transform:rotate(-2deg)}
+.lr i.ok{color:var(--ok)}.lr i.bad{color:var(--red)}
+.bigstamp{display:block;width:max-content;margin:14px 0 0 auto;font-size:12px;letter-spacing:.18em;color:var(--red);border:2px solid var(--red);border-radius:3px;padding:5px 8px;transform:rotate(-7deg);opacity:.86}
+.cact{display:flex;align-items:center;gap:14px;margin-top:18px}
+.link{font-size:11.5px;color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.note{margin-top:12px;font-size:11.5px;line-height:1.65;color:#6f6654}
+.nextcheck{margin-top:auto;padding-top:11px;border-top:1px solid #c6bb9e;font-family:var(--mono);font-size:10.5px;color:#7e7563;letter-spacing:.04em}
+.month{display:flex;align-items:center;gap:16px;padding:14px 6px;border-bottom:1px solid #ded4bd;font-size:11.5px;color:#6b6455}
+.month b{font-family:var(--mono);font-weight:500;color:var(--ink);margin-right:4px}
+.month a{margin-left:auto;color:var(--ink);text-underline-offset:3px}
+.foot{margin-top:auto;display:flex;justify-content:space-between;padding:13px 0 15px;border-top:1px solid #c6bb9e;font-size:10.5px;color:#7e7563;letter-spacing:.04em}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="mark">versekit <b>/ vk</b></div>
+    <nav>
+      <a class="on">账号<span class="n">8</span></a>
+      <a>作品</a><a>发布</a><a>总览</a>
+    </nav>
+    <div class="railfoot">凭证只在这台机器上。<br>没有云端副本，也没有第二个登录。</div>
+  </aside>
+
+  <main>
+    <header class="head">
+      <h1>账号</h1>
+      <p class="sub">8 个号，7 个正常</p>
+      <div class="filters"><b class="on">全部 8</b><b>需处理 1</b><b>正常 7</b></div>
+      <div class="grow"></div>
+      <button class="btn">新增账号</button>
+    </header>
+
+    <div class="body">
+      <section class="table" aria-label="账号列表">
+        <div class="thead">
+          <span>平台 / 账号</span><span>状态</span><span>最近发布</span><span>最近采集</span><span></span>
+        </div>
+        <div class="row">
+          <div><div class="pname">抖音 · AI 工具研究所</div><div class="pmeta">cookie 通道 · 2 小时前有动静</div></div>
+          <div><span class="st warn">71H 后失效</span></div>
+          <div class="cell"><b>11-06 17:20</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act pri">续期</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">小红书 · AI 工具研究所</div><div class="pmeta">自动化通道 · 连续失败 2 次</div></div>
+          <div><span class="st bad">登录已失效</span></div>
+          <div class="cell"><b>10-31 20:10</b>退回</div>
+          <div class="cell"><b>3 天前</b>采集停止</div>
+          <button class="act pri">扫码重登</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">B站 · AI 工具研究所</div><div class="pmeta">公开投稿接口</div></div>
+          <div><span class="st ok">正常</span></div>
+          <div class="cell"><b>11-05 20:00</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">详情</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">YouTube · @ai-tools-lab</div><div class="pmeta">官方 API</div></div>
+          <div><span class="st ok">正常</span></div>
+          <div class="cell"><b>11-05 20:00</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">详情</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">TikTok · @ai-tools-lab</div><div class="pmeta">已发，仅自己可见</div></div>
+          <div><span class="st warn">待放行</span></div>
+          <div class="cell"><b>11-04 21:30</b>私密</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">放行</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">B站 · 剪辑日记</div><div class="pmeta">公开投稿接口 · 矩阵号</div></div>
+          <div><span class="st ok">正常</span></div>
+          <div class="cell"><b>11-03 12:00</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">详情</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">抖音 · 剪辑日记</div><div class="pmeta">cookie 通道 · 矩阵号</div></div>
+          <div><span class="st ok">正常</span></div>
+          <div class="cell"><b>10-29 19:00</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">详情</button>
+        </div>
+        <div class="row">
+          <div><div class="pname">YouTube · @cutdiary</div><div class="pmeta">官方 API · 矩阵号</div></div>
+          <div><span class="st ok">正常</span></div>
+          <div class="cell"><b>10-27 20:00</b>公开</div>
+          <div class="cell"><b>19:12</b>12 分钟前</div>
+          <button class="act">详情</button>
+        </div>
+        <div class="month"><span>本月凭证事件</span><span><b>38</b>次采集</span><span><b>12</b>次发布</span><span><b>2</b>次退回</span><span><b>1</b>次续期</span><a>导出凭证日志</a></div>
+      </section>
+
+      <aside class="detail">
+        <div class="dhead"><span>凭证卡 VK-0412</span><span>背面 · 借还记录</span></div>
+        <div class="card">
+          <div class="cid">DOUYIN / 主号 / 通道 COOKIE</div>
+          <div class="ctitle">抖音 · AI 工具研究所</div>
+          <div class="cmeta">@AI工具研究所 · 这条凭证接过 38 次活</div>
+          <div class="hr"></div>
+          <div class="lr"><b>11-06 19:12</b><span>采集 12 条快照，来源创作中心</span><i class="ok">正常</i></div>
+          <div class="lr"><b>11-03 09:40</b><span>续期成功，新凭证已替换旧凭证</span><i class="ok">续期</i></div>
+          <div class="lr"><b>11-01 20:00</b><span>《AI 剪辑 30 天》发布，公开</span><i class="ok">已发布</i></div>
+          <div class="lr"><b>10-24 09:12</b><span>cookie 过期，采集连续失败 2 次</span><i class="bad">退回</i></div>
+          <div class="bigstamp">71 小时后失效</div>
+          <div class="cact"><button class="btn">现在续期</button><span class="link">查看全部 38 条记录</span></div>
+        </div>
+        <p class="note">卡背面只记发生过的事：谁续的期、什么时候失效、退回是哪一次。红章不是提醒，是现场。</p>
+        <div class="nextcheck">下次自动检查 19:41 · 每 15 分钟一次</div>
+      </aside>
+    </div>
+
+    <footer class="foot">
+      <span>7 正常 · 1 需处理 · 1 待放行</span>
+      <span>最近一次检查 19:26 · 下次 19:41</span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
