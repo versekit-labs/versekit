@@ -82,7 +82,7 @@ async function viewAccounts() {
         <div class="row" style="margin-top:10px">
           <button class="small" data-check="${esc(a.id)}">验证登录</button>
           <button class="small" data-act="mode" data-id="${esc(a.id)}" data-mode="${a.is_manual ? "auto" : "manual"}">${a.is_manual ? "改为自动发布" : "改为手动"}</button>
-          <button class="small ghost" data-act="reauth" data-id="${esc(a.id)}">重新授权</button>
+          <button class="small ghost" data-act="reauth" data-id="${esc(a.id)}">登录 / 重新授权</button>
         </div>
         <p class="meta" data-note="${esc(a.id)}"></p>
       </div>`,
@@ -123,7 +123,11 @@ async function viewAccounts() {
       </details>
       <details class="meta" style="margin-top:6px">
         <summary style="cursor:pointer">TikTok 要怎么登录？</summary>
-        <p class="meta" style="margin-top:8px">在上面的平台里选 tiktok 并添加，然后在账号卡上点「重新授权」——会在这个账号自己的浏览器里打开登录页。登录完点「验证登录」确认。</p>
+        <p class="meta" style="margin-top:8px">在上面的平台里选 tiktok 并添加，然后在账号卡上点「登录 / 重新授权」——会在这个账号自己的浏览器里打开登录页。登录完点「验证登录」确认。</p>
+      </details>
+      <details class="meta" style="margin-top:6px">
+        <summary style="cursor:pointer">小红书要怎么登录？</summary>
+        <p class="meta" style="margin-top:8px">选 xiaohongshu 添加（不需要凭证文件）→ 在账号卡上点「登录 / 重新授权」→ 专用 Chrome 会打开创作服务平台登录页 → 用手机号收验证码登录 → 回来点「验证登录」。登录态会留在这个账号的 profile 里。</p>
       </details>
     </div>`;
 
