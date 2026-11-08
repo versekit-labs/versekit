@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = "fangyouxi/versekit";
+const REPO = "versekit-app/versekit";
 const DRY = process.argv.includes("--dry");
 
 const account = readFileSync(join(ROOT, ".pi", "gh-account"), "utf8").trim();
@@ -289,7 +289,7 @@ const ISSUES = [
     "v0.3 平台扩展",
   ),
   I(
-    "docs: 确定最终产品名，并收敛 fangyouxi / versekit 的组织与品牌（R8）",
+    "docs: 确定最终产品名，并收敛 versekit / versekit-app 的组织与品牌（R8）",
     `**背景**：三个名字并存，新人第一分钟就在猜。
 **要做**：README 顶部一句话说明（品牌 / 组织 / 产品），或在 v1.0 前统一。
 **验收**：README 前 10 行内能回答"这三个名字是什么关系"。`,
