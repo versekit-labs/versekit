@@ -92,7 +92,25 @@ const API = "https://api.github.com";
 let TOKEN = "";
 
 /** 唯一的出网口。所有请求都走这里，才能统一计数与报错。 */
-async function api(path, { params, method = "GET", body } = {}) {
+async function api(path, opts = {}) {
+  // 网络抖动不该让整轮协调失败：一次 fetch failed 会把 claim 判成"失败"，
+  // 而它其实只是没连上。只对**连接层**错误重试（fetch failed / ECONNRESET / 超时），
+  // HTTP 4xx/5xx 一律直接抛——那些重试也没用，而且可能掩盖真实问题。
+  const RETRYABLE = /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|network/i;
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await apiOnce(path, opts);
+    } catch (err) {
+      lastErr = err;
+      if (!RETRYABLE.test(err.message) || attempt === 2) throw err;
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+async function apiOnce(path, { params, method = "GET", body } = {}) {
   const url = new URL(API + path);
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
   const res = await fetch(url, {

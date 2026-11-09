@@ -43,6 +43,33 @@ FAILED=0
 
 log() { printf '%s\n' "$*"; }
 
+# ---------------------------------------------------------------- Run 绑定
+# orchestration 的 task-create / worker-start 必须带一个 Run。
+# 交互式终端里 Orca 会自动解析"当前绑定"，但 automation 起的新终端没有绑定，
+# 不加 --run 就会静默失败——错误信息还只会说"task-create 失败"，非常难查。
+# 用文件持有 run id：跨轮次复用同一个 Run，派工历史才连得起来。
+RUN_FILE="$HOME/.orca/versekit-run-id"
+if [ -s "$RUN_FILE" ]; then
+  RUN_ID=$(cat "$RUN_FILE")
+else
+  RUN_ID=$(orca orchestration run-create --objective "versekit 多 agent 协作" --json 2>/dev/null \
+    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("run",{}).get("id",""))' 2>/dev/null)
+  [ -n "$RUN_ID" ] && mkdir -p "$(dirname "$RUN_FILE")" && printf '%s' "$RUN_ID" > "$RUN_FILE"
+fi
+if [ -z "${RUN_ID:-}" ]; then
+  log "拿不到 Run id，无法派工"
+  exit 1
+fi
+log "Run: $RUN_ID"
+
+# Run 绑定的是"某一个 coordinator 终端"，换终端就会 consumer_fenced（task-create 被拒）。
+# automation 每次都起新终端，所以每轮开头必须 run-use 重新绑定（generation+1，旧终端失效）。
+# 这才是 HANDOFF-ORCA.md 里 worker-start/task-create 失败的根因，不是 --run 没传。
+if ! bind_out=$(orca orchestration run-use --id "$RUN_ID" --json 2>&1); then
+  log "run-use 绑定失败：$(printf '%s' "$bind_out" | head -c 300)"
+  exit 1
+fi
+
 # ---------------------------------------------------------------- 1. 机械迁移
 # tick --apply 只做确定性迁移（doing 有 PR 了 → review）。它不该处理"派工"，
 # 因为派工要起进程，失败率和副作用都比改 label 大得多。
@@ -55,10 +82,11 @@ log "== 2/3 派工 =="
 dispatch_one() {
   local role="$1" wt="$2"
   local claimed
-  claimed=$(node bin/agentctl.mjs claim --role "$role" --json 2>/dev/null) || {
-    log "  ✗ $role: claim 失败"
+  local clm_err
+  if ! claimed=$(node bin/agentctl.mjs claim --role "$role" --json 2>&1); then
+    log "  ✗ $role: claim 失败：$(printf '%s' "$claimed" | head -2 | tr '\n' ' ')"
     return 1
-  }
+  fi
   local num title body
   num=$(printf '%s' "$claimed" | python3 -c 'import json,sys;d=json.load(sys.stdin);c=d.get("claimed");print(c["number"] if c else "")')
   if [ -z "$num" ]; then
@@ -90,18 +118,28 @@ dispatch_one() {
   spec=$(printf '你是本仓库的%s agent（worktree=%s）。\n\n以下是你要做的工单：\n\n%s\n\n要求：\n- 严格按工单的「口径」验收条目实现\n- 完成后开 PR，body 含 Closes #%s 和证据包 YAML\n- 用 worker_done 结束，带 task-id 与 dispatch-id\n- 做不下去就发 escalation 并说明缺什么' \
     "$role" "$wt" "$body" "$num")
 
-  local task
-  task=$(orca orchestration task-create --spec "$spec" --json 2>/dev/null \
-    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
+  local task tc_out
+  if ! tc_out=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>&1); then
+    log "    ✗ task-create 失败：$(printf "%s" "$tc_out" | python3 -c 'import json,sys;d=json.load(sys.stdin);print((d.get("error") or {}).get("message",""))' 2>/dev/null)"
+    return 1
+  fi
+  task=$(printf '%s' "$tc_out" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("result",{}).get("task",{}).get("id",""))' 2>/dev/null)
   if [ -z "$task" ]; then
-    log "    ✗ task-create 失败"
+    log "    ✗ task-create 无 id：$(printf '%s' "$tc_out" | head -2 | tr '\n' ' ')"
     return 1
   fi
 
-  if orca orchestration worker-start --task "$task" --terminal "$handle" --worktree "$wt" --json >/dev/null 2>&1; then
+  if ws_out=$(orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$wt" --json 2>&1); then
     log "    ✓ 已派工 task=$task"
   else
-    log "    ✗ worker-start 失败"
+    log "    ✗ worker-start 失败：$(printf '%s' "$ws_out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print((d.get("error") or {}).get("message") or d.get("message") or "unknown")
+except Exception:
+    print(sys.stdin.read()[:160])
+' 2>/dev/null)"
     return 1
   fi
   return 0
@@ -124,10 +162,10 @@ log "== 3/3 验收派工 =="
 #   - 验收要跑真实服务看界面，所以要求用 8788 端口，避开实现方可能占用的 8787
 dispatch_acceptance() {
   local queue
-  queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
-    log "  ✗ acceptance: 取队列失败"
+  if ! queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>&1); then
+    log "  ✗ acceptance: 取队列失败：$(printf '%s' "$queue" | head -2 | tr '\n' ' ')"
     return 1
-  }
+  fi
   local num pull
   num=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["number"] if q else "")')
   if [ -z "$num" ]; then
@@ -169,15 +207,25 @@ dispatch_acceptance() {
 禁止改实现代码、禁止自己合并 PR。用 worker_done 结束。' \
     "$ACCEPTANCE_WT" "$num" "$pull")
 
-  local task
-  task=$(orca orchestration task-create --spec "$spec" --json 2>/dev/null \
-    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
-  [ -n "$task" ] || { log "    ✗ task-create 失败"; return 1; }
+  local task tc_out
+  if ! tc_out=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>&1); then
+    log "    ✗ task-create 失败：$(printf "%s" "$tc_out" | python3 -c 'import json,sys;d=json.load(sys.stdin);print((d.get("error") or {}).get("message",""))' 2>/dev/null)"
+    return 1
+  fi
+  task=$(printf '%s' "$tc_out" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("result",{}).get("task",{}).get("id",""))' 2>/dev/null)
+  [ -n "$task" ] || { log "    ✗ task-create 无 id：$(printf '%s' "$tc_out" | head -2 | tr '\n' ' ')"; return 1; }
 
-  if orca orchestration worker-start --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json >/dev/null 2>&1; then
+  if ws_out=$(orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json 2>&1); then
     log "    ✓ 已派验收 task=$task"
   else
-    log "    ✗ worker-start 失败"
+    log "    ✗ worker-start 失败：$(printf '%s' "$ws_out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print((d.get("error") or {}).get("message") or d.get("message") or "unknown")
+except Exception:
+    print(sys.stdin.read()[:160])
+' 2>/dev/null)"
     return 1
   fi
 }
@@ -193,7 +241,7 @@ import json,re,sys
 d=json.load(sys.stdin)
 for r in d.get("rows",[]):
     if r.get("state") != "accept": continue
-    m = re.search(r"PR #(\\d+)", r.get("why",""))
+    m = re.search(r"PR #(\d+)", r.get("why",""))
     if m: print(m.group(1))
 ' | sort -u | while read -r PR; do
   [ -n "$PR" ] || continue

@@ -41,7 +41,8 @@
 
 ## 4. 代码约定
 
-- ESM、Node ≥ 22.5、无运行时依赖（`node:sqlite`、`WebSocket`、`fetch` 都是内置的）。
+- ESM、Node ≥ 22.5。**`packages/core` 与 `packages/cli` 保持零运行时依赖**（`node:sqlite`、`WebSocket`、`fetch` 都是内置的）。
+- 前端与工程化（测试、lint、浏览器验收如 Playwright、构建工具）可以引入成熟工具，但必须：放 `devDependencies` 或 `packages/web` 内、锁版本、在 PR 里说明为什么不自己写；core 不得反向依赖它们。
 - 适配器是独立包：`packages/adapter-<platform>`，`export default { platform, capabilities, ready, publish, collect }`。
 - 状态迁移必须走 `transitionPublish()`；非法迁移要抛错（有测试钉着）。
 - 失败要留现场：`error_code` + 人话 + 事件；**静默失败是 P0 缺陷**。
