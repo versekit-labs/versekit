@@ -96,6 +96,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "bootstrap",
+    summary: "一次拉齐外壳快照：当前组、组列表、账号、数据新鲜度、口径化计数、跨组只读矩阵",
+    remote: false,
+    args: {},
+    http: { method: "GET", path: "/api/bootstrap" },
+    cli: { usage: "vk bootstrap [--json]" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.add",
     summary: "加一个账号（需要在电脑上扫码）",
     remote: false,

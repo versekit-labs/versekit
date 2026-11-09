@@ -13,6 +13,7 @@ import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
+import * as overview from "./overview.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -38,10 +39,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   return {
     now: () => ({ ...store.statusSnapshot() }),
 
+    "bootstrap": () => overview.buildBootstrap(),
+
     "account.list": ({ group } = {}) => {
-      if (!group) return { accounts: store.listAccounts() };
+      // 账号页与总览新鲜度面板共用 overview.listAccountViews 的同一份对象（ACC-overview-02）。
+      if (!group) return { accounts: overview.listAccountViews() };
       const g = requireGroup(group);
-      return { group: { id: g.id, name: g.name }, accounts: store.listAccounts({ groupId: g.id }) };
+      return { group: { id: g.id, name: g.name }, accounts: overview.listAccountViews({ groupId: g.id }) };
     },
 
     "group.list": () => {
