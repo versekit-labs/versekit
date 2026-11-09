@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-schedule-"));
+const HOME = process.env.VK_HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -217,13 +219,25 @@ test("命令表 + 路由 + handler 三端同源", async () => {
   assert.equal(canceled.canceled.length, 1);
 });
 
-test("--group：账号组未上线时明确报错；上线后按组过滤", () => {
-  const day = nextDay();
-  assert.throws(() => sched.listSchedule({ ...window(day), group: "g1" }), (e) => e.code === "E_GROUP_UNSUPPORTED");
+test("--group：旧库没有 account.group_id 时明确报错，不悄悄忽略过滤", () => {
+  // #11 合入后主库已经有 group_id，这段只能在独立旧库上验证：造一张没有账号组列的表。
+  const legacyHome = mkdtempSync(join(tmpdir(), "vk-schedule-legacy-"));
+  process.env.VK_HOME = legacyHome;
+  core.close();
+  const { db: dbPath } = core.ensureDirs();
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`CREATE TABLE account (
+    id TEXT PRIMARY KEY, platform TEXT NOT NULL, handle TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+  legacy.close();
 
-  // 模拟 #11 的迁移（只在这个临时库里）：account_group + account.group_id
-  db().exec("CREATE TABLE IF NOT EXISTS account_group (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL)");
-  db().exec("ALTER TABLE account ADD COLUMN group_id TEXT REFERENCES account_group(id)");
+  assert.throws(() => sched.listSchedule({ ...window(nextDay()), group: "g1" }), (e) => e.code === "E_GROUP_UNSUPPORTED");
+
+  core.close();
+  process.env.VK_HOME = HOME;
+});
+
+test("--group：按组过滤；不同组的同平台账号不算撞车", () => {
+  const day = nextDay();
   db().prepare("INSERT INTO account_group (id, name, created_at) VALUES ('grp_a','主号组',0), ('grp_b','副号组',0)").run();
   const inA = account("bilibili");
   const inB = account("bilibili");
