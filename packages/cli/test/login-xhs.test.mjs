@@ -16,8 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
-const { openAccount, closeAccount } = await import("../../driver-browser/src/index.mjs");
+const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
 const { setInputValue, fillAndSendCode, clickLoginButton } = await import("../src/login-xhs.mjs");
+
+// CI runner 没有 Chrome：这些用例是「真浏览器」验收，缺浏览器时跳过，别把 job 拖红。
+const skipNoChrome = browserReady() ?? false;
 
 const PAGE = `<!doctype html><meta charset="utf-8"><body>
 <div id="app">
@@ -93,7 +96,7 @@ async function shut(tab) {
   await closeAccount("xhs-fixture");
 }
 
-test("setInputValue：受控输入框要收到 input 事件，页面状态才认", async () => {
+test("setInputValue：受控输入框要收到 input 事件，页面状态才认", { skip: skipNoChrome }, async () => {
   const tab = await open();
   try {
     await setInputValue(tab, "手机号", "17712665728");
@@ -107,7 +110,7 @@ test("setInputValue：受控输入框要收到 input 事件，页面状态才认
   }
 });
 
-test("fillAndSendCode：勾协议 + 嵌套按钮也能发出，并回读到倒计时", async () => {
+test("fillAndSendCode：勾协议 + 嵌套按钮也能发出，并回读到倒计时", { skip: skipNoChrome }, async () => {
   const tab = await open();
   try {
     await fillAndSendCode(tab, "17712665728");
@@ -120,7 +123,7 @@ test("fillAndSendCode：勾协议 + 嵌套按钮也能发出，并回读到倒�
   }
 });
 
-test("fillAndSendCode：号码不合法时不报成功（回读失败要抛错）", async () => {
+test("fillAndSendCode：号码不合法时不报成功（回读失败要抛错）", { skip: skipNoChrome }, async () => {
   const tab = await open();
   try {
     await assert.rejects(() => fillAndSendCode(tab, "123"), /没有发出|倒计时/);
@@ -130,7 +133,7 @@ test("fillAndSendCode：号码不合法时不报成功（回读失败要抛错�
   }
 });
 
-test("clickLoginButton：文案带空格也能点中；验证码对就跳转成功", async () => {
+test("clickLoginButton：文案带空格也能点中；验证码对就跳转成功", { skip: skipNoChrome }, async () => {
   const tab = await open();
   try {
     await fillAndSendCode(tab, "17712665728");
@@ -144,7 +147,7 @@ test("clickLoginButton：文案带空格也能点中；验证码对就跳转成�
   }
 });
 
-test("clickLoginButton：验证码错误时不跳转", async () => {
+test("clickLoginButton：验证码错误时不跳转", { skip: skipNoChrome }, async () => {
   const tab = await open();
   try {
     await fillAndSendCode(tab, "17712665728");
@@ -158,7 +161,7 @@ test("clickLoginButton：验证码错误时不跳转", async () => {
   }
 });
 
-test("pageLoggedIn：控制台页面算登录成功，登录页不算", async () => {
+test("pageLoggedIn：控制台页面算登录成功，登录页不算", { skip: skipNoChrome }, async () => {
   const { pageLoggedIn } = await import("../src/login-xhs.mjs");
   // 假页面里点对了验证码后会出现上传控件 + 发布文字
   const tab = await open();

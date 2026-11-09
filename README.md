@@ -124,7 +124,7 @@ flowchart LR
 ## 快速开始
 
 ```bash
-node -v                     # 需要 ≥ 22.5（用到 node:sqlite）
+node -v                     # 需要 ≥ 22.13（node:sqlite；更早的 22.x 有 .get() 返回 null 行的问题）
 npm run vk -- init          # 建库 + 配置
 npm run vk -- serve         # 启动守护进程，打开 http://127.0.0.1:8787
 ```
