@@ -71,20 +71,30 @@
 
 ---
 
-## 四、你每天要做的三件事
+## 四、你不用派工，agent 自己会来抢
 
-### 1. 早上看一眼：「有没有活要干」
+**这是这套流程最重要的性质**：没有任何一步需要你说「去做 #12」。
+
+三个 Orca 定时任务在后台转（`orca automations list` 可查）：
+
+| 任务 | 频率 | 干什么 |
+|---|---|---|
+| `engineer-claim` | 每 10 分钟 | 起一个干净 worktree，抢一个 `s:ready` 的 issue，做到底并开 PR |
+| `acceptance-claim` | 每 10 分钟的 5/15/25… 分 | 取一个待验收 PR，逐条比对 ACC 条目，给 PASS/FAIL |
+| `agentctl-tick` | 每 30 分钟 | 只做机械迁移：`doing` 有 PR 了 → 推到 `review` |
+
+它们互不知情、也不需要知道彼此——全靠 label 这个原子状态交接（抢单机制：先删 `s:ready`，删成功者赢）。
+
+### 你每天只需要做两件事
+
+#### 1. 看一眼有没有 `human` 的活
 
 ```bash
 npm run agentctl -- tick
 ```
 
-输出长这样：
-
 ```
-agentctl tick   versekit-labs/versekit   2026-11-08 23:17 UTC
-────────────────────────────────────────────────────────────────
- #12  s:ready    engineer     派工实现
+ #11  s:ready    engineer     派工实现
        └ 口径齐，且没有进行中的 PR
  #14  s:review   acceptance   派工验收
        └ PR 已开，等逐条比对验收条目（PR #15 · 9f3c1ab）
@@ -94,25 +104,36 @@ agentctl tick   versekit-labs/versekit   2026-11-08 23:17 UTC
   engineer 1 · acceptance 1 · human 1   |   配额 4917/5000
 ```
 
-**只关心 `human` 那几行**。其余是 agent 的活。
+**只看 `human` 那几行。** 其余两行是 agent 自己会去抢的，你不用管——事实上你也不该管，你插手反而会和它抢。
 
-加 `--json` 是给编排器吃的，人不用管。
-
-### 2. 有 `human` 的活，就处理
-
-三种典型情况：
+#### 2. 处理 `human` 的活
 
 | 看到什么 | 你要做什么 |
 |---|---|
-| `s:triage` 补口径 | 打开 issue，写清**验收条目**（能 grep 到的那种），然后打 `s:ready` |
-| `s:blocked` | 看打回理由。要么改需求，要么砍范围，要么自己动手 |
-| `修状态` / `查停滞` | 标签和实际对不上，判断一下真实情况再改 |
+| `s:triage` | 写清验收条目（能 grep 到 ACC id 的那种），然后打 `s:ready` |
+| `s:blocked` | 看打回理由：改需求 / 砍范围 / 自己动手，然后改回 `s:ready` |
+| `修状态` / `查停滞` | 标签和实际对不上，判断真实情况再改 |
 
-### 3. 想干预时，用 `hold:human`
+#### 干预：用 `hold:human`
 
-**别直接改 label。** 打 `hold:human` 上去，调度器就绕开它。撤掉就恢复。
+**别直接改 label。** 打 `hold:human` 上去，调度器就绕开它；撤掉就恢复。
 
-直接改状态会被下一轮 reconcile 覆盖回去，而且丢了"谁改的、为什么"。
+直接改状态会和 `agentctl-tick` 打架，而且丢了「谁改的、为什么」。
+
+### 如果你想手动推一把
+
+不用等定时任务，直接触发一次：
+
+```bash
+orca automations run 5f5bc1e6-4538-4081-a9fc-fb7885254e07   # engineer 立刻抢一次
+orca automations run 8b04610a-2a81-4701-b782-4970b04004a8   # 验收立刻跑一次
+```
+
+或者自己看看队列里有什么（不改任何状态）：
+
+```bash
+npm run agentctl -- claim --role acceptance   # 只是列出来，不认领
+```
 
 ---
 
