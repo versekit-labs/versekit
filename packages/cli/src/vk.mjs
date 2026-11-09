@@ -567,8 +567,9 @@ async function cmdAccount() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
   if (sub === "list") {
-    const data = await send("account.list", {}, { log });
+    const data = await send("account.list", val("--group") ? { group: val("--group") } : {}, { log });
     if (human) {
+      if (data.group) console.log(`账号组：${data.group.name}`);
       if (!data.accounts.length) console.log("还没有账号：vk account add tiktok --name 主号");
       for (const a of data.accounts) console.log(`${a.id.padEnd(14)}${a.platform.padEnd(12)}${a.handle.padEnd(18)}${a.state}`);
     } else out(data);
@@ -585,6 +586,7 @@ async function cmdAccount() {
         name,
         ...(val("--handle") ? { handle: val("--handle") } : {}),
         ...(val("--credential") ? { credentialRef: val("--credential") } : {}),
+        ...(val("--group") ? { group: val("--group") } : {}),
       },
       { log },
     );
@@ -632,6 +634,39 @@ async function cmdAccount() {
     return data;
   }
   throw new Error("用法：vk account list | add | mode | reauth");
+}
+
+async function cmdGroup() {
+  const sub = pos[1];
+  const log = (m) => human && console.log(m);
+  if (sub === "list" || !sub) {
+    const data = await send("group.list", {}, { log });
+    if (human) {
+      if (!data.groups.length) console.log("还没有账号组：vk group add <名字>");
+      for (const g of data.groups) {
+        const mark = data.current?.id === g.id ? "*" : " ";
+        console.log(`${mark} ${g.id.padEnd(16)}${String(g.name).padEnd(18)}${g.account_count} 个账号`);
+      }
+    } else out(data);
+    return data;
+  }
+  if (sub === "add") {
+    const name = pos.slice(2).join(" ") || val("--name");
+    if (!name) throw new Error("用法：vk group add <名字>");
+    const data = await send("group.add", { name }, { log });
+    if (human) console.log(`${data.existed ? "已存在" : "已新建"}账号组 ${data.name}（${data.id}）\n${data.next}`);
+    else out(data);
+    return data;
+  }
+  if (sub === "use") {
+    const group = pos[2];
+    if (!group) throw new Error("用法：vk group use <组 id 或名字>");
+    const data = await send("group.use", { group }, { log });
+    if (human) console.log(`当前账号组 → ${data.current.name}`);
+    else out(data);
+    return data;
+  }
+  throw new Error("用法：vk group list | add <名字> | use <组>");
 }
 
 async function cmdPublish() {
@@ -937,7 +972,8 @@ function usage() {
       "  vk doctor [--human]",
       "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
       "  vk commands [--human]",
-      "  vk account list | add <platform> --name <名字> | mode <id> auto|manual | reauth <id>",
+      "  vk group list | add <名字> | use <组 id 或名字>",
+      "  vk account list [--group <组>] | add <platform> --name <名字> [--group <组>] | mode <id> auto|manual | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
@@ -966,6 +1002,7 @@ try {
   else if (cmd === "doctor") await cmdDoctor();
   else if (cmd === "commands") cmdCommands();
   else if (cmd === "serve") await cmdServe();
+  else if (cmd === "group") await cmdGroup();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();

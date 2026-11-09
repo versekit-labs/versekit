@@ -7,6 +7,13 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+-- 账号组：产品第一层导航（进去先选组，之后所有页面只看该组）。docs/design/HANDOFF.md §3
+CREATE TABLE IF NOT EXISTS account_group (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account (
   id             TEXT PRIMARY KEY,
   platform       TEXT NOT NULL,
@@ -19,8 +26,12 @@ CREATE TABLE IF NOT EXISTS account (
   last_ok_at     INTEGER,
   last_checked_at INTEGER,          -- 最近一次主动探测（成功失败都算），调度靠它
   created_at     INTEGER NOT NULL,
+  group_id       TEXT REFERENCES account_group(id),  -- null = 未分组，行为与引入账号组之前一致
   UNIQUE (platform, handle)
 );
+-- 一个组里每个平台只有一个槽位；未分组的账号不受约束（旧数据照旧）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_group_platform
+  ON account(group_id, platform) WHERE group_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS work (
   id         TEXT PRIMARY KEY,
