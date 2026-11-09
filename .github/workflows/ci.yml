@@ -24,10 +24,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 每个 job 硬超时 10 分钟。job 默认上限是 6 小时，一旦某条命令挂住（例如 CI 上的
+# test job），它会一直占着 concurrency 组、PR 永远停在 "Expected — waiting"。
+# 10 分钟足够本地 16 秒的测试在 runner 上跑完，挂住则必定红着退出，让问题显形。
 jobs:
   test:
     name: test / npm test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,6 +47,7 @@ jobs:
   parity:
     name: parity / 命令表 = 路由 = 卡片 = CLI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,6 +63,7 @@ jobs:
   adapter-contract:
     name: adapter-contract / 形状 + ready + dry-run 无副作用
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -73,6 +79,7 @@ jobs:
   no-backdoor:
     name: no-backdoor / web 与 channel 不得直连数据库
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,6 +93,7 @@ jobs:
   design:
     name: design / 任务书 · 导航 · 死链 · 检测器 · 触控
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
