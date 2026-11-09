@@ -8,7 +8,7 @@
 import { existsSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue } from "./index.mjs";
-import { queuePublish, queueCollect } from "./runner.mjs";
+import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -110,21 +110,41 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
     },
 
-    "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags }) => {
+    "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags, group }) => {
       const platforms = platformList(to);
       if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
 
-      const { accounts, missing } = store.accountsForPlatforms(platforms);
-      if (missing.length) fail(`没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号`);
+      // 默认作用域是 group.use 记录的当前组：发布台打开时看到的是哪一组，就只发哪一组。
+      // 没选组（首次使用、旧数据）才退回「全部账号」，与引入账号组之前一致。
+      const selectedGroup = group ? requireGroup(group) : store.currentGroup();
+      const groupId = selectedGroup?.id ?? null;
+      const scope = selectedGroup ? `账号组「${selectedGroup.name}」里` : "";
+
+      const { accounts, missing, unusable, blocked } = store.accountsForPlatforms(platforms, { groupId });
+      if (missing.length) {
+        fail(`${scope}没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号${selectedGroup ? ` --group ${selectedGroup.name}` : ""}`);
+      }
+      // 已失效的账号不可选，而且必须说清为什么：静默跳过等于「以为发了，其实没发」。
+      // 只有「这个平台一个可用号都没有」才拦下整单；同平台还有可用号时，失效号只是不选它。
+      if (blocked.length) {
+        const reasons = unusable.filter((u) => blocked.includes(u.platform)).map((u) => u.reason);
+        fail(`这些账号已失效，不能选：${reasons.join("；")}。换可用账号，或从 --to 里去掉这些平台`);
+      }
       const noAdapter = platforms.filter((p) => !byPlatform.has(p));
       if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
 
+      // 快失效的仍然可选，但提前告诉人：不是阻塞，不应该等到发布当天才在任务页发现。
+      const warnings = accounts
+        .filter((a) => a.state === "expiring")
+        .map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, state: a.state, reason: `${a.platform} ${store.handleLabel(a.handle)} 登录即将失效：发布前确认或重登` }));
+
       const planned = accounts.map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, visibility }));
       const workTitle = title ?? titleOf(asset);
+      const base = { group: selectedGroup ? { id: selectedGroup.id, name: selectedGroup.name } : null, ...(warnings.length ? { warnings } : {}) };
 
       // Dry-run answers "what would happen" without writing rows or touching a network.
       if (dryRun) {
-        return { dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false };
+        return { ...base, dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false };
       }
 
       // 正文/话题是平台相关的素材（小红书用），放进 work.meta，不塞进 publish 的通用列。
@@ -141,7 +161,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         created.push({ publishId: id, platform: account.platform, handle: account.handle });
       }
       log(`[handlers] 创建 ${created.length} 条发布：${created.map((c) => c.platform).join(", ")}`);
-      return { workId: work.id, publishes: created };
+      return { ...base, workId: work.id, publishes: created };
     },
 
     "approval.link": ({ publishId }) => {
@@ -213,7 +233,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { queued: targets.length, targets };
     },
 
-    "stats.works": ({ range = "all", publishId = null }) => ({ rows: store.listStats({ range, publishId }) }),
+    "stats.works": ({ range = "all", publishId = null, group = null }) => {
+      const g = group ? requireGroup(group) : null;
+      return {
+        group: g ? { id: g.id, name: g.name } : null,
+        rows: store.listStats({ range, publishId, groupId: g?.id ?? null }),
+      };
+    },
 
     "stats.series": ({ publishId }) => ({ publishId, points: store.seriesFor({ publishId }) }),
 
@@ -228,7 +254,16 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "schedule.cancel": ({ workId }) => cancelSchedule({ workId }),
 
-    "run.list": ({ state = null, limit = 100 }) => ({ rows: store.listRuns({ state, limit }) }),
+    "run.list": ({ state = null, limit = 100, group = null }) => {
+      const g = group ? requireGroup(group) : null;
+      const rows = store.listRuns({ state, limit, groupId: g?.id ?? null }).map((r) => ({
+        ...r,
+        // 重试上限是队列策略，不是每行另存一份；放在响应里，页面才能显示「2 / 3」而不是猜。
+        max_attempts: MAX_ATTEMPTS,
+        attempts_left: Math.max(0, MAX_ATTEMPTS - r.attempts),
+      }));
+      return { group: g ? { id: g.id, name: g.name } : null, retry_limit: MAX_ATTEMPTS, rows };
+    },
 
     "event.list": ({ since = 0, limit = 100 }) => ({ rows: store.listEvents({ since, limit }) }),
   };
