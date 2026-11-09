@@ -51,7 +51,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "group.add": ({ name }) => {
       const result = store.addGroup({ name });
-      return { ...result, next: `切到这个组：vk group use ${result.id}` };
+      // 「创建并进入」（ACC-groups-02）：新建组必须同时成为当前组，否则页面建完仍停留在
+      // “无当前组”，还得再发一次 group.use 才能看到空组——那正是验收要排除的多余一步。
+      store.useGroup(result.id);
+      const current = { id: result.id, name: result.name };
+      return { ...result, current, next: `下一步：vk account add <platform> --name <名字> --group ${result.name}` };
     },
 
     "group.use": ({ group }) => {

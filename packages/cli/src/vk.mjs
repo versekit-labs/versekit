@@ -654,7 +654,7 @@ async function cmdGroup() {
     const name = pos.slice(2).join(" ") || val("--name");
     if (!name) throw new Error("用法：vk group add <名字>");
     const data = await send("group.add", { name }, { log });
-    if (human) console.log(`${data.existed ? "已存在" : "已新建"}账号组 ${data.name}（${data.id}）\n${data.next}`);
+    if (human) console.log(`${data.existed ? "已存在并切换到" : "已新建并进入"}账号组 ${data.name}（${data.id}）\n${data.next}`);
     else out(data);
     return data;
   }

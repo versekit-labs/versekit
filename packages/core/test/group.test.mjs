@@ -63,11 +63,13 @@ test("group.add / group.list：新建组后进入空组不报错（ACC-groups-02
   const a = h["group.add"]({ name: "主矩阵" });
   assert.equal(a.existed, false);
   assert.match(a.id, /^grp_/);
+  assert.deepEqual(a.current, { id: a.id, name: "主矩阵" }, "新建组即进入：不需要再发一次 group.use（ACC-groups-02）");
+  assert.deepEqual(h["group.list"]().current, { id: a.id, name: "主矩阵" }, "新建后当前组已经切过去，页面直接进空组");
   const again = h["group.add"]({ name: "主矩阵" });
   assert.equal(again.existed, true, "同名重复新建返回已有的组，而不是抛约束错误");
   assert.equal(again.id, a.id);
+  assert.deepEqual(again.current, { id: a.id, name: "主矩阵" }, "重复新建也停在这个组");
 
-  h["group.use"]({ group: a.id });
   const list = h["group.list"]();
   assert.equal(list.groups.length, 1);
   assert.equal(list.groups[0].account_count, 0);
@@ -124,18 +126,20 @@ test("三条命令走 HTTP（由命令表派生的路由）", async () => {
 
   const created = await post("/api/groups", { name: "HTTP 组" });
   assert.equal(created.status, 200);
-  const { id } = await created.json();
-
-  const used = await post("/api/groups/current", { group: id });
-  assert.equal(used.status, 200);
-  assert.equal((await used.json()).current.id, id);
+  const createdBody = await created.json();
+  const { id } = createdBody;
+  assert.equal(createdBody.current.id, id, "一次 POST /api/groups 就进入新组，页面不必再补一次切组");
 
   const listed = await (await fetch(`${base}/api/groups`)).json();
   assert.equal(listed.current.id, id);
   assert.ok(listed.groups.some((g) => g.name === "HTTP 组"));
 
   const accounts = await (await fetch(`${base}/api/accounts?group=${encodeURIComponent(id)}`)).json();
-  assert.deepEqual(accounts.accounts, []);
+  assert.deepEqual(accounts.accounts, [], "空组读取返回 []，不报错（ACC-groups-02）");
+
+  const used = await post("/api/groups/current", { group: id });
+  assert.equal(used.status, 200);
+  assert.equal((await used.json()).current.id, id);
 
   const missing = await post("/api/groups/current", {});
   assert.equal(missing.status, 400, "缺参数是 400，不是 500");

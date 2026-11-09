@@ -77,7 +77,7 @@ export const COMMANDS = [
   },
   {
     name: "group.add",
-    summary: "新建账号组",
+    summary: "新建账号组并进入（创建即成为当前组）",
     remote: false,
     args: { name: "string" },
     http: { method: "POST", path: "/api/groups" },
