@@ -33,52 +33,56 @@ npm run ci
 
 每页都要过三件事：**数据来自 `/api`**、**每个动作有对应命令**、**空/错/权限三态真实**。
 
+> **条目 id 是给机器看的。** PR 里的证据包必须逐条引用 `ACC-*` id 并给 pass/fail；
+> 引用不到的 PASS 无效（见 `docs/AGENT-COLLAB.md` §4）。改条目文案时不要改 id——
+> id 是跨 PR 的稳定引用，文案可以演进而 id 不能。
+
 ### 账号页 `account-wall.html`
-- 只显示**当前账号组**的五个平台槽位；未接入的显示缺口与添加入口。
-- 点账号行，详情在组内就位；主动作指向具体账号。
-- 空组：五个缺口 + 一句引导，不能白屏。
-- 命令：`vk account list --group <g>`、`vk account reauth <id>`、`vk account remove <id>`
+- [ACC-account-01] 只显示**当前账号组**的五个平台槽位；未接入的显示缺口与添加入口。
+- [ACC-account-02] 点账号行，详情在组内就位；主动作指向具体账号。
+- [ACC-account-03] 空组：五个缺口 + 一句引导，不能白屏。
+- 实现提示 命令：`vk account list --group <g>`、`vk account reauth <id>`、`vk account remove <id>`
 
 ### 选择账号组 `groups.html`
-- 首次进入无当前组时落到这里；选组后所有页面跟着变。
-- 新建组后进入空组，不报错。
-- 命令：`vk group list`、`vk group add`、`vk group use`
+- [ACC-groups-01] 首次进入无当前组时落到这里；选组后所有页面跟着变。
+- [ACC-groups-02] 新建组后进入空组，不报错。
+- 实现提示 命令：`vk group list`、`vk group add`、`vk group use`
 
 ### 矩阵总览 `matrix.html`
-- 跨组只读；点格子进入对应组。
-- 页面明确写"只读"，不能在这里改数据。
+- [ACC-matrix-01] 跨组只读；点格子进入对应组。
+- [ACC-matrix-02] 页面明确写"只读"，不能在这里改数据。
 
 ### 发布台 `publish.html`
-- 只列**当前组**账号；已失效的账号不可选并说明原因。
-- 平台差异字段只出现在真正不同的地方；预演列出将发生什么。
-- 发布后生成 work + 多条 publish，状态可查。
-- 命令：`vk publish <asset> --group <g> --to ... --schedule ... --dry-run`
+- [ACC-publish-01] 只列**当前组**账号；已失效的账号不可选并说明原因。
+- [ACC-publish-02] 平台差异字段只出现在真正不同的地方；预演列出将发生什么。
+- [ACC-publish-03] 发布后生成 work + 多条 publish，状态可查。
+- 实现提示 命令：`vk publish <asset> --group <g> --to ... --schedule ... --dry-run`
 
 ### 发布计划 `calendar.html`
-- 一条排期 = 一个作品一张卡，卡上带该作品要去的平台；**不要拆成平台碎片**。
-- 周/月/列表三视图；手机默认列表。
-- 改期 1 步可达（快捷项），保存有 toast + 撤销；过去时间拦截；撞车在保存前提示。
-- 撞车必须在卡片上有标记，不能只在摘要里报数。
-- 空档行可逐日选择。
-- 命令：`vk schedule list --group <g> --from --to`、`vk schedule move`、`vk schedule cancel`
+- [ACC-calendar-01] 一条排期 = 一个作品一张卡，卡上带该作品要去的平台；**不要拆成平台碎片**。
+- [ACC-calendar-02] 周/月/列表三视图；手机默认列表。
+- [ACC-calendar-03] 改期 1 步可达（快捷项），保存有 toast + 撤销；过去时间拦截；撞车在保存前提示。
+- [ACC-calendar-04] 撞车必须在卡片上有标记，不能只在摘要里报数。
+- [ACC-calendar-05] 空档行可逐日选择。
+- 实现提示 命令：`vk schedule list --group <g> --from --to`、`vk schedule move`、`vk schedule cancel`
 
 ### 作品详情 `work.html`
-- 每个数字旁边有来源与时间；采集缺口要画出来。
-- 平台级状态逐平台显示，不用一个状态盖住全部。
+- [ACC-work-01] 每个数字旁边有来源与时间；采集缺口要画出来。
+- [ACC-work-02] 平台级状态逐平台显示，不用一个状态盖住全部。
 
 ### 总览 `overview.html`
-- 数字带口径（作品数 vs 平台发布数分开）；跨组汇总只读。
-- 数据新鲜度面板与账号页一致。
+- [ACC-overview-01] 数字带口径（作品数 vs 平台发布数分开）；跨组汇总只读。
+- [ACC-overview-02] 数据新鲜度面板与账号页一致。
 
 ### 任务与日志 `runs.html`
-- 失败条目就地展开现场：错误码、平台原文、尝试次数、任务号。
-- 重试有上限；不静默放弃。
-- 命令：`vk run list`、`vk publish retry`
+- [ACC-runs-01] 失败条目就地展开现场：错误码、平台原文、尝试次数、任务号。
+- [ACC-runs-02] 重试有上限；不静默放弃。
+- 实现提示 命令：`vk run list`、`vk publish retry`
 
 ### 添加账号 `add.html`
-- 组已锁定；已接入平台灰掉并说明被谁占用。
-- 完成回到账号页能看到新账号。
-- 命令：`vk account add --group <g> <platform>`
+- [ACC-add-01] 组已锁定；已接入平台灰掉并说明被谁占用。
+- [ACC-add-02] 完成回到账号页能看到新账号。
+- 实现提示 命令：`vk account add --group <g> <platform>`
 
 ## 三、数字一致性（最容易糊弄的地方）
 
