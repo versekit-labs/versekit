@@ -18,6 +18,8 @@ const fail = (message) => {
   throw new Error(message);
 };
 
+const requireGroup = (ref) => store.findGroup(ref) ?? fail(`没有这个账号组：${ref}（先 vk group list 看看有哪些）`);
+
 const titleOf = (asset) => basename(asset, extname(asset)) || "未命名";
 
 /** `--to tiktok,bilibili` arrives as an array; tolerate a comma string from a card button. */
@@ -36,7 +38,30 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   return {
     now: () => ({ ...store.statusSnapshot() }),
 
-    "account.list": () => ({ accounts: store.listAccounts() }),
+    "account.list": ({ group } = {}) => {
+      if (!group) return { accounts: store.listAccounts() };
+      const g = requireGroup(group);
+      return { group: { id: g.id, name: g.name }, accounts: store.listAccounts({ groupId: g.id }) };
+    },
+
+    "group.list": () => {
+      const current = store.currentGroup();
+      return { groups: store.listGroups(), current: current ? { id: current.id, name: current.name } : null };
+    },
+
+    "group.add": ({ name }) => {
+      const result = store.addGroup({ name });
+      // 「创建并进入」（ACC-groups-02）：新建组必须同时成为当前组，否则页面建完仍停留在
+      // “无当前组”，还得再发一次 group.use 才能看到空组——那正是验收要排除的多余一步。
+      store.useGroup(result.id);
+      const current = { id: result.id, name: result.name };
+      return { ...result, current, next: `下一步：vk account add <platform> --name <名字> --group ${result.name}` };
+    },
+
+    "group.use": ({ group }) => {
+      const g = store.useGroup(group);
+      return { current: { id: g.id, name: g.name } };
+    },
 
     "channel.bind": ({ openId }) => store.bindChannel("feishu", openId),
 
@@ -62,8 +87,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       })),
     }),
 
-    "account.add": ({ platform, name, handle, credentialRef }) => {
-      const result = store.addAccount({ platform, handle: handle ?? name, displayName: name, credentialRef: credentialRef ?? null });
+    "account.add": ({ platform, name, handle, credentialRef, group }) => {
+      const groupId = group ? requireGroup(group).id : null;
+      const result = store.addAccount({ platform, handle: handle ?? name, displayName: name, credentialRef: credentialRef ?? null, groupId });
       return { ...result, next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）` };
     },
 

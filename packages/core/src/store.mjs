@@ -19,8 +19,60 @@ const requireString = (value, field, { max = 500 } = {}) => {
   return value.trim();
 };
 
-export function listAccounts() {
-  return open().prepare("SELECT * FROM account ORDER BY platform, handle").all();
+/** `groupId` 为空时返回全部账号（引入账号组之前的行为）；给了就只看这个组。 */
+export function listAccounts({ groupId = null } = {}) {
+  const conn = open();
+  return groupId
+    ? conn.prepare("SELECT * FROM account WHERE group_id = ? ORDER BY platform, handle").all(groupId)
+    : conn.prepare("SELECT * FROM account ORDER BY platform, handle").all();
+}
+
+// ------------------------------------------------------------------ account groups
+//
+// 账号组是第一层导航：进去先选组，之后所有页面只看该组（docs/design/HANDOFF.md §3）。
+// 「当前组」是本机状态，放 meta 表，不是每个请求都要带的参数。
+
+const CURRENT_GROUP_KEY = "current_group";
+
+export function listGroups() {
+  return open()
+    .prepare(
+      `SELECT g.id, g.name, g.created_at, COUNT(a.id) AS account_count
+         FROM account_group g LEFT JOIN account a ON a.group_id = g.id
+        GROUP BY g.id ORDER BY g.created_at, g.name`,
+    )
+    .all();
+}
+
+/** 按 id 或名字找组；找不到返回 null。 */
+export function findGroup(ref) {
+  if (typeof ref !== "string" || !ref.trim()) return null;
+  return open().prepare("SELECT * FROM account_group WHERE id = ? OR name = ?").get(ref.trim(), ref.trim()) ?? null;
+}
+
+export function addGroup({ name }) {
+  const n = requireString(name, "组名", { max: 64 });
+  const existing = open().prepare("SELECT id FROM account_group WHERE name = ?").get(n);
+  if (existing) return { id: existing.id, name: n, existed: true };
+  const id = newId("grp");
+  open().prepare("INSERT INTO account_group (id, name, created_at) VALUES (?,?,?)").run(id, n, Date.now());
+  return { id, name: n, existed: false };
+}
+
+/** 当前组；记录的组已不存在时当作没有当前组，而不是返回一个悬空 id。 */
+export function currentGroup() {
+  const row = open().prepare("SELECT value FROM meta WHERE key = ?").get(CURRENT_GROUP_KEY);
+  if (!row) return null;
+  return open().prepare("SELECT * FROM account_group WHERE id = ?").get(row.value) ?? null;
+}
+
+export function useGroup(ref) {
+  const group = findGroup(ref);
+  if (!group) fail(`没有这个账号组：${ref}（先 vk group add <名字>）`);
+  open()
+    .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .run(CURRENT_GROUP_KEY, group.id);
+  return group;
 }
 
 export function getAccount(accountId) {
@@ -34,15 +86,21 @@ export function findAccount(platform, handle = null) {
     : conn.prepare("SELECT * FROM account WHERE platform = ? ORDER BY created_at LIMIT 1").get(platform);
 }
 
-export function addAccount({ platform, handle, displayName = null, credentialRef = null }) {
+export function addAccount({ platform, handle, displayName = null, credentialRef = null, groupId = null }) {
   const p = requireString(platform, "platform", { max: 32 });
   const h = requireString(handle, "handle", { max: 200 });
   const existing = open().prepare("SELECT id FROM account WHERE platform = ? AND handle = ?").get(p, h);
   if (existing) return { id: existing.id, existed: true };
+  if (groupId) {
+    const group = open().prepare("SELECT name FROM account_group WHERE id = ?").get(groupId);
+    if (!group) fail(`没有这个账号组：${groupId}`);
+    const taken = open().prepare("SELECT id, handle FROM account WHERE group_id = ? AND platform = ?").get(groupId, p);
+    if (taken) fail(`账号组「${group.name}」已经有 ${p} 账号（${taken.handle}）：一个组每个平台只能有一个`);
+  }
   const id = newId("acc");
   open()
-    .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at) VALUES (?,?,?,?,?, 'ok', ?)")
-    .run(id, p, h, displayName, credentialRef, Date.now());
+    .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id) VALUES (?,?,?,?,?, 'ok', ?, ?)")
+    .run(id, p, h, displayName, credentialRef, Date.now(), groupId);
   return { id, existed: false };
 }
 

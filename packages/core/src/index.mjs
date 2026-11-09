@@ -113,13 +113,16 @@ export function migrate() {
 const COLUMNS = {
   run: { lane: "TEXT" },
   publish: { published_at: "INTEGER" },
-  account: { last_checked_at: "INTEGER" },
+  account: { last_checked_at: "INTEGER", group_id: "TEXT REFERENCES account_group(id)" },
   command_audit: { idempotency_key: "TEXT" },
 };
 
 function addMissingColumns(conn) {
   for (const [table, cols] of Object.entries(COLUMNS)) {
     const have = new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+    // 表还不存在：第一遍 exec 在某个引用新列的索引处中断，后面的表没建出来。
+    // 交给第二遍 exec 按 schema.sql 原样建（自带全部列），这里不能 ALTER 一张不存在的表。
+    if (!have.size) continue;
     for (const [name, type] of Object.entries(cols)) {
       if (!have.has(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
