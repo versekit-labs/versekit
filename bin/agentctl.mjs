@@ -313,6 +313,116 @@ async function applyTransitions(repo, rows, { dryRun }) {
   return results;
 }
 
+// ---------------------------------------------------------------- 认领（抢单）
+
+/**
+ * 认领一个 issue。**这是整套协作的原子操作。**
+ *
+ * 为什么必须原子：两个 engineer 同时看中同一个 issue，如果先查后改，两边都会认为
+ * "它是我的"。这里用「先删 s:ready」当锁——只有删成功的那个赢，另一个收到 404 就换下一个。
+ * 这比加 claimed 字段可靠：label 本身就是状态，不存在两份真相。
+ */
+async function claimIssue(repo, issue) {
+  const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue.number}/labels`;
+  try {
+    await api(`${base}/${encodeURIComponent("s:ready")}`, { method: "DELETE" });
+  } catch (err) {
+    if (/^404 /.test(err.message)) return { ok: false, why: "被抢了" };
+    throw err;
+  }
+  try {
+    await api(base, { method: "POST", body: { labels: ["s:doing"] } });
+  } catch (err) {
+    // 锁已拿、状态没写上：最危险的中间态，必须让调用方知道 issue 现在无状态。
+    throw new Error(
+      `认领 #${issue.number} 时已移除 s:ready，但没能加上 s:doing。\n` +
+      `  issue 现在无状态，请手工加 s:doing 或 s:blocked。\n  原因：${err.message}`,
+    );
+  }
+  return { ok: true };
+}
+
+/**
+ * agent 自己找活。
+ *
+ * 设计要点：**由 agent 主动抢，而不是由协调器指派**。
+ * 指派要求协调器知道"哪台机器上的哪个 session 是空闲的"，这在多 worktree 下会立刻失真；
+ * 抢单只需要一个原子操作，谁抢到算谁的，天然适配任意数量的 worker。
+ *
+ *   engineer   —— 抢 s:ready，抢到即 s:doing（同一时刻只有一个在跑）
+ *   acceptance —— 不抢，只列队列。验收没有"半成品"，重复审只是浪费；
+ *                 而抢单会引入"认领者崩了没人接手"的死结。
+ */
+async function cmdClaim(repo, { role, milestone, json }) {
+  const board = await loadBoard(repo);
+  const pulls = board.pulls;
+
+  let candidates = board.issues;
+  if (milestone) candidates = candidates.filter((i) => (i.milestone?.title ?? "") === milestone);
+
+  if (role === "engineer") {
+    const ready = candidates
+      .filter((i) => readState(i).state === "ready" && !readState(i).hold)
+      .sort((a, b) => a.number - b.number); // 老 issue 先做，避免新活插队把旧活饿死
+    if (ready.length === 0) {
+      process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "no-work" }) + "\n" : "no-work\n");
+      return 0;
+    }
+    for (const issue of ready) {
+      const res = await claimIssue(repo, issue);
+      if (!res.ok) continue;
+      const claimed = {
+        number: issue.number,
+        title: issue.title,
+        body: issue.body ?? "",
+        url: issue.html_url,
+        milestone: issue.milestone?.title ?? null,
+      };
+      if (json) {
+        process.stdout.write(JSON.stringify({ claimed }, null, 2) + "\n");
+      } else {
+        process.stdout.write(
+          `已认领 #${claimed.number}  ${claimed.title}\n` +
+          (claimed.milestone ? `里程碑：${claimed.milestone}\n` : "") +
+          `${claimed.url}\n` +
+          `${"─".repeat(64)}\n${claimed.body}\n`,
+        );
+      }
+      return 0;
+    }
+    process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "all-raced" }) + "\n" : "全被抢光了\n");
+    return 0;
+  }
+
+  if (role === "acceptance") {
+    const queue = candidates
+      .filter((i) => readState(i).state === "review" && !readState(i).hold)
+      .map((i) => {
+        const pull = findPull(pulls, i);
+        return {
+          number: i.number,
+          title: i.title,
+          url: i.html_url,
+          pull: pull?.number ?? null,
+          pullUrl: pull?.html_url ?? null,
+        };
+      })
+      .filter((x) => x.pull)
+      .sort((a, b) => a.number - b.number);
+
+    if (json) process.stdout.write(JSON.stringify({ queue }, null, 2) + "\n");
+    else if (queue.length === 0) process.stdout.write("no-work\n");
+    else
+      for (const q of queue)
+        process.stdout.write(
+          `待验收 #${q.number}  ${q.title}\n  PR #${q.pull}  ${q.pullUrl}\n  issue ${q.url}\n`,
+        );
+    return 0;
+  }
+
+  throw new Error(`未知角色：${role}（只支持 engineer / acceptance）`);
+}
+
 // ---------------------------------------------------------------- 入口
 
 async function main(argv) {
@@ -326,24 +436,45 @@ async function main(argv) {
       `agentctl —— 多 agent 协作协调器
 
 用法：
-  node bin/agentctl.mjs tick [--json] [--verbose] [--apply]
+  node bin/agentctl.mjs <command> [options]
 
-  tick    读一次工单全景，算「谁该动、为什么」。
-          默认只读；加 --apply 才会真的改 label（目前只自动做 doing→review）。
-          --apply   执行决策里带 transition 的迁移（其余一律不动）
-          --json    机器可读
-          --verbose 附带原始 label 与链接
+  tick      读一次工单全景，算「谁该动、为什么」。
+            --apply   执行决策里带 transition 的迁移（目前只自动做 doing→review）
+            --json    机器可读
+            --verbose 附带原始 label 与链接
 
-退出码：0 正常；1 配置/网络/API 出错，或有迁移失败。
-         "有活要干"不算失败——那会让 cron 误判。
+  claim     自己找活（worker 用，不需要人来派）。
+            --role engineer|acceptance   （必填）
+            --milestone <标题>           只在该里程碑内找
+            --json                       机器可读
+
+  engineer  抢 s:ready，抢到即改 s:doing；同一时刻只有一个 agent 能拿到。
+  acceptance 列出 s:review 且已有 PR 的队列（不抢单：验收可以重复，认领者崩了才是死结）。
+
+退出码：0 正常（含"没活"）；1 配置/网络/API 出错，或迁移/认领失败。
+         "有活要干"不算失败——那会让定时任务误判。
 
 文档：docs/AGENT-COLLAB.md · docs/AGENT-WORKFLOW.md
 `,
     );
     return 0;
   }
+  if (cmd === "claim") {
+    const roleIdx = argv.indexOf("--role");
+    const role = roleIdx >= 0 ? argv[roleIdx + 1] : null;
+    if (!role) {
+      process.stderr.write("claim 需要 --role engineer|acceptance\n");
+      return 1;
+    }
+    const msIdx = argv.indexOf("--milestone");
+    const milestone = msIdx >= 0 ? argv[msIdx + 1] : null;
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    return cmdClaim(repo, { role, milestone, json });
+  }
+
   if (cmd !== "tick") {
-    process.stderr.write(`未知命令：${cmd}（目前只有 tick）\n`);
+    process.stderr.write(`未知命令：${cmd}（支持 tick / claim）\n`);
     return 1;
   }
 
