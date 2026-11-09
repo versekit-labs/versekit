@@ -22,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MAX=2
+MAX=0   # 0 = 用满所有 engineer worktree
 DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -32,7 +32,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ENGINEER_WT="${ENGINEER_WT:-current}"
+# 工程师可以有好几个 worktree：同一 worktree 不能同时跑两个 worker（会抢同一个 git 分支），
+# 所以并发数 = worktree 数。列表用逗号分隔，按顺序轮转分配。
+ENGINEER_WTS="${ENGINEER_WTS:-${ENGINEER_WT:-current}}"
+IFS=',' read -ra ENG_WT_ARR <<< "$ENGINEER_WTS"
+[ "${#ENG_WT_ARR[@]}" -gt 0 ] || ENG_WT_ARR=(current)
+ENGINEER_WT="${ENG_WT_ARR[0]}"
 ACCEPTANCE_WT="${ACCEPTANCE_WT:-current}"
 FAILED=0
 
@@ -102,8 +107,12 @@ dispatch_one() {
   return 0
 }
 
+if [ "$MAX" -le 0 ] || [ "$MAX" -gt "${#ENG_WT_ARR[@]}" ]; then
+  MAX="${#ENG_WT_ARR[@]}"
+fi
 for i in $(seq 1 "$MAX"); do
-  dispatch_one engineer "$ENGINEER_WT" || FAILED=1
+  wt="${ENG_WT_ARR[$(( (i - 1) % ${#ENG_WT_ARR[@]} ))]}"
+  dispatch_one engineer "$wt" || FAILED=1
 done
 
 # ---------------------------------------------------------------- 3. 验收派工
@@ -174,6 +183,30 @@ dispatch_acceptance() {
 }
 
 dispatch_acceptance || FAILED=1
+
+# ---------------------------------------------------------------- 4. 合并
+# 合并是唯一不可逆的动作，所以只做一件事：**s:accept 的 issue，去合它的 PR**。
+# 不做"顺手重试""自动 rebase"——那些失败要么是门禁没过，要么是冲突，都需要人看。
+log "== 4/4 合并 s:accept =="
+node bin/agentctl.mjs tick --json 2>/dev/null | python3 -c '
+import json,re,sys
+d=json.load(sys.stdin)
+for r in d.get("rows",[]):
+    if r.get("state") != "accept": continue
+    m = re.search(r"PR #(\\d+)", r.get("why",""))
+    if m: print(m.group(1))
+' | sort -u | while read -r PR; do
+  [ -n "$PR" ] || continue
+  if [ "$DRY" = "1" ]; then
+    log "  · [dry-run] 会合并 PR #$PR"
+    continue
+  fi
+  if bin/ghx pr merge "$PR" --squash --delete-branch >/dev/null 2>&1; then
+    log "  ✓ 已合并 PR #$PR"
+  else
+    log "  · PR #$PR 合不了（门禁未过或有冲突），留给下一轮"
+  fi
+done
 
 if [ "$FAILED" = "1" ]; then
   log "本轮有派工失败，见上方 ✗"

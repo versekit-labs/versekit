@@ -192,11 +192,25 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
   // 流程就停在"实现中"，验收方永远等不到。**由协调器推，不由实现方推**，
   // 因为"我完成了"这件事必须由第三方确认，否则就是自证。
   if (state === "doing" && pull) {
+    // 关键区分：**新活**的 PR 是刚开的，**返工**的 PR 早就在了。
+    // 只看"有没有 PR"会把刚认领的返工立刻推回 review——活还没干，就被当成干完了。
+    // 用时间戳判定：PR 最近一次更新晚于 issue 最近一次状态变化，才算"有新提交"。
+    // issue.updated_at 在认领（改 label）时一定会刷新，所以这个比较天然成立。
+    const prUpdated = Date.parse(pull.updated_at ?? pull.created_at ?? 0);
+    const issueUpdated = Date.parse(issue.updated_at ?? 0);
+    if (prUpdated > issueUpdated) {
+      return {
+        actor: "coordinator",
+        action: "转 review",
+        why: `PR #${pull.number} 有新提交，实现阶段结束`,
+        transition: { from: "s:doing", to: "s:review" },
+        blocked: false,
+      };
+    }
     return {
-      actor: "coordinator",
-      action: "转 review",
-      why: `PR #${pull.number} 已开，实现阶段结束`,
-      transition: { from: "s:doing", to: "s:review" },
+      actor: "engineer",
+      action: "返工中",
+      why: `PR #${pull.number} 已存在但还没有新提交（认领后未推送）`,
       blocked: false,
     };
   }
@@ -322,10 +336,10 @@ async function applyTransitions(repo, rows, { dryRun }) {
  * "它是我的"。这里用「先删 s:ready」当锁——只有删成功的那个赢，另一个收到 404 就换下一个。
  * 这比加 claimed 字段可靠：label 本身就是状态，不存在两份真相。
  */
-async function claimIssue(repo, issue) {
+async function claimIssue(repo, issue, fromState = "ready") {
   const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue.number}/labels`;
   try {
-    await api(`${base}/${encodeURIComponent("s:ready")}`, { method: "DELETE" });
+    await api(`${base}/${encodeURIComponent(`s:${fromState}`)}`, { method: "DELETE" });
   } catch (err) {
     if (/^404 /.test(err.message)) return { ok: false, why: "被抢了" };
     throw err;
@@ -361,17 +375,20 @@ async function cmdClaim(repo, { role, milestone, json }) {
   if (milestone) candidates = candidates.filter((i) => (i.milestone?.title ?? "") === milestone);
 
   if (role === "engineer") {
+    // s:changes 与 s:ready 对 worker 是同一件事：去改代码。区别只在 PR 是否已存在。
+    // 不把 changes 纳入认领，被打回的活就永远没人接——流程会静默停在"等返工"。
     const ready = candidates
-      .filter((i) => readState(i).state === "ready" && !readState(i).hold)
+      .filter((i) => ["ready", "changes"].includes(readState(i).state) && !readState(i).hold)
       .sort((a, b) => a.number - b.number); // 老 issue 先做，避免新活插队把旧活饿死
     if (ready.length === 0) {
       process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "no-work" }) + "\n" : "no-work\n");
       return 0;
     }
     for (const issue of ready) {
-      const res = await claimIssue(repo, issue);
+      const res = await claimIssue(repo, issue, readState(issue).state);
       if (!res.ok) continue;
       const claimed = {
+        kind: readState(issue).state === "changes" ? "rework" : "new",
         number: issue.number,
         title: issue.title,
         body: issue.body ?? "",
