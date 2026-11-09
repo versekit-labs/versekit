@@ -423,6 +423,32 @@ async function cmdClaim(repo, { role, milestone, json }) {
   throw new Error(`未知角色：${role}（只支持 engineer / acceptance）`);
 }
 
+/**
+ * 直接把某个 issue 拨到指定状态。给"派工失败要退回 s:ready"这类补偿用。
+ *
+ * 不做状态机校验：调用方是已经知道自己要干什么的脚本，再套一层校验只会让
+ * 补偿动作也被拒绝。这里只保证"同时只有一个 s:*"这个不变量。
+ */
+async function cmdSet(repo, { issue, to, json }) {
+  const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue}/labels`;
+  // 先摘掉所有现有的 s:*
+  const cur = await api(`/repos/${repo.owner}/${repo.repo}/issues/${issue}`);
+  const states = (cur.data.labels ?? [])
+    .map((l) => (typeof l === "string" ? l : l.name))
+    .filter((n) => n.startsWith("s:"));
+  for (const name of states) {
+    try {
+      await api(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
+    } catch (err) {
+      if (!/^404 /.test(err.message)) throw err;
+    }
+  }
+  await api(base, { method: "POST", body: { labels: [`s:${to}`] } });
+  if (json) process.stdout.write(JSON.stringify({ issue: Number(issue), to }) + "\n");
+  else process.stdout.write(`#${issue} → s:${to}\n`);
+  return 0;
+}
+
 // ---------------------------------------------------------------- 入口
 
 async function main(argv) {
@@ -473,8 +499,20 @@ async function main(argv) {
     return cmdClaim(repo, { role, milestone, json });
   }
 
+  if (cmd === "set") {
+    const iIdx = argv.indexOf("--issue");
+    const tIdx = argv.indexOf("--to");
+    if (iIdx < 0 || tIdx < 0) {
+      process.stderr.write("set 需要 --issue <n> --to <state>\n");
+      return 1;
+    }
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    return cmdSet(repo, { issue: argv[iIdx + 1], to: argv[tIdx + 1], json });
+  }
+
   if (cmd !== "tick") {
-    process.stderr.write(`未知命令：${cmd}（支持 tick / claim）\n`);
+    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set）\n`);
     return 1;
   }
 
