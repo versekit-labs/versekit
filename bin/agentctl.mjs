@@ -92,22 +92,25 @@ const API = "https://api.github.com";
 let TOKEN = "";
 
 /** 唯一的出网口。所有请求都走这里，才能统一计数与报错。 */
-async function api(path, { params } = {}) {
+async function api(path, { params, method = "GET", body } = {}) {
   const url = new URL(API + path);
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
   const res = await fetch(url, {
+    method,
     headers: {
       authorization: `token ${TOKEN}`,
       accept: "application/vnd.github+json",
       "user-agent": "versekit-agentctl",
+      ...(body ? { "content-type": "application/json" } : {}),
     },
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const remaining = Number(res.headers.get("x-ratelimit-remaining") ?? "-1");
   const limit = Number(res.headers.get("x-ratelimit-limit") ?? "-1");
   if (!res.ok) {
     // 失败必须留现场：状态码 + GitHub 的原话 + 这条路径。
-    const body = await res.text();
-    throw new Error(`${res.status} ${path}\n  ${body.slice(0, 300)}`);
+    const text = await res.text();
+    throw new Error(`${res.status} ${method} ${path}\n  ${text.slice(0, 300)}`);
   }
   return { data: await res.json(), remaining, limit };
 }
@@ -184,6 +187,20 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
     }
     return { ...base, actor: "engineer", action: "确认在跑", why: "s:doing 且尚无 PR（正常）" };
   }
+
+  // 有 PR 的 doing 不该继续挂着——这是最容易漏的一步：agent 交了 PR 但忘了推状态，
+  // 流程就停在"实现中"，验收方永远等不到。**由协调器推，不由实现方推**，
+  // 因为"我完成了"这件事必须由第三方确认，否则就是自证。
+  if (state === "doing" && pull) {
+    return {
+      actor: "coordinator",
+      action: "转 review",
+      why: `PR #${pull.number} 已开，实现阶段结束`,
+      transition: { from: "s:doing", to: "s:review" },
+      blocked: false,
+    };
+  }
+
   if (state === "review" && !pull) {
     return { actor: "human", action: "修状态", why: "s:review 但找不到对应 PR", blocked: true };
   }
@@ -201,7 +218,7 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
 
 // ---------------------------------------------------------------- 输出
 
-function render({ repo, rows, quota, verbose }) {
+function render({ repo, rows, quota, verbose, transitions = [], applied = false }) {
   const stamp = new Date().toISOString().replace("T", " ").slice(0, 16);
   const lines = [];
   lines.push(`agentctl tick   ${repo.full}   ${stamp} UTC`);
@@ -234,7 +251,66 @@ function render({ repo, rows, quota, verbose }) {
   if (quota.remaining >= 0 && quota.remaining < 10) {
     lines.push("  ⚠ 配额不足 10，下一轮会被限流——降低 tick 频率或换认证方式。");
   }
+
+  // 状态迁移单独一段：只读时显示"会改什么"，--apply 时显示"改成了什么"。
+  // 两者共用同一条代码路径，行文用词区分，避免演练与实战不一致。
+  if (transitions.length) {
+    lines.push("");
+    lines.push(applied ? "  已迁移：" : "  本轮会迁移（加 --apply 才执行）：");
+    for (const t of transitions) {
+      const mark = { changed: "✓", "would-change": "·", skipped: "−", failed: "✗" }[t.status] ?? "?";
+      const tail = t.why ? `  （${t.why}）` : "";
+      lines.push(`   ${mark} #${t.number}  ${t.from} → ${t.to}${tail}`);
+    }
+  }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------- 写状态
+
+/**
+ * 执行状态迁移。**这是本文件唯一会改变外部世界的地方。**
+ *
+ * 安全设计：
+ *   - 只执行决策里带 transition 的行；其余（human / engineer / acceptance）一律不碰。
+ *   - 先删旧 label 再加新的。删除时若返回 404，说明状态已被别人改过——跳过而不是硬写，
+ *     这比"覆盖"安全：覆盖会掩盖并发冲突，跳过会把冲突暴露出来。
+ *   - 单条失败不中断其余，最后汇总；有任何失败就返回非零退出码。
+ *   - 幂等：重复跑同一轮，因为源 label 已经没了，第二次会全部 skip。
+ */
+async function applyTransitions(repo, rows, { dryRun }) {
+  const todo = rows.filter((r) => r.transition);
+  const results = [];
+
+  for (const row of todo) {
+    const { from, to } = row.transition;
+    if (dryRun) {
+      results.push({ number: row.number, from, to, status: "would-change" });
+      continue;
+    }
+    const base = `/repos/${repo.owner}/${repo.repo}/issues/${row.number}/labels`;
+    try {
+      await api(`${base}/${encodeURIComponent(from)}`, { method: "DELETE" });
+    } catch (err) {
+      if (/^404 /.test(err.message)) {
+        results.push({ number: row.number, from, to, status: "skipped", why: "源状态已不存在（并发修改）" });
+        continue;
+      }
+      results.push({ number: row.number, from, to, status: "failed", why: err.message });
+      continue;
+    }
+    try {
+      await api(base, { method: "POST", body: { labels: [to] } });
+      results.push({ number: row.number, from, to, status: "changed" });
+    } catch (err) {
+      // 旧 label 已删、新 label 没加上，是最糟的中间态：必须喊出来并建议人工修复。
+      results.push({
+        number: row.number, from, to, status: "failed",
+        why: `${err.message}\n  ⚠ 已移除 ${from} 但未能加上 ${to}，issue 现在无状态，请手工修复`,
+      });
+    }
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------- 入口
@@ -243,18 +319,25 @@ async function main(argv) {
   const cmd = argv[0];
   const json = argv.includes("--json");
   const verbose = argv.includes("--verbose");
+  const apply = argv.includes("--apply");
 
   if (!cmd || ["-h", "--help", "help"].includes(cmd)) {
     process.stdout.write(
-      `agentctl —— 多 agent 协作协调器（只读）
+      `agentctl —— 多 agent 协作协调器
 
 用法：
-  node bin/agentctl.mjs tick [--json] [--verbose]
+  node bin/agentctl.mjs tick [--json] [--verbose] [--apply]
 
-  tick   读一次工单全景，算「谁该动、为什么」。不发写请求。
+  tick    读一次工单全景，算「谁该动、为什么」。
+          默认只读；加 --apply 才会真的改 label（目前只自动做 doing→review）。
+          --apply   执行决策里带 transition 的迁移（其余一律不动）
+          --json    机器可读
+          --verbose 附带原始 label 与链接
 
-退出码：0 正常；1 配置/网络/API 出错（有活要干不算失败）。
-文档：docs/AGENT-COLLAB.md
+退出码：0 正常；1 配置/网络/API 出错，或有迁移失败。
+         "有活要干"不算失败——那会让 cron 误判。
+
+文档：docs/AGENT-COLLAB.md · docs/AGENT-WORKFLOW.md
 `,
     );
     return 0;
@@ -283,10 +366,23 @@ async function main(argv) {
     })
     .sort((a, b) => a.number - b.number);
 
+  // 即使不加 --apply 也走一遍（dryRun），这样输出里能看到"本轮会改什么"——
+  // 只读观察和真实执行共用同一条代码路径，避免"演练和实战不一样"。
+  const transitions = await applyTransitions(repo, rows, { dryRun: !apply });
+
   if (json) {
-    process.stdout.write(JSON.stringify({ repo: repo.full, quota: board.quota, rows }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ repo: repo.full, quota: board.quota, rows, transitions, applied: apply }, null, 2) + "\n",
+    );
   } else {
-    process.stdout.write(render({ repo, rows, quota: board.quota, verbose }) + "\n");
+    process.stdout.write(render({ repo, rows, quota: board.quota, verbose, transitions, applied: apply }) + "\n");
+  }
+
+  const failed = transitions.filter((t) => t.status === "failed");
+  if (failed.length) {
+    process.stderr.write(`\n${failed.length} 条迁移失败：\n`);
+    for (const f of failed) process.stderr.write(`  #${f.number} ${f.from}→${f.to}: ${f.why}\n`);
+    return 1;
   }
   return 0;
 }
