@@ -12,6 +12,7 @@ import { queuePublish, queueCollect } from "./runner.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
+import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -193,6 +194,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "publish.list": ({ state = null, platform = null, limit = 100 }) => ({
       rows: store.listPublishes({ state, platform, limit }),
     }),
+
+    // 排期投影与撞车都在 core 里算（schedule.mjs），Web 与 CLI 只读结果。
+    "schedule.list": ({ group = null, from = null, to = null }) => listSchedule({ group, from, to }),
+
+    "schedule.move": ({ workId, at, force = false }) => moveSchedule({ workId, at, force }),
+
+    "schedule.cancel": ({ workId }) => cancelSchedule({ workId }),
 
     "run.list": ({ state = null, limit = 100 }) => ({ rows: store.listRuns({ state, limit }) }),
 

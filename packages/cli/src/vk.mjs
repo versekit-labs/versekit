@@ -29,6 +29,7 @@ const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta
 const VALUE_FLAGS = new Set([
   "--to", "--name", "--handle", "--credential", "--title", "--schedule", "--visibility",
   "--range", "--publish", "--platform", "--concurrency", "--port", "--actor", "--origin",
+  "--group", "--from", "--to", "--at",
 ]);
 
 function parseArgv(argv) {
@@ -857,6 +858,74 @@ async function cmdStats() {
   return data;
 }
 
+/** 日期边界：只给日期（2026-11-10）时，--from 取当天 0 点、--to 取当天最后一毫秒（本地时区）。 */
+function parseBound(raw, { end = false } = {}) {
+  if (raw == null) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw).trim());
+  if (m) {
+    const day = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+    return end ? day + 24 * 3600e3 - 1 : day;
+  }
+  return parseSchedule(raw);
+}
+
+const fmtTime = (ms) => (ms == null ? "—" : new Date(ms).toLocaleString());
+
+async function cmdSchedule() {
+  const sub = pos[1] ?? "list";
+  const log = (m) => human && console.log(m);
+
+  if (sub === "list") {
+    const from = parseBound(val("--from"));
+    const to = parseBound(val("--to"), { end: true });
+    const data = await send("schedule.list", {
+      ...(val("--group") ? { group: val("--group") } : {}),
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {}),
+    });
+    if (human) {
+      if (!data.cards.length) console.log("这段时间没有排期：vk publish <素材> --to <平台> --schedule 2026-11-10T20:00");
+      for (const c of data.cards) {
+        const plats = c.platforms.map((p) => `${p.platform}:${p.state}`).join(" ");
+        console.log(`${fmtTime(c.at).padEnd(22)}${c.state.padEnd(12)}${String(c.title).slice(0, 24).padEnd(26)}${plats}${c.conflict ? "  ⚠ 撞车" : ""}`);
+        for (const x of c.conflicts) console.log(`${"".padEnd(34)}↳ ${x.platform} 与「${x.title}」相隔 ${x.gapMin} 分钟`);
+      }
+      console.log(`\n${data.counts.works} 个作品 · ${data.counts.publishes} 条发布 · ${data.counts.conflicts} 张卡撞车`);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "move") {
+    const workId = pos[2];
+    const at = parseSchedule(val("--at"));
+    if (!workId || at == null) throw new Error("用法：vk schedule move <workId> --at <2026-11-10T20:00|2h> [--force]");
+    const data = await send("schedule.move", { workId, at, ...(has("--force") ? { force: true } : {}) }, { log });
+    if (human) {
+      if (data.saved) console.log(`已改期：「${data.title}」${fmtTime(data.from)} → ${fmtTime(data.at)}（${data.moved.map((m) => m.platform).join("、")}）`);
+      else {
+        console.log(`没有保存：${data.message}`);
+        for (const c of data.conflicts) console.log(`  ${c.platform} @${c.handle}：「${c.a.title}」${fmtTime(c.a.at)} ↔「${c.b.title}」${fmtTime(c.b.at)}`);
+        console.log(data.next);
+      }
+    } else out(data);
+    if (!data.saved) process.exitCode = 3; // 撞车没保存：脚本要能分辨「成功」和「被拦下」
+    return data;
+  }
+
+  if (sub === "cancel") {
+    const workId = pos[2];
+    if (!workId) throw new Error("用法：vk schedule cancel <workId>");
+    const data = await send("schedule.cancel", { workId }, { log });
+    if (human) {
+      if (data.already) console.log(`「${data.title}」已经是取消状态`);
+      else console.log(`已取消「${data.title}」：${data.canceled.map((c) => c.platform).join("、")}${data.skipped.length ? `（已发出、未取消：${data.skipped.map((c) => c.platform).join("、")}）` : ""}`);
+    } else out(data);
+    return data;
+  }
+
+  throw new Error("用法：vk schedule list | move <workId> --at <时间> [--force] | cancel <workId>");
+}
+
 function usage() {
   console.log(
     [
@@ -875,6 +944,7 @@ function usage() {
       "  vk collect [--now] [--platform <p>]",
       "  vk stats works [--range 7d] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
+      "  vk schedule list [--group <g>] [--from <日期>] [--to <日期>] | move <workId> --at <时间> [--force] | cancel <workId>",
       "  vk platforms | runs [--state failed] | events [--since <ms>]",
       "  vk setup [--json] | vk channel bind feishu | test feishu",
       "  vk --version",
@@ -900,6 +970,7 @@ try {
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();
   else if (cmd === "stats") await cmdStats();
+  else if (cmd === "schedule") await cmdSchedule();
   else if (cmd === "platforms") await cmdPlatforms();
   else if (cmd === "setup") await cmdSetup();
   else if (cmd === "runs") await cmdRuns();
