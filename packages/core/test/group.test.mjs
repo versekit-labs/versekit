@@ -41,8 +41,11 @@ test("ACC-groups 迁移：引入账号组之前的旧库升级两次，不报错
   const conn = core.open();
   const cols = conn.prepare("PRAGMA table_info(account)").all().map((c) => c.name);
   assert.ok(cols.includes("group_id"), "account 应补上 group_id 列");
+  assert.ok(cols.includes("removed_at"), "account 应补上 removed_at 列（移除不删行）");
   assert.ok(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_group'").get());
-  assert.ok(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_account_group_platform'").get());
+  const index = conn.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_account_group_platform'").get();
+  assert.ok(index, "账号组平台唯一索引应存在");
+  assert.match(index.sql, /removed_at/, "唯一索引只约束在用账号；旧索引谓词没有 removed_at 会被旧库带过来");
 
   const rows = store.listAccounts();
   assert.deepEqual(rows.map((r) => r.id).sort(), ["old1", "old2"], "旧账号一个都不能少");
@@ -88,7 +91,7 @@ test("group.use 可以用名字，切换后当前组跟着变；不存在的组�
   assert.throws(() => h["group.add"]({ name: "   " }), /组名 不能为空/);
 });
 
-test("同组同平台只能有一个账号；不同组互不影响；未分组照旧", () => {
+test("同组同平台只能有一个账号；不同组互不影响；新账号必须带组", () => {
   const h = createCoreHandlers();
   const g1 = h["group.add"]({ name: "唯一性一" }).id;
   const g2 = h["group.add"]({ name: "唯一性二" }).id;
@@ -96,8 +99,8 @@ test("同组同平台只能有一个账号；不同组互不影响；未分组�
   h["account.add"]({ platform: "bilibili", name: "一号", group: g1 });
   assert.throws(() => h["account.add"]({ platform: "bilibili", name: "二号", group: g1 }), /每个平台只能有一个/);
   h["account.add"]({ platform: "bilibili", name: "三号", group: g2 });
-  h["account.add"]({ platform: "bilibili", name: "散号" });
-  h["account.add"]({ platform: "bilibili", name: "散号二" });
+  assert.throws(() => h["account.add"]({ platform: "bilibili", name: "没带组" }), /必须带 --group/);
+  assert.throws(() => store.addAccount({ platform: "bilibili", handle: "@无组" }), /必须带 --group/);
 
   // 数据库层同样兜底：绕过 store 直接写也会被唯一索引拦下。
   assert.throws(
@@ -112,8 +115,9 @@ test("同组同平台只能有一个账号；不同组互不影响；未分组�
   const inG1 = h["account.list"]({ group: "唯一性一" });
   assert.equal(inG1.group.id, g1);
   assert.deepEqual(inG1.accounts.map((a) => a.handle), ["一号"], "只看当前组（ACC-account-01）");
+  assert.deepEqual(inG1.occupants.bilibili, { accountId: inG1.accounts[0].id, handle: "一号", name: "一号" }, "ACC-add-01：核心返回占用者");
   assert.equal(h["account.list"]({ group: g2 }).accounts.length, 1);
-  assert.ok(h["account.list"]().accounts.length >= 4, "不带 --group 时返回全部账号，与今天一致");
+  assert.deepEqual(h["account.list"]().accounts.map((a) => a.handle).sort(), ["一号", "三号"], "不带 --group 时只列在用的账号");
   assert.equal(h["group.list"]().groups.find((g) => g.id === g1).account_count, 1);
   assert.throws(() => h["account.add"]({ platform: "tiktok", name: "x", group: "没有的组" }), /没有这个账号组/);
 });

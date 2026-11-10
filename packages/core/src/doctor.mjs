@@ -20,8 +20,8 @@ export function doctorReport({
   const add = (id, ok, detail, next) => checks.push({ id, ok, detail, ...(next ? { next } : {}) });
 
   const [major, minor] = process.versions.node.split(".").map(Number);
-  const nodeOk = major > 22 || (major === 22 && minor >= 5);
-  add("node", nodeOk, `v${process.versions.node}${nodeOk ? "" : "（需要 ≥22.5，node:sqlite）"}`, nodeOk ? null : "升级 Node 到 22.5 以上");
+  const nodeOk = major > 22 || (major === 22 && minor >= 13);
+  add("node", nodeOk, `v${process.versions.node}${nodeOk ? "" : "（需要 ≥22.13，node:sqlite 的 .get() 修复）"}`, nodeOk ? null : "升级 Node 到 22.13 以上");
 
   const p = paths();
   const initialised = isInitialised();
@@ -44,8 +44,10 @@ export function doctorReport({
   let counts = { accounts: 0, expiring: 0, stuck: 0 };
   if (initialised) {
     const conn = open({ readonly: true });
-    counts.accounts = conn.prepare("SELECT COUNT(*) n FROM account").get().n;
-    counts.expiring = conn.prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired')").get().n;
+    counts.accounts = conn.prepare("SELECT COUNT(*) n FROM account WHERE removed_at IS NULL").get().n;
+    counts.expiring = conn
+      .prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired') AND removed_at IS NULL")
+      .get().n;
     counts.stuck = conn.prepare("SELECT COUNT(*) n FROM run WHERE state='running' AND lease_until < ?").get(now).n;
   }
   add("accounts", counts.accounts > 0, `${counts.accounts} 个账号`, counts.accounts ? null : "vk account add <platform> --name 主号");

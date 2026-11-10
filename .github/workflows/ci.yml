@@ -6,9 +6,11 @@
 # 不安装 npm 依赖：versekit 是零依赖（连 eslint/prettier 都不进 devDependencies），
 # 没有 node_modules 可装。直接 node 跑，CI 只有「代码对不对」这一件事。
 #
-# Node 22.5：node:sqlite 在 22.5 还需要 --experimental-sqlite（22.13 起才默认可用），
-# 所以凡是会 import core 的 step 都带上这个 flag。特意放在 step 级 env 而不是 job 级：
-# job 级 NODE_OPTIONS 会传给 setup-node 等由 runner 自带 Node 执行的 action，
+# Node 22.13：node:sqlite 自 22.13 起默认可用；更早的 22.5–22.12 里 .get() 查不到行
+# 会返回 {列:null} 的对象而不是 undefined，代码里的 `if (row)` 会把它当成“有行”，
+# 进而误判账号已存在、集成测试失败后 daemon 不关、test job 挂住 10 分钟被取消。
+# 所以 CI 与最低运行时都抬到 22.13+。NODE_OPTIONS 仍保留（对 22.13+ 无害），
+# 特意放在 step 级 env 而不是 job 级：job 级会传给 setup-node 等 action 自带的 Node，
 # 那个 Node 不认这个 flag，会在 checkout 之后莫名失败。
 
 name: ci
@@ -24,15 +26,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 每个 job 硬超时 10 分钟。job 默认上限是 6 小时，一旦某条命令挂住（例如 CI 上的
+# test job），它会一直占着 concurrency 组、PR 永远停在 "Expected — waiting"。
+# 10 分钟足够本地 16 秒的测试在 runner 上跑完，挂住则必定红着退出，让问题显形。
 jobs:
   test:
     name: test / npm test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.5.0"
+          node-version: "22"
       # 语义不变：仍然是一条 npm test（node --test packages/*/test/*.test.mjs）。
       # 失败时 node:test 会打印具体 test 名与断言差异。
       - name: npm test（全部单测）
@@ -43,11 +49,12 @@ jobs:
   parity:
     name: parity / 命令表 = 路由 = 卡片 = CLI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.5.0"
+          node-version: "22"
       # 真 spawn `node packages/cli/src/vk.mjs commands`，解析 JSON 与注册表逐字段比对。
       # 失败信息形如：✗ parity.cli.http … ↳ 怎么修：…
       - name: 三端一致断言（scripts/ci/parity.mjs）
@@ -58,11 +65,12 @@ jobs:
   adapter-contract:
     name: adapter-contract / 形状 + ready + dry-run 无副作用
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.5.0"
+          node-version: "22"
       # 每个适配器在独立 mkdtemp VK_HOME 里造 fixture，dry-run 必须无状态变化、无快照、无 fetch。
       # ready() 非 null 的适配器（例如 runner 上没装 biliup）会显式打印原因后跳过——日志里一定看得到。
       - name: 适配器契约断言（scripts/ci/adapter-contract.mjs）
@@ -73,11 +81,12 @@ jobs:
   no-backdoor:
     name: no-backdoor / web 与 channel 不得直连数据库
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.5.0"
+          node-version: "22"
       # 当前还没有 web/channel 包：打印「尚无 web/channel 包，门禁生效于未来包」并成功退出。
       # 未来包一落地，这条门禁自动开始扫，不需要改 CI。
       - name: 零后门静态扫描（scripts/ci/no-backdoor.mjs）
@@ -86,11 +95,12 @@ jobs:
   design:
     name: design / 任务书 · 导航 · 死链 · 检测器 · 触控
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.5.0"
+          node-version: "22"
       # 静态部分（每页有 surface brief、导航一致、无死链、检测器干净含 app.css）。
       # 运行时部分（触控、横向溢出、hidden 生效）需要 Chrome；runner 上没有时脚本打印提示并跳过，
       # 不会假装通过——本地用 npm run design:check -- --url http://127.0.0.1:8787 补测。

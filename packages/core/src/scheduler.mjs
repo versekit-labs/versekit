@@ -16,7 +16,8 @@ export function dueAccounts({ now = Date.now(), intervalMs = CHECK_INTERVAL_MS }
   return open()
     .prepare(
       `SELECT id, platform, handle, last_checked_at FROM account
-        WHERE is_manual = 0 AND (last_checked_at IS NULL OR last_checked_at <= ?)
+        WHERE is_manual = 0 AND removed_at IS NULL
+          AND (last_checked_at IS NULL OR last_checked_at <= ?)
         ORDER BY last_checked_at IS NOT NULL, last_checked_at ASC`,
     )
     .all(now - intervalMs);

@@ -38,11 +38,36 @@ FAILED=0
 
 log() { printf '%s\n' "$*"; }
 
+# ---------------------------------------------------------------- 验收锁
+# 验收侧不抢单（重复审同一 PR 只是浪费），但"不抢单"不等于"可以重复派"。
+# 用 mkdir 的原子性做锁：同名目录创建成功才派工；失败说明已有一个验收在跑。
+# 锁放在仓库外，避免污染工作树；超过 TTL 自动过期，防止 worker 崩了永久堵住队列。
+LOCK_DIR="${LOCK_DIR:-$HOME/.orca/versekit-locks}"
+ACCEPT_LOCK_TTL_MIN="${ACCEPT_LOCK_TTL_MIN:-45}"
+mkdir -p "$LOCK_DIR"
+find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_TTL_MIN" -exec rm -rf {} + 2>/dev/null || true
+
 # ---------------------------------------------------------------- 1. 机械迁移
 # tick --apply 只做确定性迁移（doing 有 PR 了 → review）。它不该处理"派工"，
 # 因为派工要起进程，失败率和副作用都比改 label 大得多。
 log "== 1/3 机械迁移 =="
 node bin/agentctl.mjs tick --apply 2>&1 | sed -n '/已迁移\|本轮会迁移/,$p' | head -10 || true
+
+# ---------------------------------------------------------------- Run 绑定
+# orchestration 的 task-create / worker-start 需要一个 Run。交互式终端里 Orca 会
+# 自动解析当前绑定，但 automation 起的新终端没有绑定——不显式带上 --run 就会
+# 报 "task-create 失败"，而且错误信息不会告诉你是缺 Run。
+# 用文件持有 run id：跨轮次复用同一个 Run，派工历史才连得起来。
+RUN_FILE="$HOME/.orca/versekit-run-id"
+if [ -s "$RUN_FILE" ]; then
+  RUN_ID=$(cat "$RUN_FILE")
+else
+  RUN_ID=$(orca orchestration run-create --objective "versekit 多 agent 协作" --json 2>/dev/null \
+    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("run",{}).get("id",""))')
+  [ -n "$RUN_ID" ] && mkdir -p "$(dirname "$RUN_FILE")" && printf '%s' "$RUN_ID" > "$RUN_FILE"
+fi
+[ -n "${RUN_ID:-}" ] || { log "拿不到 Run id，无法派工"; exit 1; }
+log "Run: $RUN_ID"
 
 # ---------------------------------------------------------------- 2. 派工
 log "== 2/3 派工 =="
@@ -86,17 +111,19 @@ dispatch_one() {
     "$role" "$wt" "$body" "$num")
 
   local task
-  task=$(orca orchestration task-create --spec "$spec" --json 2>/dev/null \
+  task=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>/dev/null \
     | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
   if [ -z "$task" ]; then
     log "    ✗ task-create 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     return 1
   fi
 
-  if orca orchestration worker-start --task "$task" --terminal "$handle" --worktree "$wt" --json >/dev/null 2>&1; then
+  if orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$wt" --json >/dev/null 2>&1; then
     log "    ✓ 已派工 task=$task"
   else
     log "    ✗ worker-start 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     return 1
   fi
   return 0
@@ -110,7 +137,7 @@ done
 log "== 3/3 验收派工 =="
 
 # 验收与实现的差异：
-#   - 不抢单（多个验收方看同一 PR 只是浪费，不会损坏状态）
+#   - 不抢单（多个验收方看同一 PR 只是浪费，不会损坏状态），但要靠锁去重
 #   - spec 必须带上 PR 号和"逐条引用 ACC id"的硬要求，否则 verdict 无法核对
 #   - 验收要跑真实服务看界面，所以要求用 8788 端口，避开实现方可能占用的 8787
 dispatch_acceptance() {
@@ -134,10 +161,18 @@ dispatch_acceptance() {
     return 0
   fi
 
+  # 同一 issue 同时只允许一个验收 dispatch；抢锁失败说明已有在跑的。
+  local lock="$LOCK_DIR/accept-$num.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    log "  · 验收 #$num 已在跑（锁存在），跳过"
+    return 0
+  fi
+
   log "  → 验收 #${num}（PR #${pull}）$title"
   local handle
   if ! handle=$(bin/worker-up.sh "$ACCEPTANCE_WT" "verify: #$num"); then
     log "    ✗ 起验收终端失败"
+    rm -rf "$lock"
     return 1
   fi
 
@@ -150,7 +185,7 @@ dispatch_acceptance() {
 1. 用 gh api 或 bin/ghx 拉 PR 的 diff 与 body 里的证据包
 2. 打开 docs/design/ACCEPTANCE.md，找到该 issue 引用的 ACC 条目
 3. 逐条比对，每条给 pass/fail 并写明证据
-4. 本地跑 npm run ci（注意 CI 上的 test job 会挂，本地应当全绿）
+4. 本地跑 npm run ci（应当全绿；GitHub 的 test job 已修复）
 5. 需要看界面时起 npm run serve，用 8788 端口
 
 判定：
@@ -161,14 +196,21 @@ dispatch_acceptance() {
     "$ACCEPTANCE_WT" "$num" "$pull")
 
   local task
-  task=$(orca orchestration task-create --spec "$spec" --json 2>/dev/null \
+  task=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>/dev/null \
     | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
-  [ -n "$task" ] || { log "    ✗ task-create 失败"; return 1; }
+  if [ -z "$task" ]; then
+    log "    ✗ task-create 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
+    rm -rf "$lock"
+    return 1
+  fi
 
-  if orca orchestration worker-start --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json >/dev/null 2>&1; then
+  if orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json >/dev/null 2>&1; then
     log "    ✓ 已派验收 task=$task"
   else
     log "    ✗ worker-start 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
+    rm -rf "$lock"
     return 1
   fi
 }

@@ -8,7 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-click-"));
-const { openAccount, closeAccount } = await import("../../driver-browser/src/index.mjs");
+const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
+// 真浏览器用例：CI 的 Chrome 实例开关有竞态，跳过；缺 Chrome 的开发机也跳过。
+const skipNoChrome = browserReady() ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态）" : false);
 
 const FIND = `(() => {
   const cands = [...document.querySelectorAll('div,button,span')].filter((e) => {
@@ -51,7 +53,7 @@ after(async () => {
   server.close();
 });
 
-test("弹窗带空格且外层也含「验证」时，仍能点到真正的按钮", async () => {
+test("弹窗带空格且外层也含「验证」时，仍能点到真正的按钮", { skip: skipNoChrome }, async () => {
   const tab = await openAccount({ accountId: "click-fixture", url: `http://127.0.0.1:${port}/`, headless: true });
   try {
     const spot = await tab.eval(FIND);

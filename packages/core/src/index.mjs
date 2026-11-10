@@ -113,7 +113,7 @@ export function migrate() {
 const COLUMNS = {
   run: { lane: "TEXT" },
   publish: { published_at: "INTEGER" },
-  account: { last_checked_at: "INTEGER", group_id: "TEXT REFERENCES account_group(id)" },
+  account: { last_checked_at: "INTEGER", group_id: "TEXT REFERENCES account_group(id)", removed_at: "INTEGER" },
   command_audit: { idempotency_key: "TEXT" },
 };
 
