@@ -41,7 +41,7 @@
 
 ## 4. 代码约定
 
-- ESM、Node ≥ 22.5、无运行时依赖（`node:sqlite`、`WebSocket`、`fetch` 都是内置的）。
+- ESM、Node ≥ 22.13、无运行时依赖（`node:sqlite`、`WebSocket`、`fetch` 都是内置的）。22.5–22.12 的 `.get()` 在无命中时返回 null 行，会引发误判。
 - 适配器是独立包：`packages/adapter-<platform>`，`export default { platform, capabilities, ready, publish, collect }`。
 - 状态迁移必须走 `transitionPublish()`；非法迁移要抛错（有测试钉着）。
 - 失败要留现场：`error_code` + 人话 + 事件；**静默失败是 P0 缺陷**。

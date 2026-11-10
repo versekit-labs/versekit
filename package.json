@@ -5,7 +5,7 @@
   "description": "Local-first publish + own-account analytics control plane for multi-platform creators",
   "type": "module",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "workspaces": [
     "packages/*"
