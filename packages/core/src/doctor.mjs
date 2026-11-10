@@ -44,8 +44,10 @@ export function doctorReport({
   let counts = { accounts: 0, expiring: 0, stuck: 0 };
   if (initialised) {
     const conn = open({ readonly: true });
-    counts.accounts = conn.prepare("SELECT COUNT(*) n FROM account").get().n;
-    counts.expiring = conn.prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired')").get().n;
+    counts.accounts = conn.prepare("SELECT COUNT(*) n FROM account WHERE removed_at IS NULL").get().n;
+    counts.expiring = conn
+      .prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired') AND removed_at IS NULL")
+      .get().n;
     counts.stuck = conn.prepare("SELECT COUNT(*) n FROM run WHERE state='running' AND lease_until < ?").get(now).n;
   }
   add("accounts", counts.accounts > 0, `${counts.accounts} 个账号`, counts.accounts ? null : "vk account add <platform> --name 主号");

@@ -28,8 +28,11 @@ let dayN = 0;
 const nextDay = () => DAY0 + ++dayN * 24 * H;
 
 let acc = 0;
-function account(platform) {
-  const { id } = store.addAccount({ platform, handle: `@${platform}${++acc}` });
+let groupSeq = 0;
+/** 每个测试账号默认独占一个组：同组同平台只能有一个，测试之间不该互相占槽位。 */
+function account(platform, groupId = null) {
+  const gid = groupId ?? store.addGroup({ name: `排期组 ${++groupSeq}` }).id;
+  const { id } = store.addAccount({ platform, handle: `@${platform}${++acc}`, groupId: gid });
   return id;
 }
 

@@ -41,7 +41,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "account.list": ({ group } = {}) => {
       if (!group) return { accounts: store.listAccounts() };
       const g = requireGroup(group);
-      return { group: { id: g.id, name: g.name }, accounts: store.listAccounts({ groupId: g.id }) };
+      const accounts = store.listAccounts({ groupId: g.id });
+      // 添加账号页据此灰掉已接入平台并写出「被谁占用」；同组同平台唯一，所以一个平台最多一人。
+      const occupants = Object.fromEntries(
+        accounts.map((a) => [a.platform, { accountId: a.id, handle: a.handle, name: a.display_name ?? a.handle }]),
+      );
+      return { group: { id: g.id, name: g.name }, accounts, occupants };
     },
 
     "group.list": () => {
@@ -88,10 +93,24 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     }),
 
     "account.add": ({ platform, name, handle, credentialRef, group }) => {
-      const groupId = group ? requireGroup(group).id : null;
-      const result = store.addAccount({ platform, handle: handle ?? name, displayName: name, credentialRef: credentialRef ?? null, groupId });
-      return { ...result, next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）` };
+      // 命令层 args 已把 group 标成必填；这里再挡一次，直接调 handler 的调用方也不能绕过。
+      if (!group) fail("account.add 必须带 --group：先 vk group add <名字> 建组，或 vk group list 看已有的组");
+      const g = requireGroup(group);
+      const result = store.addAccount({
+        platform,
+        handle: handle ?? name,
+        displayName: name,
+        credentialRef: credentialRef ?? null,
+        groupId: g.id,
+      });
+      return {
+        ...result,
+        group: { id: g.id, name: g.name },
+        next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）`,
+      };
     },
+
+    "account.remove": ({ accountId }) => store.removeAccount(accountId),
 
     "account.mode": ({ accountId, mode }) => store.setAccountMode(accountId, mode),
 
@@ -115,7 +134,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
 
       const { accounts, missing } = store.accountsForPlatforms(platforms);
-      if (missing.length) fail(`没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号`);
+      if (missing.length) fail(`没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号 --group <组>`);
       const noAdapter = platforms.filter((p) => !byPlatform.has(p));
       if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
 

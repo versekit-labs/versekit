@@ -19,12 +19,17 @@ const requireString = (value, field, { max = 500 } = {}) => {
   return value.trim();
 };
 
-/** `groupId` 为空时返回全部账号（引入账号组之前的行为）；给了就只看这个组。 */
-export function listAccounts({ groupId = null } = {}) {
+/**
+ * `groupId` 为空时返回全部在用账号（引入账号组之前的读法）；给了就只看这个组。
+ * 已移除（removed_at 非空）的账号不再出现在任何"当前账号"列表里：它不占槽位，
+ * 但行还留着，历史发布与快照仍能通过 publish.account_id 追到。
+ */
+export function listAccounts({ groupId = null, includeRemoved = false } = {}) {
   const conn = open();
+  const live = includeRemoved ? "" : " AND removed_at IS NULL";
   return groupId
-    ? conn.prepare("SELECT * FROM account WHERE group_id = ? ORDER BY platform, handle").all(groupId)
-    : conn.prepare("SELECT * FROM account ORDER BY platform, handle").all();
+    ? conn.prepare(`SELECT * FROM account WHERE group_id = ?${live} ORDER BY platform, handle`).all(groupId)
+    : conn.prepare(`SELECT * FROM account WHERE 1=1${live} ORDER BY platform, handle`).all();
 }
 
 // ------------------------------------------------------------------ account groups
@@ -38,7 +43,7 @@ export function listGroups() {
   return open()
     .prepare(
       `SELECT g.id, g.name, g.created_at, COUNT(a.id) AS account_count
-         FROM account_group g LEFT JOIN account a ON a.group_id = g.id
+         FROM account_group g LEFT JOIN account a ON a.group_id = g.id AND a.removed_at IS NULL
         GROUP BY g.id ORDER BY g.created_at, g.name`,
     )
     .all();
@@ -76,32 +81,93 @@ export function useGroup(ref) {
 }
 
 export function getAccount(accountId) {
-  return open().prepare("SELECT * FROM account WHERE id = ?").get(accountId) ?? null;
+  return open().prepare("SELECT * FROM account WHERE id = ? AND removed_at IS NULL").get(accountId) ?? null;
 }
 
 export function findAccount(platform, handle = null) {
   const conn = open();
   return handle
-    ? conn.prepare("SELECT * FROM account WHERE platform = ? AND handle = ?").get(platform, handle)
-    : conn.prepare("SELECT * FROM account WHERE platform = ? ORDER BY created_at LIMIT 1").get(platform);
+    ? conn.prepare("SELECT * FROM account WHERE platform = ? AND handle = ? AND removed_at IS NULL").get(platform, handle)
+    : conn.prepare("SELECT * FROM account WHERE platform = ? AND removed_at IS NULL ORDER BY created_at LIMIT 1").get(platform);
+}
+
+/** 组里当前占用某个平台槽位的账号；没有就返回 null。箭头指向的就是「被谁占用」。 */
+export function occupantOf(groupId, platform) {
+  return (
+    open()
+      .prepare("SELECT id, handle, display_name FROM account WHERE group_id = ? AND platform = ? AND removed_at IS NULL")
+      .get(groupId, platform) ?? null
+  );
 }
 
 export function addAccount({ platform, handle, displayName = null, credentialRef = null, groupId = null }) {
   const p = requireString(platform, "platform", { max: 32 });
   const h = requireString(handle, "handle", { max: 200 });
-  const existing = open().prepare("SELECT id FROM account WHERE platform = ? AND handle = ?").get(p, h);
-  if (existing) return { id: existing.id, existed: true };
-  if (groupId) {
-    const group = open().prepare("SELECT name FROM account_group WHERE id = ?").get(groupId);
-    if (!group) fail(`没有这个账号组：${groupId}`);
-    const taken = open().prepare("SELECT id, handle FROM account WHERE group_id = ? AND platform = ?").get(groupId, p);
-    if (taken) fail(`账号组「${group.name}」已经有 ${p} 账号（${taken.handle}）：一个组每个平台只能有一个`);
+  if (!groupId) fail("account.add 必须带 --group：先 vk group add <名字> 建组，或 vk group list 看已有的组");
+  const group = open().prepare("SELECT id, name FROM account_group WHERE id = ?").get(groupId);
+  if (!group) fail(`没有这个账号组：${groupId}`);
+
+  const existing = open().prepare("SELECT * FROM account WHERE platform = ? AND handle = ?").get(p, h);
+  if (existing && !existing.removed_at) {
+    if (existing.group_id !== groupId) {
+      const other = open().prepare("SELECT name FROM account_group WHERE id = ?").get(existing.group_id);
+      fail(`账号 ${h}（${existing.id}）已经在账号组「${other?.name ?? existing.group_id}」里：同一个账号不能同时挂两个组`);
+    }
+    return { id: existing.id, existed: true };
   }
+
+  const taken = occupantOf(groupId, p);
+  if (taken) {
+    const who = taken.display_name && taken.display_name !== taken.handle ? `${taken.handle}（${taken.display_name}）` : taken.handle;
+    fail(`账号组「${group.name}」的 ${p} 已被 ${who} 占用（${taken.id}）：一个组每个平台只能有一个；要换号，先运行 vk account remove ${taken.id}`);
+  }
+
+  // 同一个 handle 之前被移除过：复活那一行，保留它的发布历史，不造一个"新账号"把旧数据割裂。
+  if (existing?.removed_at) {
+    open()
+      .prepare(
+        "UPDATE account SET group_id = ?, display_name = ?, credential_ref = ?, state = 'ok', removed_at = NULL, last_checked_at = NULL, last_ok_at = NULL WHERE id = ?",
+      )
+      .run(groupId, displayName, credentialRef, existing.id);
+    return { id: existing.id, existed: false, revived: true };
+  }
+
   const id = newId("acc");
   open()
     .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id) VALUES (?,?,?,?,?, 'ok', ?, ?)")
     .run(id, p, h, displayName, credentialRef, Date.now(), groupId);
   return { id, existed: false };
+}
+
+/**
+ * 移除账号：不删行。把 removed_at 写上后它不再占组里的平台槽位（唯一索引只看在用账号），
+ * 但 publish/snapshot 仍然能通过 account_id 找到它——换号不该把历史一起烧掉。
+ * 队列里还没跑完的发布会拒绝移除：否则移除之后它仍在后台发出去，人以为已经停了。
+ */
+export function removeAccount(accountId) {
+  const conn = open();
+  const account = conn.prepare("SELECT * FROM account WHERE id = ?").get(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`);
+  if (account.removed_at) fail(`账号 ${account.handle}（${accountId}）已经移除，不用再移一次`);
+
+  const pending = conn
+    .prepare("SELECT COUNT(*) n FROM publish WHERE account_id = ? AND state IN ('queued','auto_running','draft_running')")
+    .get(accountId).n;
+  if (pending) {
+    fail(`这个账号还有 ${pending} 条发布在队列里或正在跑：等它们结束，或先取消对应排期，再移除账号`);
+  }
+
+  const group = account.group_id ? conn.prepare("SELECT name FROM account_group WHERE id = ?").get(account.group_id) : null;
+  conn.prepare("UPDATE account SET removed_at = ? WHERE id = ?").run(Date.now(), accountId);
+  const published = conn.prepare("SELECT COUNT(*) n FROM publish WHERE account_id = ?").get(accountId).n;
+  return {
+    accountId,
+    removed: true,
+    platform: account.platform,
+    handle: account.handle,
+    group: group ? { id: account.group_id, name: group.name } : null,
+    historyKept: published,
+  };
 }
 
 export function setAccountMode(accountId, mode) {
@@ -197,7 +263,9 @@ export function accountsForPlatforms(platforms) {
   const found = [];
   const missing = [];
   for (const platform of platforms) {
-    const accounts = open().prepare("SELECT * FROM account WHERE platform = ? ORDER BY created_at").all(platform);
+    const accounts = open()
+      .prepare("SELECT * FROM account WHERE platform = ? AND removed_at IS NULL ORDER BY created_at")
+      .all(platform);
     if (!accounts.length) missing.push(platform);
     else found.push(...accounts);
   }
@@ -215,9 +283,12 @@ export function statusSnapshot() {
   const count = (sql, ...params) => conn.prepare(sql).get(...params)?.n ?? 0;
   return {
     accounts: {
-      total: count("SELECT COUNT(*) n FROM account"),
+      total: count("SELECT COUNT(*) n FROM account WHERE removed_at IS NULL"),
       by_state: Object.fromEntries(
-        ["ok", "expiring", "expired", "banned", "manual"].map((s) => [s, count("SELECT COUNT(*) n FROM account WHERE state = ?", s)]),
+        ["ok", "expiring", "expired", "banned", "manual"].map((s) => [
+          s,
+          count("SELECT COUNT(*) n FROM account WHERE state = ? AND removed_at IS NULL", s),
+        ]),
       ),
       list: listAccounts(),
     },
