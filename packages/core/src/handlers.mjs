@@ -76,9 +76,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "setup.status": async () => {
       const binding = store.getBinding("feishu");
+      // 接入进度是「当前账号组」的进度：账号步骤只数本组账号，否则空组会借用别组的账号显示完成。
+      const current = store.currentGroup();
       return setupStatus({
         doctor: doctor ? await doctor() : null,
-        accounts: store.listAccounts(),
+        accounts: store.listAccounts({ groupId: current?.id ?? null }),
         channel: { bound: Boolean(binding), who: binding?.external_user_id ?? null },
         publishedCount: store.countPublished(),
       });

@@ -1166,17 +1166,26 @@ async function render(arg) {
 let lastSignature = "";
 let renderTimer = null;
 
-function paintPill(status) {
+function paintPill(status, groupAccounts = null) {
   const pill = $("#pill");
   if (!pill || !status) return;
-  const bad = status.accounts.by_state.expired + status.accounts.by_state.banned;
-  pill.textContent = `${status.accounts.total} 个账号 · 队列 ${status.queue.queued}${status.queue.running ? `/${status.queue.running}` : ""} · ${bad ? `${bad} 个需重登` : "连接正常"}`;
+  // 外壳顶栏属于「当前账号组」：账号数取 /api/bootstrap 的组快照，不用 /api/now 的全局 total，
+  // 否则空组会把别的组的账号算进来（ACC-groups-01 / 02）。队列仍是全局队列，因为没有组维度。
+  const accounts = groupAccounts ?? VK.accounts();
+  const bad = accounts.filter((a) => a.state === "expired" || a.state === "banned").length;
+  const total = VK.group(VK.current()?.id)?.account_count ?? accounts.length;
+  pill.textContent = `${total} 个账号 · 队列 ${status.queue.queued}${status.queue.running ? `/${status.queue.running}` : ""} · ${bad ? `${bad} 个需重登` : "连接正常"}`;
   pill.className = `pill ${bad ? "bad" : "ok"}`;
 }
 
 async function ping() {
   try {
-    paintPill(await api("/api/now"));
+    const now = await api("/api/now");
+    // /api/now 的账号列表是原始行，按当前组收窄后再数「需重登」；账号总数由 bootstrap 的
+    // account_count 给出，与切换器、账号页看到的是同一个组。
+    const groupId = VK.current()?.id ?? null;
+    const groupAccounts = groupId ? (now.accounts.list ?? []).filter((a) => a.group_id === groupId) : [];
+    paintPill(now, groupAccounts);
   } catch {
     $("#pill").textContent = "守护进程未连接";
     $("#pill").className = "pill bad";
