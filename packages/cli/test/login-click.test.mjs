@@ -9,8 +9,8 @@ import { join } from "node:path";
 
 process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-click-"));
 const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
-// 真浏览器用例：CI runner 没有 Chrome 时跳过。
-const skipNoChrome = browserReady() ?? false;
+// 真浏览器用例：CI 的 Chrome 实例开关有竞态，跳过；缺 Chrome 的开发机也跳过。
+const skipNoChrome = browserReady() ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态）" : false);
 
 const FIND = `(() => {
   const cands = [...document.querySelectorAll('div,button,span')].filter((e) => {

@@ -19,8 +19,8 @@ process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
 const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
 const { setInputValue, fillAndSendCode, clickLoginButton } = await import("../src/login-xhs.mjs");
 
-// CI runner 没有 Chrome：这些用例是「真浏览器」验收，缺浏览器时跳过，别把 job 拖红。
-const skipNoChrome = browserReady() ?? false;
+// 真浏览器验收只在开发机跑：CI 的 Chrome 实例开关有竞态，skip 免得 job 随机红。
+const skipNoChrome = browserReady() ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态）" : false);
 
 const PAGE = `<!doctype html><meta charset="utf-8"><body>
 <div id="app">
