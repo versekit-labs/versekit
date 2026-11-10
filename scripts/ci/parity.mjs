@@ -212,7 +212,7 @@ if (!COMMANDS) {
     bad(
       "parity.cli.commands",
       `运行 "node packages/cli/src/vk.mjs commands" 失败：${err.message}${stderr ? `（stderr: ${stderr}）` : ""}`,
-      "保证 CLI 能独立跑 commands；Node 22.5 上 core 的 node:sqlite 需要 NODE_OPTIONS=--experimental-sqlite",
+      "保证 CLI 能独立跑 commands；Node 22.13+ 的 node:sqlite 无需实验开关，且 .get() 无命中返回 undefined",
     );
   }
 

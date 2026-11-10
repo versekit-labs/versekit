@@ -177,7 +177,7 @@ ok → expiring → expired → ok
 
 | 层 | 选择 | 理由 |
 |---|---|---|
-| 运行时 | **Node ≥ 22.5**（`node:sqlite` 内置） | 零外部依赖 |
+| 运行时 | **Node ≥ 22.13**（`node:sqlite` 内置，`.get()` 无命中返回 `undefined`） | 零外部依赖 |
 | 浏览器 | **自写 CDP**（不换 Playwright） | 零依赖、小、已在工厂验证 |
 | 数据库 | **SQLite WAL** | 单机足够，无需额外服务 |
 | 进程模型 | **单守护进程 + CLI 客户端**（unix socket） | 写路径唯一，三端不分叉 |
