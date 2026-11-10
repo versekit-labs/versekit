@@ -27,11 +27,15 @@ CREATE TABLE IF NOT EXISTS account (
   last_checked_at INTEGER,          -- 最近一次主动探测（成功失败都算），调度靠它
   created_at     INTEGER NOT NULL,
   group_id       TEXT REFERENCES account_group(id),  -- null = 未分组，行为与引入账号组之前一致
+  removed_at     INTEGER,                            -- 非空 = 已从组的槽位移除；行保留，历史发布仍可追溯
   UNIQUE (platform, handle)
 );
--- 一个组里每个平台只有一个槽位；未分组的账号不受约束（旧数据照旧）。
+-- 一个组里每个平台只有一个槽位；未分组与已移除的账号不占槽位。
+-- 先 DROP 再建：旧库的索引谓词里没有 removed_at，IF NOT EXISTS 不会替换它，
+-- 移除后换号就会被旧索引拦下。第一遍 exec 因缺列中断时由 migrate() 的第二遍补建。
+DROP INDEX IF EXISTS idx_account_group_platform;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_account_group_platform
-  ON account(group_id, platform) WHERE group_id IS NOT NULL;
+  ON account(group_id, platform) WHERE group_id IS NOT NULL AND removed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS work (
   id         TEXT PRIMARY KEY,
