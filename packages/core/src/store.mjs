@@ -9,6 +9,25 @@ import { queuePublish } from "./runner.mjs";
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
 export const PUBLISH_VISIBILITIES = ["public", "private", "friends", "private_then_public"];
 
+/**
+ * 已失效 = 这个账号现在发不出去，不是「快过期了提醒一下」。expired 需要重登，banned 需要换号/申诉；
+ * 两种都必须从发布选择里排除，并且把原因带回去，不能静默跳过让用户以为发出去了。
+ */
+export const UNUSABLE_ACCOUNT_STATES = ["expired", "banned"];
+
+/** Handles are stored with or without a leading @; the person should never see `@@`. */
+export const handleLabel = (handle) => (String(handle ?? "").startsWith("@") ? String(handle) : `@${handle}`);
+
+export function accountUnusableReason(account) {
+  if (account.state === "expired") {
+    return `${account.platform} ${handleLabel(account.handle)} 已失效（登录过期）：先 vk account reauth ${account.id}`;
+  }
+  if (account.state === "banned") {
+    return `${account.platform} ${handleLabel(account.handle)} 已失效（被平台封禁）：换号或申诉解封后再发`;
+  }
+  return null;
+}
+
 const fail = (message) => {
   throw new Error(message);
 };
@@ -258,18 +277,46 @@ export function getPublish(publishId) {
     .get(publishId) ?? null;
 }
 
-/** Accounts per platform, so `--to tiktok,bilibili` does not need account ids on the command line. */
-export function accountsForPlatforms(platforms) {
+/**
+ * Accounts per platform, so `--to tiktok,bilibili` does not need account ids on the command line.
+ *
+ * `groupId` scopes the lookup (publish.create defaults to the current group). Accounts in
+ * `UNUSABLE_ACCOUNT_STATES` are never returned as selectable: they are reported separately with
+ * a reason, which is what the caller turns into a readable error instead of a silent skip.
+ */
+export function accountsForPlatforms(platforms, { groupId = null } = {}) {
   const found = [];
   const missing = [];
+  const unusable = [];
+  const blocked = [];
   for (const platform of platforms) {
-    const accounts = open()
-      .prepare("SELECT * FROM account WHERE platform = ? AND removed_at IS NULL ORDER BY created_at")
-      .all(platform);
-    if (!accounts.length) missing.push(platform);
-    else found.push(...accounts);
+    // 已移除的账号不占槽位，也不能进候选：软删除和 group 作用域是两个独立条件，二者都在这里过滤。
+    const accounts = groupId
+      ? open()
+          .prepare("SELECT * FROM account WHERE platform = ? AND group_id = ? AND removed_at IS NULL ORDER BY created_at")
+          .all(platform, groupId)
+      : open()
+          .prepare("SELECT * FROM account WHERE platform = ? AND removed_at IS NULL ORDER BY created_at")
+          .all(platform);
+    if (!accounts.length) {
+      missing.push(platform);
+      continue;
+    }
+    const usable = accounts.filter((a) => !UNUSABLE_ACCOUNT_STATES.includes(a.state));
+    if (!usable.length) {
+      blocked.push(platform);
+      for (const a of accounts) {
+        unusable.push({ platform: a.platform, accountId: a.id, handle: a.handle, state: a.state, reason: accountUnusableReason(a) });
+      }
+      continue;
+    }
+    found.push(...usable);
+    // 同一平台还有别的失效号（未分组的旧数据）不影响这次发布：列出来只是为了解释，不是拦截。
+    for (const a of accounts.filter((x) => !usable.includes(x))) {
+      unusable.push({ platform: a.platform, accountId: a.id, handle: a.handle, state: a.state, reason: accountUnusableReason(a) });
+    }
   }
-  return { accounts: found, missing };
+  return { accounts: found, missing, unusable, blocked };
 }
 
 // ------------------------------------------------------------------ status / stats
@@ -323,7 +370,7 @@ export function rangeCutoff(range = "all", now = Date.now()) {
 }
 
 /** Latest snapshot per publish, joined with what the row is. One row per work, not per capture. */
-export function listStats({ range = "all", publishId = null } = {}) {
+export function listStats({ range = "all", publishId = null, groupId = null } = {}) {
   const cutoff = rangeCutoff(range);
   const conn = open();
   const rows = conn
@@ -337,10 +384,11 @@ export function listStats({ range = "all", publishId = null } = {}) {
          LEFT JOIN snapshot s ON s.publish_id = p.id
           AND s.captured_at = (SELECT MAX(captured_at) FROM snapshot WHERE publish_id = p.id)
         WHERE (? IS NULL OR p.id = ?)
+          AND (? IS NULL OR a.group_id = ?)
           AND (? = 0 OR p.created_at >= ?)
         ORDER BY p.created_at DESC`,
     )
-    .all(publishId, publishId, cutoff, cutoff);
+    .all(publishId, publishId, groupId, groupId, cutoff, cutoff);
 
   return rows.map((r) => ({
     publishId: r.id,
@@ -379,15 +427,26 @@ export function listPublishes({ state = null, platform = null, limit = 100 } = {
     .all(state, state, platform, platform, boundedLimit(limit));
 }
 
-export function listRuns({ state = null, limit = 100 } = {}) {
+/**
+ * Queue rows with an optional account-group filter.
+ *
+ * A run's group is not a column: publish runs point at a publish → account, check runs point at
+ * an account directly. Resolving both here keeps `--group` one implementation for CLI, HTTP and
+ * any future page instead of three slightly different joins.
+ */
+export function listRuns({ state = null, limit = 100, groupId = null } = {}) {
   return open()
     .prepare(
-      `SELECT id, kind, target_type, target_id, lane, state, priority, attempts,
-              run_after, lease_until, last_error, created_at
-         FROM run WHERE (? IS NULL OR state = ?)
-        ORDER BY created_at DESC LIMIT ?`,
+      `SELECT r.id, r.kind, r.target_type, r.target_id, r.lane, r.state, r.priority, r.attempts,
+              r.run_after, r.lease_until, r.last_error, r.created_at
+         FROM run r
+         LEFT JOIN publish p ON r.target_type = 'publish' AND p.id = r.target_id
+         LEFT JOIN account a ON a.id = COALESCE(p.account_id, CASE WHEN r.target_type = 'account' THEN r.target_id END)
+        WHERE (? IS NULL OR r.state = ?)
+          AND (? IS NULL OR a.group_id = ?)
+        ORDER BY r.created_at DESC LIMIT ?`,
     )
-    .all(state, state, boundedLimit(limit));
+    .all(state, state, groupId, groupId, boundedLimit(limit));
 }
 
 export function listEvents({ since = 0, limit = 100 } = {}) {

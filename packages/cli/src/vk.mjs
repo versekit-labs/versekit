@@ -735,6 +735,7 @@ async function cmdPublish() {
   const args = {
     asset,
     to,
+    ...(val("--group") ? { group: val("--group") } : {}),
     ...(val("--title") ? { title: val("--title") } : {}),
     ...(val("--body") ? { body: val("--body") } : {}),
     ...(val("--tags") ? { tags: String(val("--tags")).split(",").map((s) => s.trim()).filter(Boolean) } : {}),
@@ -744,6 +745,8 @@ async function cmdPublish() {
   };
   const data = await send("publish.create", args, { log });
   if (human) {
+    if (data.group) console.log(`账号组：${data.group.name}${val("--group") ? "" : "（当前组）"}`);
+    for (const w of data.warnings ?? []) console.log(`注意：${w.reason}`);
     if (data.dryRun) {
       console.log(`试运行：${data.work.title} → ${data.publishes.map((p) => p.platform).join("、")}`);
       console.log("没有写入任何行，也没有对外动作");
@@ -786,9 +789,13 @@ async function cmdPlatforms() {
 }
 
 async function cmdRuns() {
-  const data = await send("run.list", { ...(val("--state") ? { state: val("--state") } : {}) });
+  const data = await send("run.list", {
+    ...(val("--state") ? { state: val("--state") } : {}),
+    ...(val("--group") ? { group: val("--group") } : {}),
+  });
   if (human) {
-    for (const r of data.rows) console.log(`${r.kind.padEnd(9)}${String(r.state).padEnd(10)}${String(r.target_id).padEnd(18)}${r.last_error ?? ""}`);
+    if (data.group) console.log(`账号组：${data.group.name}`);
+    for (const r of data.rows) console.log(`${r.kind.padEnd(9)}${String(r.state).padEnd(10)}${String(r.target_id).padEnd(18)}${r.attempts}/${data.retry_limit ?? "?"} 次  ${r.last_error ?? ""}`);
     if (!data.rows.length) console.log("队列是空的");
   } else out(data);
   return data;
@@ -908,6 +915,7 @@ async function cmdChannel() {
 async function cmdStats() {
   const sub = pos[1];
   if (sub === "series") {
+    if (val("--group")) throw new Error("stats series 是按单条发布的，不接受 --group；按组看作品用 vk stats works --group");
     const publishId = pos[2] ?? val("--publish");
     if (!publishId) throw new Error("用法：vk stats series <publishId>");
     const data = await send("stats.series", { publishId });
@@ -918,8 +926,13 @@ async function cmdStats() {
     return data;
   }
   if (sub !== "works") throw new Error("用法：vk stats works|series …");
-  const data = await send("stats.works", { range: val("--range") ?? "all", ...(val("--publish") ? { publishId: val("--publish") } : {}) });
+  const data = await send("stats.works", {
+    range: val("--range") ?? "all",
+    ...(val("--publish") ? { publishId: val("--publish") } : {}),
+    ...(val("--group") ? { group: val("--group") } : {}),
+  });
   if (human) {
+    if (data.group) console.log(`账号组：${data.group.name}`);
     const rows = data.rows.filter((r) => r.latest);
     if (!rows.length) console.log("还没有采集到数据：vk collect --now");
     for (const r of rows) console.log(`${r.platform.padEnd(10)}${String(r.title).slice(0, 24).padEnd(26)}${JSON.stringify(r.latest.metrics)}`);
@@ -1008,15 +1021,17 @@ function usage() {
       "  vk commands [--human]",
       "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
       "  vk group list | add <名字> | use <组 id 或名字>",
+      // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
+      // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
-      "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
+      "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
       "  vk collect [--now] [--platform <p>]",
-      "  vk stats works [--range 7d] | series <publishId>",
+      "  vk stats works [--range 7d] [--group <组>] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
       "  vk schedule list [--group <g>] [--from <日期>] [--to <日期>] | move <workId> --at <时间> [--force] | cancel <workId>",
-      "  vk platforms | runs [--state failed] | events [--since <ms>]",
+      "  vk platforms | runs [--state failed] [--group <组>] | events [--since <ms>]",
       "  vk setup [--json] | vk channel bind feishu | test feishu",
       "  vk --version",
       "",
