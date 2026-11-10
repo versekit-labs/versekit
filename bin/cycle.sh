@@ -115,6 +115,7 @@ dispatch_one() {
     | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
   if [ -z "$task" ]; then
     log "    ✗ task-create 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     return 1
   fi
 
@@ -122,6 +123,7 @@ dispatch_one() {
     log "    ✓ 已派工 task=$task"
   else
     log "    ✗ worker-start 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     return 1
   fi
   return 0
@@ -196,12 +198,18 @@ dispatch_acceptance() {
   local task
   task=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>/dev/null \
     | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
-  [ -n "$task" ] || { log "    ✗ task-create 失败"; rm -rf "$lock"; return 1; }
+  if [ -z "$task" ]; then
+    log "    ✗ task-create 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
+    rm -rf "$lock"
+    return 1
+  fi
 
   if orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json >/dev/null 2>&1; then
     log "    ✓ 已派验收 task=$task"
   else
     log "    ✗ worker-start 失败"
+    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     rm -rf "$lock"
     return 1
   fi

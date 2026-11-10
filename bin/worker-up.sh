@@ -44,15 +44,19 @@ print(r.get("handle") or r.get("terminalHandle") or (r.get("terminal") or {}).ge
 
 [ -n "$handle" ] || die "拿不到终端 handle：$out"
 
-# 2+3. 等首帧，然后 Esc 跳过 landing page。
-# 18 秒是实测值：dsh-tui 在这台机器上约 12-15 秒画完首帧，留 3 秒余量。
-# 宁可多等——早发的 Esc 会被启动过程吃掉，然后 worker 卡在引导页，很难排查。
-sleep "${WORKER_UP_WAIT:-18}"
+# 2+3. 等 TUI 就绪，然后 Esc 跳过 landing page。
+# 固定 sleep 不可靠：不同 worktree / 首次启动的绘制时间不同，早发 Esc 会被启动过程吃掉，
+# worker 就卡在引导页。改用 Orca 的 tui-idle 条件等待，超时才报错。
+if ! orca terminal wait --terminal "$handle" --for tui-idle --timeout-ms "${WORKER_UP_TIMEOUT_MS:-60000}" >/dev/null 2>&1; then
+  die "等 TUI 就绪超时（终端 $handle）"
+fi
 esc=$(printf '\033')
 orca terminal send --terminal "$handle" --text "$esc" >/dev/null 2>&1 \
   || die "发送 Esc 失败（终端 $handle）"
 
-# 再给 TUI 一点时间处理 Esc 并重绘输入框。
-sleep 3
+# Esc 之后等输入框重新空闲，再让 Orca 注入 prompt。
+if ! orca terminal wait --terminal "$handle" --for tui-idle --timeout-ms "${WORKER_UP_SETTLE_MS:-15000}" >/dev/null 2>&1; then
+  die "Esc 后 TUI 未回到空闲（终端 $handle）"
+fi
 
 printf '%s\n' "$handle"
