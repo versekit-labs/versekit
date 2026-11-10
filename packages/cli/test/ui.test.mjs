@@ -10,6 +10,7 @@ const HOME = mkdtempSync(join(tmpdir(), "vk-ui-"));
 process.env.VK_HOME = HOME;
 
 const core = await import("../../core/src/index.mjs");
+const store = await import("../../core/src/store.mjs");
 const { startDaemon } = await import("../../core/src/daemon.mjs");
 const { createCoreHandlers } = await import("../../core/src/handlers.mjs");
 const { doctorReport } = await import("../../core/src/doctor.mjs");
@@ -23,9 +24,12 @@ const skipBrowser = missing ?? (process.env.CI === "true" ? "CI 不跑真浏览�
 
 test("控制台在真浏览器里能打开：五页都在、没有横向溢出、没有 JS 错误", { skip: skipBrowser }, async () => {
   core.migrate();
+  // 账号组是 #24 起的工作区入口：没有当前组时首页会落到选组页，所以这里先建一个组。
+  const group = store.addGroup({ name: "UI 验收组" });
+  store.useGroup(group.id);
   core.open()
-    .prepare("INSERT INTO account (id, platform, handle, created_at) VALUES ('a_ui','bilibili','@uitest',1)")
-    .run();
+    .prepare("INSERT INTO account (id, platform, handle, created_at, group_id) VALUES ('a_ui','bilibili','@uitest',1,?)")
+    .run(group.id);
 
   const adapters = (await loadAdapters()).adapters;
   const handlers = {

@@ -33,7 +33,25 @@ body {
 .brand { font-size: 17px; font-weight: 650; letter-spacing: .2px; }
 .brand .mark { color: var(--accent); margin-right: 6px; }
 .brand .sub { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
-.top-right { display: flex; gap: 10px; align-items: center; }
+.top-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+/* 当前账号组：所有日常页面只服务这一个组；选定即 POST group.use，再刷新本页。 */
+.workspace-inline { display: flex; align-items: center; gap: 8px; }
+.workspace-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+#group-switch {
+  width: auto; min-width: 132px; max-width: 220px; padding: 5px 8px; font-size: 12px;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+}
+.workspace-manage { color: var(--muted); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.workspace-manage:hover { color: var(--text); }
+@media (max-width: 700px) {
+  .workspace-inline { order: 3; flex-basis: 100%; justify-content: flex-start; }
+  #group-switch { max-width: 100%; flex: 1; }
+}
+@media (max-width: 520px) {
+  .top { padding: 14px 16px 8px; }
+  .tabs { padding: 0 12px; flex-wrap: wrap; }
+}
 
 .pill {
   font-size: 12px; padding: 3px 10px; border-radius: 999px;

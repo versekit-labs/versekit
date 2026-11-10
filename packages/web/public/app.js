@@ -24,6 +24,22 @@ async function api(path, { method = "GET", body } = {}) {
   return data;
 }
 
+// 外壳：当前组来自 /api/bootstrap；页面读它来收窄数据范围，切换组就重新渲染。
+const VK = window.VK;
+const currentGroupId = () => VK?.current()?.id ?? null;
+const groupQuery = () => (currentGroupId() ? `group=${encodeURIComponent(currentGroupId())}` : "");
+const withGroup = (path) => {
+  const q = groupQuery();
+  if (!q) return path;
+  return path + (path.includes("?") ? "&" : "?") + q;
+};
+/** 发布行没有 group_id；用「平台 + handle」回指当前组账号，避免在 Web 里另算一遍分组。 */
+const inCurrentGroup = (row) => {
+  const id = currentGroupId();
+  if (!id) return true;
+  return VK.accounts(id).some((a) => a.platform === row.platform && a.handle === row.handle);
+};
+
 let toastTimer = null;
 function toast(message, bad = false) {
   const el = $("#toast");
@@ -62,11 +78,12 @@ const METRIC_LABEL = { play: "播放", like: "点赞", fav: "收藏", comment: "
 
 async function viewAccounts() {
   const [{ accounts }, { platforms }, now, chStatus] = await Promise.all([
-    api("/api/accounts"),
+    api(withGroup("/api/accounts")),
     api("/api/platforms"),
     api("/api/now"),
     api("/api/channels/feishu/status"),
   ]);
+  const groupName = VK.current()?.name ?? "当前账号组";
   const channel = now.channel;
   const usable = platforms.filter((p) => p.publish !== "none");
 
@@ -93,7 +110,7 @@ async function viewAccounts() {
 
   $("#view").innerHTML = `
     <h1>账号墙</h1>
-    <p class="hint">一个账号一份 Chrome profile，互不串号。状态由每 6 小时的体检和发布/采集失败共同驱动。</p>
+    <p class="hint">当前账号组：<b>${esc(groupName)}</b> · 一个账号一份 Chrome profile，互不串号。状态由每 6 小时的体检和发布/采集失败共同驱动。</p>
     ${accounts.length ? `<div class="grid cols-2">${cards}</div>` : `<div class="empty">还没有账号。先在下面添加一个。</div>`}
 
     <h2>飞书通道</h2>
@@ -138,8 +155,9 @@ async function viewAccounts() {
     const handle = $("#acc-handle").value.trim() || `@${platform}`;
     const credentialRef = $("#acc-credential").value.trim() || undefined;
     try {
-      const r = await api("/api/accounts", { method: "POST", body: { platform, name: handle, handle, ...(credentialRef ? { credentialRef } : {}) } });
+      const r = await api("/api/accounts", { method: "POST", body: { platform, name: handle, handle, group: currentGroupId(), ...(credentialRef ? { credentialRef } : {}) } });
       toast(r.existed ? "这个账号已经在了" : "账号已添加");
+      await VK.bootstrap({ force: true });
       render();
     } catch (err) {
       toast(err.message, true);
@@ -246,7 +264,7 @@ async function viewAccounts() {
 let draft = { asset: "", uploading: false };
 
 async function viewPublish() {
-  const [{ platforms }, { accounts }] = await Promise.all([api("/api/platforms"), api("/api/accounts")]);
+  const [{ platforms }, { accounts }] = await Promise.all([api("/api/platforms"), api(withGroup("/api/accounts"))]);
   const usable = platforms.filter((p) => p.publish !== "none");
   const hasAccount = (name) => accounts.some((a) => a.platform === name);
   // 「适配器能用」不等于「这个平台能发」：没有账号的平台勾了只会整单失败，所以直接禁掉并说明原因。
@@ -340,7 +358,7 @@ async function viewPublish() {
     try {
       const args = collectArgs();
       if (draft.uploading) throw new Error("素材还在上传");
-      const r = await api("/api/publishes", { method: "POST", body: { ...args, ...(dryRun ? { dryRun: true } : {}) } });
+      const r = await api("/api/publishes", { method: "POST", body: { ...args, group: currentGroupId(), ...(dryRun ? { dryRun: true } : {}) } });
       if (r.dryRun) {
         box.innerHTML = `<p><b>彩排结果</b>：${r.publishes.length} 条将创建</p><pre class="mono">${esc(JSON.stringify(r.publishes, null, 2))}</pre>`;
       } else {
@@ -389,7 +407,8 @@ function chart(points, height = 180) {
 }
 
 async function viewWorks(selectedId = null) {
-  const { rows } = await api("/api/publishes");
+  const { rows: allRows } = await api("/api/publishes");
+  const rows = allRows.filter(inCurrentGroup);
   const selected = selectedId ? rows.find((r) => r.id === selectedId) : rows[0];
   let detail = `<div class="empty">左边选一条，看它的快照。</div>`;
   if (selected) {
@@ -505,11 +524,13 @@ async function viewWorks(selectedId = null) {
 // ---------------------------------------------------------------- 总览
 
 async function viewOverview() {
-  const [{ rows }, { accounts }, { rows: runs }] = await Promise.all([
+  const [{ rows: allRows }, runsResult] = await Promise.all([
     api("/api/publishes"),
-    api("/api/accounts"),
-    api("/api/runs"),
+    api(withGroup("/api/runs")),
   ]);
+  const rows = allRows.filter(inCurrentGroup);
+  const accounts = VK.accounts();
+  const runs = runsResult.rows;
   const byState = (s) => rows.filter((r) => r.state === s).length;
   const done = byState("published") + byState("published_limited");
   const lost = byState("failed") + byState("blocked");
@@ -568,21 +589,35 @@ async function viewOverview() {
 // ---------------------------------------------------------------- 任务
 
 async function viewTasks() {
-  const [{ rows: runs }, { rows: events }, { rows: waiting }, { rows: failedPubs }] = await Promise.all([
-    api("/api/runs"),
-    api("/api/events?limit=12"),
-    api("/api/publishes?state=notify_pending"),
-    api("/api/publishes?state=failed"),
+  const [{ rows: allRuns }, { rows: allEvents }, { rows: allPubs }] = await Promise.all([
+    api(withGroup("/api/runs")),
+    api("/api/events?limit=50"),
+    api("/api/publishes?limit=100"),
   ]);
-  const waitingAll = [...waiting, ...failedPubs];
+  const runs = allRuns;
+  const groupPubs = allPubs.filter(inCurrentGroup);
+  const groupPublishIds = new Set(groupPubs.map((p) => p.id));
+  const groupAccountIds = new Set(VK.accounts().map((a) => a.id));
+  const events = allEvents
+    .filter((e) => {
+      if (e.publish_id) return groupPublishIds.has(e.publish_id);
+      const payload = e.payload ?? {};
+      const accountId = payload.accountId ?? payload.account_id ?? null;
+      return accountId ? groupAccountIds.has(accountId) : false;
+    })
+    .slice(0, 12);
+  const waiting = groupPubs.filter((p) => ["notify_pending", "draft_pending"].includes(p.state));
+  const failedPubs = groupPubs.filter((p) => p.state === "failed");
+  const waitingAllPubs = [...waiting, ...failedPubs];
+  const groupName = VK.current()?.name ?? "当前账号组";
   $("#view").innerHTML = `
     <h1>任务与日志</h1>
-    <p class="hint">队列是发布与采集的唯一通道。失败会带原因，重试不会丢掉原任务。</p>
+    <p class="hint">当前账号组：<b>${esc(groupName)}</b> · 队列是发布与采集的唯一通道。失败会带原因，重试不会丢掉原任务。</p>
     ${
-      waitingAll.length
+      waitingAllPubs.length
         ? `<h2>等你拍板</h2>
            <div class="card" style="padding:6px 10px"><table><thead><tr><th>平台</th><th>标题</th><th>状态</th><th>原因</th><th></th></tr></thead><tbody>
-             ${waitingAll
+             ${waitingAllPubs
                .map(
                  (p) => `<tr><td>${esc(p.platform)}</td><td>${esc(p.title ?? "")}</td><td><span class="badge ${STATE_CLASS(p.state)}">${esc(p.state)}</span></td><td class="meta">${esc(p.error_message ?? p.fallback_reason ?? "")}</td>
                    <td><button class="small" data-approve="${esc(p.id)}">手机审批</button></td></tr>`,
@@ -1078,6 +1113,44 @@ function current() {
   return VIEWS[name] ? name : "overview";
 }
 
+/**
+ * 外壳的账号组切换器。选组走命令 `group.use`（POST /api/groups/current），成功后刷新快照
+ * 再重渲染当前视图——不是只改一个本地变量，所以 CLI、其他标签页、后面的页面看到的都是同一组。
+ */
+function renderGroupSwitcher() {
+  const select = $("#group-switch");
+  if (!select || !VK) return;
+  const groups = VK.groups();
+  const active = VK.current();
+  if (!groups.length) {
+    select.innerHTML = '<option value="">没有账号组</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = groups
+    .map((g) => `<option value="${esc(g.id)}">${esc(g.name)}</option>`)
+    .join("");
+  if (active) select.value = active.id;
+  select.onchange = async () => {
+    const target = select.value;
+    if (!target || target === active?.id) return;
+    select.disabled = true;
+    try {
+      const next = await VK.useGroup(target);
+      toast(`已切换到账号组「${next?.name ?? target}」`);
+      renderGroupSwitcher();
+      await render();
+      ping();
+    } catch (err) {
+      toast(`切换账号组失败：${err.message}`, true);
+      renderGroupSwitcher();
+    } finally {
+      select.disabled = false;
+    }
+  };
+}
+
 async function render(arg) {
   const name = current();
   for (const a of document.querySelectorAll(".tabs a")) a.classList.toggle("active", a.dataset.view === name);
@@ -1162,6 +1235,19 @@ $("#refresh").onclick = () => {
 };
 
 async function boot() {
+  try {
+    // 外壳先拉一次快照：没有当前组就落到选组页，而不是渲染一个没有作用域的空壳（ACC-groups-01）。
+    await VK.bootstrap();
+  } catch (err) {
+    $("#view").innerHTML = `<div class="card"><h3>读不到账号组</h3><p class="meta">${esc(err.message)}</p>
+      <p class="meta">守护进程在跑吗？终端执行 <span class="mono">vk serve</span>，或看 <span class="mono">vk doctor --human</span>。</p></div>`;
+    return;
+  }
+  if (!VK.current()) {
+    location.replace("/groups.html");
+    return;
+  }
+  renderGroupSwitcher();
   ping();
   connectStream();
   if (!location.hash) {
