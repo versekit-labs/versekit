@@ -74,7 +74,7 @@ const ISSUES = [
     `**背景**：架构的承重墙是"命令注册表派生三端"，但校验只写在文档里（PLAN §2.2 R6）。没有 CI，这条约束等于不存在。
 
 **要做**
-- \`.github/workflows/ci.yml\`：Node 22.5+，跑 \`npm test\`
+- \`.github/workflows/ci.yml\`：Node 22.13+，跑 \`npm test\`
 - \`commands-parity\`：\`vk commands --json\` 的命令集合 == HTTP 路由表 == 卡片按钮集合
 - \`adapter-contract\`：对每个 \`packages/adapter-*\` 跑形状断言（platform/ready/publish/collect/capabilities）
 

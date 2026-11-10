@@ -99,7 +99,11 @@ function cmdInit() {
     db: p.db,
     config: p.configFile,
     schema_version: getMeta("schema_version"),
-    next: ["vk serve --open（打开本地控制台）", "vk account add bilibili --name 主号 --credential <cookies.json>", "vk doctor --human"],
+    next: [
+      "vk serve --open（打开本地控制台）",
+      "vk group add 主矩阵 && vk account add bilibili --group 主矩阵 --name 主号 --credential <cookies.json>",
+      "vk doctor --human",
+    ],
   };
   if (human) {
     console.log(line("已初始化", p.state));
@@ -128,7 +132,7 @@ function cmdNow() {
     console.log(`队列   待跑 ${data.queue.queued} · 运行中 ${data.queue.running} · 失败 ${data.queue.failed}`);
     console.log(`发布   成功 ${data.publishes.published} · 部分 ${data.publishes.published_limited} · 待确认 ${data.publishes.needs_human}`);
     console.log(`通道   飞书 ${data.channel.feishu === "bound" ? "已连接" : "未配对"}`);
-    if (!data.accounts.total) console.log("\n还没有账号：vk account add tiktok --name 主号");
+    if (!data.accounts.total) console.log("\n还没有账号：vk group add 主矩阵，然后 vk account add tiktok --group 主矩阵 --name 主号");
   } else out({ ok: true, ...data });
   return data;
 }
@@ -570,28 +574,41 @@ async function cmdAccount() {
     const data = await send("account.list", val("--group") ? { group: val("--group") } : {}, { log });
     if (human) {
       if (data.group) console.log(`账号组：${data.group.name}`);
-      if (!data.accounts.length) console.log("还没有账号：vk account add tiktok --name 主号");
-      for (const a of data.accounts) console.log(`${a.id.padEnd(14)}${a.platform.padEnd(12)}${a.handle.padEnd(18)}${a.state}`);
+      if (!data.accounts.length) console.log(`还没有账号：vk account add tiktok --group ${data.group?.name ?? "<组>"} --name 主号`);
+      for (const a of data.accounts) console.log(`${a.id.padEnd(16)}${a.platform.padEnd(12)}${a.handle.padEnd(18)}${a.state}`);
     } else out(data);
     return data;
   }
   if (sub === "add") {
     const platform = pos[2];
-    if (!platform) throw new Error("用法：vk account add <platform> --name <名字>");
+    if (!platform) throw new Error("用法：vk account add <platform> --group <组> --name <名字>");
+    const group = val("--group");
+    if (!group) throw new Error("用法：vk account add <platform> --group <组> --name <名字>（账号必须属于一个账号组）");
     const name = val("--name") ?? platform;
     const data = await send(
       "account.add",
       {
         platform,
         name,
+        group,
         ...(val("--handle") ? { handle: val("--handle") } : {}),
         ...(val("--credential") ? { credentialRef: val("--credential") } : {}),
-        ...(val("--group") ? { group: val("--group") } : {}),
       },
       { log },
     );
-    if (human) console.log(`已添加 ${platform} ${name}（${data.id}）\n${data.next ?? ""}`);
+    if (human) console.log(`已添加 ${platform} ${name}（${data.id}）到账号组「${data.group.name}」\n${data.next ?? ""}`);
     else out(data);
+    return data;
+  }
+  if (sub === "remove") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account remove <accountId>");
+    const data = await send("account.remove", { accountId }, { log });
+    if (human) {
+      console.log(`已移除 ${data.platform} ${data.handle}（${accountId}）${data.group ? `，${data.group.name} 的这个平台槽位已空出` : ""}`);
+      if (data.historyKept) console.log(`历史 ${data.historyKept} 条发布仍保留（只移除账号，不删数据）`);
+      console.log("现在可以重新添加这个平台的账号：vk account add <platform> --group <组> --name <名字>");
+    } else out(data);
     return data;
   }
   if (sub === "mode") {
@@ -633,7 +650,7 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
-  throw new Error("用法：vk account list | add | mode | reauth");
+  throw new Error("用法：vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
 }
 
 async function cmdBootstrap() {
@@ -991,7 +1008,7 @@ function usage() {
       "  vk commands [--human]",
       "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
       "  vk group list | add <名字> | use <组 id 或名字>",
-      "  vk account list [--group <组>] | add <platform> --name <名字> [--group <组>] | mode <id> auto|manual | reauth <id>",
+      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",

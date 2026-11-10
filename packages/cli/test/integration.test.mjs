@@ -18,6 +18,8 @@ const store = await import("../../core/src/store.mjs");
 
 const db = () => core.open();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let groupSeq = 0;
+const newGroup = () => store.addGroup({ name: `E2E 组 ${++groupSeq}` }).id;
 
 function fakeBiliup({ style = "ok" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "vk-fake-biliup-"));
@@ -64,7 +66,7 @@ test("一条素材从 CLI 到 B站适配器：published + BV 号 + followup + �
   const asset = join(HOME, "ep1.mp4");
   writeFileSync(asset, "fake video");
 
-  const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@e2e", credentialRef: cred });
+  const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@e2e", credentialRef: cred, groupId: newGroup() });
   const work = store.createWork({ title: "端到端第一条", assetPath: asset, meta: { description: "描述", tags: ["AI"] } });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
 
@@ -101,7 +103,7 @@ test("登录失效时：publish 进 blocked，账号置 expired，事件只发�
   const asset = join(HOME, "ep2.mp4");
   writeFileSync(asset, "fake video");
 
-  const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@dead", credentialRef: cred });
+  const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@dead", credentialRef: cred, groupId: newGroup() });
   const work = store.createWork({ title: "会失效的一条", assetPath: asset });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
 
@@ -121,7 +123,7 @@ test("没有适配器的平台会在第一条发布时明确报错，而不是�
   const { daemon } = await boot();
   const asset = join(HOME, "ep3.mp4");
   writeFileSync(asset, "x");
-  const { id: accountId } = store.addAccount({ platform: "youtube", handle: "@yt" });
+  const { id: accountId } = store.addAccount({ platform: "youtube", handle: "@yt", groupId: newGroup() });
   const work = store.createWork({ title: "没有适配器", assetPath: asset });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
   try {

@@ -13,10 +13,13 @@ const store = await import("../src/store.mjs");
 
 const db = () => core.open();
 
+let groupId = null;
+
 before(() => {
   core.migrate();
-  store.addAccount({ platform: "tiktok", handle: "@main" });
-  store.addAccount({ platform: "bilibili", handle: "@b" });
+  groupId = store.addGroup({ name: "store 测试组" }).id;
+  store.addAccount({ platform: "tiktok", handle: "@main", groupId });
+  store.addAccount({ platform: "bilibili", handle: "@b", groupId });
 });
 
 test("creating a publish also queues it, on the account's lane", () => {
@@ -79,8 +82,9 @@ test("stats returns the latest snapshot per publish, with source and status", ()
 });
 
 test("adding the same account twice is idempotent, not a crash", () => {
-  const first = store.addAccount({ platform: "tiktok", handle: "@again" });
-  const second = store.addAccount({ platform: "tiktok", handle: "@again" });
+  const otherGroup = store.addGroup({ name: "store 幂等组" }).id;
+  const first = store.addAccount({ platform: "tiktok", handle: "@again", groupId: otherGroup });
+  const second = store.addAccount({ platform: "tiktok", handle: "@again", groupId: otherGroup });
   assert.equal(first.id, second.id);
   assert.equal(second.existed, true);
 });
