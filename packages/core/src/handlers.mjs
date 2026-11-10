@@ -13,6 +13,7 @@ import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
+import * as overview from "./overview.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -38,10 +39,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   return {
     now: () => ({ ...store.statusSnapshot() }),
 
+    "bootstrap": () => overview.buildBootstrap(),
+
     "account.list": ({ group } = {}) => {
-      if (!group) return { accounts: store.listAccounts() };
+      // 账号页与总览新鲜度面板共用 overview.listAccountViews 的同一份对象（ACC-overview-02）。
+      if (!group) return { accounts: overview.listAccountViews() };
       const g = requireGroup(group);
-      const accounts = store.listAccounts({ groupId: g.id });
+      const accounts = overview.listAccountViews({ groupId: g.id });
       // 添加账号页据此灰掉已接入平台并写出「被谁占用」；同组同平台唯一，所以一个平台最多一人。
       const occupants = Object.fromEntries(
         accounts.map((a) => [a.platform, { accountId: a.id, handle: a.handle, name: a.display_name ?? a.handle }]),

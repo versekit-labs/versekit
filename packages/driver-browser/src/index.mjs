@@ -401,6 +401,39 @@ function killByPid(pid) {
   }
 }
 
+/**
+ * Chrome 通过 Browser.close 退出后，SingletonLock 偶尔会留在 profile 里（Chrome 157 实测）。
+ * 下一次用同一个 profile 启动会直接以退出码 21（PROFILE_IN_USE）死掉——账号看起来「第二次登录
+ * 必失败」。只在进程确实退出后清，别在它还活着时把锁拆了。
+ */
+async function waitPidGone(pid, timeout = 3e3) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1) return true;
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    try {
+      process.kill(n, 0);
+    } catch {
+      return true;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
+function clearStaleSingleton(profile, pid) {
+  if (!(Number.isInteger(Number(pid)) && Number(pid) > 1)) return;
+  try {
+    process.kill(Number(pid), 0);
+    return; // 进程还在，锁不能动
+  } catch {
+    /* 已经退出，可以清理 */
+  }
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    rmSync(join(profile, name), { force: true });
+  }
+}
+
 // ------------------------------------------------------------------ tab
 
 /**
@@ -987,6 +1020,8 @@ export async function closeAccount(accountId) {
       /* 下面用 pid 兜底 */
     }
     if (!(await waitDown(port, 5e3))) killByPid(marker.pid);
+    await waitPidGone(marker.pid, 2e3);
+    clearStaleSingleton(profile, marker.pid);
     removeMarker(profile);
     return true;
   }
@@ -997,11 +1032,17 @@ export async function closeAccount(accountId) {
   } catch {
     /* 下面用 pid 兜底 */
   }
+  const marker = readMarker(instance.profile);
+  const pid = instance.pid ?? marker?.pid;
   if (!(await waitDown(instance.port, 5e3))) {
-    const marker = readMarker(instance.profile);
-    killByPid(marker?.pid);
+    killByPid(pid);
     await waitDown(instance.port, 2e3);
   }
+  if (!(await waitPidGone(pid, 2e3))) {
+    killByPid(pid);
+    await waitPidGone(pid, 2e3);
+  }
+  clearStaleSingleton(instance.profile, pid);
   forget(id);
   removeMarker(instance.profile);
   return true;

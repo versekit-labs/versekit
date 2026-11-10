@@ -653,6 +653,23 @@ async function cmdAccount() {
   throw new Error("用法：vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
 }
 
+async function cmdBootstrap() {
+  const data = await send("bootstrap", {}, { log: (m) => human && console.log(m) });
+  if (human) {
+    console.log(`当前账号组      ${data.current?.name ?? "未选择（先 vk group add <名字>）"}`);
+    console.log(`账号            ${data.accounts.length} 个（当前组 ${data.freshness.total} 个）`);
+    console.log(
+      `作品 / 发布     ${data.counts.works} 个作品 · ${data.counts.publishes} 条平台发布（${data.counts.publishedPublishes} 条已发布）`,
+    );
+    console.log(`数据新鲜度      ${data.freshness.ratio} 个账号 1 小时内采集`);
+    for (const account of data.accounts.filter((a) => a.group_id === data.current?.id)) {
+      console.log(`  ${account.platform.padEnd(12)}${account.handle.padEnd(18)}${account.freshness.level.padEnd(8)}${account.freshness.reason}`);
+    }
+    console.log(`组 / 矩阵       ${data.groups.length} 个组 · 跨组矩阵只读`);
+  } else out(data);
+  return data;
+}
+
 async function cmdGroup() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
@@ -989,6 +1006,7 @@ function usage() {
       "  vk doctor [--human]",
       "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
       "  vk commands [--human]",
+      "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
       "  vk group list | add <名字> | use <组 id 或名字>",
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]",
@@ -1018,6 +1036,7 @@ try {
   else if (cmd === "now") cmdNow();
   else if (cmd === "doctor") await cmdDoctor();
   else if (cmd === "commands") cmdCommands();
+  else if (cmd === "bootstrap") await cmdBootstrap();
   else if (cmd === "serve") await cmdServe();
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "account") await cmdAccount();
