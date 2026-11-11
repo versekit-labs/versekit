@@ -7,7 +7,7 @@
 
 import { existsSync } from "node:fs";
 import { basename, extname } from "node:path";
-import { open, transitionPublish, enqueue } from "./index.mjs";
+import { open, transitionPublish, enqueue, emit } from "./index.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
@@ -67,6 +67,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { ...result, current, next: `下一步：vk account add <platform> --name <名字> --group ${result.name}` };
     },
 
+    "group.rename": ({ group, name }) => {
+      const target = requireGroup(group);
+      const result = store.renameGroup({ id: target.id, name });
+      emit({ type: "group.renamed", payload: { groupId: target.id, from: result.previous ?? target.name, to: result.name } });
+      return result;
+    },
     "group.use": ({ group }) => {
       const g = store.useGroup(group);
       return { current: { id: g.id, name: g.name } };

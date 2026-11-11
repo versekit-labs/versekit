@@ -9,6 +9,11 @@
 /* 入口页：没有外壳导航，只有一个任务——选一个工作区，或新建一个。 */
 .entry{min-height:100svh;display:flex;align-items:center;justify-content:center;padding:40px 20px}
 .entry-card{width:100%;max-width:560px}
+.group-row{display:flex;align-items:stretch;gap:8px;margin-bottom:8px}
+.group-row .group-btn{flex:1;margin-bottom:0}
+.group-rename{min-width:56px;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--muted);font-size:12px;cursor:pointer;flex:none}
+.group-rename:hover{border-color:var(--navy);color:var(--navy)}
+.rename-group{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
 .entry-head{margin-bottom:6px;font-size:12px;color:var(--faint);letter-spacing:.08em}
 .entry h1{font-size:28px}
 .entry .sub{margin-top:8px}
@@ -39,6 +44,16 @@
 
     <div class="group-list" id="groups" aria-live="polite">
       <div class="empty-groups">正在读取账号组…</div>
+    </div>
+
+    <div class="rename-group" id="rename-group" hidden>
+      <label class="field-label" for="rename-name">给「<b id="rename-target"></b>」改名</label>
+      <form class="inline-form" id="rename-form">
+        <input class="input" id="rename-name" maxlength="64" autocomplete="off">
+        <button class="btn primary" type="submit" id="rename-submit">保存</button>
+        <button class="btn" type="button" id="rename-cancel">取消</button>
+      </form>
+      <p class="hint" id="rename-error" style="margin-top:8px" role="alert" hidden></p>
     </div>
 
     <div class="new-group">
@@ -135,9 +150,62 @@
       btn.querySelector('.group-meta').textContent = summary(g);
       btn.querySelector('.group-go').textContent = current && current.id === g.id ? '当前 · 进入 →' : '进入 →';
       btn.addEventListener('click', function(){ enter(g, btn); });
-      box.appendChild(btn);
+
+      const row = document.createElement('div');
+      row.className = 'group-row';
+      const rename = document.createElement('button');
+      rename.className = 'group-rename';
+      rename.type = 'button';
+      rename.textContent = '改名';
+      rename.setAttribute('aria-label', '给账号组 ' + g.name + ' 改名');
+      rename.addEventListener('click', function(e){
+        e.stopPropagation();
+        openRename(g);
+      });
+      row.appendChild(btn);
+      row.appendChild(rename);
+      box.appendChild(row);
     });
   }
+
+  let renaming = null;
+  const renameBox = document.getElementById('rename-group');
+  const renameInput = document.getElementById('rename-name');
+  const renameError = document.getElementById('rename-error');
+  const clearRenameError = function(){ renameError.hidden = true; renameError.textContent = ''; };
+
+  function openRename(g){
+    renaming = g;
+    clearRenameError();
+    document.getElementById('rename-target').textContent = g.name;
+    renameInput.value = g.name;
+    renameBox.hidden = false;
+    renameInput.focus();
+    renameInput.select();
+    renameBox.scrollIntoView({ block: 'nearest' });
+  }
+
+  document.getElementById('rename-cancel').addEventListener('click', function(){
+    renameBox.hidden = true; renaming = null;
+  });
+
+  document.getElementById('rename-form').addEventListener('submit', async function(e){
+    e.preventDefault();
+    if(!renaming) return;
+    const name = renameInput.value.trim();
+    if(!name){ renameError.hidden = false; renameError.textContent = '组名不能为空'; return; }
+    const submit = document.getElementById('rename-submit');
+    submit.disabled = true; submit.textContent = '正在保存…';
+    try{
+      await VK.renameGroup(renaming.id, name);
+      renameBox.hidden = true; renaming = null;
+      render();
+    }catch(err){
+      renameError.hidden = false; renameError.textContent = String(err.message);
+    }finally{
+      submit.disabled = false; submit.textContent = '保存';
+    }
+  });
 
   form.addEventListener('submit', async function(e){
     e.preventDefault();

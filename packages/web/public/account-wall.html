@@ -47,6 +47,18 @@
   .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
   .col-collect{display:none}
 }
+/* 当前账号组是这一页的作用域，必须比标题更显眼：
+   下拉直接切组，旁边就是「改名」；表单就地展开，不跳页、不打断手上的事。 */
+.title-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.group-hero{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 账号组是这一页的作用域：做成带边框的标签，比标题更抢眼，点开就能切。 */
+.group-select{font:600 16px/1.2 var(--sans);color:var(--navy);background:#eef4fb;border:1px solid #cfe0f2;border-radius:999px;padding:7px 30px 7px 14px;cursor:pointer;max-width:min(420px,60vw);appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--navy) 50%),linear-gradient(135deg,var(--navy) 50%,transparent 50%);background-position:calc(100% - 15px) 16px,calc(100% - 10px) 16px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.group-select:hover,.group-select:focus{background-color:#e3edfa;border-color:var(--navy)}
+.group-rename{min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--muted);font-size:12px;cursor:pointer}
+.group-rename:hover{border-color:var(--navy);color:var(--navy)}
+.group-rename-form{margin:6px 0 8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);max-width:520px}
+.rename-row{display:flex;gap:8px;align-items:center;margin-top:6px}
+.rename-row .input{flex:1;min-width:0}
 @media (max-width:900px){
   .slot{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:14px}
   .slot-col{grid-column:1/-1}
@@ -79,8 +91,23 @@
   <main id="main"><div class="page">
     <header class="pagehead">
       <div>
-        <div class="crumb"><span>账号组 · <b id="group-label">—</b></span></div>
-        <h1>账号</h1>
+        <div class="crumb"><span>账号</span></div>
+        <div class="title-row">
+          <h1>账号</h1>
+          <div class="group-hero">
+            <select class="group-select" id="group-select" aria-label="当前账号组，可切换" title="切换账号组"></select>
+            <button class="group-rename" id="group-rename" type="button" title="给这个账号组改名">改名</button>
+          </div>
+        </div>
+        <form class="group-rename-form" id="rename-form" hidden>
+          <label class="field-label" for="rename-input">账号组新名字</label>
+          <div class="rename-row">
+            <input class="input" id="rename-input" maxlength="64" autocomplete="off">
+            <button class="btn primary" id="rename-save" type="submit">保存</button>
+            <button class="btn" id="rename-cancel" type="button">取消</button>
+          </div>
+          <p class="notice bad" id="rename-error" hidden></p>
+        </form>
         <p class="sub" id="sub">正在加载…</p>
       </div>
       <div class="detail-actions">
@@ -436,7 +463,12 @@
     const warn = accounts.filter((a) => levelOf(a) === "warn").length;
     const columns = VK.platforms();
 
-    $("group-label").textContent = group.name;
+    // 注意别叫 select：页面里 select(id) 是「选中某个账号」的函数，同名会把它覆盖掉。
+    const groupSelect = $("group-select");
+    if(groupSelect){
+      groupSelect.innerHTML = VK.groups().map((g) => '<option value="' + g.id + '">' + g.name + '</option>').join("");
+      groupSelect.value = group.id;
+    }
     $("add-btn").href = "/accounts/add";
 
     const parts = [accounts.length + " / " + (columns.length || 5) + " 个平台已接入"];
@@ -497,8 +529,59 @@
     }
   }
 
+  /* 当前组是这一页的作用域：切组 = group.use，改名 = group.rename。
+   * 两者都不跳页：改完就地重渲染，手上的账号列表跟着变。 */
+  function wireGroupControls(){
+    const select = $("group-select");
+    if(select){
+      select.addEventListener("change", async () => {
+        select.disabled = true;
+        try{
+          await VK.useGroup(select.value);
+          selected = null;
+          render();
+        }catch(err){
+          toast("切换失败：" + err.message, true);
+        }finally{
+          select.disabled = false;
+        }
+      });
+    }
+    const form = $("rename-form");
+    const input = $("rename-input");
+    const err = $("rename-error");
+    const open = () => {
+      input.value = VK.current()?.name ?? "";
+      err.hidden = true;
+      form.hidden = false;
+      input.focus();
+      input.select();
+    };
+    $("group-rename").addEventListener("click", open);
+    $("rename-cancel").addEventListener("click", () => { form.hidden = true; });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = input.value.trim();
+      if(!name){ err.hidden = false; err.textContent = "组名不能为空"; return; }
+      const save = $("rename-save");
+      save.disabled = true; save.textContent = "正在保存…";
+      try{
+        await VK.renameGroup(VK.currentId(), name);
+        form.hidden = true;
+        render();
+        toast("已改名为 " + name);
+      }catch(error){
+        err.hidden = false;
+        err.textContent = String(error.message);
+      }finally{
+        save.disabled = false; save.textContent = "保存";
+      }
+    });
+  }
+
   function boot(){
     $("d-remove").addEventListener("click", () => { if(selected) runRemove(selected); });
+    wireGroupControls();
     VK.ready()
       .then(() => {
         if(!VK.current()){ location.replace("/groups.html"); return; }

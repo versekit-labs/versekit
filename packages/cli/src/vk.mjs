@@ -692,6 +692,15 @@ async function cmdGroup() {
     else out(data);
     return data;
   }
+  if (sub === "rename") {
+    const group = pos[2];
+    const name = pos.slice(3).join(" ");
+    if (!group || !name) throw new Error("用法：vk group rename <组 id 或名字> <新名字>");
+    const data = await send("group.rename", { group, name }, { log });
+    if (human) console.log(data.changed ? `账号组改名：${data.previous} → ${data.name}` : `名字没变：${data.name}`);
+    else out(data);
+    return data;
+  }
   if (sub === "use") {
     const group = pos[2];
     if (!group) throw new Error("用法：vk group use <组 id 或名字>");
@@ -700,7 +709,7 @@ async function cmdGroup() {
     else out(data);
     return data;
   }
-  throw new Error("用法：vk group list | add <名字> | use <组>");
+  throw new Error("用法：vk group list | add <名字> | use <组> | rename <组> <新名字>");
 }
 
 async function cmdPublish() {

@@ -86,6 +86,16 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "group.rename",
+    summary: "给账号组改个名字（只改显示名，组里的账号与排期都不动）",
+    remote: false,
+    args: { group: "string", name: "string" },
+    http: { method: "POST", path: "/api/groups/:group/rename" },
+    cli: { usage: "vk group rename <组 id 或名字> <新名字>" },
+    card: null,
+    audit: "always",
+  },
+  {
     name: "group.use",
     summary: "切换当前账号组（之后所有页面只看这个组）",
     remote: false,

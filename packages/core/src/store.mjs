@@ -83,6 +83,19 @@ export function addGroup({ name }) {
   return { id, name: n, existed: false };
 }
 
+/** 改组名：只改显示名，不动 id（排期、发布、账号都按 id 关联）。
+ *  重名与新建组同一套规则：名字唯一，撞到自己不算冲突（幂等改名）。 */
+export function renameGroup({ id, name }) {
+  const target = findGroup(id);
+  if (!target) fail(`没有这个账号组：${id}（先 vk group list 看看有哪些）`);
+  const n = requireString(name, "组名", { max: 64 });
+  if (n === target.name) return { id: target.id, name: n, changed: false };
+  const clash = open().prepare("SELECT id FROM account_group WHERE name = ? AND id != ?").get(n, target.id);
+  if (clash) fail(`已经有一个叫「${n}」的账号组了，换个名字`);
+  open().prepare("UPDATE account_group SET name = ? WHERE id = ?").run(n, target.id);
+  return { id: target.id, name: n, changed: true, previous: target.name };
+}
+
 /** 当前组；记录的组已不存在时当作没有当前组，而不是返回一个悬空 id。 */
 export function currentGroup() {
   const row = open().prepare("SELECT value FROM meta WHERE key = ?").get(CURRENT_GROUP_KEY);
