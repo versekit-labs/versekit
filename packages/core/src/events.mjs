@@ -25,6 +25,9 @@ export const EVENTS = {
   // 改期不是状态迁移（状态不变，只动时间），但必须留痕：谁把哪个作品从几点挪到了几点。
   "schedule.moved": { severity: "info", required: false, internal: true },
 
+  // 改组名只影响显示名，不影响任何发布；留痕是为了以后能解释「这组以前叫什么」。
+  "group.renamed": { severity: "info", required: false, internal: true },
+
   "approval.requested": { severity: "warn", required: true, card: "approval" },
 
   "collect.degraded": { severity: "warn", required: true, card: "collect" },

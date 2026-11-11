@@ -148,3 +148,30 @@ test("三条命令走 HTTP（由命令表派生的路由）", async () => {
   const missing = await post("/api/groups/current", {});
   assert.equal(missing.status, 400, "缺参数是 400，不是 500");
 });
+
+test("group.rename：只改名字，id 与组内账号不动；重名要拒绝", async () => {
+  const h = createCoreHandlers();
+  const a = h["group.add"]({ name: "改名前的组" });
+  h["account.add"]({ platform: "bilibili", name: "主号", group: a.id });
+
+  const renamed = h["group.rename"]({ group: a.id, name: "改名后的组" });
+  assert.equal(renamed.id, a.id, "id 不能变：排期/发布/账号都按 id 关联");
+  assert.equal(renamed.name, "改名后的组");
+  assert.equal(renamed.changed, true);
+  assert.equal(renamed.previous, "改名前的组");
+
+  const list = h["group.list"]();
+  const row = list.groups.find((g) => g.id === a.id);
+  assert.equal(row.name, "改名后的组");
+  assert.equal(row.account_count, 1, "改名不影响组内账号");
+
+  // 幂等：改成同名不算错。
+  assert.equal(h["group.rename"]({ group: a.id, name: "改名后的组" }).changed, false);
+
+  // 重名：另一个组已经占用这个名字时必须拒绝。
+  h["group.add"]({ name: "另一个组" });
+  assert.throws(() => h["group.rename"]({ group: a.id, name: "另一个组" }), /已经有一个叫/);
+
+  // 按新名字也能找到组（改名后 CLI/页面继续用名字寻址）。
+  assert.equal(h["group.use"]({ group: "改名后的组" }).current.name, "改名后的组");
+});

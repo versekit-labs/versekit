@@ -134,6 +134,18 @@
     return result.current ?? current();
   }
 
+  /** 改名 = 命令 `group.rename`：只改显示名，组 id 与组内账号、排期都不动。 */
+  async function renameGroup(ref, name) {
+    const clean = String(name ?? "").trim();
+    if (!clean) throw new Error("组名不能为空");
+    const result = await request(`/api/groups/${encodeURIComponent(ref)}/rename`, {
+      method: "POST",
+      body: { group: String(ref), name: clean },
+    });
+    await bootstrap({ force: true });
+    return result;
+  }
+
   /** 建组 = 命令 `group.add`：服务端建组即进入，页面不需要再补一次 group.use。 */
   async function addGroup(name) {
     const clean = String(name ?? "").trim();
@@ -391,6 +403,7 @@
   VK.rollup = rollup;
   VK.useGroup = useGroup;
   VK.addGroup = addGroup;
+  VK.renameGroup = renameGroup;
   VK.addAccount = addAccount;
   VK.reauthAccount = reauthAccount;
   VK.removeAccount = removeAccount;
