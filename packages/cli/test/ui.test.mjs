@@ -22,9 +22,8 @@ const missing = driver.browserReady();
 // 真浏览器验收只在开发机跑；CI 由 design:check 的静态门禁兜底。
 const skipBrowser = missing ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态），本地跑 design:check" : false);
 
-test("控制台在真浏览器里能打开：五页都在、没有横向溢出、没有 JS 错误", { skip: skipBrowser }, async () => {
+test("控制台在新设计下能打开：五个日常页都在、没有横向溢出、没有 JS 错误", { skip: skipBrowser }, async () => {
   core.migrate();
-  // 账号组是 #24 起的工作区入口：没有当前组时首页会落到选组页，所以这里先建一个组。
   const group = store.addGroup({ name: "UI 验收组" });
   store.useGroup(group.id);
   core.open()
@@ -42,34 +41,40 @@ test("控制台在真浏览器里能打开：五页都在、没有横向溢出�
   const base = `http://127.0.0.1:${daemon.port}`;
   let tab = null;
   try {
-    // CI runner 有 Chrome 但没有显示器：必须 headless，否则可见窗口起不来。
-    // openAccount 必须在 try 内：启动失败时也要走到 finally 关掉 daemon，
-    // 否则监听 socket 会保活，node --test 一直等子进程退出（test job 挂住）。
-    tab = await driver.openAccount({ accountId: "ui-check", url: `${base}/#overview`, headless: process.env.CI === "true" });
-    await tab.waitFor(`document.querySelector("#view h1")?.innerText`, [], { timeout: 20e3, what: "控制台首页" });
-    await tab.eval(`window.__errors = []; window.addEventListener("error", (e) => window.__errors.push(String(e.message)))`);
+    tab = await driver.openAccount({ accountId: "ui-check", url: `${base}/overview`, headless: process.env.CI === "true" });
+    await tab.waitFor(`document.querySelector(".pagehead h1")?.innerText`, [], { timeout: 25e3, what: "总览首页" });
 
-    assert.equal(await tab.eval(`document.querySelectorAll(".tabs a").length`), 7);
-    assert.equal(await tab.eval(`document.documentElement.scrollWidth > window.innerWidth + 1`), false);
-
+    // 五个日常页共用同一份导航（shell.js），每页都要能打开且不横向溢出。
+    const pages = [
+      ["/accounts", "账号"],
+      ["/publish", "发布"],
+      ["/plan", "发布计划"],
+      ["/overview", "总览"],
+      ["/runs", "任务与日志"],
+    ];
     const seen = [];
-    for (const name of ["setup", "accounts", "publish", "works", "overview", "tasks", "doctor"]) {
-      await tab.eval(`location.hash = "#${name}"`);
-      await tab.waitFor(`document.querySelector("#view h1")?.innerText`, [], { timeout: 10e3, what: `${name} 视图` });
-      seen.push(await tab.eval(`document.querySelector("#view h1").innerText`));
-      assert.equal(await tab.eval(`document.documentElement.scrollWidth > window.innerWidth + 1`), false, `${name} 出现横向溢出`);
+    for (const [path, title] of pages) {
+      await tab.goto(`${base}${path}`);
+      // 每次整页导航都会换 document，错误收集器要在新页面上重新装一次。
+      await tab.eval(`window.__errors = []; window.addEventListener("error", (e) => window.__errors.push(String(e.message))); window.addEventListener("unhandledrejection", (e) => window.__errors.push("rejection:" + String((e.reason && e.reason.message) || e.reason)))`);
+      await tab.waitFor(`document.querySelector(".pagehead h1")?.innerText === ${JSON.stringify(title)}`, [], { timeout: 25e3, what: `${title} 页` });
+      await new Promise((r) => setTimeout(r, 800));
+      seen.push(await tab.eval(`document.querySelector(".pagehead h1").innerText`));
+      assert.equal(await tab.eval(`document.documentElement.scrollWidth > window.innerWidth + 1`), false, `${title} 出现横向溢出`);
+      assert.equal(await tab.eval(`document.querySelectorAll("aside.sidebar .nav a").length`), 5, `${title} 的导航必须来自共享外壳`);
+      assert.deepEqual(await tab.eval(`window.__errors`), [], `${title} 不应有未捕获的 JS 错误`);
     }
-    assert.deepEqual(seen, ["接入", "账号墙", "发布台", "作品", "总览", "任务与日志", "自检"]);
-    assert.deepEqual(await tab.eval(`window.__errors`), [], "页面不应有未捕获的 JS 错误");
+    assert.deepEqual(seen, ["账号", "发布", "发布计划", "总览", "任务与日志"]);
 
-    // 没有账号时，打开根地址应该直接落在「接入」，而不是空的总览。
-    core.open().prepare("DELETE FROM account").run();
-    await tab.goto(`${base}/`);
-    await tab.waitFor(`document.querySelector("#view h1")?.innerText === "接入"`, [], { timeout: 15e3, what: "无账号首启落在接入页" });
-    assert.equal(await tab.eval(`location.hash`), "#setup");
+    // 点导航不再回到旧单页：任何一跳都不应出现 #setup 那套旧 tab。
+    await tab.goto(`${base}/accounts`);
+    await tab.eval(`window.__errors = []; window.addEventListener("error", (e) => window.__errors.push(String(e.message)))`);
+    await tab.waitFor(`document.querySelector(".pagehead h1")?.innerText === "账号"`, [], { timeout: 25e3, what: "账号页" });
+    await tab.eval(`document.querySelector('aside.sidebar .nav a[href="/overview"]').click()`);
+    await tab.waitFor(`document.querySelector(".pagehead h1")?.innerText === "总览"`, [], { timeout: 25e3, what: "点导航到总览" });
+    assert.equal(await tab.eval(`location.hash`), "", "导航不能退回 #setup 旧路由");
   } finally {
     if (tab) await tab.close().catch(() => {});
-    // 浏览器验收最容易漏的一步：只关标签页会留下一个空 Chrome，堆在用户屏幕上。
     await driver.closeAccount("ui-check").catch(() => {});
     await daemon.close();
   }

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>矩阵总览 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.readonly{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--faint);font-size:12px;background:var(--paper)}
+.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 4px}
+.stat{display:flex;flex-direction:column;gap:4px;padding:13px 15px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.stat-k{color:var(--faint);font-size:12px}
+.stat-v{font-family:var(--mono);font-size:24px;font-weight:500;font-variant-numeric:tabular-nums}
+.matrix{width:100%;border-collapse:separate;border-spacing:0}
+.matrix th,.matrix td{border-bottom:1px solid var(--line-soft);padding:10px 12px;text-align:left;font-size:13px}
+.matrix thead th{color:var(--faint);font-weight:500;font-size:12px;border-bottom:1px solid var(--line)}
+.matrix th:first-child{padding-left:16px}
+.matrix td:first-child{padding-left:16px}
+.gname{font-weight:600;color:var(--ink)}
+.gmeta{color:var(--faint);font-size:12px;margin-top:2px}
+.cell{display:flex;align-items:center;gap:7px;min-height:26px}
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:var(--paper);font-size:12px;max-width:180px}
+.chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gap{color:var(--faint);font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--line)}
+.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}.dot.warn{background:var(--amber)}
+.wraptable{overflow-x:auto}
+@media (max-width:900px){
+  .summary{grid-template-columns:1fr}
+  .matrix th,.matrix td{padding:9px 8px}
+}
+</style>
+</head>
+<body data-page="matrix">
+<a class="skip" href="#main">跳到主内容</a>
+
+<div class="shell">
+  <aside class="sidebar"></aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span>全部账号组 · 只读</span></div>
+        <h1>矩阵总览</h1>
+        <p class="sub">一行一个账号组，一列一个平台。这里只汇总，不改任何组的数据。</p>
+      </div>
+      <span class="readonly">只读</span>
+    </header>
+
+    <section class="summary" aria-label="跨组汇总">
+      <div class="stat"><span class="stat-k">账号组</span><span class="stat-v" id="s-groups">—</span></div>
+      <div class="stat"><span class="stat-k">已接入平台槽位</span><span class="stat-v" id="s-filled">—</span></div>
+      <div class="stat"><span class="stat-k">作品 / 平台发布</span><span class="stat-v" id="s-counts">—</span></div>
+    </section>
+
+    <section class="panel" aria-label="账号组 × 平台">
+      <div class="wraptable">
+        <table class="matrix" id="matrix"></table>
+      </div>
+    </section>
+
+    <footer class="pagefoot">
+      <span>矩阵只读：点格子进入对应账号组处理账号。</span>
+      <a href="/overview">回到总览 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const levelClass = (state) => (state === "expired" || state === "banned") ? "bad" : state === "expiring" ? "warn" : "ok";
+
+  function render(){
+    const matrix = VK.matrix();
+    const groups = matrix.groups ?? [];
+    const columns = matrix.columns ?? [];
+    const rollup = VK.rollup();
+
+    $("s-groups").textContent = groups.length;
+    $("s-filled").textContent = groups.reduce((n, g) => n + (g.filled ?? 0), 0) + " / " + groups.length * columns.length;
+    const c = rollup.counts;
+    $("s-counts").textContent = c ? (c.works + " / " + c.publishes) : "—";
+
+    const head = '<thead><tr><th>账号组</th>' + columns.map(col => '<th>' + (col.label ?? col.platform) + '</th>').join("") + '</tr></thead>';
+    const body = '<tbody>' + groups.map(g => {
+      const cells = (g.cells ?? []).map(cell => {
+        if(!cell.filled){
+          return '<td><span class="gap">未接入</span></td>';
+        }
+        const acc = cell.account ?? {};
+        const level = levelClass(acc.state);
+        const name = acc.handle || acc.display_name || acc.id;
+        // 进组 = 用 group.use 切过去，再落到账号页处理；矩阵本身不写任何数据。
+        return '<td><a class="chip" href="/accounts?group=' + encodeURIComponent(g.id) + '" title="进入这个账号组">' +
+          '<span class="dot ' + level + '"></span><span>' + String(name).replace(/[<>&]/g, "") + '</span></a></td>';
+      }).join("");
+      return '<tr><td><div class="gname">' + g.name + '</div><div class="gmeta">' + (g.filled ?? 0) + ' / ' + (g.slots ?? columns.length) + ' 个平台已接入</div></td>' + cells + '</tr>';
+    }).join("") + '</tbody>';
+
+    $("matrix").innerHTML = head + body;
+    if(!groups.length){
+      $("matrix").innerHTML = '<tbody><tr><td style="padding:18px 16px;color:var(--muted)">还没有账号组。<a href="/groups.html">去建一个 →</a></td></tr></tbody>';
+    }
+  }
+
+  VK.ready().then(render).catch(err => { document.querySelector('.sub').textContent = "读不到矩阵：" + err.message; });
+})();
+</script>
+</body>
+</html>

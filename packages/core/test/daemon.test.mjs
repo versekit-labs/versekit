@@ -127,18 +127,40 @@ test("coerceArgs only converts types the command declares", () => {
 // ---------------------------------------------------------------- 静态页与资产上传
 
 test("本地控制台首页能打开，静态资源带了正确类型", async () => {
+  // 首页就是新总览页：旧单页（index.html + app.js + style.css）在 #30 已删除，
+  // 不能再有第二个入口，否则导航一定会漂回旧 UI。
   const index = await fetch(`${base}/`);
   assert.equal(index.status, 200);
   assert.match(index.headers.get("content-type"), /text\/html/);
-  assert.match(await index.text(), /versekit/);
+  const html = await index.text();
+  assert.match(html, /versekit/);
+  assert.match(html, /data-page="overview"/, "首页必须是新总览页");
 
-  const css = await fetch(`${base}/style.css`);
+  const css = await fetch(`${base}/app.css`);
   assert.equal(css.status, 200);
   assert.match(css.headers.get("content-type"), /text\/css/);
 
-  const js = await fetch(`${base}/app.js`);
+  const js = await fetch(`${base}/shell.js`);
   assert.equal(js.status, 200);
   assert.match(js.headers.get("content-type"), /javascript/);
+  assert.match(await (await fetch(`${base}/shell.js`)).text(), /\/accounts/, "共享导航必须指向新页面");
+});
+
+test("旧单页已下线：index.html / app.js / style.css 不再提供", async () => {
+  for (const path of ["/index.html", "/app.js", "/style.css"]) {
+    assert.equal((await fetch(`${base}${path}`)).status, 404, `${path} 应该已删除`);
+  }
+});
+
+test("所有导航目标都存在，页面之间没有死链", async () => {
+  const shell = await (await fetch(`${base}/shell.js`)).text();
+  const hrefs = [...shell.matchAll(/href:\s*"([^"]+)"/g)].map((m) => m[1]).filter((h) => h.startsWith("/"));
+  assert.ok(hrefs.length >= 5, "共享导航至少要覆盖五个日常页面");
+  for (const href of new Set(hrefs)) {
+    const res = await fetch(`${base}${href}`);
+    assert.equal(res.status, 200, `导航 ${href} 必须是可打开的页面`);
+    assert.doesNotMatch(await res.text(), /404/, `${href} 不能是 404 页`);
+  }
 });
 
 test("静态目录之外的文件一律 404（不许用 .. 读仓库）", async () => {
@@ -160,11 +182,12 @@ test("应用外壳：选组页与 api.js 由守护进程托管，数据只从 /a
   assert.match(api.headers.get("content-type"), /javascript/);
   assert.match(await api.text(), /\/api\/bootstrap/, "api.js 必须真的拉 /api/bootstrap");
 
-  // 日常页面也要接同一个外壳：首页加载 api.js 并带组切换器，没有当前组时才跳选组页。
-  const index = await fetch(`${base}/`);
+  // 日常页面也要接同一个外壳：总览页加载 api.js 与 shell.js，导航只有一份来源。
+  const index = await fetch(`${base}/overview`);
   const indexHtml = await index.text();
   assert.match(indexHtml, /src="\/api\.js"/);
-  assert.match(indexHtml, /id="group-switch"/);
+  assert.match(indexHtml, /src="\/shell\.js"/);
+  assert.match(indexHtml, /data-page="overview"/);
 });
 
 test("账号页与添加账号页走干净 URL，且数据只从 /api 来", async () => {
