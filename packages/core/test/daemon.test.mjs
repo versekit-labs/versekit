@@ -147,6 +147,26 @@ test("静态目录之外的文件一律 404（不许用 .. 读仓库）", async 
   assert.equal((await fetch(`${base}/nope.html`)).status, 404);
 });
 
+test("应用外壳：选组页与 api.js 由守护进程托管，数据只从 /api 来", async () => {
+  const page = await fetch(`${base}/groups.html`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-type"), /text\/html/);
+  const html = await page.text();
+  assert.match(html, /src="\/api\.js"/, "选组页必须由 api.js 拉真实快照");
+  assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
+
+  const api = await fetch(`${base}/api.js`);
+  assert.equal(api.status, 200);
+  assert.match(api.headers.get("content-type"), /javascript/);
+  assert.match(await api.text(), /\/api\/bootstrap/, "api.js 必须真的拉 /api/bootstrap");
+
+  // 日常页面也要接同一个外壳：首页加载 api.js 并带组切换器，没有当前组时才跳选组页。
+  const index = await fetch(`${base}/`);
+  const indexHtml = await index.text();
+  assert.match(indexHtml, /src="\/api\.js"/);
+  assert.match(indexHtml, /id="group-switch"/);
+});
+
 test("资产上传落到 state/assets，文件名被清洗，内容是原样", async () => {
   const res = await fetch(`${base}/api/assets`, {
     method: "POST",
