@@ -15,6 +15,10 @@
 .step-hint{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.5}
 .auth-steps{margin:12px 0 0;padding-left:18px;font-size:13px;line-height:1.7;color:var(--muted)}
 .auth-steps li::marker{color:var(--faint);font-family:var(--mono);font-size:12px}
+.login-status{margin:12px 0 4px;font-size:13px;line-height:1.6;color:var(--muted)}
+.login-status.pending{color:var(--navy)}
+.login-status.ok{color:var(--green);font-weight:600}
+.login-status.warn{color:var(--amber)}
 .done-box{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:20px;border:1px solid var(--green-line);border-radius:8px;background:var(--green-bg)}
 .done-box h2{font-size:18px;font-weight:650;color:var(--green)}
 .done-box p{color:var(--muted);font-size:13px;line-height:1.6}
@@ -83,12 +87,16 @@
 
       <section class="step" id="step-done" hidden>
         <div class="done-box">
-          <h2>已接入</h2>
+          <h2 id="done-title">已登记，接下来登录</h2>
           <p id="done-text"></p>
-          <div class="cmd" style="width:100%"><b>等价命令</b><code id="done-cmd"></code></div>
+          <ol class="auth-steps" id="login-steps"></ol>
+          <p class="login-status" id="login-status" role="status"></p>
+          <div class="cmd" style="width:100%" id="done-cmd-wrap"><b>等价命令</b><code id="done-cmd"></code></div>
           <p class="hint" id="done-hint"></p>
           <div class="form-actions" style="justify-content:flex-start;margin-top:4px">
-            <a class="btn primary" id="back-account" href="/accounts">回到账号页</a>
+            <button class="btn" id="open-login" type="button" hidden>打开登录窗口</button>
+            <button class="btn primary" id="check-login" type="button" hidden>我已登录，检查</button>
+            <a class="btn" id="back-account" href="/accounts">回到账号页</a>
             <a class="btn" id="next-platform" href="/accounts/add">再添加一个平台</a>
           </div>
         </div>
@@ -139,6 +147,148 @@
     $("s2").style.color = step >= 2 ? "var(--navy)" : "";
     $("s3").style.color = step >= 3 ? "var(--navy)" : "";
   }
+
+  /* 登记之后必须立刻把人带进登录，否则「已接入」是个假完成：
+   * 账号只是登记了一行，平台那边还没授权，发布一定失败。
+   *
+   * 两条路分得很清：
+   *   · 网页登录（小红书/抖音/TikTok/YouTube）：直接开有头浏览器窗口，人自己登录；
+   *   · B站：适配器走 biliup CLI，只能给命令，不能假装能扫码。
+   * 检查统一走 account.check —— 它跑适配器的 check()，把真实状态写回账号行。
+   */
+  const WEB_LOGIN = new Set(["xiaohongshu", "douyin", "tiktok", "youtube"]);
+  let loginAccountId = null;
+  let loginPlatform = null;
+  let pollTimer = null;
+
+  function setLoginStatus(text, level){
+    const el = $("login-status");
+    el.textContent = text;
+    el.className = "login-status" + (level ? " " + level : "");
+  }
+
+  async function checkLogin(silent){
+    if(!loginAccountId) return false;
+    if(!silent) setLoginStatus("正在检查登录状态…", "pending");
+    try{
+      const result = await VK.request("/api/accounts/" + encodeURIComponent(loginAccountId) + "/check", {
+        method: "POST",
+        body: { accountId: loginAccountId },
+      });
+      if(result.skipped){
+        setLoginStatus("这个平台还没有自动检查：登录完成后请手动确认一次。", "warn");
+        return false;
+      }
+      if(result.state === "ok"){
+        setLoginStatus("登录成功，这个账号可以发布与采集了。", "ok");
+        $("done-title").textContent = "已接入并登录";
+        $("check-login").hidden = true;
+        $("open-login").hidden = true;
+        stopPoll();
+        return true;
+      }
+      setLoginStatus(
+        result.state === "expiring" ? "已登录，但凭证快过期了。" :
+        result.state === "expired" ? "还没检测到登录：在打开的窗口里完成登录，再点「我已登录，检查」。" :
+        result.state === "banned" ? "账号在平台上被限制，需要先在平台侧处理。" :
+        "当前状态：" + result.state,
+        result.state === "expiring" ? "warn" : "warn",
+      );
+      return false;
+    }catch(err){
+      setLoginStatus("检查失败：" + err.message, "warn");
+      return false;
+    }
+  }
+
+  function stopPoll(){
+    if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  }
+  function startPoll(){
+    stopPoll();
+    // 人在另一个窗口扫码，这里每 4 秒认一次结果；最多认 5 分钟，不无限转。
+    let ticks = 0;
+    pollTimer = setInterval(() => {
+      ticks += 1;
+      if(ticks > 75 || document.hidden && ticks > 5){ stopPoll(); return; }
+      checkLogin(true);
+    }, 4000);
+  }
+
+  async function guideLogin({ accountId, platform, label }){
+    stopPoll();
+    loginAccountId = accountId;
+    loginPlatform = platform;
+    $("done-cmd").textContent = "vk account reauth " + accountId;
+    $("open-login").hidden = true;
+    $("check-login").hidden = true;
+    $("done-hint").textContent = "";
+
+    if(!adapters.has(platform)){
+      $("done-title").textContent = "已登记";
+      $("login-steps").innerHTML = "";
+      $("done-cmd-wrap").hidden = true;
+      setLoginStatus("这个平台还没有适配器：账号已登记，授权与发布要等 packages/adapter-" + platform + " 装好。", "warn");
+      return;
+    }
+
+    if(WEB_LOGIN.has(platform)){
+      $("done-title").textContent = "登录" + label;
+      $("login-steps").innerHTML =
+        "<li>正在为你打开登录窗口…</li>" +
+        "<li>在弹出的浏览器窗口里完成扫码 / 登录（不要关掉它）。</li>" +
+        "<li>登录成功后这里会自动认出来，也可以点「我已登录，检查」。</li>";
+      $("check-login").hidden = false;
+      $("open-login").hidden = false;
+      setLoginStatus("正在打开登录窗口…", "pending");
+      try{
+        await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/open", {
+          method: "POST",
+          body: { accountId },
+        });
+        setLoginStatus("登录窗口已打开：请在那个人浏览器窗口里完成登录。", "pending");
+        startPoll();
+      }catch(err){
+        setLoginStatus("打不开登录窗口：" + err.message + "（可以点「打开登录窗口」重试）", "warn");
+      }
+      return;
+    }
+
+    if(platform === "bilibili"){
+      $("done-title").textContent = "登录 B站（用 biliup）";
+      $("login-steps").innerHTML =
+        "<li>B站走 <code>biliup</code> 登录，不是网页扫码；打开终端执行下面这条命令。</li>" +
+        "<li>命令会弹出浏览器，扫码登录后把 cookies 存到指定文件。</li>" +
+        "<li>回来点「我已登录，检查」，通过后这个账号就能发 B站。</li>";
+      $("done-cmd-wrap").hidden = false;
+      $("done-cmd").textContent = "biliup -u ~/.config/versekit/credentials/bili-cookies.json login";
+      $("open-login").hidden = true;
+      $("check-login").hidden = false;
+      setLoginStatus("在终端执行上面那条命令完成 B站登录。", "pending");
+      return;
+    }
+
+    setLoginStatus("这个平台需要手动授权，完成后点「我已登录，检查」。", "pending");
+    $("check-login").hidden = false;
+    $("done-cmd").textContent = "vk account reauth " + accountId;
+  }
+
+  $("check-login").addEventListener("click", () => checkLogin(false));
+  $("open-login").addEventListener("click", async () => {
+    if(!loginAccountId) return;
+    setLoginStatus("正在打开登录窗口…", "pending");
+    try{
+      await VK.request("/api/accounts/" + encodeURIComponent(loginAccountId) + "/login/open", {
+        method: "POST",
+        body: { accountId: loginAccountId },
+      });
+      setLoginStatus("登录窗口已打开，请完成登录。", "pending");
+      startPoll();
+    }catch(err){
+      setLoginStatus("打不开登录窗口：" + err.message, "warn");
+    }
+  });
+
 
   function renderPlatforms(){
     const grid = $("platform-grid");
@@ -227,16 +377,14 @@
     button.textContent = "正在登记…";
     try{
       const result = await VK.addAccount({ platform: chosen, name });
-      const column = columnOf(chosen);
-      $("done-text").textContent = "已登记 " + group.name + " · " + column.label + " · " + name + "。";
-      $("done-cmd").textContent = "vk account reauth " + result.id;
-      $("done-hint").textContent = adapters.has(chosen)
-        ? "授权还没完成：回到账号页点「重新登录」，按提示在这台电脑上完成。"
-        : "这个平台还没有适配器：账号已登记，授权与发布要等 packages/adapter-" + chosen + " 装好。";
+      const platform = chosen;
+      const column = columnOf(platform);
+      $("done-text").textContent = group.name + " · " + column.label + " · " + name + " 已登记。";
       $("back-account").href = "/accounts";
       $("next-platform").href = "/accounts/add";
       chosen = null;
       setStep(3);
+      await guideLogin({ accountId: result.id, platform, label: column.label });
     }catch(err){
       warn.hidden = false;
       warn.textContent = err.message + "（换号要先在账号页移除旧账号）";
