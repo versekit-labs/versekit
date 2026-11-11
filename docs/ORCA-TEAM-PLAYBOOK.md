@@ -211,13 +211,13 @@ automation（每 10 分钟）拉起协调器，跑 bin/cycle.sh
 
 ---
 
-## 8. 本仓库的现状（2026-11-09 实测）
+## 8. 本仓库的现状（2026-11-09 实测，11-10 晚复核）
 
 | 设计 | 实际 |
 |---|---|
-| 文档说 3 个 automation：engineer-claim / acceptance-claim / agentctl-tick | **只有 1 个 `coordinator`**（id `d43265fa`，`*/10 * * * *`，`reuseSession:false`，provider claude），prompt 里跑 `bin/cycle.sh`，由脚本内部做三段 |
+| 文档说 3 个 automation：engineer-claim / acceptance-claim / agentctl-tick | **只有 1 个 `coordinator`**（id `d43265fa`，`*/10 * * * *`，`reuseSession:false`，provider dsh；当前状态 **disabled**），prompt 里跑 `bin/cycle.sh`，由脚本内部做三段 |
 | 派工：claim 原子锁 | `bin/agentctl.mjs`：`DELETE s:ready`，404 = 被抢；再 `POST s:doing` |
-| 验收也抢单 | **不抢**，只取队列第一个；同一 PR 会被重复派（实测 3 个相同的 `验收 PR #15` 任务） |
+| 验收也抢单 | **不抢，但有去重锁**：`cycle.sh` 用 `mkdir` 原子锁 `accept-<issue>.lock`（TTL 45 分钟），同 issue 同时只派一个验收；不是按 head_sha 去重（见 §9.1） |
 | 协调器消费消息 | 没有 `check --wait` / `ack`；`worker_done` 的 `read=0` 堆在库里，靠人看 |
 | 决策门 | `gate-list` = 0；唯一的 `question` 停在库里（`question_threads` = 1） |
 | 终端回收 | `retained=10`，`reclaimable=1`，从不 `worker-release` |
@@ -228,13 +228,16 @@ automation（每 10 分钟）拉起协调器，跑 bin/cycle.sh
 
 ---
 
-## 9. 已知坑（都是实测）
+## 9. 已知坑（都是实测，11-10 晚复核了修复状态）
 
-1. **验收重复派工**：`dispatch_acceptance` 不检查“这个 PR 是否已有在跑的验收”，每 10 分钟可能再起一个。修法：用一个 `s:review` 的认领动作或查 `worker-list` 里同 PR 的活跃 dispatch。
-2. **每 10 分钟一个新 session**：automation 的 `reuseSession:false`。这是 6 个/小时的稳定开销，也是昨晚 session 数暴涨的来源之一。
+1. **验收重复派工（已修，但锁有边界）**：`dispatch_acceptance` 原先每 10 分钟可能再起一个。
+   11-10 的 `cycle.sh` 已加 `mkdir` 原子锁（`~/.orca/versekit-locks/accept-<issue>.lock`，TTL 45 分钟）。
+   两个边界要知道：锁按 **issue 号**、不按 `head_sha`，所以 FAIL 打回后同一 issue 在 45 分钟内再派会被跳过；
+   锁在派工成功后**不删除**，靠 TTL 过期。打回后想立刻复验，先 `rm -rf` 对应锁。
+2. **每 10 分钟一个新 session**：automation 的 `reuseSession:false`。这是 6 个/小时的稳定开销，也是昨晚 session 数暴涨的来源之一。当前 `coordinator` 已 disabled，重开时优先考虑复用 session。
 3. **retained 终端不释放**：结算后没有 release，资源记账一直是 `retained`。协调器结束前必须清 `reclaimable`。
-4. **静默失败**：`worker-start` 卡在 `starting` 没有巡检，11 小时没人知道。修法：每轮用 `worker-list` 看 `attention`，超过阈值发 escalation。
-5. **worker-up 的 18s + Esc 是 hack**：绕过 dsh 引导页，慢且脆；一旦 TUI 启动变慢就派工失败。修法是 `worker-start --agent dsh` 前把 profile 初始化好，或改用 `--spec` 原生路径。
+4. **静默失败（部分已修）**：`worker-start` 曾卡在 `starting` 11 小时没人知道。现在 `worker-up` 用 `orca terminal wait --for tui-idle` 有超时，失败会清终端、把 issue 退回 `s:ready`（117c199）；但**派发之后的巡检仍缺**——没有周期性 `worker-list` 看 `attention`，长跑 dispatch 依旧可能静默。
+5. **Esc 跳 landing 仍是 hack（已不那么脆）**：不再固定等 18 秒，改成 `tui-idle` 等待（默认 60 秒就绪 + 15 秒 settle）。但 Esc 本身仍是绕过 dsh 启动页的 hack，TUI 交互一变就会破；根治是让 `worker-start --agent` 指向已初始化 profile，或走原生 `--spec` 路径。
 6. **协调器不看信箱**：`worker_done` 不消费，等于“干完了但没人记账”。必须先修好 check/ack，再谈自动合并。
 
 ---
@@ -305,8 +308,9 @@ automation（每 10 分钟）拉起协调器，跑 bin/cycle.sh
 3. **卡住时**：看 `s:blocked` 的原因或 decision gate，做决定；冻结用 `hold:human`，不要手改 `s:*`。
 4. **合并前**：看 PR body 的证据包 + 五门禁。PASS 但 CI 红，照样不能合。合并后确认 `Closes #N` 生效、milestone 计数更新。
 
-### 这次暴露的待修项
+### 这次暴露的待修项（11-10 晚复核后更新）
 
-- 验收侧不抢单，同一 PR 可能被重复派（昨天留下 3 个重复验收任务）
-- `coordinator` automation 已停用，provider 已改成 dsh；重开前应先修重复派工，并考虑 `--reuse-session`
+- ~~验收侧不抢单，同一 PR 可能被重复派~~ → 已加 `accept-<issue>.lock`（TTL 45 分钟）；待改进：锁按 issue 而非 `head_sha`，打回后 45 分钟内复验会被跳过
+- `coordinator` automation 当前 **disabled**，provider 已改成 dsh；重开前先定 `reuseSession` 策略
 - CI 的 test job 修复已进主干；`v0.1` 只剩 #35 的真机验收（需要人操作真实账号）
+- 晚复核已合并：#42（#24 应用外壳，验收 PASS），以及本手册
