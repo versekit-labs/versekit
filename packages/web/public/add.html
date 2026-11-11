@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>添加账号 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.flow{max-width:720px}
+.locked{display:flex;align-items:center;gap:10px;padding:10px 13px;border:1px solid var(--line);border-radius:6px;background:var(--paper-subtle);font-size:12px;color:var(--muted);flex-wrap:wrap}
+.locked b{color:var(--ink);font-weight:600}
+.step{margin-top:14px}
+.step[hidden]{display:none}
+.step-title{font-size:14px;font-weight:650}
+.step-hint{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.5}
+.auth-steps{margin:12px 0 0;padding-left:18px;font-size:13px;line-height:1.7;color:var(--muted)}
+.auth-steps li::marker{color:var(--faint);font-family:var(--mono);font-size:12px}
+.done-box{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:20px;border:1px solid var(--green-line);border-radius:8px;background:var(--green-bg)}
+.done-box h2{font-size:18px;font-weight:650;color:var(--green)}
+.done-box p{color:var(--muted);font-size:13px;line-height:1.6}
+.nav .nav-pending{display:flex;align-items:center;min-height:42px;padding:0 12px;border-radius:6px;color:var(--nav-muted);font-size:14px;opacity:.6;cursor:default}
+@media (max-width:900px){
+  .form-actions .btn{flex:1;min-height:40px}
+  .nav .nav-pending{min-height:40px;padding:0}
+}
+</style>
+</head>
+<body data-page="add">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/accounts">versekit <span>/ vk</span></a>
+    <a class="publish" href="/#publish"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="/accounts" aria-current="page">账号</a>
+      <a href="/#publish">发布</a>
+      <span class="nav-pending" aria-disabled="true" title="发布计划页在 #26–#30 工单中">计划</span>
+      <a href="/#overview">总览</a>
+      <a href="/#tasks">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <div class="crumb"><a href="/accounts">账号</a> / <span id="crumb-now">添加账号</span></div>
+    <header class="pagehead">
+      <div>
+        <h1 id="page-title">添加账号</h1>
+        <p class="sub" id="page-sub">为当前账号组接入一个平台账号</p>
+      </div>
+    </header>
+
+    <div class="flow">
+      <p class="locked">账号组：<b id="group-name">—</b><span>·</span><span>一个平台只能挂一个账号；要换号，先移除旧的。</span></p>
+
+      <div class="flow-steps" id="steps">
+        <b id="s1">1 选平台</b><i>›</i><span id="s2">2 登记</span><i>›</i><span id="s3">3 完成</span>
+      </div>
+
+      <section class="panel step" id="step-platform">
+        <div class="panel-head"><h2>选择平台</h2><span class="hint" id="platform-hint"></span></div>
+        <div class="panel-body">
+          <p class="step-hint">已接入的平台灰掉了；想换号要先在账号页移除。</p>
+          <div class="choice-grid" id="platform-grid"></div>
+        </div>
+      </section>
+
+      <section class="panel step" id="step-auth" hidden>
+        <div class="panel-head"><h2 id="auth-title">登记账号</h2><span class="hint" id="auth-hint"></span></div>
+        <div class="panel-body">
+          <p class="step-hint" id="auth-desc"></p>
+          <ol class="auth-steps" id="auth-steps"></ol>
+          <div class="field" style="margin-top:14px">
+            <label class="field-label" for="handle">账号名（用于区分同一平台的账号）</label>
+            <input class="input" id="handle" placeholder="例如：@AI工具研究所" autocomplete="off" maxlength="200">
+            <p class="hint" id="handle-hint">登记后，这个名称会显示在账号页和发布台。</p>
+          </div>
+          <p class="notice warn" id="auth-warn" role="alert" style="margin-top:12px" hidden></p>
+          <div class="form-actions">
+            <a class="btn" href="/accounts" id="cancel-auth">取消</a>
+            <button class="btn primary" id="finish" type="button">完成接入</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="step" id="step-done" hidden>
+        <div class="done-box">
+          <h2>已接入</h2>
+          <p id="done-text"></p>
+          <div class="cmd" style="width:100%"><b>等价命令</b><code id="done-cmd"></code></div>
+          <p class="hint" id="done-hint"></p>
+          <div class="form-actions" style="justify-content:flex-start;margin-top:4px">
+            <a class="btn primary" id="back-account" href="/accounts">回到账号页</a>
+            <a class="btn" id="next-platform" href="/accounts/add">再添加一个平台</a>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="pagefoot">
+      <span>账号只登记在本机；授权与凭证不会上传到 versekit 服务器。</span>
+      <a href="/#tasks">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="/api.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const params = new URLSearchParams(location.search);
+  const preset = params.get("platform");
+
+  let group = null;
+  let chosen = null;
+  let adapters = new Set();
+
+  function columnOf(platform){
+    return VK.platforms().find((column) => column.platform === platform) ?? null;
+  }
+
+  function occupantOf(column){
+    return VK.accounts().find((account) => VK.platformOf(account)?.platform === column.platform) ?? null;
+  }
+
+  function setStep(step){
+    $("step-platform").hidden = step !== 1;
+    $("step-auth").hidden = step !== 2;
+    $("step-done").hidden = step !== 3;
+    $("s1").style.color = step >= 1 ? "var(--navy)" : "";
+    $("s2").style.color = step >= 2 ? "var(--navy)" : "";
+    $("s3").style.color = step >= 3 ? "var(--navy)" : "";
+  }
+
+  function renderPlatforms(){
+    const grid = $("platform-grid");
+    grid.innerHTML = "";
+    const columns = VK.platforms();
+
+    columns.forEach((column) => {
+      const occupant = occupantOf(column);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "choice" + (chosen === column.platform ? " selected" : "");
+      button.disabled = Boolean(occupant);
+      if(occupant){
+        button.setAttribute("aria-label", column.label + " 已被 " + occupant.handle + " 占用，要换号先在账号页移除");
+        button.title = "已被 " + occupant.handle + " 占用；要换号先在账号页移除";
+      } else {
+        button.setAttribute("aria-label", column.label + " · " + column.auth);
+      }
+      button.innerHTML =
+        '<svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
+        '<span><span class="choice-title"></span><span class="choice-sub"></span></span>';
+      button.querySelector(".choice-title").textContent = column.label;
+      button.querySelector(".choice-sub").textContent = occupant ? "已接入 " + occupant.handle : column.auth;
+      if(!occupant){
+        button.addEventListener("click", () => {
+          chosen = column.platform;
+          renderPlatforms();
+          goRegister();
+        });
+      }
+      grid.appendChild(button);
+    });
+
+    const available = columns.filter((column) => !occupantOf(column)).length;
+    $("platform-hint").textContent = columns.length === 0
+      ? "读不到平台槽位"
+      : available ? available + " 个平台还可添加" : "五个平台都已接入";
+  }
+
+  function goRegister(){
+    if(!chosen) return;
+    const column = columnOf(chosen);
+    if(!column) return;
+
+    $("auth-hint").textContent = column.label;
+    $("auth-desc").textContent = "把账号登记进「" + group.name + "」。授权不在这一页伪造：登记完成后，账号页会给出这条账号的等价命令。";
+    const steps = [
+      "填写账号名并点「完成接入」，账号进入当前组",
+      adapters.has(column.platform)
+        ? "回到账号页，点这个账号的「重新登录」，在这台电脑上完成" + column.auth
+        : "这个平台还没有安装适配器（packages/adapter-" + column.platform + "）：账号可以先登记，授权与发布等适配器装好",
+      "完成后，账号页的登录状态与最近采集会跟着更新"
+    ];
+    const list = $("auth-steps");
+    list.innerHTML = "";
+    steps.forEach((text) => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      list.appendChild(item);
+    });
+
+    const handle = $("handle");
+    handle.value = "";
+    handle.placeholder = "例如：@AI工具研究所";
+    $("handle-hint").textContent = "登记后，这个名称会显示在账号页和发布台。";
+    $("auth-warn").hidden = true;
+    $("cancel-auth").href = "/accounts";
+    setStep(2);
+    handle.focus();
+  }
+
+  async function finish(){
+    const button = $("finish");
+    const input = $("handle");
+    const warn = $("auth-warn");
+    if(!chosen){ setStep(1); return; }
+    const name = input.value.trim();
+    if(!name){
+      warn.hidden = false;
+      warn.textContent = "请填写账号名：同一平台可以用它区分不同账号";
+      input.focus();
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "正在登记…";
+    try{
+      const result = await VK.addAccount({ platform: chosen, name });
+      const column = columnOf(chosen);
+      $("done-text").textContent = "已登记 " + group.name + " · " + column.label + " · " + name + "。";
+      $("done-cmd").textContent = "vk account reauth " + result.id;
+      $("done-hint").textContent = adapters.has(chosen)
+        ? "授权还没完成：回到账号页点「重新登录」，按提示在这台电脑上完成。"
+        : "这个平台还没有适配器：账号已登记，授权与发布要等 packages/adapter-" + chosen + " 装好。";
+      $("back-account").href = "/accounts";
+      $("next-platform").href = "/accounts/add";
+      chosen = null;
+      setStep(3);
+    }catch(err){
+      warn.hidden = false;
+      warn.textContent = err.message + "（换号要先在账号页移除旧账号）";
+      renderPlatforms();
+      input.focus();
+    }finally{
+      button.disabled = false;
+      button.textContent = "完成接入";
+    }
+  }
+
+  $("finish").addEventListener("click", finish);
+  $("handle").addEventListener("keydown", (event) => {
+    if(event.key === "Enter"){ event.preventDefault(); finish(); }
+  });
+
+  VK.ready()
+    .then(async () => {
+      group = VK.current();
+      if(!group){ location.replace("/groups.html"); return; }
+      $("group-name").textContent = group.name;
+
+      try{
+        const data = await VK.request("/api/platforms");
+        adapters = new Set((data.platforms ?? []).map((platform) => platform.platform));
+      }catch{
+        adapters = new Set();
+      }
+
+      renderPlatforms();
+      const column = preset ? columnOf(preset) : null;
+      if(column && !occupantOf(column)){
+        chosen = column.platform;
+        renderPlatforms();
+        goRegister();
+      } else {
+        setStep(1);
+      }
+    })
+    .catch((err) => {
+      $("steps").hidden = true;
+      $("step-platform").hidden = false;
+      const grid = $("platform-grid");
+      grid.innerHTML = "";
+      const notice = document.createElement("p");
+      notice.className = "notice bad";
+      notice.textContent = "读不到账号组：" + err.message + "（守护进程在跑吗？终端执行 vk serve）";
+      grid.appendChild(notice);
+    });
+})();
+</script>
+</body>
+</html>
