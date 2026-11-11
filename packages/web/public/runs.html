@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>任务与日志 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0}
+.filters .grow{flex:1}
+.runs{display:flex;flex-direction:column}
+.run{border-bottom:1px solid var(--line-soft)}
+.run:last-child{border-bottom:0}
+.run-head{display:grid;grid-template-columns:minmax(0,1fr) 90px 78px 96px;gap:10px;align-items:center;padding:11px 16px;cursor:pointer}
+.run-head:hover{background:var(--paper)}
+.run-title{display:flex;align-items:center;gap:8px;min-width:0}
+.run-id{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.run-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run-state{font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.run-attempts{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+.run-time{font-family:var(--mono);font-size:12px;color:var(--faint);text-align:right}
+.run-body{padding:0 16px 14px;font-size:13px;color:var(--muted);line-height:1.7}
+.run-body code{font-family:var(--mono);font-size:12px;background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+.scene{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 12px;margin-top:6px}
+.scene dt{color:var(--faint);font-size:12px}
+.scene dd{margin:0;color:var(--ink);word-break:break-word}
+.actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--line)}
+.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}.dot.warn{background:var(--amber)}
+@media (max-width:900px){
+  .run-head{grid-template-columns:minmax(0,1fr) 70px}
+  .run-time{display:none}
+  .scene{grid-template-columns:92px minmax(0,1fr)}
+}
+</style>
+</head>
+<body data-page="runs">
+<a class="skip" href="#main">跳到主内容</a>
+
+<div class="shell">
+  <aside class="sidebar"></aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span>账号组 · <b id="group-label">—</b></span></div>
+        <h1>任务与日志</h1>
+        <p class="sub" id="sub">正在加载…</p>
+      </div>
+      <button class="btn" id="refresh" type="button">刷新</button>
+    </header>
+
+    <div class="filters">
+      <div class="tabs" role="group" aria-label="筛选">
+        <input type="radio" name="f" id="f-all" checked><label for="f-all">全部</label>
+        <input type="radio" name="f" id="f-fail"><label for="f-fail">失败</label>
+        <input type="radio" name="f" id="f-run"><label for="f-run">排队中</label>
+      </div>
+      <span class="grow"></span>
+      <span class="count" id="count"></span>
+    </div>
+
+    <section class="panel" aria-label="任务列表">
+      <div class="runs" id="runs"></div>
+    </section>
+
+    <footer class="pagefoot">
+      <span>失败条目会保留错误码与平台原文；重试有上限，到顶必须人来处理。</span>
+      <a href="/publish">去发布 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  let rows = [];
+  let filter = "all";
+
+  const STATE = {
+    queued: ["排队中", "warn"], running: ["进行中", "warn"], done: ["完成", "ok"],
+    failed: ["失败", "bad"], canceled: ["已取消", ""], needs_human: ["需要人处理", "bad"],
+  };
+  const KIND = { publish: "发布", collect: "采集", check: "体检" };
+
+  function fmt(ts){ if(!ts) return "—"; const d = new Date(Number(ts)); const p = (n)=>String(n).padStart(2,"0"); return p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
+
+  function render(){
+    const group = VK.current();
+    if(!group) { location.replace("/groups.html"); return; }
+    $("group-label").textContent = group.name;
+
+    const list = rows.filter(r => filter === "all" ? true : filter === "fail" ? r.state === "failed" : (r.state === "queued" || r.state === "running"));
+    $("count").textContent = list.length + " 条";
+    const box = $("runs");
+    if(!list.length){
+      box.innerHTML = '<p style="padding:18px 16px;color:var(--muted);font-size:13px">' + (filter === "fail" ? "没有失败的任务。" : "还没有任务。发一条试试 → /publish") + '</p>';
+      return;
+    }
+    box.innerHTML = list.map((r, i) => {
+      const [label, level] = STATE[r.state] ?? [r.state, ""];
+      const max = r.maxAttempts ?? r.max_attempts ?? 3;
+      return '<div class="run" data-i="'+i+'">' +
+        '<div class="run-head" role="button" tabindex="0">' +
+          '<span class="run-title"><span class="dot '+(level||'')+'"></span>' +
+            '<span class="run-name">'+(KIND[r.kind] ?? r.kind)+' · '+(r.target_id ?? "")+'</span>' +
+            '<span class="run-id">'+r.id+'</span></span>' +
+          '<span class="run-state">'+label+'</span>' +
+          '<span class="run-attempts">'+r.attempts+' / '+max+'</span>' +
+          '<span class="run-time">'+fmt(r.created_at)+'</span>' +
+        '</div>' +
+        '<div class="run-body" hidden>' +
+          '<dl class="scene">' +
+            '<dt>任务号</dt><dd><code>'+r.id+'</code></dd>' +
+            '<dt>目标</dt><dd>'+r.target_type+' · <code>'+(r.target_id ?? "—")+'</code></dd>' +
+            '<dt>尝试次数</dt><dd>'+r.attempts+' / '+max+(r.attempts >= max ? "（到上限，不再自动重试，需要人处理）" : "")+'</dd>' +
+            '<dt>错误</dt><dd>'+(r.last_error ? '<code>'+String(r.last_error.code ?? "error")+'</code> '+String(r.last_error.message ?? "") : "—")+'</dd>' +
+            '<dt>下次尝试</dt><dd>'+fmt(r.run_after)+'</dd>' +
+          '</dl>' +
+          (r.kind === "publish" && r.state === "failed"
+            ? '<div class="actions"><button class="btn" type="button" data-retry="'+r.target_id+'">重试这条发布</button>' +
+              (r.attempts >= max ? '<span style="color:var(--amber);font-size:12px">已到重试上限，先看看错误原因</span>' : '') + '</div>'
+            : '') +
+        '</div></div>';
+    }).join("");
+
+    box.querySelectorAll('.run-head').forEach(head => {
+      const toggle = () => {
+        const body = head.nextElementSibling;
+        body.hidden = !body.hidden;
+      };
+      head.addEventListener("click", toggle);
+      head.addEventListener("keydown", (e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(); } });
+    });
+    box.querySelectorAll('[data-retry]').forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        btn.disabled = true; btn.textContent = "正在重试…";
+        try{
+          await VK.request("/api/publishes/" + encodeURIComponent(btn.dataset.retry) + "/retry", { method: "POST", body: { publishId: btn.dataset.retry } });
+          await load();
+        }catch(err){
+          btn.disabled = false; btn.textContent = "重试这条发布";
+          alert("重试失败：" + err.message);
+        }
+      });
+    });
+  }
+
+  async function load(){
+    const data = await VK.request("/api/runs?limit=200");
+    rows = data.rows ?? [];
+    render();
+  }
+
+  document.querySelectorAll('.tabs input').forEach(r => r.addEventListener("change", () => { filter = r.id.replace("f-",""); render(); }));
+  $("refresh").addEventListener("click", load);
+
+  VK.ready().then(load).catch(err => { $("sub").textContent = "读不到任务：" + err.message; });
+})();
+</script>
+</body>
+</html>

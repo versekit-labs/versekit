@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>发布 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.cols{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+.pad{padding:14px 16px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.acct-list{display:flex;flex-direction:column}
+.acct{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line-soft);cursor:pointer}
+.acct:last-child{border-bottom:0}
+.acct.off{opacity:.55;cursor:not-allowed}
+.acct input{margin:0;width:32px;height:32px;accent-color:var(--navy)}
+.acct-who{display:flex;align-items:center;gap:8px;min-width:0}
+.acct-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct-meta{color:var(--faint);font-size:12px}
+.plogo{width:20px;height:20px;border-radius:5px;flex:none}
+.preview-list{margin:0;padding:0 0 0 18px;color:var(--muted);font-size:13px;line-height:1.9}
+.preview-list b{color:var(--ink);font-weight:600}
+.actionbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:1px solid var(--line);background:var(--paper)}
+.actionbar .grow{flex:1}
+.count{color:var(--muted);font-size:12px}
+.file{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.file-name{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all}
+.warn-note{color:var(--amber);font-size:12px;line-height:1.6;margin:8px 16px 0}
+.ok-note{color:var(--green);font-size:12px;line-height:1.6;margin:8px 16px 0}
+@media (max-width:900px){
+  .cols{grid-template-columns:minmax(0,1fr)}
+  .row2{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body data-page="publish">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar"></aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span>账号组 · <b id="group-label">—</b></span></div>
+        <h1>发布</h1>
+        <p class="sub" id="sub">选一条素材，勾平台，先预演再发。</p>
+      </div>
+      <a class="btn" href="/plan">看看排期 →</a>
+    </header>
+
+    <div class="cols">
+      <div class="stack">
+        <section class="panel" aria-label="素材与文案">
+          <div class="panel-head"><h2>素材</h2><span class="hint">本机文件，上传后只在本地</span></div>
+          <div class="pad">
+            <div class="file">
+              <input class="input" id="asset" type="file" accept="video/*,image/*" aria-label="选择素材文件">
+              <span class="file-name" id="asset-name">还没有选择文件</span>
+            </div>
+            <p class="field-label" style="margin-top:12px">标题</p>
+            <input class="input" id="title" placeholder="留空则用文件名">
+            <p class="field-label" style="margin-top:12px">正文 / 简介</p>
+            <textarea class="textarea" id="body" rows="3" placeholder="留空则不带正文"></textarea>
+            <p class="field-label" style="margin-top:12px">标签</p>
+            <input class="input" id="tags" placeholder="用逗号或空格分开，例如：AI工具 效率">
+          </div>
+        </section>
+
+        <section class="panel" aria-label="目标账号">
+          <div class="panel-head"><h2>发到哪些账号</h2><span class="hint">只列当前账号组</span></div>
+          <div class="acct-list" id="accounts"></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel" aria-label="发布设置">
+          <div class="panel-head"><h2>发布设置</h2><span class="hint">默认立即发</span></div>
+          <div class="pad">
+            <div class="row2">
+              <div>
+                <p class="field-label">定时（可选）</p>
+                <input class="input" id="sched" type="datetime-local">
+              </div>
+              <div>
+                <p class="field-label">可见性</p>
+                <select class="select" id="visibility">
+                  <option value="public">公开</option>
+                  <option value="private">仅自己可见</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="pad" style="border-top:1px solid var(--line)">
+            <div class="panel-head" style="padding:0 0 8px"><h2 style="font-size:14px">预演结果</h2><span class="hint">不会真的发布</span></div>
+            <ol class="preview-list" id="preview"><li>还没预演。点「预演」看将要发生什么。</li></ol>
+            <p class="warn-note" id="preview-warn" hidden></p>
+          </div>
+          <div class="actionbar">
+            <span class="count" id="action-count">—</span>
+            <span class="grow"></span>
+            <button class="btn" id="dry" type="button">预演</button>
+            <button class="btn primary" id="go" type="button" disabled>发布</button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="等价命令">
+          <div class="panel-head"><h2>等价命令</h2><span class="hint">Web 只调用同一条命令</span></div>
+          <div class="pad"><div class="cmd"><code id="cmd-line">vk publish &lt;素材&gt; --to &lt;平台&gt;</code></div></div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="pagefoot">
+      <span>发布结果逐平台回报；失败会留 error_code 与原因。</span>
+      <a href="/runs">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  let selected = new Set();
+  let assetPath = null;
+  let assetName = "";
+  let dryResult = null;
+
+  const levelOf = (a) => (a.state === "expired" || a.state === "banned") ? "bad" : a.state === "expiring" ? "warn" : "ok";
+
+  function render(){
+    const group = VK.current();
+    if(!group) { location.replace("/groups.html"); return; }
+    $("group-label").textContent = group.name;
+
+    const accounts = VK.accounts();
+    const box = $("accounts");
+    if(!accounts.length){
+      box.innerHTML = '<p class="pad" style="color:var(--muted);font-size:13px">当前账号组还没有接入账号。<a href="/accounts/add">去添加一个 →</a></p>';
+      return;
+    }
+    box.innerHTML = accounts.map(a => {
+      const info = VK.platformOf(a);
+      const level = levelOf(a);
+      const disabled = level === "bad";
+      const reason = disabled ? "登录已失效，先重新登录" : a.is_manual ? "仅手动发布" : "自动发布";
+      return '<label class="acct'+(disabled?' off':'')+'">' +
+        '<input type="checkbox" data-id="'+a.id+'" '+(disabled?'disabled':'')+' '+(selected.has(a.id)?'checked':'')+'>' +
+        '<span class="acct-who"><svg class="plogo" aria-hidden="true"><use href="#'+(info?.logo ?? 'pl-generic')+'"/></svg>' +
+        '<span class="acct-name">'+(info?.name ?? a.platform)+' · '+(a.display_name || a.handle || a.id)+'</span></span>' +
+        '<span class="acct-meta">'+reason+'</span></label>';
+    }).join("");
+    box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener("change", () => {
+        if(cb.checked) selected.add(cb.dataset.id); else selected.delete(cb.dataset.id);
+        dryResult = null; updateCount();
+      });
+    });
+    updateCount();
+  }
+
+  function platformsOfSelected(){
+    const out = [];
+    for(const id of selected){
+      const acc = VK.account(id);
+      const info = acc ? VK.platformOf(acc) : null;
+      if(info) out.push(info.platform);
+    }
+    return [...new Set(out)];
+  }
+
+  function updateCount(){
+    const n = selected.size;
+    $("action-count").textContent = n ? ("将发布到 " + n + " 个账号") : "还没选账号";
+    $("go").disabled = !(n && assetPath);
+    const plats = platformsOfSelected();
+    $("cmd-line").textContent = "vk publish " + (assetName || "<素材>") + " --to " + (plats.join(",") || "<平台>") +
+      ($("sched").value ? (" --schedule " + $("sched").value) : "");
+  }
+
+  $("asset").addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if(!file) return;
+    assetName = file.name;
+    $("asset-name").textContent = "正在上传 " + file.name + " …";
+    try{
+      const res = await fetch("/api/assets", {
+        method: "POST",
+        headers: { "x-vk-filename": encodeURIComponent(file.name) },
+        body: file,
+      });
+      const data = await res.json();
+      if(!res.ok || data.ok === false) throw new Error(data.error?.message ?? ("HTTP " + res.status));
+      assetPath = data.path;
+      $("asset-name").textContent = file.name + " · 已就绪";
+    }catch(err){
+      assetPath = null;
+      $("asset-name").textContent = "上传失败：" + err.message;
+    }
+    dryResult = null; updateCount();
+  });
+
+  function payload(dryRun){
+    const tags = $("tags").value.split(/[,，\s]+/).filter(Boolean);
+    const schedText = $("sched").value;
+    const schedule = schedText ? VK.fromLocalStamp(schedText) : null;
+    return {
+      asset: assetPath,
+      to: platformsOfSelected(),
+      group: VK.currentId(),
+      dryRun,
+      visibility: $("visibility").value,
+      ...( $("title").value.trim() ? { title: $("title").value.trim() } : {} ),
+      ...( $("body").value.trim() ? { body: $("body").value.trim() } : {} ),
+      ...( tags.length ? { tags } : {} ),
+      ...( schedule ? { schedule } : {} ),
+    };
+  }
+
+  async function run(dryRun){
+    if(!assetPath){ $("preview").innerHTML = '<li>先选一个素材文件。</li>'; return; }
+    if(!selected.size){ $("preview").innerHTML = '<li>至少勾一个账号。</li>'; return; }
+    const btn = dryRun ? $("dry") : $("go");
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = dryRun ? "正在预演…" : "正在发布…";
+    $("preview-warn").hidden = true;
+    try{
+      const data = await VK.request("/api/publishes", { method: "POST", body: payload(dryRun) });
+      renderResult(data, dryRun);
+    }catch(err){
+      $("preview").innerHTML = '<li><b>失败：</b>' + String(err.message) + '</li>';
+    }finally{
+      btn.disabled = false; btn.textContent = label;
+      updateCount();
+    }
+  }
+
+  function renderResult(data, dryRun){
+    const rows = data.publishes ?? data.rows ?? [];
+    const notes = [];
+    if(data.missing?.length) notes.push("缺账号：没有接入 " + data.missing.join("、"));
+    if(data.unusable?.length) notes.push("不可用账号：登录失效，需要重新登录");
+    const list = rows.map(r => {
+      const info = VK.platformMap()[r.platform] ?? { name: r.platform };
+      const when = r.scheduled_at ? " · 定时 " + VK.toLocalStamp(r.scheduled_at) : " · 立即";
+      return '<li><b>' + info.name + '</b> · ' + (r.handle || r.accountId || "") + when + (r.state ? " · 状态 " + r.state : "") + '</li>';
+    });
+    $("preview").innerHTML = list.length ? list.join("") : '<li>' + (dryRun ? "预演没有可发目标。" : "没有生成发布。") + '</li>';
+    if(notes.length){ $("preview-warn").hidden = false; $("preview-warn").textContent = notes.join(" · "); }
+    if(!dryRun){
+      const workId = data.workId ?? data.work?.id;
+      if(workId) $("preview").innerHTML += '<li>作品已创建：<b>' + workId + '</b> · <a href="/works">去作品页看 →</a></li>';
+    }
+    dryResult = data;
+  }
+
+  $("dry").addEventListener("click", () => run(true));
+  $("go").addEventListener("click", () => run(false));
+  $("sched").addEventListener("change", updateCount);
+  $("visibility").addEventListener("change", updateCount);
+
+  VK.ready().then(render).catch(err => { $("sub").textContent = "读不到账号：" + err.message; });
+})();
+</script>
+</body>
+</html>

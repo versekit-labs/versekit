@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>总览 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.rangebar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 14px}
+.rangebar .grow{flex:1}
+.rangebar .note{color:var(--faint);font-size:12px}
+
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.stat{display:flex;flex-direction:column;gap:4px;padding:13px 15px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.stat-k{color:var(--faint);font-size:12px;display:flex;align-items:center;gap:6px}
+.stat-k .q{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--line);color:var(--faint);font-size:10px;cursor:help}
+.stat-v{font-family:var(--mono);font-size:25px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.15}
+.stat-d{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.stat-d .up{color:var(--green)}
+.stat-d .down{color:var(--red)}
+
+.grid2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+.bars{display:flex;align-items:flex-end;gap:6px;height:150px;margin-top:14px;padding-top:8px;border-bottom:1px solid var(--line)}
+.barcol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:6px;min-width:0;height:100%}
+.bar{width:100%;max-width:34px;border-radius:4px 4px 0 0;background:var(--navy);min-height:2px}
+.bar.zero{background:var(--line)}
+.bar.fail{background:var(--red)}
+.baxis{display:flex;gap:6px;margin-top:6px}
+.baxis span{flex:1;text-align:center;color:var(--faint);font-size:12px;font-family:var(--mono)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:10px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:4px;display:inline-block;background:var(--navy)}
+.legend i.red{background:var(--red)}.legend i.grey{background:var(--line)}
+
+.split{display:flex;flex-direction:column}
+.sp{display:grid;grid-template-columns:minmax(0,1fr) 92px 76px 96px;gap:10px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line-soft)}
+.sp:last-child{border-bottom:0}
+.sp.sp-head{color:var(--faint);font-size:12px;padding-top:8px;padding-bottom:8px}
+.sp-who{display:flex;align-items:center;gap:8px;min-width:0}
+.sp-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
+.track{display:block;height:6px;border-radius:3px;background:var(--line-soft);overflow:hidden}
+.track i{display:block;height:100%;background:var(--navy);border-radius:3px}
+.sp-state{display:flex;align-items:center;gap:6px;justify-content:flex-end;color:var(--muted);font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--line)}
+.dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}
+.empty{padding:22px 16px;color:var(--muted);font-size:13px;line-height:1.6}
+.empty b{color:var(--ink);font-weight:600}
+.groupbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.gchip{border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:var(--paper);font-size:12px;color:var(--muted)}
+.gchip b{color:var(--ink);font-weight:600}
+@media (max-width:900px){
+  .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+  .sp{grid-template-columns:minmax(0,1fr) 72px 64px}
+  .sp-state{display:none}
+}
+</style>
+</head>
+<body data-page="overview">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar"></aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span>账号组 · <b id="group-label">—</b></span></div>
+        <h1>总览</h1>
+        <p class="sub" id="sub">正在加载…</p>
+      </div>
+      <a class="btn primary" href="/publish">+ 发布内容</a>
+    </header>
+
+    <div class="rangebar">
+      <div class="tabs" role="group" aria-label="时间范围">
+        <input type="radio" name="range" id="r7" checked><label for="r7">7 天</label>
+        <input type="radio" name="range" id="r30"><label for="r30">30 天</label>
+        <input type="radio" name="range" id="r90"><label for="r90">90 天</label>
+      </div>
+      <span class="note" id="range-note">—</span>
+      <span class="grow"></span>
+      <a class="btn" href="/matrix">全部账号组 →</a>
+    </div>
+
+    <section class="summary" aria-label="关键数字">
+      <div class="stat">
+        <span class="stat-k">作品数 <span class="q" title="至少有一条平台发布的 work 去重计数；一个作品发三端仍然只算 1 个">?</span></span>
+        <span class="stat-v" id="s-works">—</span>
+        <span class="stat-d" id="s-works-d">当前账号组</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">平台发布数 <span class="q" title="publish 行数；同一作品每上一个平台账号算 1 条">?</span></span>
+        <span class="stat-v" id="s-publishes">—</span>
+        <span class="stat-d" id="s-publishes-d">已成功 —</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">时间范围内已发 <span class="q" title="按 publish 的发布时间统计，取当前账号组">?</span></span>
+        <span class="stat-v" id="s-range">—</span>
+        <span class="stat-d" id="s-range-d">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-k">数据新鲜度 <span class="q" title="1 小时内采集成功算新鲜；与账号页同一口径">?</span></span>
+        <span class="stat-v" id="s-fresh">—</span>
+        <span class="stat-d" id="s-fresh-d">—</span>
+      </div>
+    </section>
+
+    <div class="grid2">
+      <div class="stack">
+        <section class="panel" aria-label="每日发布">
+          <div class="panel-head"><h2>每日发布</h2><span class="hint">成功 / 失败</span></div>
+          <div class="panel-body">
+            <div class="bars" id="bars" role="img" aria-label="时间范围内每天发布的条数"></div>
+            <div class="baxis" id="baxis" aria-hidden="true"></div>
+            <div class="legend">
+              <span><i></i>成功发布</span>
+              <span><i class="red"></i>失败</span>
+              <span><i class="grey"></i>没有发布</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="按平台">
+          <div class="panel-head"><h2>按平台</h2><span class="hint">发布数 · 采集新鲜度</span></div>
+          <div class="split" id="platform-split"></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel" aria-label="账号组">
+          <div class="panel-head"><h2>账号组</h2><span class="hint">跨组只读</span></div>
+          <div class="panel-body">
+            <div class="groupbar" id="groupbar"></div>
+            <p class="empty" id="group-note" hidden></p>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="下一步">
+          <div class="panel-head"><h2>下一步</h2><span class="hint">按缺口做</span></div>
+          <div class="panel-body"><p class="empty" id="next-step">正在读取…</p></div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="pagefoot">
+      <span>数字口径与 <code>vk bootstrap --json</code> 一致；作品数与平台发布数分开统计。</span>
+      <a href="/runs">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const days = { "7": 7, "30": 30, "90": 90 };
+  let rangeKey = "7";
+  let publishes = [];
+
+  const fmtDay = (ms) => { const d = new Date(ms); return String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); };
+  const dayKey = (ms) => { const d = new Date(ms); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+
+  function render(){
+    const group = VK.current();
+    if(!group) { location.replace("/groups.html"); return; }
+    $("group-label").textContent = group.name;
+
+    const n = days[rangeKey];
+    const now = new Date(); now.setHours(23,59,59,999);
+    const start = now.getTime() - (n-1)*864e5;
+    const inRange = publishes.filter(p => {
+      const ts = p.published_at ?? p.created_at;
+      return ts && ts >= start && ts <= now.getTime();
+    });
+    const ok = inRange.filter(p => p.state === "published" || p.state === "published_limited").length;
+    const bad = inRange.filter(p => p.state === "failed" || p.state === "blocked").length;
+
+    $("range-note").textContent = fmtDay(start) + " 至 " + fmtDay(now.getTime()) + " · 共 " + n + " 天";
+
+    const counts = VK.counts();
+    $("s-works").textContent = counts.works;
+    $("s-publishes").textContent = counts.publishes;
+    $("s-publishes-d").textContent = "已成功 " + counts.publishedPublishes;
+    $("s-range").textContent = ok;
+    $("s-range-d").textContent = bad ? (bad + " 条失败") : (inRange.length ? "没有失败" : "还没有发布记录");
+
+    const fresh = VK.freshness();
+    $("s-fresh").textContent = (fresh.fresh ?? 0) + "/" + (fresh.total ?? 0);
+    $("s-fresh-d").textContent = fresh.failing ? (fresh.failing + " 个账号采集失败") : "1 小时内采集过";
+
+    // 每日柱状：成功与失败各一根；没有记录的那天给灰柱，别画成 0 成功。
+    const buckets = new Map();
+    for(let i=0;i<n;i++){
+      const ts = start + i*864e5;
+      buckets.set(dayKey(ts), { day: fmtDay(ts), ok: 0, bad: 0 });
+    }
+    for(const p of inRange){
+      const key = dayKey(p.published_at ?? p.created_at);
+      const b = buckets.get(key);
+      if(!b) continue;
+      if(p.state === "published" || p.state === "published_limited") b.ok += 1;
+      else if(p.state === "failed" || p.state === "blocked") b.bad += 1;
+    }
+    const list = [...buckets.values()];
+    const max = Math.max(1, ...list.map(b => Math.max(b.ok, b.bad)));
+    const show = list.length > 30 ? list.slice(-30) : list;
+    $("bars").innerHTML = show.map(b => {
+      const h = b.ok ? Math.round(b.ok/max*100) : 0;
+      const f = b.bad ? Math.round(b.bad/max*100) : 0;
+      return '<div class="barcol">' +
+        (f ? '<div class="bar fail" style="height:'+f+'%"></div>' : '') +
+        '<div class="bar'+(h? '' : ' zero')+'" style="height:'+(h||3)+'%"></div>' +
+        '<\/div>';
+    }).join("");
+    const axis = show.length <= 8 ? show : [show[0], show[Math.floor(show.length/2)], show[show.length-1]];
+    $("baxis").innerHTML = axis.map(b => '<span>'+b.day+'<\/span>').join("");
+
+    // 按平台：当前组每个平台的发布数与最近采集状态。
+    const accounts = VK.accounts();
+    const columns = VK.platformMap();
+    const rows = Object.entries(columns).filter(([key]) => !["bili","xhs"].includes(key));
+    const per = new Map();
+    for(const p of publishes){
+      const k = p.platform; if(!k) continue;
+      per.set(k, (per.get(k) ?? 0) + 1);
+    }
+    const total = Math.max(1, [...per.values()].reduce((a,b)=>a+b,0));
+    const split = $("platform-split");
+    if(!accounts.length){
+      split.innerHTML = '<p class="empty">当前账号组还没有接入账号。<b><a href="/accounts/add">去添加一个 →<\/a><\/b><\/p>';
+    } else {
+      split.innerHTML = '<div class="sp sp-head"><span>平台<\/span><span>发布数<\/span><span>占比<\/span><span style="text-align:right">采集<\/span><\/div>' +
+        Object.entries(columns).filter(([key]) => ["xiaohongshu","douyin","bilibili","youtube","tiktok"].includes(key)).map(([key, info]) => {
+          const acc = accounts.find(a => VK.platformOf(a)?.platform === key);
+          const c = per.get(key) ?? 0;
+          const pct = Math.round(c/total*100);
+          const level = !acc ? "none" : (acc.state === "expired" || acc.state === "banned") ? "bad" : acc.state === "expiring" ? "warn" : "ok";
+          const label = level === "none" ? "未接入" : level === "bad" ? "登录失效" : level === "warn" ? "将过期" : "正常";
+          return '<div class="sp">' +
+            '<div class="sp-who"><svg class="plogo" aria-hidden="true"><use href="#'+info.logo+'"/><\/svg><span class="sp-name">'+info.name+'<\/span><\/div>' +
+            '<span class="num">'+c+'<\/span>' +
+            '<span class="track-cell"><span class="track"><i style="width:'+pct+'%"><\/i><\/span><\/span>' +
+            '<span class="sp-state"><span class="dot '+level+'"><\/span>'+label+'<\/span>' +
+            '<\/div>';
+        }).join("");
+    }
+
+    // 账号组：跨组只读一览。
+    $("groupbar").innerHTML = VK.groups().map(g =>
+      '<span class="gchip">' + (g.name === group.name ? "<b>"+g.name+"</b>" : g.name) + ' · ' + (g.account_count ?? 0) + ' 账号<\/span>'
+    ).join("");
+
+    const bad = accounts.filter(a => a.state === "expired" || a.state === "banned").length;
+    const gaps = 5 - accounts.length;
+    $("next-step").innerHTML = bad
+      ? '有 <b>'+bad+'</b> 个账号登录失效，<a href="/accounts">去重新登录 →<\/a>'
+      : gaps > 0
+        ? '还有 <b>'+gaps+'</b> 个平台没接入，<a href="/accounts">去添加 →<\/a>'
+        : (publishes.length ? '账号都正常，去<a href="/publish">发布下一条 →<\/a>' : '账号齐了，发第一条试试：<a href="/publish">去发布 →<\/a>');
+  }
+
+  document.querySelectorAll('.tabs input').forEach(r => r.addEventListener("change", () => { rangeKey = r.id.replace("r",""); render(); }));
+
+  VK.ready()
+    .then(() => VK.request("/api/publishes?limit=200"))
+    .then((data) => { publishes = data.rows ?? []; render(); })
+    .catch((err) => { $("sub").textContent = "读不到数据：" + err.message; });
+})();
+</script>
+</body>
+</html>

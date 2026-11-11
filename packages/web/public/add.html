@@ -25,7 +25,7 @@
 }
 </style>
 </head>
-<body data-page="add">
+<body data-page="add" data-page="accounts">
 <a class="skip" href="#main">跳到主内容</a>
 
 <svg class="sprite" aria-hidden="true" focusable="false">
@@ -37,18 +37,7 @@
 </svg>
 
 <div class="shell">
-  <aside class="sidebar">
-    <a class="brand" href="/accounts">versekit <span>/ vk</span></a>
-    <a class="publish" href="/#publish"><b>+</b> 发布内容</a>
-    <nav class="nav" aria-label="主导航">
-      <a href="/accounts" aria-current="page">账号</a>
-      <a href="/#publish">发布</a>
-      <span class="nav-pending" aria-disabled="true" title="发布计划页在 #26–#30 工单中">计划</span>
-      <a href="/#overview">总览</a>
-      <a href="/#tasks">任务与日志</a>
-    </nav>
-    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
-  </aside>
+  <aside class="sidebar"></aside>
 
   <main id="main"><div class="page">
     <div class="crumb"><a href="/accounts">账号</a> / <span id="crumb-now">添加账号</span></div>
@@ -108,12 +97,13 @@
 
     <footer class="pagefoot">
       <span>账号只登记在本机；授权与凭证不会上传到 versekit 服务器。</span>
-      <a href="/#tasks">查看任务与日志 →</a>
+      <a href="/runs">查看任务与日志 →</a>
     </footer>
   </div></main>
 </div>
 
 <script src="/api.js"></script>
+<script src="/shell.js"></script>
 <script>
 (function(){
   const $ = (id) => document.getElementById(id);

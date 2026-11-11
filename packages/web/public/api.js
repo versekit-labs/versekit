@@ -205,6 +205,173 @@
     return null;
   }
 
+  /* ---------------------------------------------------------------- 排期
+   *
+   * 日历是「作品」的投影，不是 publish 行：一次排期 = 一个 work + N 条 publish。
+   * 服务端的 schedule.list 已经按作品聚合、算好撞车，这里只做两件事：
+   *   1. 预拉一个足够宽的窗口（前后各几个月），页面按天/周/月切片是纯内存操作；
+   *   2. 把时间在「毫秒时间戳」与「本地 YYYY-MM-DDTHH:MM」之间转一次，页面只见后者。
+   */
+  const SCHEDULE_PAD_DAYS = 120;
+  let schedule = { from: 0, to: 0, cards: [], conflicts: [], counts: {} };
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+
+  /** 本地时间字符串：日历按人的本地日界线分格，不能用 toISOString（那是 UTC）。 */
+  function toLocalStamp(ms) {
+    const d = new Date(Number(ms));
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  /** 页面里输入的本地时间 -> 毫秒；非法时间返回 NaN，由调用方拒绝。 */
+  function fromLocalStamp(text) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(text ?? "").trim());
+    if (!m) return NaN;
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0).getTime();
+  }
+
+  function dayStart(ms) {
+    const d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  async function loadSchedule({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && schedule.from && now >= schedule.from && now <= schedule.to) return schedule;
+    const from = dayStart(now - SCHEDULE_PAD_DAYS * 864e5);
+    const to = dayStart(now + SCHEDULE_PAD_DAYS * 864e5) + 864e5 - 1;
+    const data = await request(`/api/schedule${query({ from, to, group: current()?.id ?? null })}`);
+    schedule = {
+      from,
+      to,
+      cards: (data.cards ?? []).map((card) => ({
+        id: card.workId,
+        workId: card.workId,
+        group: current()?.id ?? null,
+        title: card.title,
+        at: toLocalStamp(card.at),
+        atMs: card.at,
+        state: card.state,
+        conflict: Boolean(card.conflict),
+        conflicts: card.conflicts ?? [],
+        platforms: (card.platforms ?? []).map((p) => ({
+          id: p.platform,
+          platform: p.platform,
+          state: p.state,
+          publishState: p.publishState,
+          accountId: p.accountId,
+          publishId: p.publishId,
+        })),
+      })),
+      /* 服务端的撞车条目是 {a:{workId,at,...}, b:{...}}；设计稿页面按
+       * {platform, at, a:<cardId>, b:<cardId>} 用，这里转一次，页面不改。 */
+      conflicts: (data.conflicts ?? []).map((c) => ({
+        platform: c.platform,
+        at: toLocalStamp(Math.max(c.a?.at ?? 0, c.b?.at ?? 0)),
+        a: c.a?.workId,
+        b: c.b?.workId,
+        gapMin: c.gapMin,
+      })),
+      counts: data.counts ?? { works: 0, publishes: 0, conflicts: 0 },
+    };
+    return schedule;
+  }
+
+  /** 同步读：窗口已经拉过；没拉过就先给空，页面在 ready() 之后重渲染。 */
+  function scheduled() {
+    return schedule.cards;
+  }
+
+  function scheduledBetween(_group, fromDay, toDay) {
+    return schedule.cards.filter((card) => {
+      const day = card.at.slice(0, 10);
+      return day >= fromDay && day <= toDay;
+    });
+  }
+
+  /** 设计稿页面按 Set 用（`.has(id)`）；服务端给的是作品卡片，这里转成 id 集合。 */
+  function conflictIds() {
+    return new Set(schedule.cards.filter((card) => card.conflict).map((card) => card.id));
+  }
+
+  /** 改期 = 命令 schedule.move：整作品一起移；撞车未 force 时服务端会拒绝并回结构化冲突。 */
+  async function scheduleMove(workId, atText, { force = false } = {}) {
+    const at = fromLocalStamp(atText);
+    if (!Number.isFinite(at)) throw new Error("时间格式不对：" + atText);
+    const result = await request(`/api/schedule/${encodeURIComponent(workId)}/move`, {
+      method: "POST",
+      body: { workId, at, force },
+    });
+    // 撞车时服务端是 200 + saved:false（不是错误码）：不在这里转成异常，页面就会以为改成功了。
+    if (!result.saved) {
+      const first = (result.conflicts ?? [])[0];
+      const gap = first?.gapMin ? `相隔 ${first.gapMin} 分钟` : "同一账号时间太近";
+      const err = new Error(`和「${first?.b?.title ?? first?.a?.title ?? "另一条排期"}」撞车（${gap}）`);
+      err.code = result.code ?? "E_SCHEDULE_CONFLICT";
+      err.conflicts = result.conflicts ?? [];
+      throw err;
+    }
+    await loadSchedule({ force: true });
+    return result;
+  }
+
+  /** 取消排期 = 命令 schedule.cancel；作品本身不删。 */
+  async function scheduleCancel(workId) {
+    const result = await request(`/api/schedule/${encodeURIComponent(workId)}/cancel`, {
+      method: "POST",
+      body: { workId },
+    });
+    await loadSchedule({ force: true });
+    return result;
+  }
+
+  /* 原型门面里还有 groupLabel / url / platforms 三件套：设计稿页面按短 id（bili/xhs）
+   * 取平台名，真实数据用全名（bilibili/xiaohongshu）。这里做一次别名归一，页面不用改写。 */
+  const PLATFORM_ALIAS = { bili: "bilibili", xhs: "xiaohongshu" };
+
+  const PLATFORM_NAME = {
+    xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok",
+  };
+  const PLATFORM_LOGO = {
+    xiaohongshu: "pl-xhs", douyin: "pl-douyin", bilibili: "pl-bili", youtube: "pl-youtube", tiktok: "pl-tiktok",
+  };
+  const PLATFORM_AUTH = {
+    xiaohongshu: "扫码登录", douyin: "扫码登录", bilibili: "授权登录", youtube: "Google 授权", tiktok: "TikTok 授权",
+  };
+
+  /** 平台展示信息：列由服务端矩阵决定，名字/标识/授权方式在这里补齐。
+   *  不依赖具体页面模块，日历页与账号页共用同一份。 */
+  function platformMap() {
+    const map = {};
+    for (const column of snapshot?.matrix?.columns ?? []) {
+      const platform = column.platform;
+      const entry = {
+        name: PLATFORM_NAME[platform] ?? column.label ?? platform,
+        logo: PLATFORM_LOGO[platform] ?? "pl-generic",
+        auth: PLATFORM_AUTH[platform] ?? "授权登录",
+        id: platform,
+      };
+      map[platform] = entry;
+      for (const alias of column.aliases ?? []) map[alias] = entry;
+    }
+    for (const [short, full] of Object.entries(PLATFORM_ALIAS)) if (map[full] && !map[short]) map[short] = map[full];
+    return map;
+  }
+
+  function groupLabel(ref) {
+    return group(ref)?.name ?? String(ref ?? "");
+  }
+
+  function currentId() {
+    return current()?.id ?? null;
+  }
+
+  function url(page, groupRef) {
+    const id = groupRef ?? currentId();
+    return id ? `${page}${page.includes("?") ? "&" : "?"}group=${encodeURIComponent(id)}` : page;
+  }
+
   VK.request = request;
   VK.bootstrap = bootstrap;
   VK.ready = ready;
@@ -230,4 +397,22 @@
   VK.setAccountMode = setAccountMode;
   VK.query = query;
   VK.requireGroup = requireGroup;
+  VK.loadSchedule = loadSchedule;
+  VK.scheduled = scheduled;
+  VK.scheduledBetween = scheduledBetween;
+  VK.conflictIds = conflictIds;
+  VK.conflicts = () => schedule.conflicts;
+  VK.scheduleMove = scheduleMove;
+  VK.scheduleRemove = scheduleCancel;
+  VK.platformMap = platformMap;
+  VK.groupLabel = groupLabel;
+  VK.currentId = currentId;
+  VK.url = url;
+  VK.toLocalStamp = toLocalStamp;
+  VK.fromLocalStamp = fromLocalStamp;
+  VK.platsOf = (item) => (item?.platforms ?? []).map((p) => (typeof p === "string" ? { id: p, state: item.state ?? "scheduled" } : p));
+  VK.countsOf = (list) => ({
+    works: list.length,
+    publishes: list.reduce((n, item) => n + (item.platforms?.length ?? 0), 0),
+  });
 })();
