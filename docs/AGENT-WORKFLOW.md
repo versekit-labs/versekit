@@ -87,9 +87,10 @@ prompt 里只跑 `bin/cycle.sh`。三段动作由脚本内部完成，不是三�
 
 它们互不知情、也不需要知道彼此——全靠 label 这个原子状态交接（抢单机制：先删 `s:ready`，删成功者赢）。
 
-> 注意：`coordinator` 的 `reuseSession` 是 `false`，所以每轮都会新起一个 session；
-> 验收侧不抢单，同一个 PR 可能被重复派。这两点是现在内存和重复任务的来源，详见
-> `docs/ORCA-TEAM-PLAYBOOK.md` §9。
+> 注意：验收侧已有去重锁（同一 issue 同时只派一个验收，`accept-<issue>.lock`，TTL 45 分钟），
+> 但锁按 issue 号、不按 `head_sha`，打回后 45 分钟内复验会被跳过；
+> `coordinator` 的 `reuseSession` 仍是 `false`，每轮新起一个 session，重开 automation 前先定策略。
+> 细节见 `docs/ORCA-TEAM-PLAYBOOK.md` §9。
 
 ### 你每天只需要做两件事
 
