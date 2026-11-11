@@ -2,6 +2,7 @@
 
 **这份文档给「你」看**，不是给 agent 看。
 给 agent 的规则在 `docs/AGENT-COLLAB.md`（那份是规范，有状态机、有字段格式、有反模式清单）。
+Orca 编排层怎么运转、消息怎么走，见 `docs/ORCA-TEAM-PLAYBOOK.md`。
 这份回答的是：**明天早上打开电脑，我该干什么？**
 
 ---
@@ -75,15 +76,20 @@
 
 **这是这套流程最重要的性质**：没有任何一步需要你说「去做 #12」。
 
-三个 Orca 定时任务在后台转（`orca automations list` 可查）：
+**实际只有一个** Orca 定时任务在转（`orca automations list` 可查）：`coordinator`，每 10 分钟一次，
+prompt 里只跑 `bin/cycle.sh`。三段动作由脚本内部完成，不是三个独立任务：
 
-| 任务 | 频率 | 干什么 |
+| 脚本阶段 | 频率（随 coordinator） | 干什么 |
 |---|---|---|
-| `engineer-claim` | 每 10 分钟 | 起一个干净 worktree，抢一个 `s:ready` 的 issue，做到底并开 PR |
-| `acceptance-claim` | 每 10 分钟的 5/15/25… 分 | 取一个待验收 PR，逐条比对 ACC 条目，给 PASS/FAIL |
-| `agentctl-tick` | 每 30 分钟 | 只做机械迁移：`doing` 有 PR 了 → 推到 `review` |
+| 机械迁移 | 每 10 分钟 | `agentctl tick --apply`：`doing` 有 PR 了 → 推到 `review` |
+| 派工 | 每 10 分钟 | `claim` 抢一个 `s:ready` 的 issue，起 worker，做到底并开 PR |
+| 验收派工 | 每 10 分钟 | 取队列里第一个待验收 PR，逐条比对 ACC，给 PASS/FAIL |
 
 它们互不知情、也不需要知道彼此——全靠 label 这个原子状态交接（抢单机制：先删 `s:ready`，删成功者赢）。
+
+> 注意：`coordinator` 的 `reuseSession` 是 `false`，所以每轮都会新起一个 session；
+> 验收侧不抢单，同一个 PR 可能被重复派。这两点是现在内存和重复任务的来源，详见
+> `docs/ORCA-TEAM-PLAYBOOK.md` §9。
 
 ### 你每天只需要做两件事
 
