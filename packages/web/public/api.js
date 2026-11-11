@@ -70,6 +70,35 @@
     return all.filter((a) => a.groupId === id);
   }
 
+  /* 五个平台槽位的展示信息：平台清单由服务端矩阵列决定，这里只补自绘标识与授权方式。
+   * 展示信息不参与「有没有账号 / 能不能添加」的判断——那些判断读 /api 的真实账号。 */
+  const PLATFORM_STYLE = {
+    xiaohongshu: { logo: "pl-xhs", auth: "扫码登录" },
+    douyin: { logo: "pl-douyin", auth: "扫码登录" },
+    bilibili: { logo: "pl-bili", auth: "授权登录" },
+    youtube: { logo: "pl-youtube", auth: "Google 授权" },
+    tiktok: { logo: "pl-tiktok", auth: "TikTok 授权" },
+  };
+
+  /** 当前组的五个平台槽位 = /api/bootstrap 的矩阵列 + 展示信息。 */
+  function platforms() {
+    const columns = snapshot?.matrix?.columns ?? [];
+    return columns.map((column) => ({
+      ...column,
+      ...(PLATFORM_STYLE[column.platform] ?? { logo: "pl-generic", auth: "授权登录" }),
+    }));
+  }
+
+  /** 账号也可能用旧别名（xhs / bili）落库；按列里的 aliases 归一到同一个槽位。 */
+  function platformOf(account) {
+    const platform = String(account?.platform ?? "");
+    return platforms().find((column) => column.platform === platform || (column.aliases ?? []).includes(platform)) ?? null;
+  }
+
+  function account(id) {
+    return (snapshot?.accounts ?? []).find((a) => a.id === id) ?? null;
+  }
+
   function groupCounts(groupId) {
     const id = groupId ?? current()?.id;
     return group(id)?.counts ?? { works: 0, publishes: 0, publishedPublishes: 0 };
@@ -114,6 +143,51 @@
     return result;
   }
 
+  /** 登记账号 = 命令 `account.add`：成功后刷新快照，回账号页立刻能看到它。 */
+  async function addAccount({ platform, name, group } = {}) {
+    const clean = String(name ?? "").trim();
+    if (!platform) throw new Error("先选一个平台");
+    if (!clean) throw new Error("请填写平台账号名");
+    const groupId = group ?? current()?.id;
+    if (!groupId) throw new Error("先选一个账号组");
+    const result = await request("/api/accounts", {
+      method: "POST",
+      body: { platform, name: clean, group: groupId },
+    });
+    await bootstrap({ force: true });
+    return result;
+  }
+
+  /** 重新登录 = 命令 `account.reauth`；返回的 next 是给人在电脑前照做的那一步。 */
+  async function reauthAccount(accountId) {
+    if (!accountId) throw new Error("先选一个账号");
+    const result = await request(`/api/accounts/${encodeURIComponent(accountId)}/reauth`, {
+      method: "POST",
+      body: { accountId },
+    });
+    await bootstrap({ force: true });
+    return result;
+  }
+
+  /** 移除账号 = 命令 `account.remove`：只让出槽位，不删历史。 */
+  async function removeAccount(accountId) {
+    if (!accountId) throw new Error("先选一个账号");
+    const result = await request(`/api/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+    await bootstrap({ force: true });
+    return result;
+  }
+
+  /** 自动 / 仅手动 = 命令 `account.mode`。 */
+  async function setAccountMode(accountId, mode) {
+    if (mode !== "auto" && mode !== "manual") throw new Error("模式只能是 auto 或 manual");
+    const result = await request(`/api/accounts/${encodeURIComponent(accountId)}/mode`, {
+      method: "POST",
+      body: { accountId, mode },
+    });
+    await bootstrap({ force: true });
+    return result;
+  }
+
   function query(params = {}) {
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -138,6 +212,9 @@
   VK.current = current;
   VK.groups = groups;
   VK.group = group;
+  VK.platforms = platforms;
+  VK.platformOf = platformOf;
+  VK.account = account;
   VK.accounts = accounts;
   VK.groupCounts = groupCounts;
   VK.groupFreshness = groupFreshness;
@@ -147,6 +224,10 @@
   VK.rollup = rollup;
   VK.useGroup = useGroup;
   VK.addGroup = addGroup;
+  VK.addAccount = addAccount;
+  VK.reauthAccount = reauthAccount;
+  VK.removeAccount = removeAccount;
+  VK.setAccountMode = setAccountMode;
   VK.query = query;
   VK.requireGroup = requireGroup;
 })();

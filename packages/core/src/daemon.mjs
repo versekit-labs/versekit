@@ -38,10 +38,26 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
+/**
+ * 干净 URL 的显式别名：账号页沿用设计稿文件名 `account-wall.html`，但导航路径是 `/accounts`。
+ * 只映射静态页，不碰 `/api/*`——命令路由仍由 `routes.mjs` 从命令表派生，这里不写第二套。
+ */
+const PAGE_ALIASES = new Map([
+  ["/accounts", "account-wall.html"],
+  ["/accounts/add", "add.html"],
+]);
+
 /** 静态页只服务 web/public 里的文件；任何越界路径都当 404，不做「聪明」的路径修正。 */
 function staticFile(webRoot, pathname) {
-  const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const clean = pathname.replace(/\/+$/, "") || "/";
+  let rel = clean === "/" ? "index.html" : clean.replace(/^\/+/, "");
   if (!rel || rel.includes("\0")) return null;
+  // 干净 URL：/groups → groups.html（文件存在才映射），账号页用上面的显式别名。
+  if (!extname(rel)) {
+    const alias = PAGE_ALIASES.get(clean);
+    if (alias) rel = alias;
+    else if (existsSync(resolve(webRoot, rel + ".html"))) rel += ".html";
+  }
   const root = resolve(webRoot);
   const file = resolve(join(root, rel));
   if (file !== root && !file.startsWith(root + sep)) return null;

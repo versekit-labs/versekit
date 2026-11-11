@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账号 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+/* 单组账号页：五个平台槽位；接入的显示状态，未接入的显示缺口与添加入口 */
+.slots{display:flex;flex-direction:column;margin-top:14px;overflow:hidden;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.slot{display:grid;grid-template-columns:minmax(170px,1.05fr) minmax(112px,.62fr) minmax(196px,1.15fr) minmax(150px,.9fr) auto;gap:14px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+.slot:last-child{border-bottom:0}
+.slot.connected{cursor:pointer}
+.slot.connected:hover{background:var(--paper-subtle)}
+.slot.selected{background:var(--ground);box-shadow:inset 2px 0 0 var(--navy)}
+.slot-who{display:flex;align-items:center;gap:10px;min-width:0}
+.plogo{width:22px;height:22px;flex:none;border-radius:4px}
+.slot-name{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-sub{display:block;margin-top:2px;color:var(--muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-col{min-width:0}
+.slot-k{display:none;color:var(--faint);font-size:12px}
+.slot-v{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink);line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot-m{margin-top:2px;color:var(--muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot .pubm{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.slot-act{display:flex;justify-content:flex-end;gap:8px}
+.slot.empty .slot-act{justify-content:flex-end}
+.gap-text{color:var(--faint);font-size:13px}
+.nav .nav-pending{display:flex;align-items:center;min-height:42px;padding:0 12px;border-radius:6px;color:var(--nav-muted);font-size:14px;opacity:.6;cursor:default}
+
+.detail{margin-top:14px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:16px 18px 17px}
+.detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding-bottom:12px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+.detail-location{color:var(--faint);font-size:12px}
+.detail-title{margin-top:2px;font-size:18px;font-weight:650;letter-spacing:-.015em}
+.detail-issue{margin-top:4px;color:var(--muted);font-size:13px}
+.detail-issue.bad{color:var(--red)}.detail-issue.warn{color:var(--amber)}
+.detail-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;padding-top:12px}
+.fact-label{margin-bottom:5px;color:var(--faint);font-size:12px}
+.fact-value{font-size:13px;font-weight:500}
+.fact-value.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
+.detail-note{margin-top:12px}
+.toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(420px,calc(100vw - 40px));padding:10px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.5}
+.toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red)}
+
+@media (max-width:1100px){
+  .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
+  .col-collect{display:none}
+}
+@media (max-width:900px){
+  .slot{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:14px}
+  .slot-col{grid-column:1/-1}
+  .slot-k{display:block;margin-bottom:1px}
+  .slot-act{grid-row:1;grid-column:2;align-self:start}
+  .slot-act .btn{min-height:40px}
+  .gap{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%}
+  .gap .btn{min-height:40px}
+  .detail-grid{grid-template-columns:1fr;gap:12px}
+  .fact{padding-bottom:10px;border-bottom:1px solid var(--line-soft)}.fact:last-child{border-bottom:0;padding-bottom:0}
+  .detail-actions{width:100%}.detail-actions .btn{flex:1;min-height:40px}
+  .nav .nav-pending{min-height:40px;padding:0}
+}
+</style>
+</head>
+<body data-page="account-wall">
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/accounts">versekit <span>/ vk</span></a>
+    <a class="publish" href="/#publish"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="/accounts" aria-current="page">账号</a>
+      <a href="/#publish">发布</a>
+      <span class="nav-pending" aria-disabled="true" title="发布计划页在 #26–#30 工单中">计划</span>
+      <a href="/#overview">总览</a>
+      <a href="/#tasks">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <header class="pagehead">
+      <div>
+        <div class="crumb"><span>账号组 · <b id="group-label">—</b></span></div>
+        <h1>账号</h1>
+        <p class="sub" id="sub">正在加载…</p>
+      </div>
+      <div class="detail-actions">
+        <a class="btn" href="/groups.html">管理账号组</a>
+        <a class="btn primary" id="add-btn" href="/accounts/add">+ 添加账号</a>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="todo-links" id="todos" aria-label="待处理事项"></div>
+      <span id="check-cadence">正在读取体检记录…</span>
+    </div>
+
+    <p class="notice" id="empty-lead" hidden></p>
+
+    <section class="slots" id="slots" aria-label="当前账号组的平台账号"></section>
+
+    <section class="detail" id="detail" aria-live="polite" hidden>
+      <div class="detail-head">
+        <div>
+          <p class="detail-location" id="d-location"></p>
+          <h2 class="detail-title" id="d-title"></h2>
+          <p class="detail-issue" id="d-issue"></p>
+        </div>
+        <div class="detail-actions">
+          <a class="btn" id="d-work" href="/#works">看这条作品</a>
+          <button class="btn danger" id="d-remove" type="button">移除账号</button>
+          <button class="btn primary" id="d-action" type="button">账号详情</button>
+        </div>
+      </div>
+      <div class="detail-grid">
+        <div class="fact"><div class="fact-label">最近发布</div><div class="fact-value mono" id="d-publish"></div><div class="fact-meta" id="d-publish-meta"></div></div>
+        <div class="fact"><div class="fact-label">最近采集</div><div class="fact-value mono" id="d-collect"></div><div class="fact-meta" id="d-collect-meta"></div></div>
+        <div class="fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
+      </div>
+      <p class="notice detail-note" id="d-feedback" role="status" hidden></p>
+    </section>
+
+    <footer class="pagefoot">
+      <span>凭证仅保存在本机，不会上传到 versekit 服务器。</span>
+      <a href="/#tasks">查看任务与日志 →</a>
+    </footer>
+  </div></main>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="/api.js"></script>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const two = (n) => String(n).padStart(2, "0");
+  const levelText = { bad: "登录已失效", warn: "登录将过期", "": "登录正常" };
+  const PUBLISH_STATES = {
+    queued: "排队中", auto_running: "发布中", draft_running: "生成草稿中", draft_pending: "待确认草稿",
+    notify_pending: "待人工确认", published: "已发布", published_limited: "仅自己可见", failed: "失败", blocked: "受阻", canceled: "已取消"
+  };
+  const COLLECT_SOURCES = { intercept: "创作中心", api: "官方 API", csv: "CSV 导入", web: "网页" };
+  const COLLECT_STATUSES = { ok: "成功", success: "成功", failed: "失败", error: "失败", empty: "没有数据" };
+
+  let selected = null;
+  let toastTimer = null;
+
+  function formatTime(ts){
+    if(!ts) return "";
+    const d = new Date(Number(ts));
+    return two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + two(d.getHours()) + ":" + two(d.getMinutes());
+  }
+
+  function timeAgo(ts){
+    if(!ts) return "";
+    const diff = Math.max(0, Date.now() - Number(ts));
+    if(diff < 60e3) return "刚刚";
+    const minutes = Math.round(diff / 60e3);
+    if(minutes < 60) return minutes + " 分钟前";
+    const hours = Math.round(minutes / 60);
+    if(hours < 24) return hours + " 小时前";
+    return Math.round(hours / 24) + " 天前";
+  }
+
+  // 登录异常只看账号状态：采集新鲜度是另一条口径，不能混成一个"坏"。
+  function levelOf(account){
+    if(!account) return "";
+    if(account.state === "expired" || account.state === "banned") return "bad";
+    if(account.state === "expiring") return "warn";
+    return "";
+  }
+
+  function statusSub(account, level){
+    if(level === "bad") return "发布与采集已暂停";
+    if(level === "warn") return "建议提前续期";
+    return account.is_manual ? "仅手动发布" : "运行中";
+  }
+
+  function issueOf(account){
+    const level = levelOf(account);
+    if(level === "bad"){
+      const last = account.lastCollectedAt ? " · 最近成功采集 " + formatTime(account.lastCollectedAt) : "";
+      return "登录已失效 · 发布与采集暂停" + last;
+    }
+    if(level === "warn"){
+      if(Number.isInteger(account.expires_at)){
+        const hours = Math.round((Number(account.expires_at) - Date.now()) / 3600e3);
+        if(hours > 0) return "登录 " + hours + " 小时后过期 · 到期将自动暂停发布与采集";
+      }
+      return "登录将过期 · 到期将自动暂停发布与采集";
+    }
+    return account.is_manual ? "登录正常 · 仅手动发布" : "登录正常 · 发布与采集运行中";
+  }
+
+  function publishCell(account){
+    const publish = account.lastPublish;
+    if(!publish) return { value: "还没有发布", meta: "可以从发布台发出第一条作品" };
+    return {
+      value: formatTime(publish.at),
+      meta: "《" + (publish.title ?? "未命名") + "》 · " + (PUBLISH_STATES[publish.state] ?? publish.state)
+    };
+  }
+
+  function collectCell(account){
+    const collection = account.collection;
+    if(!collection) return { value: "还没有采集", meta: "发布成功后才有指标可采" };
+    return {
+      value: timeAgo(collection.at),
+      meta: (COLLECT_SOURCES[collection.source] ?? collection.source ?? "来源未知") + " · " + (COLLECT_STATUSES[collection.status] ?? collection.status)
+    };
+  }
+
+  // 主动作必须指向这个具体账号：失效/将过期→重新登录；正常→切换自动/仅手动。
+  function primaryOf(account){
+    const level = levelOf(account);
+    if(level){
+      return {
+        label: "重新登录",
+        primary: true,
+        cmd: "vk account reauth " + account.id,
+        run: () => VK.reauthAccount(account.id),
+        feedback: (result) => result?.next ?? "已发起重新登录，按提示在这台电脑上完成。"
+      };
+    }
+    const mode = account.is_manual ? "auto" : "manual";
+    return {
+      label: account.is_manual ? "恢复自动发布" : "改为仅手动",
+      primary: false,
+      cmd: "vk account mode " + account.id + " " + mode,
+      run: () => VK.setAccountMode(account.id, mode),
+      feedback: () => account.is_manual ? "已恢复自动发布" : "已改为仅手动：自动发布会跳过这个账号"
+    };
+  }
+
+  function toast(message, bad){
+    const el = $("toast");
+    el.textContent = message;
+    el.className = "toast" + (bad ? " bad" : "");
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
+  }
+
+  function feedback(element, message, bad){
+    element.hidden = !message;
+    element.textContent = message ?? "";
+    element.className = "notice detail-note" + (bad ? " bad" : "");
+  }
+
+  function busy(button, pending, label){
+    button.disabled = pending;
+    if(label) button.textContent = pending ? "正在处理…" : label;
+  }
+
+  async function runPrimary(accountId){
+    const account = VK.account(accountId);
+    if(!account) return;
+    const action = primaryOf(account);
+    const button = $("d-action");
+    busy(button, true, action.label);
+    try{
+      const result = await action.run();
+      render();
+      feedback($("d-feedback"), action.feedback(result), false);
+      toast(action.label + "完成");
+    }catch(err){
+      feedback($("d-feedback"), action.label + "失败：" + err.message, true);
+      toast(action.label + "失败：" + err.message, true);
+    }finally{
+      // render() 会重建详情内容；按钮可能已经换成新对象，这里按 id 再取一次。
+      const current = $("d-action");
+      busy(current, false, primaryOf(VK.account(accountId) ?? account).label);
+    }
+  }
+
+  function select(accountId, scroll){
+    const account = VK.account(accountId);
+    if(!account){
+      $("detail").hidden = true;
+      return;
+    }
+    selected = accountId;
+    document.querySelectorAll(".slot.connected").forEach((row) => {
+      row.classList.toggle("selected", row.dataset.account === accountId);
+    });
+
+    const column = VK.platformOf(account);
+    const level = levelOf(account);
+    const action = primaryOf(account);
+    const detail = $("detail");
+    detail.hidden = false;
+    $("d-location").textContent = (VK.current()?.name ?? "当前账号组") + " · " + (column?.label ?? account.platform);
+    $("d-title").textContent = account.handle;
+    const issue = $("d-issue");
+    issue.textContent = issueOf(account);
+    issue.className = "detail-issue" + (level ? " " + level : "");
+
+    const publish = publishCell(account);
+    const collect = collectCell(account);
+    $("d-publish").textContent = publish.value;
+    $("d-publish-meta").textContent = publish.meta;
+    $("d-collect").textContent = collect.value;
+    $("d-collect-meta").textContent = collect.meta;
+    $("d-cmd").textContent = action.cmd;
+
+    const primary = $("d-action");
+    primary.textContent = action.label;
+    primary.className = "btn" + (action.primary ? " primary" : "");
+    primary.onclick = () => runPrimary(accountId);
+
+    const work = $("d-work");
+    work.hidden = !account.lastPublish;
+    work.href = "/#works";
+
+    feedback($("d-feedback"), "", false);
+
+    if(scroll) detail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function renderSlots(accounts){
+    const slots = $("slots");
+    slots.innerHTML = "";
+    const columns = VK.platforms();
+    if(!columns.length){
+      const failed = document.createElement("p");
+      failed.className = "notice bad";
+      failed.textContent = "读不到平台槽位：/api/bootstrap 没有返回矩阵列（守护进程在跑吗？终端执行 vk serve）";
+      slots.appendChild(failed);
+      return;
+    }
+
+    columns.forEach((column) => {
+      const account = accounts.find((a) => VK.platformOf(a)?.platform === column.platform) ?? null;
+
+      if(account){
+        const level = levelOf(account);
+        const row = document.createElement("div");
+        row.className = "slot connected" + (selected === account.id ? " selected" : "");
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.dataset.account = account.id;
+        row.setAttribute("aria-label", column.label + " · " + account.handle + " · " + levelText[level]);
+        row.innerHTML =
+          '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
+            '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>' +
+          '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span></div>' +
+          '<div class="slot-col"><span class="slot-k">最近发布</span><div class="slot-v pub"></div><div class="slot-m pubm"></div></div>' +
+          '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>' +
+          '<div class="slot-act"></div>';
+
+        row.querySelector(".slot-name").textContent = account.handle;
+        row.querySelector(".slot-sub").textContent = column.label + " · " + statusSub(account, level);
+        row.querySelector(".slot-status").innerHTML = level
+          ? '<span class="badge ' + (level === "bad" ? "bad" : "warn") + '">' + levelText[level] + "</span>"
+          : '<span class="status-ok"><i></i>登录正常</span>';
+
+        const publish = publishCell(account);
+        const collect = collectCell(account);
+        row.querySelector(".pub").textContent = publish.value;
+        row.querySelector(".pubm").textContent = publish.meta;
+        row.querySelector(".col").textContent = collect.value;
+        row.querySelector(".colm").textContent = collect.meta;
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn sm" + (level ? " primary" : "");
+        button.textContent = level ? "重新登录" : "详情";
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          select(account.id, true);
+          if(level) runPrimary(account.id);
+        });
+        row.querySelector(".slot-act").appendChild(button);
+
+        row.addEventListener("click", () => select(account.id, true));
+        row.addEventListener("keydown", (event) => {
+          if(event.key === "Enter" || event.key === " "){ event.preventDefault(); select(account.id, true); }
+        });
+        slots.appendChild(row);
+      } else {
+        const row = document.createElement("div");
+        row.className = "slot empty";
+        row.innerHTML =
+          '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
+            '<div><span class="slot-name"></span><span class="slot-sub">这个平台还没有接入账号</span></div></div>' +
+          '<div class="slot-col"><span class="slot-k">登录状态</span><span class="gap-text">未接入</span></div>' +
+          '<div class="gap"><div class="slot-col"><span class="slot-k">接入方式</span><span class="gap-text auth"></span></div>' +
+            '<a class="btn sm gap-add"></a></div>';
+        row.querySelector(".slot-name").textContent = column.label;
+        row.querySelector(".gap .auth").textContent = column.auth;
+        const link = row.querySelector(".gap-add");
+        link.href = "/accounts/add?platform=" + encodeURIComponent(column.platform);
+        link.textContent = "+ 添加" + column.label;
+        slots.appendChild(row);
+      }
+    });
+  }
+
+  function renderTodos(accounts){
+    const todos = $("todos");
+    todos.innerHTML = "";
+    const need = accounts
+      .map((account) => ({ account, level: levelOf(account), column: VK.platformOf(account) }))
+      .filter((item) => item.level);
+
+    if(need.length){
+      const strong = document.createElement("strong");
+      strong.textContent = "待处理";
+      todos.appendChild(strong);
+      need.forEach(({ account, level, column }) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "todo-link";
+        button.textContent = (column?.label ?? account.platform) + (level === "bad" ? "重登" : "续期");
+        button.addEventListener("click", () => {
+          select(account.id, true);
+          runPrimary(account.id);
+        });
+        todos.appendChild(button);
+      });
+      return;
+    }
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = accounts.length ? "这个账号组没有需要处理的事项" : "还没有账号 · 从下面的缺口开始添加";
+    todos.appendChild(hint);
+  }
+
+  function render(){
+    const group = VK.current();
+    if(!group) return;
+    const accounts = VK.accounts();
+    const bad = accounts.filter((a) => levelOf(a) === "bad").length;
+    const warn = accounts.filter((a) => levelOf(a) === "warn").length;
+    const columns = VK.platforms();
+
+    $("group-label").textContent = group.name;
+    $("add-btn").href = "/accounts/add";
+
+    const parts = [accounts.length + " / " + (columns.length || 5) + " 个平台已接入"];
+    if(!accounts.length) parts.push("还没有账号");
+    else {
+      if(bad) parts.push(bad + " 个登录异常");
+      if(warn) parts.push(warn + " 个将过期");
+      if(!bad && !warn) parts.push("登录正常");
+    }
+    $("sub").textContent = parts.join(" · ");
+
+    const checked = accounts.map((a) => Number(a.last_checked_at) || 0);
+    const latest = checked.length ? Math.max(...checked) : 0;
+    $("check-cadence").textContent = latest ? "最近体检 " + formatTime(latest) + " · 每 6 小时" : "还没有体检记录 · 每 6 小时自动体检";
+
+    const lead = $("empty-lead");
+    if(!accounts.length){
+      lead.hidden = false;
+      lead.textContent = "这个账号组还没有接入任何账号。从下面任意一个平台的缺口开始，添加后会出现在这里。";
+    } else {
+      lead.hidden = true;
+      lead.textContent = "";
+    }
+
+    renderTodos(accounts);
+    renderSlots(accounts);
+
+    const keep = selected && accounts.some((a) => a.id === selected)
+      ? selected
+      : (accounts.find((a) => levelOf(a) === "bad") ?? accounts.find((a) => levelOf(a) === "warn") ?? accounts[0])?.id ?? null;
+    if(keep) select(keep, false);
+    else { selected = null; $("detail").hidden = true; }
+  }
+
+  /* 移除账号 = 命令 account.remove：只让出组内平台槽位，不删历史发布。
+   * 这里不走「先点详情再确认」的两段式：按钮本来就在详情里，点的人已经选好了账号。 */
+  async function runRemove(accountId){
+    const account = VK.account(accountId);
+    if(!account) return;
+    const button = $("d-remove");
+    const label = "移除 " + (account.display_name || account.handle || account.id) + "？组内这个平台槽位会空出来，历史发布仍保留。";
+    if(!window.confirm(label)) return;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "正在移除…";
+    try{
+      await VK.removeAccount(accountId);
+      selected = null;
+      render();
+      toast("账号已移除");
+    }catch(err){
+      feedback($("d-feedback"), "移除失败：" + err.message, true);
+      toast("移除失败：" + err.message, true);
+    }finally{
+      const current = $("d-remove");
+      current.disabled = false;
+      current.textContent = original;
+    }
+  }
+
+  function boot(){
+    $("d-remove").addEventListener("click", () => { if(selected) runRemove(selected); });
+    VK.ready()
+      .then(() => {
+        if(!VK.current()){ location.replace("/groups.html"); return; }
+        render();
+      })
+      .catch((err) => {
+        $("sub").textContent = "读不到账号数据";
+        const slots = $("slots");
+        slots.innerHTML = "";
+        const notice = document.createElement("p");
+        notice.className = "notice bad";
+        notice.textContent = "读不到账号数据：" + err.message + "（守护进程在跑吗？终端执行 vk serve）";
+        slots.appendChild(notice);
+      });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

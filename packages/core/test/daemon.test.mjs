@@ -167,6 +167,33 @@ test("应用外壳：选组页与 api.js 由守护进程托管，数据只从 /a
   assert.match(indexHtml, /id="group-switch"/);
 });
 
+test("账号页与添加账号页走干净 URL，且数据只从 /api 来", async () => {
+  // 导航路径与设计稿文件名分开：/accounts 是页面地址，account-wall.html 是设计闸门取页的路径。
+  for (const path of ["/accounts", "/accounts/", "/accounts/add", "/groups"]) {
+    const res = await fetch(`${base}${path}`);
+    assert.equal(res.status, 200, `${path} 应该返回页面`);
+    assert.match(res.headers.get("content-type"), /text\/html/, `${path} 必须是 HTML`);
+    const html = await res.text();
+    assert.match(html, /src="\/api\.js"/, "页面必须由 api.js 拉真实快照");
+    assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
+  }
+
+  const accounts = await (await fetch(`${base}/accounts`)).text();
+  assert.match(accounts, /id="slots"/, "账号页要有五个平台槽位的容器");
+  assert.match(accounts, /id="detail"/, "账号页要有组内详情");
+  assert.match(accounts, /\/api\/bootstrap|matrix\.columns|VK\.platforms/, "槽位数量应由 /api 快照决定");
+
+  const add = await (await fetch(`${base}/accounts/add`)).text();
+  assert.match(add, /id="platform-grid"/, "添加页要有平台选择网格");
+  assert.match(add, /id="group-name"/, "添加页要显示锁定的账号组");
+  assert.match(add, /VK\.addAccount|account\.add/, "完成后走命令 account.add");
+  assert.match(add, /\/api\/accounts/, "占用者读命令 account.list --group 的 occupants");
+
+  // 设计闸门按设计稿文件名取页面；两个名字都要能打开。
+  assert.equal((await fetch(`${base}/account-wall.html`)).status, 200);
+  assert.equal((await fetch(`${base}/add.html`)).status, 200);
+});
+
 test("资产上传落到 state/assets，文件名被清洗，内容是原样", async () => {
   const res = await fetch(`${base}/api/assets`, {
     method: "POST",
