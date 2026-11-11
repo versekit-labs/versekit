@@ -32,6 +32,6 @@ related_targets: ["docs/design/add.html"]
 ## 实现与设计稿的差异（有意识决定）
 
 - 原型第二步的假二维码与「已自动排队登录检查与首次采集」删除：当前后端不提供真实扫码会话，写了就是假承诺。第二步改为「登记账号」，授权入口以完成后给出的 `vk account reauth <id>` 命令如实交付。
-- 数据从 `store.js` 换成 `api.js`；占用判断读 bootstrap 的账号快照与 `/api/bootstrap.matrix.columns`，不在页面里重算组口径。
+- 数据从 `store.js` 换成 `api.js`；占用者读命令 `account.list --group <g>` 的 `occupants`，平台清单读 `/api/bootstrap.matrix.columns`，不在页面里重算组口径。
 - 同一输入同时作为 `name` 与默认 `handle`，与 `vk account add <platform> --group <g> --name <名字>` 完全等价。
 - 重新登录（`?mode=reauth`）不在本工单内；账号页的重新登录直接走 `account.reauth`，不绕到本页。

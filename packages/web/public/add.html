@@ -124,12 +124,20 @@
   let group = null;
   let chosen = null;
   let adapters = new Set();
+  let occupants = {};
 
   function columnOf(platform){
     return VK.platforms().find((column) => column.platform === platform) ?? null;
   }
 
+  /** 占用者读命令 `account.list --group <g>` 的 occupants：一个平台最多一个账号（ACC-add-01）。
+   *  服务端按真实 platform 建键，旧别名（xhs / bili）按列的 aliases 依次找。 */
   function occupantOf(column){
+    const keys = [column.platform, ...(column.aliases ?? [])];
+    for(const key of keys){
+      if(occupants[key]) return occupants[key];
+    }
+    // occupants 还没回来时退回 bootstrap 快照，不让页面先渲染成「可添加」。
     return VK.accounts().find((account) => VK.platformOf(account)?.platform === column.platform) ?? null;
   }
 
@@ -262,9 +270,14 @@
       $("group-name").textContent = group.name;
 
       try{
-        const data = await VK.request("/api/platforms");
-        adapters = new Set((data.platforms ?? []).map((platform) => platform.platform));
+        const [accountList, platformList] = await Promise.all([
+          VK.request("/api/accounts" + VK.query({ group: group.id })),
+          VK.request("/api/platforms"),
+        ]);
+        occupants = accountList.occupants ?? {};
+        adapters = new Set((platformList.platforms ?? []).map((platform) => platform.platform));
       }catch{
+        occupants = {};
         adapters = new Set();
       }
 

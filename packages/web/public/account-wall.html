@@ -481,7 +481,34 @@
     else { selected = null; $("detail").hidden = true; }
   }
 
+  /* 移除账号 = 命令 account.remove：只让出组内平台槽位，不删历史发布。
+   * 这里不走「先点详情再确认」的两段式：按钮本来就在详情里，点的人已经选好了账号。 */
+  async function runRemove(accountId){
+    const account = VK.account(accountId);
+    if(!account) return;
+    const button = $("d-remove");
+    const label = "移除 " + (account.display_name || account.handle || account.id) + "？组内这个平台槽位会空出来，历史发布仍保留。";
+    if(!window.confirm(label)) return;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "正在移除…";
+    try{
+      await VK.removeAccount(accountId);
+      selected = null;
+      render();
+      toast("账号已移除");
+    }catch(err){
+      feedback($("d-feedback"), "移除失败：" + err.message, true);
+      toast("移除失败：" + err.message, true);
+    }finally{
+      const current = $("d-remove");
+      current.disabled = false;
+      current.textContent = original;
+    }
+  }
+
   function boot(){
+    $("d-remove").addEventListener("click", () => { if(selected) runRemove(selected); });
     VK.ready()
       .then(() => {
         if(!VK.current()){ location.replace("/groups.html"); return; }

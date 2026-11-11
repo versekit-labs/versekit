@@ -187,6 +187,7 @@ test("账号页与添加账号页走干净 URL，且数据只从 /api 来", asyn
   assert.match(add, /id="platform-grid"/, "添加页要有平台选择网格");
   assert.match(add, /id="group-name"/, "添加页要显示锁定的账号组");
   assert.match(add, /VK\.addAccount|account\.add/, "完成后走命令 account.add");
+  assert.match(add, /\/api\/accounts/, "占用者读命令 account.list --group 的 occupants");
 
   // 设计闸门按设计稿文件名取页面；两个名字都要能打开。
   assert.equal((await fetch(`${base}/account-wall.html`)).status, 200);
