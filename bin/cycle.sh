@@ -208,7 +208,7 @@ for s in d.get("skipped") or []:
     return 0
   fi
 
-  log "  → #$num $title（口径 ${acc}）"
+  log "  → #$num ${title}（口径 ${acc}）"
   local handle
   if ! handle=$(ensure_terminal "$role" "$wt" "worker: #$num"); then
     log "    ✗ 起 worker 终端失败，把 #$num 退回 s:ready"
@@ -280,7 +280,7 @@ dispatch_acceptance() {
     return 0
   fi
 
-  log "  → 验收 #$num（PR #$pull，head ${head:0:7}）$title"
+  log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
   local handle
   if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
     log "    ✗ 起验收终端失败"
@@ -426,7 +426,7 @@ for w in (d.get("result") or {}).get("workers") or []:
       if orca orchestration worker-release --dispatch "$d" >/dev/null 2>&1; then
         log "  ✓ released $d"
       else
-        log "  ⚠ release 失败：$d（留给下一轮，或按 receipt 的 recovery 处理）"
+        log "  ⚠ release 失败：${d}（留给下一轮，或按 receipt 的 recovery 处理）"
       fi
     done
   fi

@@ -48,15 +48,15 @@ print(r.get("handle") or r.get("terminalHandle") or (r.get("terminal") or {}).ge
 # 固定 sleep 不可靠：不同 worktree / 首次启动的绘制时间不同，早发 Esc 会被启动过程吃掉，
 # worker 就卡在引导页。改用 Orca 的 tui-idle 条件等待，超时才报错。
 if ! orca terminal wait --terminal "$handle" --for tui-idle --timeout-ms "${WORKER_UP_TIMEOUT_MS:-60000}" >/dev/null 2>&1; then
-  die "等 TUI 就绪超时（终端 $handle）"
+  die "等 TUI 就绪超时（终端 ${handle}）"
 fi
 esc=$(printf '\033')
 orca terminal send --terminal "$handle" --text "$esc" >/dev/null 2>&1 \
-  || die "发送 Esc 失败（终端 $handle）"
+  || die "发送 Esc 失败（终端 ${handle}）"
 
 # Esc 之后等输入框重新空闲，再让 Orca 注入 prompt。
 if ! orca terminal wait --terminal "$handle" --for tui-idle --timeout-ms "${WORKER_UP_SETTLE_MS:-15000}" >/dev/null 2>&1; then
-  die "Esc 后 TUI 未回到空闲（终端 $handle）"
+  die "Esc 后 TUI 未回到空闲（终端 ${handle}）"
 fi
 
 printf '%s\n' "$handle"
