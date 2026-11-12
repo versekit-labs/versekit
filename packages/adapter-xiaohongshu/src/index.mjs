@@ -13,7 +13,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
-import { openAccount, closeAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
+import { openAccount, closeAccount, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
 const LOGIN = "https://creator.xiaohongshu.com/login";
@@ -314,9 +314,12 @@ async function check(ctx = {}) {
   const accountId = ctx?.accountId;
   if (typeof accountId !== "string" || !accountId.trim()) throw new AdapterError("unknown", "check 需要 accountId");
   let tab = null;
+  // 用户可能正开着登录窗口：这时候既不能关它，也不能把它的页面跳走。
+  const reusedVisible = hasLiveBrowser(accountId);
   try {
-    // 只探测登录态，不需要人看窗口：用无头 Chrome，避免验证时又弹一个浏览器。
     tab = await openAccount({ accountId, headless: true });
+    // 有活窗口时 openAccount 会**新开一个空白标签**（不碰用户正在登录的那一页），
+    // 所以这里导航的是我们自己这个标签；cookie 跟着 profile 走，结论同样有效。
     await tab.goto(CHECK_URL, { waitUntil: "domcontentloaded" });
 
     // 给 SPA 一次客户端跳转的机会：未登录时它会把自己送到 /login。
@@ -345,7 +348,9 @@ async function check(ctx = {}) {
   } catch (err) {
     throw await wrap(tab, accountId, "check")(err);
   } finally {
-    await closeAccount(accountId).catch(() => {});
+    // 只清理「自己起的无头实例」：用户正开着登录窗口时，closeAccount 会把人家窗口关掉，
+    // 登录直接被打断（这就是之前「登录了仍显示未登录」的真正原因之一）。
+    if (!reusedVisible) await closeAccount(accountId).catch(() => {});
   }
 }
 

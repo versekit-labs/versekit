@@ -1064,6 +1064,18 @@ function nextStamp() {
  * 只建目录不建文件——截图由适配器写进来；目录 0700，截图里可能有登录态。
  * tag 会被清洗成安全文件名，适配器可以传平台/步骤名，不用关心文件系统。
  */
+/**
+ * 这个账号是不是已经有一个活着的浏览器（通常是用户正开着的登录窗口）。
+ *
+ * 适配器的 check() 以前一律 closeAccount()，遇到「用户正在登录」就会把人家的窗口关掉；
+ * 有了这个探针，check 只在「自己新建的无头实例」上做清理。
+ */
+export function hasLiveBrowser(accountId) {
+  const id = requireAccountId(accountId);
+  const live = instances.get(id);
+  return Boolean(live && live.tabs?.size);
+}
+
 export function evidencePath(accountId, tag = "evidence") {
   const id = requireAccountId(accountId);
   const dir = join(evidenceRoot(), id);
