@@ -122,6 +122,7 @@
     </div>
 
     <p class="notice" id="empty-lead" hidden></p>
+    <p class="notice warn" id="duplicate-lead" hidden></p>
 
     <section class="slots" id="slots" aria-label="当前账号组的平台账号"></section>
 
@@ -162,7 +163,10 @@
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const two = (n) => String(n).padStart(2, "0");
-  const levelText = { bad: "登录已失效", warn: "登录将过期", "": "登录正常" };
+  /* 状态文案只认 /api/accounts 的 state 字段，页面不再按采集新鲜度或到期时间自己推断。
+   * 这正是一致性口径（ACC-account-04）：接口 state=ok 时页面只能显示「正常」。 */
+  const STATE_LEVEL = { expiring: "warn", expired: "bad", banned: "bad" };
+  const STATE_TEXT = { ok: "正常", manual: "仅手动", expiring: "即将过期", expired: "已失效", banned: "已封禁" };
   const PUBLISH_STATES = {
     queued: "排队中", auto_running: "发布中", draft_running: "生成草稿中", draft_pending: "待确认草稿",
     notify_pending: "待人工确认", published: "已发布", published_limited: "仅自己可见", failed: "失败", blocked: "受阻", canceled: "已取消"
@@ -192,32 +196,44 @@
 
   // 登录异常只看账号状态：采集新鲜度是另一条口径，不能混成一个"坏"。
   function levelOf(account){
+    return account ? (STATE_LEVEL[account.state] ?? "") : "";
+  }
+
+  function statusText(account){
     if(!account) return "";
-    if(account.state === "expired" || account.state === "banned") return "bad";
-    if(account.state === "expiring") return "warn";
-    return "";
+    return STATE_TEXT[account.state] ?? String(account.state);
+  }
+
+  // 槽位上的状态是 state 的唯一投影：warn / bad 用徽标，ok 用绿点，其余（如 manual）用灰标。
+  function statusHtml(account){
+    const level = levelOf(account);
+    const text = esc(statusText(account));
+    if(level) return '<span class="badge ' + level + '">' + text + "</span>";
+    if(account.state === "ok") return '<span class="status-ok"><i></i>' + text + "</span>";
+    return '<span class="badge mute">' + text + "</span>";
   }
 
   function statusSub(account, level){
     if(level === "bad") return "发布与采集已暂停";
     if(level === "warn") return "建议提前续期";
-    return account.is_manual ? "仅手动发布" : "运行中";
+    return account.is_manual || account.state === "manual" ? "仅手动发布" : "运行中";
   }
 
   function issueOf(account){
     const level = levelOf(account);
+    const text = statusText(account);
     if(level === "bad"){
       const last = account.lastCollectedAt ? " · 最近成功采集 " + formatTime(account.lastCollectedAt) : "";
-      return "登录已失效 · 发布与采集暂停" + last;
+      return text + " · 发布与采集暂停" + last;
     }
     if(level === "warn"){
       if(Number.isInteger(account.expires_at)){
         const hours = Math.round((Number(account.expires_at) - Date.now()) / 3600e3);
-        if(hours > 0) return "登录 " + hours + " 小时后过期 · 到期将自动暂停发布与采集";
+        if(hours > 0) return text + " · 登录 " + hours + " 小时后过期 · 到期将自动暂停发布与采集";
       }
-      return "登录将过期 · 到期将自动暂停发布与采集";
+      return text + " · 到期将自动暂停发布与采集";
     }
-    return account.is_manual ? "登录正常 · 仅手动发布" : "登录正常 · 发布与采集运行中";
+    return text + (account.is_manual || account.state === "manual" ? " · 仅手动发布" : " · 发布与采集运行中");
   }
 
   function publishCell(account){
@@ -345,21 +361,47 @@
     if(scroll) detail.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
-  function renderSlots(accounts){
-    const slots = $("slots");
-    slots.innerHTML = "";
-    const columns = VK.platforms();
-    if(!columns.length){
+  /* 槽位是平台列，不是账号行：同一平台只落一个账号。
+   * 历史数据里可能同时存在规范名（xiaohongshu）与别名（xhs）两行，此时必须固定挑一个，
+   * 否则 find() 会按数据库排序随手命中一行，页面文案就会和 /api/accounts 对不上。 */
+  function platformColumns(){
+    const seen = new Set();
+    return VK.platforms().filter((column) => {
+      if(seen.has(column.platform)) return false;
+      seen.add(column.platform);
+      return true;
+    });
+  }
+
+  function slotAccount(column, accounts){
+    const matches = accounts.filter((a) => VK.platformOf(a)?.platform === column.platform);
+    if(!matches.length) return null;
+    return matches.slice().sort((a, b) => {
+      // 规范平台名优先（别名行是历史重复数据）；再看最近体检时间；最后按 id 稳定排序。
+      const exact = (account) => (String(account.platform) === column.platform ? 1 : 0);
+      if(exact(a) !== exact(b)) return exact(b) - exact(a);
+      const checked = (Number(b.last_checked_at) || 0) - (Number(a.last_checked_at) || 0);
+      if(checked) return checked;
+      return String(a.id).localeCompare(String(b.id));
+    })[0];
+  }
+
+  function slotsOf(accounts){
+    return platformColumns().map((column) => ({ column, account: slotAccount(column, accounts) }));
+  }
+
+  function renderSlots(slots){
+    const element = $("slots");
+    element.innerHTML = "";
+    if(!slots.length){
       const failed = document.createElement("p");
       failed.className = "notice bad";
       failed.textContent = "读不到平台槽位：/api/bootstrap 没有返回矩阵列（守护进程在跑吗？终端执行 vk serve）";
-      slots.appendChild(failed);
+      element.appendChild(failed);
       return;
     }
 
-    columns.forEach((column) => {
-      const account = accounts.find((a) => VK.platformOf(a)?.platform === column.platform) ?? null;
-
+    slots.forEach(({ column, account }) => {
       if(account){
         const level = levelOf(account);
         const row = document.createElement("div");
@@ -367,7 +409,7 @@
         row.tabIndex = 0;
         row.setAttribute("role", "button");
         row.dataset.account = account.id;
-        row.setAttribute("aria-label", column.label + " · " + account.handle + " · " + levelText[level]);
+        row.setAttribute("aria-label", column.label + " · " + account.handle + " · " + statusText(account));
         row.innerHTML =
           '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
             '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>' +
@@ -378,9 +420,7 @@
 
         row.querySelector(".slot-name").textContent = account.handle;
         row.querySelector(".slot-sub").textContent = column.label + " · " + statusSub(account, level);
-        row.querySelector(".slot-status").innerHTML = level
-          ? '<span class="badge ' + (level === "bad" ? "bad" : "warn") + '">' + levelText[level] + "</span>"
-          : '<span class="status-ok"><i></i>登录正常</span>';
+        row.querySelector(".slot-status").innerHTML = statusHtml(account);
 
         const publish = publishCell(account);
         const collect = collectCell(account);
@@ -404,7 +444,7 @@
         row.addEventListener("keydown", (event) => {
           if(event.key === "Enter" || event.key === " "){ event.preventDefault(); select(account.id, true); }
         });
-        slots.appendChild(row);
+        element.appendChild(row);
       } else {
         const row = document.createElement("div");
         row.className = "slot empty";
@@ -419,9 +459,28 @@
         const link = row.querySelector(".gap-add");
         link.href = "/accounts/add?platform=" + encodeURIComponent(column.platform);
         link.textContent = "+ 添加" + column.label;
-        slots.appendChild(row);
+        element.appendChild(row);
       }
     });
+  }
+
+  /* 同平台多行是数据问题：唯一索引是按原始 platform 字符串建的，xhs / xiaohongshu
+   * 这类别名能绕过去。页面只渲染一个槽位，但要把多余账号写出来，不能悄悄吞掉。 */
+  function renderDuplicates(slots, accounts){
+    const lead = $("duplicate-lead");
+    const groups = slots
+      .map(({ column }) => ({ column, accounts: accounts.filter((a) => VK.platformOf(a)?.platform === column.platform) }))
+      .filter((group) => group.accounts.length > 1);
+    if(!groups.length){
+      lead.hidden = true;
+      lead.textContent = "";
+      return;
+    }
+    lead.hidden = false;
+    lead.textContent = groups
+      .map(({ column, accounts }) => column.label + " 有 " + accounts.length + " 个账号（" +
+        accounts.map((a) => a.handle + " " + a.id).join("、") + "）")
+      .join("；") + "。同一平台只渲染一个槽位；多余的请运行 vk account remove <账号 id> 清理。";
   }
 
   function renderTodos(accounts){
@@ -459,9 +518,12 @@
     const group = VK.current();
     if(!group) return;
     const accounts = VK.accounts();
-    const bad = accounts.filter((a) => levelOf(a) === "bad").length;
-    const warn = accounts.filter((a) => levelOf(a) === "warn").length;
-    const columns = VK.platforms();
+    const columns = platformColumns();
+    const slots = slotsOf(accounts);
+    // 摘要、待处理与详情都只认槽位账号：同平台的重复行不能在页面上变成两个“账号”。
+    const connected = slots.map((slot) => slot.account).filter(Boolean);
+    const bad = connected.filter((a) => levelOf(a) === "bad").length;
+    const warn = connected.filter((a) => levelOf(a) === "warn").length;
 
     // 注意别叫 select：页面里 select(id) 是「选中某个账号」的函数，同名会把它覆盖掉。
     const groupSelect = $("group-select");
@@ -471,21 +533,21 @@
     }
     $("add-btn").href = "/accounts/add";
 
-    const parts = [accounts.length + " / " + (columns.length || 5) + " 个平台已接入"];
-    if(!accounts.length) parts.push("还没有账号");
+    const parts = [connected.length + " / " + (columns.length || 5) + " 个平台已接入"];
+    if(!connected.length) parts.push("还没有账号");
     else {
       if(bad) parts.push(bad + " 个登录异常");
-      if(warn) parts.push(warn + " 个将过期");
+      if(warn) parts.push(warn + " 个即将过期");
       if(!bad && !warn) parts.push("登录正常");
     }
     $("sub").textContent = parts.join(" · ");
 
-    const checked = accounts.map((a) => Number(a.last_checked_at) || 0);
+    const checked = connected.map((a) => Number(a.last_checked_at) || 0);
     const latest = checked.length ? Math.max(...checked) : 0;
     $("check-cadence").textContent = latest ? "最近体检 " + formatTime(latest) + " · 每 6 小时" : "还没有体检记录 · 每 6 小时自动体检";
 
     const lead = $("empty-lead");
-    if(!accounts.length){
+    if(!connected.length){
       lead.hidden = false;
       lead.textContent = "这个账号组还没有接入任何账号。从下面任意一个平台的缺口开始，添加后会出现在这里。";
     } else {
@@ -493,12 +555,13 @@
       lead.textContent = "";
     }
 
-    renderTodos(accounts);
-    renderSlots(accounts);
+    renderDuplicates(slots, accounts);
+    renderTodos(connected);
+    renderSlots(slots);
 
-    const keep = selected && accounts.some((a) => a.id === selected)
+    const keep = selected && connected.some((a) => a.id === selected)
       ? selected
-      : (accounts.find((a) => levelOf(a) === "bad") ?? accounts.find((a) => levelOf(a) === "warn") ?? accounts[0])?.id ?? null;
+      : (connected.find((a) => levelOf(a) === "bad") ?? connected.find((a) => levelOf(a) === "warn") ?? connected[0])?.id ?? null;
     if(keep) select(keep, false);
     else { selected = null; $("detail").hidden = true; }
   }
