@@ -160,23 +160,35 @@ fi
 # 不泄漏终端，worker 也保留已经初始化的 profile（dsh 尤其需要）。
 ensure_terminal() {
   local role="$1" wt="$2" title="$3"
-  local f="$STATE_DIR/$role.terminal"
+  local f="$STATE_DIR/$role.terminal" cf="$STATE_DIR/$role.channel"
+  # dsh worker 的模型通道（volc/qwen）。WORKER_AGENT 指定时走原生 agent，不涉及。
+  local channel=""
+  if [ -z "$WORKER_AGENT" ]; then
+    channel=$(bin/dsh-model.sh) || { log "    ✗ 没有可用的模型通道（火山与千问都不可用）"; return 1; }
+  fi
   if [ -s "$f" ]; then
     local h; h=$(cat "$f")
-    if orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
+    # 通道变了（火山→千问或反过来）就不能复用：终端里的 dsh 已经绑定了旧模型。
+    # 旧终端不关——可能还有 dispatch 在用；只解除映射并留痕，空闲终端由人或 TTL 清理。
+    if [ -n "$channel" ] && [ "$(cat "$cf" 2>/dev/null)" != "$channel" ]; then
+      log "    · $role 模型通道变为 $channel，不复用旧终端 $h"
+      rm -f "$f"
+    elif orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
       printf '%s\n' "$h"; return 0
+    else
+      rm -f "$f"
     fi
-    rm -f "$f"
   fi
   local new
   if [ -n "$WORKER_AGENT" ]; then
     made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
     new=$(printf '%s' "$made" | jfind handle)
   else
-    new=$(bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
+    new=$(DSH_CHANNEL="$channel" bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
   fi
   [ -n "$new" ] || return 1
   printf '%s' "$new" > "$f"
+  [ -n "$channel" ] && printf '%s' "$channel" > "$cf"
   printf '%s\n' "$new"
 }
 

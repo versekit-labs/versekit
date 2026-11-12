@@ -1,0 +1,7 @@
+# 主通道：火山 coding plan 上的 DeepSeek V4.1 Flash。
+# 叠在 dsh-tui profile 之上（dsh --patch），只改默认模型，不复制整个 profile。
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: arkcli-coding-plan
+    model: deepseek-v4.1-flash

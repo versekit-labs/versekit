@@ -22,16 +22,27 @@ set -euo pipefail
 
 WT="${1:-current}"
 TITLE="${2:-worker}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 die() { printf 'worker-up: %s\n' "$1" >&2; exit 1; }
 
 command -v orca >/dev/null 2>&1 || die "找不到 orca 命令"
 
+# 0. 选模型通道：火山 V4.1 Flash 优先，不可用切千问（见 bin/dsh-model.sh）。
+#    调用方（cycle.sh）已选好就传 DSH_CHANNEL，避免重复探测。
+CHANNEL="${DSH_CHANNEL:-$("$HERE/dsh-model.sh")}" || die "没有可用的模型通道（火山与千问都不可用）"
+case "$CHANNEL" in
+  volc|qwen) ;;
+  *) die "未知模型通道：$CHANNEL" ;;
+esac
+PATCH="$HERE/dsh/$CHANNEL-flash.patch.yml"
+[ -f "$PATCH" ] || die "缺少补丁文件：$PATCH"
+
 # 1. 起终端。DSH_PROFILE 已在用户 shell 里配好（dsh-tui），这里显式写出来，
 #    避免依赖调用方的环境——自动化跑起来时环境不一定和交互式 shell 一致。
 out=$(orca terminal create \
   --worktree "$WT" \
-  --command "dsh --profile dsh-tui" \
+  --command "dsh --profile dsh-tui --patch $PATCH" \
   --title "$TITLE" \
   --json 2>&1) || die "terminate create 失败：$out"
 
