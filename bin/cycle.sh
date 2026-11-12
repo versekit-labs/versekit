@@ -62,7 +62,7 @@ if ! mkdir "$CYCLE_LOCK" 2>/dev/null; then
     rm -rf "$CYCLE_LOCK"
     mkdir "$CYCLE_LOCK" 2>/dev/null || { log "另一个协调器在跑，本轮跳过"; exit 0; }
   else
-    log "另一个协调器在跑（锁 $CYCLE_LOCK），本轮跳过"
+    log "另一个协调器在跑（锁 ${CYCLE_LOCK}），本轮跳过"
     exit 0
   fi
 fi
@@ -137,6 +137,18 @@ fi
 [ -n "${RUN_ID:-}" ] || { log "拿不到 Run id，无法派工"; exit 1; }
 log "Run: $RUN_ID"
 
+# 先绑定再干活：Run 同一时刻只有一个终端是所有者，task-create / worker-start 这类写操作
+# 对非所有者一律 consumer_fenced。别的会话（比如人对话的协调器）若占了所有权，
+# 不先拿回来，派工会在 task-create 上失败，而且错误信息是空的。
+# 这个脚本是 Run 的所有者；人对话的协调器只读，不拥有 Run（见 docs/COORDINATOR.md）。
+if [ "$DRY" != "1" ]; then
+  bind_out=$(orca orchestration run-use --id "$RUN_ID" --json 2>&1) || true
+  if [ "$(printf '%s' "$bind_out" | jget ok)" != "True" ]; then
+    log "  ✗ 绑定 Run 失败：$(printf '%s' "$bind_out" | jget error.code) $(printf '%s' "$bind_out" | jget error.message | head -c 200)"
+    exit 1
+  fi
+fi
+
 # ---------------------------------------------------------------- 1. 机械迁移
 log "== 1/6 机械迁移 =="
 if [ "$DRY" = "1" ]; then
@@ -160,23 +172,35 @@ fi
 # 不泄漏终端，worker 也保留已经初始化的 profile（dsh 尤其需要）。
 ensure_terminal() {
   local role="$1" wt="$2" title="$3"
-  local f="$STATE_DIR/$role.terminal"
+  local f="$STATE_DIR/$role.terminal" cf="$STATE_DIR/$role.channel"
+  # dsh worker 的模型通道（volc/qwen）。WORKER_AGENT 指定时走原生 agent，不涉及。
+  local channel=""
+  if [ -z "$WORKER_AGENT" ]; then
+    channel=$(bin/dsh-model.sh) || { log "    ✗ 没有可用的模型通道（火山与千问都不可用）"; return 1; }
+  fi
   if [ -s "$f" ]; then
     local h; h=$(cat "$f")
-    if orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
+    # 通道变了（火山→千问或反过来）就不能复用：终端里的 dsh 已经绑定了旧模型。
+    # 旧终端不关——可能还有 dispatch 在用；只解除映射并留痕，空闲终端由人或 TTL 清理。
+    if [ -n "$channel" ] && [ "$(cat "$cf" 2>/dev/null)" != "$channel" ]; then
+      log "    · $role 模型通道变为 ${channel}，不复用旧终端 $h"
+      rm -f "$f"
+    elif orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
       printf '%s\n' "$h"; return 0
+    else
+      rm -f "$f"
     fi
-    rm -f "$f"
   fi
   local new
   if [ -n "$WORKER_AGENT" ]; then
     made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
     new=$(printf '%s' "$made" | jfind handle)
   else
-    new=$(bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
+    new=$(DSH_CHANNEL="$channel" bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
   fi
   [ -n "$new" ] || return 1
   printf '%s' "$new" > "$f"
+  [ -n "$channel" ] && printf '%s' "$channel" > "$cf"
   printf '%s\n' "$new"
 }
 
