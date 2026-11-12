@@ -131,7 +131,13 @@ export async function pageLoggedIn(tab) {
   const here = await tab.url().catch(() => "");
   if (!here || /\/login/.test(here)) return false;
   if (!/creator\.xiaohongshu\.com/.test(here)) return false;
+
+  // 1) 有会话 cookie 就是登录了：SPA 首页懒加载，DOM 文案可能一直不出现。
+  const cookies = await tab.cookies("https://creator.xiaohongshu.com").catch(() => []);
+  if (cookies.some((c) => ["web_session", "access-token", "customer-session"].includes(c.name) && c.value)) return true;
+
+  // 2) 没有 cookie 时再看页面入口文案；两者都不成立才算没登录。
   return tab
-    .eval(`/发布笔记|笔记管理|数据看板|发布图文|发布视频/.test(document.body.innerText || '')`)
+    .eval(`/发布笔记|笔记管理|数据看板|发布图文|发布视频|创作服务/.test(document.body.innerText || '')`)
     .catch(() => false);
 }

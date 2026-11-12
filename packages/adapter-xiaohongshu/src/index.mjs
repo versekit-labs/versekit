@@ -19,6 +19,7 @@ const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official"
 const LOGIN = "https://creator.xiaohongshu.com/login";
 const DATA = "https://creator.xiaohongshu.com/statistics/data-analysis";
 const API = "/api/galaxy/creator/datacenter/note";
+const CHECK_URL = "https://creator.xiaohongshu.com/publish/publish";
 const LOGIN_DETAIL = "小红书未登录：在账号自己的 Chrome 里打开创作服务平台，用手机号收验证码登录一次，然后重试";
 const MAX_TITLE = 20;
 const MAX_BODY = 1000;
@@ -297,6 +298,18 @@ async function collect({ publishId } = {}) {
   }
 }
 
+/**
+ * 登录态判定：**看站点把不把你踢回登录页**，不看某个具体 DOM。
+ *
+ * 上一版要求页面上存在 input/textarea/.tiptap 才算登录；实测登录成功后落在
+ * `/new/home`，这一页是懒加载的 SPA，无头浏览器里 DOM 可能一直不出现，于是
+ * 「明明登录了」被判定成过期。
+ *
+ * 现在两个证据，任一成立即为已登录：
+ *   1. 访问需要登录的发布页后，URL 仍是 creator 域且不在 /login；
+ *   2. cookie 里存在会话类 cookie（web_session / access-token / customer-session）。
+ * 只有「被重定向到 /login 且没有会话 cookie」才判定过期——这是站点自己的说法。
+ */
 async function check(ctx = {}) {
   const accountId = ctx?.accountId;
   if (typeof accountId !== "string" || !accountId.trim()) throw new AdapterError("unknown", "check 需要 accountId");
@@ -304,14 +317,31 @@ async function check(ctx = {}) {
   try {
     // 只探测登录态，不需要人看窗口：用无头 Chrome，避免验证时又弹一个浏览器。
     tab = await openAccount({ accountId, headless: true });
-    await tab.goto(LOGIN);
-    const state = await tab.waitFor(
-      `location.pathname.includes('/login') ? 'login' : (document.querySelector('input, textarea, .tiptap') ? 'ok' : '')`,
-      [],
-      { timeout: 30e3, every: 500, what: "小红书登录态" },
+    await tab.goto(CHECK_URL, { waitUntil: "domcontentloaded" });
+
+    // 给 SPA 一次客户端跳转的机会：未登录时它会把自己送到 /login。
+    await tab
+      .waitFor(`location.pathname.includes('/login') || /\/publish|\/new\//.test(location.pathname)`, [], {
+        timeout: 20e3,
+        every: 300,
+        what: "小红书发布页落点",
+      })
+      .catch(() => {});
+
+    const here = (await tab.url().catch(() => "")) || "";
+    const onLogin = /\/login/.test(here);
+
+    const cookies = await tab.cookies("https://creator.xiaohongshu.com").catch(() => []);
+    const sessionCookie = cookies.some((c) =>
+      ["web_session", "access-token", "customer-session", "customerClientId"].includes(c.name) && c.value,
     );
-    if (state === "login") return { state: "expired", detail: LOGIN_DETAIL };
-    return { state: "ok" };
+
+    if (!onLogin && /creator\.xiaohongshu\.com/.test(here)) return { state: "ok" };
+    if (onLogin && sessionCookie) return { state: "ok" }; // 会话 cookie 在手，登录页只是引导
+    if (onLogin) return { state: "expired", detail: LOGIN_DETAIL };
+
+    // 落在别处（网络错误 / 风控页）：不冒充成功，也不误判过期。
+    throw new AdapterError("flaky_ui", `小红书登录态无法确认：当前在 ${here || "空白页"}`);
   } catch (err) {
     throw await wrap(tab, accountId, "check")(err);
   } finally {
