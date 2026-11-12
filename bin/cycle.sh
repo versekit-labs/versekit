@@ -62,7 +62,7 @@ if ! mkdir "$CYCLE_LOCK" 2>/dev/null; then
     rm -rf "$CYCLE_LOCK"
     mkdir "$CYCLE_LOCK" 2>/dev/null || { log "另一个协调器在跑，本轮跳过"; exit 0; }
   else
-    log "另一个协调器在跑（锁 $CYCLE_LOCK），本轮跳过"
+    log "另一个协调器在跑（锁 ${CYCLE_LOCK}），本轮跳过"
     exit 0
   fi
 fi
@@ -183,7 +183,7 @@ ensure_terminal() {
     # 通道变了（火山→千问或反过来）就不能复用：终端里的 dsh 已经绑定了旧模型。
     # 旧终端不关——可能还有 dispatch 在用；只解除映射并留痕，空闲终端由人或 TTL 清理。
     if [ -n "$channel" ] && [ "$(cat "$cf" 2>/dev/null)" != "$channel" ]; then
-      log "    · $role 模型通道变为 $channel，不复用旧终端 $h"
+      log "    · $role 模型通道变为 ${channel}，不复用旧终端 $h"
       rm -f "$f"
     elif orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
       printf '%s\n' "$h"; return 0
