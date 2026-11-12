@@ -28,6 +28,7 @@ npm run ci
 | 页面引用了 `api.js` 或含 `fetch('/api` | 没有就是硬编码 |
 | `design-check --url` 通过（任务书/导航/死链/检测器/触控/溢出/hidden） | 任一失败即打回 |
 | 每页的任务书存在 | 缺一页即打回 |
+| [ACC-gate-01] 每页、每个视口加载后无未捕获脚本错误（`Runtime.exceptionThrown` / error 级控制台消息） | 任一页出现即打回，并输出页面名与错误文本 |
 
 ## 二、逐页验收项
 
@@ -83,6 +84,8 @@ npm run ci
 ### 添加账号 `add.html`
 - [ACC-add-01] 组已锁定；已接入平台灰掉并说明被谁占用。
 - [ACC-add-02] 完成回到账号页能看到新账号。
+- [ACC-add-03] 添加 B站账号后，用户在页面上点一次即可完成登录，全程不需要打开终端、不需要复制命令；`biliup … login` 命令最多作为「高级/手动」折叠项保留，不得是必经步骤。
+- [ACC-add-04] 登录完成后页面自己检查并给出结果（成功 / 失败原因），不依赖用户回来点「我已登录，检查」；失败有可读原因与重试入口，不静默。
 - 实现提示 命令：`vk account add --group <g> <platform>`
 
 ## 三、数字一致性（最容易糊弄的地方）
@@ -129,4 +132,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-model-05 | `bash -n bin/cycle.sh bin/worker-up.sh bin/dsh-model.sh`；`grep -nP '\$[A-Za-z_]\w*[^\x00-\x7F]' bin/*.sh`；`bin/cycle.sh --dry-run --no-consume` | 语法检查无输出；grep 无输出（变量名后紧跟全角标点会在 `set -u` 下报未绑定，`bash -n` 查不出）；dry-run 退出码 0，且不改任何 issue 状态 |
 | ACC-harness-coord-01 | 读 `docs/COORDINATOR.md` | 含"开场""worker 的消息怎么到你这里""不满意→动作""四块 issue"四部分；明确协调器不写业务代码、不私聊 worker、不手改 `s:*`、**不拥有 Run、不 `run-use`** |
 | ACC-harness-run-01 | 读 `bin/cycle.sh`；`bash -n`；`bin/cycle.sh --dry-run --no-consume` | `run-use` 出现在任何 `task-create` / `worker-start` 之前；绑定失败时输出错误码并退出非 0，不静默继续；dry-run 不触发绑定、退出码 0 |
+| ACC-harness-cycle-01 | 在无终端环境（如 `env -i` 或 Orca automation precheck）下运行 `bin/cycle.sh --max 1` | 不再因 `no_active_sender_terminal` 退出；`s:ready` 的 issue 能被派工 |
+| ACC-harness-cycle-02 | 让绑定 Run 失败一次以上 | 日志写明原因；失败超过一次后人能看到（如在 issue/Run 上留评论，或写入协调器开场会读的状态文件），不静默 |
+| ACC-harness-cycle-03 | 对照 `docs/COORDINATOR.md` 与 `bin/cycle.sh` 注释 | Run 所有权分工一致、不互相抢占：脚本不依赖终端句柄也能完成派工与合并；收件箱归协调器 |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
