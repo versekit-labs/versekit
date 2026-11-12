@@ -213,6 +213,9 @@ async function creatorLoggedIn(accountId, knownTab = null) {
 
 function daemonHandlers(adapters, log) {
   const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
+  // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
+  // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
+  const adapterOf = (platform) => adapters.find((a) => a.platform === platform)?.adapter ?? null;
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
@@ -232,6 +235,17 @@ function daemonHandlers(adapters, log) {
     "account.login.open": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+      const adapter = adapterOf(account.platform);
+      if (typeof adapter?.login === "function") {
+        const result = await adapter.login({ accountId, credentialRef: account.credential_ref ?? null });
+        loginSessions.set(accountId, { openedAt: Date.now(), mode: result?.mode ?? "browser" });
+        return {
+          opened: true,
+          url: result?.url ?? null,
+          mode: result?.mode ?? "browser",
+          next: result?.next ?? `已在 ${account.platform} 的浏览器窗口打开登录页，登录完不用回来点任何按钮，页面会自动识别`,
+        };
+      }
       const url =
         account.platform === "xiaohongshu"
           ? "https://creator.xiaohongshu.com/login"
@@ -283,6 +297,17 @@ function daemonHandlers(adapters, log) {
     "account.login.status": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+
+      // 适配器能读自己的登录窗口时以它为准（B站：cookie 写文件）。写入路径回填到账号行，
+      // 之后的 check / 发布 / 采集都只用这一条 credential_ref。
+      const adapter = adapterOf(account.platform);
+      if (typeof adapter?.loginStatus === "function") {
+        const result = await adapter.loginStatus({ accountId, credentialRef: account.credential_ref ?? null });
+        if (result?.state === "ok" && result.credentialRef && result.credentialRef !== account.credential_ref) {
+          open().prepare("UPDATE account SET credential_ref=? WHERE id=?").run(result.credentialRef, accountId);
+        }
+        return result;
+      }
 
       // 只认页面：人在窗口里登录成功后，这里自然变成 ok，不依赖任何内存会话。
       if (await creatorLoggedIn(accountId)) {
@@ -478,6 +503,18 @@ function daemonHandlers(adapters, log) {
     "account.reauth": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+      // 适配器自带登录流程时用它：B站会打开扫码窗口，不再回一句「去终端跑 biliup」。
+      const adapter = adapterOf(account.platform);
+      if (typeof adapter?.login === "function") {
+        const result = await adapter.login({ accountId, credentialRef: account.credential_ref ?? null });
+        log(`[reauth] 打开 ${account.platform} 登录窗口（账号 ${accountId}）`);
+        return {
+          accountId,
+          started: true,
+          mode: result?.mode ?? "browser",
+          next: result?.next ?? `已在 ${account.platform} 的浏览器窗口打开登录窗口，完成后页面会自动确认`,
+        };
+      }
       const url = LOGIN_URL[account.platform];
       if (!url) return core["account.reauth"]({ accountId });
       await openAccount({ accountId, url });

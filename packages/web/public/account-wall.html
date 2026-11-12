@@ -142,7 +142,7 @@
       <div class="detail-grid">
         <div class="fact"><div class="fact-label">最近发布</div><div class="fact-value mono" id="d-publish"></div><div class="fact-meta" id="d-publish-meta"></div></div>
         <div class="fact"><div class="fact-label">最近采集</div><div class="fact-value mono" id="d-collect"></div><div class="fact-meta" id="d-collect-meta"></div></div>
-        <div class="fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
+        <div class="fact" id="d-cmd-fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
       </div>
       <p class="notice detail-note" id="d-feedback" role="status" hidden></p>
     </section>
@@ -258,12 +258,17 @@
   function primaryOf(account){
     const level = levelOf(account);
     if(level){
+      const bilibili = VK.platformOf(account)?.platform === "bilibili";
       return {
         label: "重新登录",
         primary: true,
-        cmd: "vk account reauth " + account.id,
+        // B站不再把「去终端跑 biliup」当等价命令：登录窗口就是页面开的，命令只留在 add.html 的
+        // 高级折叠项里。这里的 cmd 仅在详情面板显示，B站直接隐藏整格。
+        cmd: bilibili ? "页面扫码登录（无需终端）" : "vk account reauth " + account.id,
         run: () => VK.reauthAccount(account.id),
-        feedback: (result) => result?.next ?? "已发起重新登录，按提示在这台电脑上完成。"
+        feedback: (result) => bilibili
+          ? "登录窗口已打开：扫码后页面会自动确认；没确认成功不会显示「已完成」。"
+          : (result?.next ?? "登录窗口已打开，按提示完成。")
       };
     }
     const mode = account.is_manual ? "auto" : "manual";
@@ -296,17 +301,81 @@
     if(label) button.textContent = pending ? "正在处理…" : label;
   }
 
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /* B站重新登录：接口只负责打开扫码窗口，成功与否必须由 login.status + check 确认。
+   * 没确认成功时页面绝不写「重新登录完成」，失败原因和重试入口都留在详情面板里。 */
+  async function verifyBiliLogin(accountId){
+    const deadline = Date.now() + 180e3;
+    feedback($("d-feedback"), "登录窗口已打开：请用 B站 App 扫码；页面会自动确认结果。", false);
+    while(Date.now() < deadline){
+      await wait(2000);
+      let status;
+      try{
+        status = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/status", {
+          method: "POST",
+          body: { accountId },
+        });
+      }catch(err){
+        feedback($("d-feedback"), "读取登录状态失败：" + err.message + "。可点「重新登录」再试。", true);
+        return false;
+      }
+
+      if(status.state === "pending"){
+        feedback($("d-feedback"), status.note ?? "等待扫码…", false);
+        continue;
+      }
+      if(status.state === "ok"){
+        feedback($("d-feedback"), "已拿到登录信息，正在用 biliup 确认…", false);
+        try{
+          const check = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/check", {
+            method: "POST",
+            body: { accountId },
+          });
+          if(check.state === "ok"){
+            await VK.ready({ force: true });
+            render();
+            feedback($("d-feedback"), "重新登录完成：登录状态已确认正常。", false);
+            toast("重新登录完成");
+            return true;
+          }
+          feedback($("d-feedback"), "登录没完成：" + (check.detail ?? check.state) + "。可点「重新登录」再试。", true);
+          toast("登录未完成：" + (check.detail ?? check.state), true);
+          return false;
+        }catch(err){
+          feedback($("d-feedback"), "登录信息已保存，但 biliup 确认失败：" + err.message + "。可点「重新登录」再试。", true);
+          toast("登录未完成：" + err.message, true);
+          return false;
+        }
+      }
+      if(status.state === "idle" || status.state === "failed"){
+        feedback($("d-feedback"), status.note ?? "没有检测到登录完成。点「重新登录」再试。", true);
+        toast("登录未完成", true);
+        return false;
+      }
+    }
+    feedback($("d-feedback"), "3 分钟内没有检测到登录完成；登录窗口可能已关闭。点「重新登录」再试。", true);
+    toast("登录未完成：还没检测到扫码结果", true);
+    return false;
+  }
+
   async function runPrimary(accountId){
     const account = VK.account(accountId);
     if(!account) return;
     const action = primaryOf(account);
+    const bilibili = VK.platformOf(account)?.platform === "bilibili";
     const button = $("d-action");
     busy(button, true, action.label);
     try{
       const result = await action.run();
+      if(bilibili && action.label === "重新登录"){
+        await verifyBiliLogin(accountId);
+        return;
+      }
       render();
       feedback($("d-feedback"), action.feedback(result), false);
-      toast(action.label + "完成");
+      // 「打开登录窗口」不等于「登录完成」：没有 check 确认就绝不报成功。
+      toast(action.label === "重新登录" ? "登录窗口已打开，完成登录后页面会自动更新" : action.label + "完成");
     }catch(err){
       feedback($("d-feedback"), action.label + "失败：" + err.message, true);
       toast(action.label + "失败：" + err.message, true);
@@ -346,6 +415,9 @@
     $("d-collect").textContent = collect.value;
     $("d-collect-meta").textContent = collect.meta;
     $("d-cmd").textContent = action.cmd;
+    // B站登录在页面里完成，把「等价命令」整格收起来：它不是必经步骤，也不该在面板底部
+    // 伪装成下一步。手动命令只保留在 add.html 的高级折叠项里。
+    $("d-cmd-fact").hidden = VK.platformOf(account)?.platform === "bilibili";
 
     const primary = $("d-action");
     primary.textContent = action.label;
