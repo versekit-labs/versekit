@@ -167,6 +167,31 @@
     el.className = "login-status" + (level ? " " + level : "");
   }
 
+  /* 自动轮询只读「登录状态」，不跑 account.check：
+   * check 会探测发布页、并且可能换目标页，轮询它等于每 4 秒打断一次登录。
+   * login.status 只读当前窗口的 URL 与会话 cookie，不动页面。
+   */
+  async function pollStatus(){
+    if(!loginAccountId) return false;
+    try{
+      const result = await VK.request("/api/accounts/" + encodeURIComponent(loginAccountId) + "/login/status", {
+        method: "POST",
+        body: { accountId: loginAccountId },
+      });
+      if(result.state === "ok"){
+        setLoginStatus("登录成功，这个账号可以发布与采集了。", "ok");
+        $("done-title").textContent = "已接入并登录";
+        $("check-login").hidden = true;
+        $("open-login").hidden = true;
+        stopPoll();
+        return true;
+      }
+      return false;
+    }catch(_e){
+      return false;
+    }
+  }
+
   async function checkLogin(silent){
     if(!loginAccountId) return false;
     if(!silent) setLoginStatus("正在检查登录状态…", "pending");
@@ -211,7 +236,7 @@
     pollTimer = setInterval(() => {
       ticks += 1;
       if(ticks > 75 || document.hidden && ticks > 5){ stopPoll(); return; }
-      checkLogin(true);
+      pollStatus();
     }, 4000);
   }
 
