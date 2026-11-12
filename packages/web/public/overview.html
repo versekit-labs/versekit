@@ -39,6 +39,7 @@
 .sp:last-child{border-bottom:0}
 .sp.sp-head{color:var(--faint);font-size:12px;padding-top:8px;padding-bottom:8px}
 .sp-who{display:flex;align-items:center;gap:8px;min-width:0}
+.plogo{width:18px;height:18px;flex:none;border-radius:4px}
 .sp-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
 .track{display:block;height:6px;border-radius:3px;background:var(--line-soft);overflow:hidden}
@@ -48,6 +49,8 @@
 .dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}
 .empty{padding:22px 16px;color:var(--muted);font-size:13px;line-height:1.6}
 .empty b{color:var(--ink);font-weight:600}
+/* 文案里的内联链接也要有 32px 的命中区，字号与行高不变。 */
+.empty a{display:inline-flex;align-items:center;min-height:32px;margin-block:-6px}
 .groupbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
 .gchip{border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:var(--paper);font-size:12px;color:var(--muted)}
 .gchip b{color:var(--ink);font-weight:600}
@@ -199,7 +202,9 @@
 
     const fresh = VK.freshness();
     $("s-fresh").textContent = (fresh.fresh ?? 0) + "/" + (fresh.total ?? 0);
-    $("s-fresh-d").textContent = fresh.failing ? (fresh.failing + " 个账号采集失败") : "1 小时内采集过";
+    $("s-fresh-d").textContent = !fresh.total
+      ? "还没有接入账号"
+      : fresh.failing ? (fresh.failing + " 个账号采集失败") : "1 小时内采集过";
 
     // 每日柱状：成功与失败各一根；没有记录的那天给灰柱，别画成 0 成功。
     const buckets = new Map();
@@ -230,6 +235,8 @@
 
     // 按平台：当前组每个平台的发布数与最近采集状态。
     const accounts = VK.accounts();
+    const slotTotal = VK.platforms().length || 5;
+    $("sub").textContent = "最近 " + n + " 天 · " + (accounts.length ? accounts.length + " / " + slotTotal + " 个平台已接入" : "还没有接入账号");
     const columns = VK.platformMap();
     const rows = Object.entries(columns).filter(([key]) => !["bili","xhs"].includes(key));
     const per = new Map();
@@ -263,10 +270,10 @@
       '<span class="gchip">' + (g.name === group.name ? "<b>"+g.name+"</b>" : g.name) + ' · ' + (g.account_count ?? 0) + ' 账号<\/span>'
     ).join("");
 
-    const bad = accounts.filter(a => a.state === "expired" || a.state === "banned").length;
+    const badAccounts = accounts.filter(a => a.state === "expired" || a.state === "banned").length;
     const gaps = 5 - accounts.length;
-    $("next-step").innerHTML = bad
-      ? '有 <b>'+bad+'</b> 个账号登录失效，<a href="/accounts">去重新登录 →<\/a>'
+    $("next-step").innerHTML = badAccounts
+      ? '有 <b>'+badAccounts+'</b> 个账号登录失效，<a href="/accounts">去重新登录 →<\/a>'
       : gaps > 0
         ? '还有 <b>'+gaps+'</b> 个平台没接入，<a href="/accounts">去添加 →<\/a>'
         : (publishes.length ? '账号都正常，去<a href="/publish">发布下一条 →<\/a>' : '账号齐了，发第一条试试：<a href="/publish">去发布 →<\/a>');
