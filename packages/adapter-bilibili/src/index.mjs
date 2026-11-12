@@ -13,6 +13,7 @@ import { readFileSync, existsSync, accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { login, loginStatus } from "./login.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
@@ -74,8 +75,8 @@ function load(publishId) {
 }
 
 function cookiesOf(credentialRef) {
-  if (!credentialRef) throw new Error("这个 B站账号没有凭证：先 biliup -u <cookies.json> login，再把路径填进 account.credential_ref");
-  if (!existsSync(credentialRef)) throw new Error(`B站登录文件不存在：${credentialRef}（biliup -u ${credentialRef} login，选「浏览器登录」）`);
+  if (!credentialRef) throw new Error("这个 B站账号还没有凭证：在账号页点「重新登录」，用页面扫码完成登录（会自动写入凭证路径）");
+  if (!existsSync(credentialRef)) throw new Error(`B站登录文件不存在：${credentialRef}（在账号页点「重新登录」重新扫码，登录完成后会写回这个路径）`);
   const parsed = JSON.parse(readFileSync(credentialRef, "utf8"));
   const list = parsed?.cookie_info?.cookies ?? parsed?.cookies ?? [];
   const pair = (name) => list.find((c) => c.name === name)?.value;
@@ -235,7 +236,10 @@ export default {
     if (!hasBiliup()) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
     return null;
   },
-  login: null, // 登录在 biliup CLI 里做（浏览器登录），不需要我们实现
+  // 页面扫码：开有头窗口 → 人扫码 → 适配器把 cookie 写成 biliup 的 cookies 文件。
+  // `biliup login` 本身必须有 TTY（实测 0.2.4 报 not a terminal），所以不再要求人开终端。
+  login,
+  loginStatus,
   check,
   publish,
   collect,

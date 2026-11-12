@@ -19,6 +19,11 @@
 .login-status.pending{color:var(--navy)}
 .login-status.ok{color:var(--green);font-weight:600}
 .login-status.warn{color:var(--amber)}
+.manual-login{margin-top:10px;width:100%;border:1px solid var(--line);border-radius:6px;background:var(--paper-subtle)}
+.manual-login summary{min-height:32px;display:flex;align-items:center;padding:0 12px;font-size:12px;color:var(--muted);cursor:pointer}
+.manual-login summary:hover{color:var(--ink)}
+.manual-login .manual-body{padding:0 12px 12px;font-size:12px;line-height:1.6;color:var(--muted)}
+.manual-login[hidden]{display:none}
 .done-box{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:20px;border:1px solid var(--green-line);border-radius:8px;background:var(--green-bg)}
 .done-box h2{font-size:18px;font-weight:650;color:var(--green)}
 .done-box p{color:var(--muted);font-size:13px;line-height:1.6}
@@ -91,6 +96,13 @@
           <p id="done-text"></p>
           <ol class="auth-steps" id="login-steps"></ol>
           <p class="login-status" id="login-status" role="status"></p>
+          <details class="manual-login" id="manual-login" hidden>
+            <summary>高级：手动登录（可选，平时不需要）</summary>
+            <div class="manual-body">
+              <p>如果自动打开登录窗口失败，可以在终端执行下面这条命令；它和页面走的是同一条路，凭证仍然只落本机。</p>
+              <div class="cmd" style="width:100%"><b>等价命令</b><code id="manual-cmd"></code></div>
+            </div>
+          </details>
           <div class="cmd" style="width:100%" id="done-cmd-wrap"><b>等价命令</b><code id="done-cmd"></code></div>
           <p class="hint" id="done-hint"></p>
           <div class="form-actions" style="justify-content:flex-start;margin-top:4px">
@@ -153,13 +165,15 @@
    *
    * 两条路分得很清：
    *   · 网页登录（小红书/抖音/TikTok/YouTube）：直接开有头浏览器窗口，人自己登录；
-   *   · B站：适配器走 biliup CLI，只能给命令，不能假装能扫码。
+   *   · B站：适配器会开 B站登录页窗口，人扫码；页面读登录窗口的 cookie 写成 biliup 凭证，
+   *     再用 account.check（biliup renew）确认。页面不再要求人开终端。
    * 检查统一走 account.check —— 它跑适配器的 check()，把真实状态写回账号行。
    */
   const WEB_LOGIN = new Set(["xiaohongshu", "douyin", "tiktok", "youtube"]);
   let loginAccountId = null;
   let loginPlatform = null;
   let pollTimer = null;
+  let confirming = false;
 
   function setLoginStatus(text, level){
     const el = $("login-status");
@@ -167,9 +181,19 @@
     el.className = "login-status" + (level ? " " + level : "");
   }
 
-  /* 自动轮询只读「登录状态」，不跑 account.check：
-   * check 会探测发布页、并且可能换目标页，轮询它等于每 4 秒打断一次登录。
-   * login.status 只读当前窗口的 URL 与会话 cookie，不动页面。
+  function markLoggedIn(){
+    setLoginStatus("登录成功，这个账号可以发布与采集了。", "ok");
+    $("done-title").textContent = "已接入并登录";
+    $("check-login").hidden = true;
+    $("open-login").hidden = true;
+    $("manual-login").hidden = true;
+    stopPoll();
+  }
+
+  /* 自动轮询只读「登录状态」：
+   * login.status 只读登录窗口的 cookie / 当前窗口的 URL，不动页面。
+   * B站拿到 cookie 不等于能用——只有 account.check（biliup renew）说 ok 才算成功，
+   * 这一步放在 confirmLogin 里，避免页面先报「已登录」再打脸。
    */
   async function pollStatus(){
     if(!loginAccountId) return false;
@@ -179,16 +203,56 @@
         body: { accountId: loginAccountId },
       });
       if(result.state === "ok"){
-        setLoginStatus("登录成功，这个账号可以发布与采集了。", "ok");
-        $("done-title").textContent = "已接入并登录";
-        $("check-login").hidden = true;
-        $("open-login").hidden = true;
-        stopPoll();
+        if(loginPlatform === "bilibili") return await confirmLogin();
+        markLoggedIn();
         return true;
+      }
+      if(result.state === "pending"){
+        if(result.note) setLoginStatus(result.note, "pending");
+        return false;
+      }
+      if(result.state === "idle" || result.state === "failed"){
+        stopPoll();
+        setLoginStatus(result.note ?? "没有检测到登录完成：可以点「重新打开登录窗口」再试。", "warn");
+        $("open-login").hidden = false;
+        $("open-login").textContent = "重新打开登录窗口";
+        return false;
       }
       return false;
     }catch(_e){
       return false;
+    }
+  }
+
+  /* B站：cookie 已经写进本机凭证文件，再让适配器 check 一次（biliup renew）。
+   * 这里失败要给出可读原因和重试入口，不能静默，也不能提前显示成功。 */
+  async function confirmLogin(){
+    // 轮询是 2 秒一次，而 check（biliup renew）可能要几秒；不要并发重复检查。
+    if(confirming) return false;
+    confirming = true;
+    setLoginStatus("已拿到登录信息，正在用 biliup 确认…", "pending");
+    try{
+      const result = await VK.request("/api/accounts/" + encodeURIComponent(loginAccountId) + "/check", {
+        method: "POST",
+        body: { accountId: loginAccountId },
+      });
+      if(result.state === "ok"){ markLoggedIn(); return true; }
+      stopPoll();
+      setLoginStatus(
+        "登录信息已保存，但 biliup 校验没通过：" + (result.detail ?? result.state) + "。可以重新打开登录窗口再扫一次。",
+        "warn",
+      );
+      $("open-login").hidden = false;
+      $("open-login").textContent = "重新打开登录窗口";
+      return false;
+    }catch(err){
+      stopPoll();
+      setLoginStatus("登录信息已保存，但 biliup 校验失败：" + err.message + "。可以重试。", "warn");
+      $("open-login").hidden = false;
+      $("open-login").textContent = "重新打开登录窗口";
+      return false;
+    }finally{
+      confirming = false;
     }
   }
 
@@ -204,14 +268,7 @@
         setLoginStatus("这个平台还没有自动检查：登录完成后请手动确认一次。", "warn");
         return false;
       }
-      if(result.state === "ok"){
-        setLoginStatus("登录成功，这个账号可以发布与采集了。", "ok");
-        $("done-title").textContent = "已接入并登录";
-        $("check-login").hidden = true;
-        $("open-login").hidden = true;
-        stopPoll();
-        return true;
-      }
+      if(result.state === "ok"){ markLoggedIn(); return true; }
       setLoginStatus(
         result.state === "expiring" ? "已登录，但凭证快过期了。" :
         result.state === "expired" ? "还没检测到登录：在打开的窗口里完成登录，再点「我已登录，检查」。" :
@@ -231,13 +288,20 @@
   }
   function startPoll(){
     stopPoll();
-    // 人在另一个窗口扫码，这里每 4 秒认一次结果；最多认 5 分钟，不无限转。
+    // 人在另一个窗口扫码，这里每 2 秒认一次结果；最多认 5 分钟，不无限转。
     let ticks = 0;
     pollTimer = setInterval(() => {
       ticks += 1;
-      if(ticks > 75 || document.hidden && ticks > 5){ stopPoll(); return; }
+      // 不看 document.hidden：人扫码时这个标签页就在登录窗口后面，按后台 20 秒就停会永远认不到结果。
+      if(ticks > 150){
+        stopPoll();
+        setLoginStatus("5 分钟内没有检测到登录完成；可以点「重新打开登录窗口」再试。", "warn");
+        $("open-login").hidden = false;
+        $("open-login").textContent = "重新打开登录窗口";
+        return;
+      }
       pollStatus();
-    }, 4000);
+    }, 2000);
   }
 
   async function guideLogin({ accountId, platform, label }){
@@ -248,6 +312,8 @@
     $("open-login").hidden = true;
     $("check-login").hidden = true;
     $("done-hint").textContent = "";
+    $("manual-login").hidden = true;
+    $("done-cmd-wrap").hidden = false;
 
     if(!adapters.has(platform)){
       $("done-title").textContent = "已登记";
@@ -280,16 +346,29 @@
     }
 
     if(platform === "bilibili"){
-      $("done-title").textContent = "登录 B站（用 biliup）";
+      $("done-title").textContent = "登录 B站";
       $("login-steps").innerHTML =
-        "<li>B站走 <code>biliup</code> 登录，不是网页扫码；打开终端执行下面这条命令。</li>" +
-        "<li>命令会弹出浏览器，扫码登录后把 cookies 存到指定文件。</li>" +
-        "<li>回来点「我已登录，检查」，通过后这个账号就能发 B站。</li>";
-      $("done-cmd-wrap").hidden = false;
-      $("done-cmd").textContent = "biliup -u ~/.config/versekit/credentials/bili-cookies.json login";
+        "<li>正在为你打开 B站登录窗口…</li>" +
+        "<li>在那个人浏览器窗口里用 B站 App 扫码，并在手机上确认。</li>" +
+        "<li>这个页面会自动识别结果：只有 biliup 确认可用才显示「已登录」，失败会给出原因和重试。</li>";
+      $("done-cmd-wrap").hidden = true;
+      $("manual-login").hidden = false;
+      $("manual-cmd").textContent = "biliup -u ~/.config/versekit/credentials/bili-<账号 id>.json login";
+      $("check-login").hidden = true;
       $("open-login").hidden = true;
-      $("check-login").hidden = false;
-      setLoginStatus("在终端执行上面那条命令完成 B站登录。", "pending");
+      setLoginStatus("正在打开 B站登录窗口…", "pending");
+      try{
+        await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/open", {
+          method: "POST",
+          body: { accountId },
+        });
+        setLoginStatus("登录窗口已打开：请用 B站 App 扫码并确认，这里会自动识别。", "pending");
+        startPoll();
+      }catch(err){
+        setLoginStatus("打不开登录窗口：" + err.message + "（点「重新打开登录窗口」重试，或展开下面的手动方式）", "warn");
+        $("open-login").hidden = false;
+        $("open-login").textContent = "重新打开登录窗口";
+      }
       return;
     }
 
@@ -359,11 +438,11 @@
     if(!column) return;
 
     $("auth-hint").textContent = column.label;
-    $("auth-desc").textContent = "把账号登记进「" + group.name + "」。授权不在这一页伪造：登记完成后，账号页会给出这条账号的等价命令。";
+    $("auth-desc").textContent = "把账号登记进「" + group.name + "」。登记完成后会直接打开登录窗口；授权不会在这一页伪造。";
     const steps = [
       "填写账号名并点「完成接入」，账号进入当前组",
       adapters.has(column.platform)
-        ? "回到账号页，点这个账号的「重新登录」，在这台电脑上完成" + column.auth
+        ? "页面会打开登录窗口，在这里完成" + column.auth + "，结果由页面自动确认"
         : "这个平台还没有安装适配器（packages/adapter-" + column.platform + "）：账号可以先登记，授权与发布等适配器装好",
       "完成后，账号页的登录状态与最近采集会跟着更新"
     ];
