@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# 一轮协调：**官方 coordinator loop 的确定性版本**
+# 一轮协调：**官方 coordinator loop 的机械段落**
 # （orca skills get orchestration --full / Canonical supervised loop）。
 #
-# 之前这脚本只做了"派工"：派完就退出，从不 check、从不 ack、从不结算。
-# 结果是收件箱堆消息、终端全 retained、合并靠人点。官方循环要求的是：
+# Run 是命名空间 + 协调器收件箱，所有权归人对话的协调器（见 docs/COORDINATOR.md）。
+# cycle.sh 是机械脚本：**不拥有 Run、不消费收件箱**，只做不需要所有权的段落：
 #
 #   1. 机械迁移      agentctl tick --apply        （doing 有 PR → review）
 #   2. 合并          agentctl merge --pending      （脚本合并，双门禁）
 #   3. 派工实现      claim → worker-start          （一次建 Task + Dispatch）
 #   4. 派工验收      queue + 锁 → worker-start
-#   5. 消费消息      check → 逐条处理 → ack
-#   6. 结算          每个已结算终端：复用 / retain / release
+#   5. 消费消息      归协调器；脚本只做只读 peek，失败留痕后继续
+#   6. 结算          归协调器；脚本不 worker-list / release
 #
 # 两条来自官方指南的硬约束，改动时不要违反：
 #   - `worker_done` 只发一次，必须带 taskId + dispatchId；心跳不等于完成。
@@ -53,6 +53,24 @@ mkdir -p "$LOCK_DIR" "$STATE_DIR"
 find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_TTL_MIN" -exec rm -rf {} + 2>/dev/null || true
 
 log() { printf '%s\n' "$*"; }
+
+# 所有权探测失败不能静默：逐轮写日志；连续失败 >=2 次再落一个协调器开场会读的
+# alert 文件。失败只影响「消费/结算」段落，不影响派工与合并。
+OWNER_FAIL_LOG="$STATE_DIR/cycle-owner-failures.log"
+reset_owner_failures() {
+  : > "$OWNER_FAIL_LOG"
+  rm -f "$STATE_DIR/cycle-owner-alert.txt"
+}
+record_owner_failure() {
+  local code="$1" msg="$2" n
+  printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$RUN_ID" "$code" "$msg" >> "$OWNER_FAIL_LOG"
+  n=$(wc -l < "$OWNER_FAIL_LOG" | tr -d ' ')
+  if [ "${n:-0}" -ge 2 ]; then
+    printf 'Run 所有权探测连续失败 %s 次（%s）。\n最后错误：%s %s\ncycle.sh 已继续派工/合并；消费与结算仍归协调器，未 ack、未释放终端。\n' \
+      "$n" "$(date -u +%FT%TZ)" "$code" "$msg" > "$STATE_DIR/cycle-owner-alert.txt"
+    log "  ⚠ 所有权探测连续失败 ${n} 次，已写入 $STATE_DIR/cycle-owner-alert.txt（协调器开场会读）"
+  fi
+}
 
 # 同一时刻只允许一个协调器在跑。launchd 与手动触发很容易撞车——
 # 撞车的后果不是报错，是"两个人都以为自己在派工"。
@@ -124,30 +142,23 @@ except Exception: print("")
 }
 
 # ---------------------------------------------------------------- 0. Run
-# 所有 orchestration 调用都显式带 --run：automation 起的新终端没有绑定，
-# 不显式带会在 task-create 上失败，而且报错不会告诉你是缺 Run。
-RUN_FILE="$HOME/.orca/versekit-run-id"
+# Run 是命名空间 + 协调器收件箱，所有权归协调器（docs/COORDINATOR.md）。
+# cycle.sh 不 run-use、不创建 Run：automation precheck 没有终端句柄，绑定必然失败；
+# task-create / worker-start 需要发送方句柄：显式带 --run 与 Run 所有者的 --from，
+# 既不需要脚本自己的终端，也不改变 Run 所有权。
+RUN_FILE="${RUN_FILE:-$HOME/.orca/versekit-run-id}"
 if [ -s "$RUN_FILE" ]; then
   RUN_ID=$(cat "$RUN_FILE")
 else
-  created=$(orca orchestration run-create --objective "versekit 多 agent 协作" --json 2>/dev/null || true)
-  RUN_ID=$(printf '%s' "$created" | jfind runId)
-  [ -n "$RUN_ID" ] && printf '%s' "$RUN_ID" > "$RUN_FILE"
+  log "✗ 没有 Run id 文件：$RUN_FILE"
+  log "  Run 归协调器：先在协调器终端 run-use，把 id 写进这个文件；cycle.sh 不创建、不抢 Run"
+  exit 1
 fi
 [ -n "${RUN_ID:-}" ] || { log "拿不到 Run id，无法派工"; exit 1; }
-log "Run: $RUN_ID"
-
-# 先绑定再干活：Run 同一时刻只有一个终端是所有者，task-create / worker-start 这类写操作
-# 对非所有者一律 consumer_fenced。别的会话（比如人对话的协调器）若占了所有权，
-# 不先拿回来，派工会在 task-create 上失败，而且错误信息是空的。
-# 这个脚本是 Run 的所有者；人对话的协调器只读，不拥有 Run（见 docs/COORDINATOR.md）。
-if [ "$DRY" != "1" ]; then
-  bind_out=$(orca orchestration run-use --id "$RUN_ID" --json 2>&1) || true
-  if [ "$(printf '%s' "$bind_out" | jget ok)" != "True" ]; then
-    log "  ✗ 绑定 Run 失败：$(printf '%s' "$bind_out" | jget error.code) $(printf '%s' "$bind_out" | jget error.message | head -c 200)"
-    exit 1
-  fi
-fi
+RUN_OWNER=$(orca orchestration run-show --id "$RUN_ID" --json 2>/dev/null | jget result.run.coordinator_handle)
+SENDER="${RUN_OWNER:-${ORCA_TERMINAL_HANDLE:-}}"
+[ -n "${SENDER:-}" ] || { log "✗ Run 没有可用的所有者句柄，无法派工（不 run-use、不抢所有权）"; exit 1; }
+log "Run: ${RUN_ID}（所有者 ${RUN_OWNER:-未知}；本进程终端 ${ORCA_TERMINAL_HANDLE:-无}；派工 --from ${SENDER}）"
 
 # ---------------------------------------------------------------- 1. 机械迁移
 log "== 1/6 机械迁移 =="
@@ -281,7 +292,7 @@ for s in d.get("skipped") or []:
     "$num" "$title" "$wt" "$num" "$body")
 
   local task taskid start dispatch
-  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "issue #$num 实现" --spec "$spec" --json 2>&1) || task=""
+  task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 实现" --spec "$spec" --json 2>&1) || task=""
   taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
   if [ -z "$taskid" ]; then
     log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
@@ -290,7 +301,7 @@ for s in d.get("skipped") or []:
     return 1
   fi
 
-  start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$wt" --json 2>/dev/null) || start=""
+  start=$(orca orchestration worker-start --run "$RUN_ID" --from "$SENDER" --task "$taskid" --terminal "$handle" --worktree "$wt" --json 2>/dev/null) || start=""
   dispatch=$(printf '%s' "$start" | jpick result.dispatchId result.dispatch.id dispatchId)
   if [ -z "$dispatch" ]; then
     log "    ✗ worker-start 失败：$(printf '%s' "$start" | head -c 300)"
@@ -355,7 +366,7 @@ dispatch_acceptance() {
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid start dispatch
-  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "验收 #$num" --spec "$spec" --json 2>&1) || task=""
+  task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "验收 #$num" --spec "$spec" --json 2>&1) || task=""
   taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
   if [ -z "$taskid" ]; then
     log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
@@ -363,7 +374,7 @@ dispatch_acceptance() {
     return 1
   fi
 
-  start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json 2>/dev/null) || start=""
+  start=$(orca orchestration worker-start --run "$RUN_ID" --from "$SENDER" --task "$taskid" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json 2>/dev/null) || start=""
   dispatch=$(printf '%s' "$start" | jpick result.dispatchId result.dispatch.id dispatchId)
   if [ -z "$dispatch" ]; then
     log "    ✗ worker-start 失败"
@@ -378,121 +389,37 @@ dispatch_acceptance() {
 dispatch_acceptance || FAILED=1
 
 # ---------------------------------------------------------------- 5. 消费消息
-# 官方投递语义：check 返回最早的 FIFO 批次，**未 ack 会重放**。
-# 所以顺序只能是：取出 → 逐条处理 → ack。处理不完就 ack，等于把消息弄丢。
+# 收件箱归协调器（docs/COORDINATOR.md）：cycle.sh 不拥有 Run，不 check 消费、不 ack、
+# 不处理消息。这里只做一次只读 --peek：它不标记已读、不消费消息，只用来发现
+# 「无终端句柄 / 所有权被抢」并把原因留痕；失败不阻断派工与合并。
 log "== 5/6 消费消息 =="
 if [ "$CONSUME" = "0" ] || [ "$DRY" = "1" ]; then
-  log "  · 跳过（dry-run / --no-consume）"
+  log "  · 跳过（dry-run / --no-consume；收件箱归协调器）"
+elif [ -z "${ORCA_TERMINAL_HANDLE:-}" ]; then
+  # automation precheck 的正常形态：没有终端句柄，也就没有 Run 所有权。
+  # 这不是故障；记一行状态供协调器开场查看，不刷 alert。
+  reset_owner_failures
+  printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$RUN_ID" "no_terminal" >> "$STATE_DIR/cycle-owner-state.log"
+  log "  · 跳过消费：无终端句柄（automation precheck），收件箱归协调器"
 else
-  check=$(orca orchestration check --run "$RUN_ID" --json 2>/dev/null) || check=""
-  ok=$(printf '%s' "$check" | jget ok)
-  if [ "$ok" != "True" ]; then
-    # consumer_fenced = 这个终端不再拥有该 Run。重新绑定一次，只绑不改状态。
-    log "  ⚠ check 失败，尝试重新绑定 Run"
-    orca orchestration run-use --id "$RUN_ID" >/dev/null 2>&1 || true
-    check=$(orca orchestration check --run "$RUN_ID" --json 2>/dev/null) || check=""
-  fi
-
-  delivery=$(printf '%s' "$check" | jget result.deliveryId)
-  count=$(printf '%s' "$check" | jget result.count)
-  log "  本轮消息 ${count:-0} 条（delivery ${delivery:-none}）"
-
-  printf '%s' "$check" | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-r=d.get("result") or {}
-for m in r.get("messages") or []:
-    p=m.get("payload")
-    if isinstance(p,str):
-        try: p=json.loads(p)
-        except Exception: p={}
-    print(json.dumps({
-        "id": m.get("id"),
-        "type": m.get("type") or "status",
-        "subject": m.get("subject") or "",
-        "dispatch": (p or {}).get("dispatchId") or "",
-        "outcome": (p or {}).get("outcome") or "",
-    }, ensure_ascii=False))
-' 2>/dev/null | while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    mtype=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["type"])' 2>/dev/null || true)
-    msubj=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["subject"][:80])' 2>/dev/null || true)
-    mdisp=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["dispatch"])' 2>/dev/null || true)
-    mout=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["outcome"])' 2>/dev/null || true)
-    issue=$(issue_for_dispatch "$mdisp")
-
-    case "$mtype" in
-      merge_ready)
-        log "  → merge_ready：${msubj}"
-        node bin/agentctl.mjs merge --pending 2>&1 | sed 's/^/    /' | head -6 || true
-        ;;
-      worker_done)
-        if [ "$mout" = "failed" ]; then
-          log "  ✗ worker 报告失败：${msubj}（issue ${issue:-未知}）"
-          if [ -n "$issue" ]; then
-            node bin/agentctl.mjs set --issue "$issue" --to blocked >/dev/null 2>&1 || true
-            bin/ghx issue edit "$issue" --add-label hold:human >/dev/null 2>&1 || true
-            log "    → #$issue 置 s:blocked + hold:human"
-          fi
-        else
-          log "  ✓ worker_done：${msubj}"
-        fi
-        ;;
-      escalation|question)
-        # 协调器是脚本，不能替人做产品判断。这类消息一律升级给人，
-        # 并且必须落成 issue 状态——留在聊天里等于没发生。
-        log "  ⚠ ${mtype}：${msubj}"
-        printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$mtype" "$msubj" >> "$STATE_DIR/escalations.log"
-        if [ -n "$issue" ]; then
-          node bin/agentctl.mjs set --issue "$issue" --to blocked >/dev/null 2>&1 || true
-          bin/ghx issue edit "$issue" --add-label hold:human >/dev/null 2>&1 || true
-          log "    → #$issue 置 s:blocked + hold:human（等人）"
-        fi
-        ;;
-      *)
-        log "  · ${mtype}：${msubj}"
-        ;;
-    esac
-  done || true
-
-  # ack 之后立刻 peek：只确认、不把下一批标记已读，留给下一轮处理。
-  if [ -n "$delivery" ]; then
-    if orca orchestration check --run "$RUN_ID" --ack "$delivery" --peek --json >/dev/null 2>&1; then
-      log "  已 ack ${delivery}"
-    else
-      log "  ⚠ ack 失败：${delivery}（下一轮会被重放，不是丢消息）"
-      FAILED=1
-    fi
+  probe=$(orca orchestration check --run "$RUN_ID" --peek --json 2>&1) || true
+  if [ "$(printf '%s' "$probe" | jget ok)" = "True" ]; then
+    reset_owner_failures
+    log "  · 跳过消费：本终端可见 Run，但收件箱归协调器（cycle.sh 只 peek，不 ack）"
+  else
+    code=$(printf '%s' "$probe" | jget error.code)
+    msg=$(printf '%s' "$probe" | jget error.message | head -c 240)
+    log "  · 跳过消费：本终端不是 Run 所有者（${code:-unknown} ${msg:-没有错误消息}）"
+    log "    收件箱归协调器；cycle.sh 不 run-use、不 ack、不抢占"
+    record_owner_failure "${code:-unknown}" "${msg:-没有错误消息}"
   fi
 fi
 
 # ---------------------------------------------------------------- 6. 结算
-# 官方铁律：协调器 turn 结束前 reclaimable 必须为空。retained 是"没有做决定"，
-# 不是"安全状态"——我们的外部终端是有意 retain（复用），所以只强制清 reclaimable。
+# 终端账本（reclaimable / release）同样属于 Run 所有者。cycle.sh 不查、不释放，
+# 避免在无所有权时抢协调器的收件箱与终端资源；结算由协调器在开场/收尾时做。
 log "== 6/6 结算 =="
-if [ "$DRY" = "1" ]; then
-  log "  · 跳过（dry-run）"
-else
-  reclaimable=$(orca orchestration worker-list --run "$RUN_ID" --terminal-state reclaimable --json 2>/dev/null \
-    | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: d={}
-for w in (d.get("result") or {}).get("workers") or []:
-    print(w.get("dispatchId",""))' 2>/dev/null || true)
-  if [ -z "$reclaimable" ]; then
-    log "  · 没有待回收的终端"
-  else
-    for d in $reclaimable; do
-      [ -n "$d" ] || continue
-      if orca orchestration worker-release --dispatch "$d" >/dev/null 2>&1; then
-        log "  ✓ released $d"
-      else
-        log "  ⚠ release 失败：${d}（留给下一轮，或按 receipt 的 recovery 处理）"
-      fi
-    done
-  fi
-fi
+log "  · 跳过：终端结算归协调器（cycle.sh 不拥有 Run）"
 
 if [ "$FAILED" = "1" ]; then
   log "本轮有失败，见上方 ✗"
