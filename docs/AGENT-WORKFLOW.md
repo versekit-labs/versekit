@@ -77,19 +77,24 @@ Orca 编排层怎么运转、消息怎么走，见 `docs/ORCA-TEAM-PLAYBOOK.md`�
 **这是这套流程最重要的性质**：没有任何一步需要你说「去做 #12」。
 
 **实际只有一个** Orca 定时任务在转（`orca automations list` 可查）：`coordinator`，每 10 分钟一次，
-prompt 里只跑 `bin/cycle.sh`。三段动作由脚本内部完成，不是三个独立任务：
+prompt 里只跑 `bin/cycle.sh`。六个阶段由脚本内部完成，对应 Orca 官方的 coordinator loop：
 
-| 脚本阶段 | 频率（随 coordinator） | 干什么 |
-|---|---|---|
-| 机械迁移 | 每 10 分钟 | `agentctl tick --apply`：`doing` 有 PR 了 → 推到 `review` |
-| 派工 | 每 10 分钟 | `claim` 抢一个 `s:ready` 的 issue，起 worker，做到底并开 PR |
-| 验收派工 | 每 10 分钟 | 取队列里第一个待验收 PR，逐条比对 ACC，给 PASS/FAIL |
+| 脚本阶段 | 干什么 |
+|---|---|
+| 机械迁移 | `agentctl tick --apply`：`doing` 有 PR 了 → 推到 `review` |
+| 合并 | `agentctl merge --pending`：`s:accept` + verdict PASS + 五门禁绿 → squash 合并（**不用你点**） |
+| 派工 | `claim` 抢一个 `s:ready` 的 issue，起 worker，做到底并开 PR |
+| 验收派工 | 取队列里第一个待验收 PR，逐条比对 ACC，给 PASS/FAIL |
+| 消费消息 | `orca orchestration check` → 逐条处理 → `--ack`（不 ack 会重放） |
+| 结算 | 已结算终端：复用 / retain / release；`reclaimable` 必须为空 |
 
 它们互不知情、也不需要知道彼此——全靠 label 这个原子状态交接（抢单机制：先删 `s:ready`，删成功者赢）。
 
-> 注意：验收侧已有去重锁（同一 issue 同时只派一个验收，`accept-<issue>.lock`，TTL 45 分钟），
-> 但锁按 issue 号、不按 `head_sha`，打回后 45 分钟内复验会被跳过；
-> `coordinator` 的 `reuseSession` 仍是 `false`，每轮新起一个 session，重开 automation 前先定策略。
+**合并是脚本的活，不是人的活。** 但只要有一条不满足就不合，并把原因逐条打出来：
+判定不是 PASS、判定针对的 `head_sha` 与当前 head 不一致、ACC 条目没逐条覆盖、五道 CI 门禁没全绿。
+
+> 验收锁按 `issue + head_sha`（`accept-<issue>-<head8>.lock`），打回后新 head 能立刻复审。
+> `coordinator` 的 `reuseSession` 仍建议在重开 automation 前拍板：每轮新 session 是 6 次/小时的稳定开销。
 > 细节见 `docs/ORCA-TEAM-PLAYBOOK.md` §9。
 
 ### 你每天只需要做两件事
@@ -171,6 +176,29 @@ id 从哪来？`docs/design/ACCEPTANCE.md` 里本来就有。写完 grep 一下�
 
 ---
 
+### 你验收时说「这里不对」会发生什么
+
+**不新建 issue。** 反馈回到原工单、原 PR、原分支：
+
+```bash
+# 协调器代跑（你只需要说清"哪条、应该怎样、实际怎样、怎么复现"）
+npm run agentctl -- reject --issue 52 \
+  --item ACC-account-01 \
+  --expected "接口 ok 时页面必须显示「正常」" \
+  --observed "显示「即将过期」" \
+  --repro "打开 /accounts 对照 /api/accounts"
+```
+
+- 在**原 PR** 留一条带 `<!-- agent-handback -->` 的结构化 FAIL 评论（item / expected / observed / repro）
+- issue 置 `s:changes`，同一个 engineer 在同一分支改，改完重新验收
+- 打回超过 3 轮 → 自动 `s:blocked` + `hold:human`，等你拍板，不会无限循环
+
+**如果这个问题在原口径里根本没写**：用 `--item manual-review --reason "..."` 显式承认，
+协调器把它补进原 issue 的口径，再走同一条打回路径。仍然不新建 issue——
+新建 issue 只在真正的新范围（新接口、改 schema、需求本身变了）时才做。
+
+已合并的 issue 也能打回：`reject` 会先 reopen，再走 `s:changes`。
+
 ## 六、命令速查
 
 ```bash
@@ -201,13 +229,17 @@ bin/ghx issue list
 - ✅ CI 真跑（迁移到 `versekit-labs` 之后）
 - ✅ `agentctl tick` 算"该谁动"
 
-**还不能用**（按顺序做）：
+**已经能用（续）**：
 
-- ⬜ `agentctl dispatch`：自动开 worktree + 注入任务（**先要 tick 连续跑稳**）
-- ⬜ `agentctl review`：自动组装证据包 + 调验收 agent
-- ⬜ `agentctl merge`：双门禁通过后自动合并
-- ⬜ 轮次统计（要拉 PR 评论，会突破 2 请求上限，得先做缓存）
-- ⚠️ `test / npm test` 在 CI 上会挂住（本地 214 项全绿 16 秒），暂时没设成 required
+- ✅ `agentctl merge`：verdict PASS + head_sha 对齐 + ACC 逐条覆盖 + 五门禁 → 脚本合并
+- ✅ `agentctl reject`：人工验收打回，**回原 PR、同一分支改，不新建 issue**（3 轮上限后转 `blocked`）
+- ✅ `claim` 口径校验：issue 正文引用的 ACC id 在 `ACCEPTANCE.md` 里 grep 不到就不派工
+- ✅ `set` 迁移校验：非法迁移直接拒绝（`--force` 才放行，且告警）
+
+**还不能用**：
+
+- ⬜ 轮次统计报表（要拉 PR 评论，会突破 2 请求上限，得先做缓存）
+- ⚠️ 验收 verdict 的 YAML 块目前靠 spec 约束验收 agent 写，没有 CI 侧的独立校验
 
 **为什么不能一口气全做**：自动化写操作的前提，是判断逻辑已经稳定。顺序反了，你会得到一台自动制造未验收代码的机器。
 

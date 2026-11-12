@@ -1,224 +1,439 @@
 #!/usr/bin/env bash
-# 一轮协调：把 s:ready 的 issue 派给 dsh worker。
+# 一轮协调：**官方 coordinator loop 的确定性版本**
+# （orca skills get orchestration --full / Canonical supervised loop）。
 #
-# 这是 coordinator 的确定性部分——派工这件事不该让 LLM 现编。
-# 判断"该派谁"用 agentctl，执行"怎么派"用 Orca 原生原语，中间没有自由发挥的空间。
+# 之前这脚本只做了"派工"：派完就退出，从不 check、从不 ack、从不结算。
+# 结果是收件箱堆消息、终端全 retained、合并靠人点。官方循环要求的是：
 #
-# 顺序很重要：**先认领，再起 worker**。
-# 反过来的话，两个 worker 会同时抢到同一个 issue（认领才是锁），而且 worker 已经在
-# 干活了没法回收。先认领的代价是"认领成功但 worker 起不来"——这种情况会把 issue
-# 退回 s:ready，而不是留在 s:doing 装作有人在做。
+#   1. 机械迁移      agentctl tick --apply        （doing 有 PR → review）
+#   2. 合并          agentctl merge --pending      （脚本合并，双门禁）
+#   3. 派工实现      claim → worker-start          （一次建 Task + Dispatch）
+#   4. 派工验收      queue + 锁 → worker-start
+#   5. 消费消息      check → 逐条处理 → ack
+#   6. 结算          每个已结算终端：复用 / retain / release
+#
+# 两条来自官方指南的硬约束，改动时不要违反：
+#   - `worker_done` 只发一次，必须带 taskId + dispatchId；心跳不等于完成。
+#   - 空等/超时是 checkpoint，不是失败；只有正证据（exited）才能 stop/abandon/retry。
 #
 # 用法：
-#   bin/cycle.sh [--max N]     默认每轮最多派 2 个（并发上限，避免一次烧掉太多额度）
-#   bin/cycle.sh --dry-run     只打印会派什么，不动任何状态
+#   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
 #
 # 环境变量：
-#   ENGINEER_WT   实现 worker 的 worktree selector（默认 current）
-#   ACCEPTANCE_WT 验收 worker 的 worktree selector（默认 current）
+#   ENGINEER_WT / ACCEPTANCE_WT   worktree selector（默认 current）
+#   WORKER_AGENT                  指定则用 worker-start --agent，否则走 worker-up.sh
+#                                 （dsh 需要预配置 profile，--agent 会停在 landing page）
 #
 # 退出码：0 正常（含"没活"）；1 有派工失败。
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MAX=2
+MAX=1
 DRY=0
+CONSUME=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --max) MAX="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --no-consume) CONSUME=0; shift ;;
     *) echo "未知参数：$1" >&2; exit 1 ;;
   esac
 done
 
 ENGINEER_WT="${ENGINEER_WT:-current}"
 ACCEPTANCE_WT="${ACCEPTANCE_WT:-current}"
+WORKER_AGENT="${WORKER_AGENT:-}"
 FAILED=0
+
+LOCK_DIR="${LOCK_DIR:-$HOME/.orca/versekit-locks}"
+STATE_DIR="${STATE_DIR:-$HOME/.orca/versekit-state}"
+ACCEPT_LOCK_TTL_MIN="${ACCEPT_LOCK_TTL_MIN:-45}"
+mkdir -p "$LOCK_DIR" "$STATE_DIR"
+find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_TTL_MIN" -exec rm -rf {} + 2>/dev/null || true
 
 log() { printf '%s\n' "$*"; }
 
-# ---------------------------------------------------------------- 验收锁
-# 验收侧不抢单（重复审同一 PR 只是浪费），但"不抢单"不等于"可以重复派"。
-# 用 mkdir 的原子性做锁：同名目录创建成功才派工；失败说明已有一个验收在跑。
-# 锁放在仓库外，避免污染工作树；超过 TTL 自动过期，防止 worker 崩了永久堵住队列。
-LOCK_DIR="${LOCK_DIR:-$HOME/.orca/versekit-locks}"
-ACCEPT_LOCK_TTL_MIN="${ACCEPT_LOCK_TTL_MIN:-45}"
-mkdir -p "$LOCK_DIR"
-find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_TTL_MIN" -exec rm -rf {} + 2>/dev/null || true
+# 从 JSON 里取点号路径（缺失打空）。失败不抛错——CLI 版本差异不该让整轮崩掉。
+# 用 stdin 传 JSON：消息批次可能很大，塞 argv 会撞 ARG_MAX。
+jget() {
+  python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+for k in sys.argv[1].split("."):
+    d = d.get(k) if isinstance(d, dict) else None
+print("" if d is None else d)
+' "$1" 2>/dev/null || true
+}
 
-# ---------------------------------------------------------------- 1. 机械迁移
-# tick --apply 只做确定性迁移（doing 有 PR 了 → review）。它不该处理"派工"，
-# 因为派工要起进程，失败率和副作用都比改 label 大得多。
-log "== 1/3 机械迁移 =="
-node bin/agentctl.mjs tick --apply 2>&1 | sed -n '/已迁移\|本轮会迁移/,$p' | head -10 || true
+# 递归找第一个非空的键（worker-start 的 receipt 层级随版本变）。
+jfind() {
+  python3 -c '
+import json,sys
+key=sys.argv[1]
+def find(o):
+    if isinstance(o,dict):
+        v=o.get(key)
+        if isinstance(v,str) and v: return v
+        for x in o.values():
+            r=find(x)
+            if r: return r
+    elif isinstance(o,list):
+        for x in o:
+            r=find(x)
+            if r: return r
+    return ""
+try: print(find(json.load(sys.stdin)))
+except Exception: print("")
+' "$1" 2>/dev/null || true
+}
 
-# ---------------------------------------------------------------- Run 绑定
-# orchestration 的 task-create / worker-start 需要一个 Run。交互式终端里 Orca 会
-# 自动解析当前绑定，但 automation 起的新终端没有绑定——不显式带上 --run 就会
-# 报 "task-create 失败"，而且错误信息不会告诉你是缺 Run。
-# 用文件持有 run id：跨轮次复用同一个 Run，派工历史才连得起来。
+# ---------------------------------------------------------------- 0. Run
+# 所有 orchestration 调用都显式带 --run：automation 起的新终端没有绑定，
+# 不显式带会在 task-create 上失败，而且报错不会告诉你是缺 Run。
 RUN_FILE="$HOME/.orca/versekit-run-id"
 if [ -s "$RUN_FILE" ]; then
   RUN_ID=$(cat "$RUN_FILE")
 else
-  RUN_ID=$(orca orchestration run-create --objective "versekit 多 agent 协作" --json 2>/dev/null \
-    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("run",{}).get("id",""))')
-  [ -n "$RUN_ID" ] && mkdir -p "$(dirname "$RUN_FILE")" && printf '%s' "$RUN_ID" > "$RUN_FILE"
+  created=$(orca orchestration run-create --objective "versekit 多 agent 协作" --json 2>/dev/null || true)
+  RUN_ID=$(printf '%s' "$created" | jfind runId)
+  [ -n "$RUN_ID" ] && printf '%s' "$RUN_ID" > "$RUN_FILE"
 fi
 [ -n "${RUN_ID:-}" ] || { log "拿不到 Run id，无法派工"; exit 1; }
 log "Run: $RUN_ID"
 
-# ---------------------------------------------------------------- 2. 派工
-log "== 2/3 派工 =="
+# ---------------------------------------------------------------- 1. 机械迁移
+log "== 1/6 机械迁移 =="
+if [ "$DRY" = "1" ]; then
+  node bin/agentctl.mjs tick 2>&1 | sed -n '/本轮会迁移/,$p' | head -10 || true
+else
+  node bin/agentctl.mjs tick --apply 2>&1 | sed -n '/已迁移\|本轮会迁移/,$p' | head -10 || true
+fi
+
+# ---------------------------------------------------------------- 2. 合并
+# 合并由 label 状态驱动，不依赖消息顺序：s:accept + verdict PASS + 门禁绿就合。
+# 这样即使消息丢了一条，状态机也会在下一轮把它捞回来。
+log "== 2/6 合并 =="
+if [ "$DRY" = "1" ]; then
+  node bin/agentctl.mjs merge --pending --dry-run 2>&1 | head -10 || true
+else
+  node bin/agentctl.mjs merge --pending 2>&1 | head -10 || true
+fi
+
+# ---------------------------------------------------------------- 终端复用
+# 官方 Completion accounting 的第一选项是"同一终端接下一单"。复用有两个好处：
+# 不泄漏终端，worker 也保留已经初始化的 profile（dsh 尤其需要）。
+ensure_terminal() {
+  local role="$1" wt="$2" title="$3"
+  local f="$STATE_DIR/$role.terminal"
+  if [ -s "$f" ]; then
+    local h; h=$(cat "$f")
+    if orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
+      printf '%s\n' "$h"; return 0
+    fi
+    rm -f "$f"
+  fi
+  local new
+  if [ -n "$WORKER_AGENT" ]; then
+    made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
+    new=$(printf '%s' "$made" | jfind handle)
+  else
+    new=$(bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
+  fi
+  [ -n "$new" ] || return 1
+  printf '%s' "$new" > "$f"
+  printf '%s\n' "$new"
+}
+
+# 派工：一次建 Task + Dispatch，再把 dispatch 与 issue 的对应写下来。
+# 没有这份对应，收到 escalation 时协调器只知道"某个 dispatch 卡住了"，不知道是哪个工单。
+record_dispatch() {
+  local dispatch="$1" issue="$2" role="$3" pull="${4:-}"
+  [ -n "$dispatch" ] || return 0
+  printf '{"issue":%s,"role":"%s","pull":"%s"}\n' "$issue" "$role" "$pull" > "$STATE_DIR/dispatch-$dispatch.json"
+}
+
+issue_for_dispatch() {
+  local f="$STATE_DIR/dispatch-$1.json"
+  [ -f "$f" ] || return 0
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("issue",""))' "$f" 2>/dev/null || true
+}
 
 dispatch_one() {
   local role="$1" wt="$2"
   local claimed
-  claimed=$(node bin/agentctl.mjs claim --role "$role" --json 2>/dev/null) || {
-    log "  ✗ $role: claim 失败"
-    return 1
-  }
+  # dry-run 必须连 claim 都用只读版，否则"演练"会真的把 issue 抢走。
+  if [ "$DRY" = "1" ]; then
+    claimed=$(node bin/agentctl.mjs claim --role "$role" --dry-run --json 2>/dev/null) || {
+      log "  ✗ $role: claim 失败"; return 1
+    }
+  else
+    claimed=$(node bin/agentctl.mjs claim --role "$role" --json 2>/dev/null) || {
+      log "  ✗ $role: claim 失败"; return 1
+    }
+  fi
   local num title body
-  num=$(printf '%s' "$claimed" | python3 -c 'import json,sys;d=json.load(sys.stdin);c=d.get("claimed");print(c["number"] if c else "")')
+  num=$(printf '%s' "$claimed" | jget claimed.number)
   if [ -z "$num" ]; then
     log "  · $role: 没有可派的活"
+    # 口径不合格时把原因打出来，否则"没活"会掩盖"工单写坏了"
+    printf '%s' "$claimed" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+for s in d.get("skipped") or []:
+    sys.stderr.write("    ✗ #%s 口径不合格：%s\n" % (s.get("number"), s.get("why")))
+' 2>/dev/null || true
     return 0
   fi
-  title=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["claimed"]["title"])')
-  body=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["claimed"]["body"])')
+  title=$(printf '%s' "$claimed" | jget claimed.title)
+  body=$(printf '%s' "$claimed" | jget claimed.body)
+  local acc; acc=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(", ".join(json.load(sys.stdin)["claimed"].get("acc") or []))' 2>/dev/null || true)
 
   if [ "$DRY" = "1" ]; then
-    log "  · [dry-run] 会派 #$num 给 ${role}（worktree=${wt}）"
-    # dry-run 也要把认领退回去，否则状态会留在 doing
-    node bin/agentctl.mjs tick --apply >/dev/null 2>&1 || true
+    # claim --dry-run 不返回 claimed，只返回 wouldClaim；这里逐条报告。
+    printf '%s' "$claimed" | python3 -c '
+import json,sys
+role, wt = sys.argv[1], sys.argv[2]
+d = json.load(sys.stdin)
+would = d.get("wouldClaim") or []
+if not would:
+    print("  · [dry-run] 没有可派的活")
+for w in would:
+    print("  · [dry-run] 会派 #%s 给 %s（worktree=%s，口径 %s）" % (
+        w.get("number"), role, wt, ", ".join(w.get("ids") or [])))
+for s in d.get("skipped") or []:
+    print("  ✗ 跳过 #%s：%s" % (s.get("number"), s.get("why")))
+' "$role" "$wt" 2>/dev/null || log "  · [dry-run] 没有可派的活"
     return 0
   fi
 
-  log "  → #$num $title"
+  log "  → #$num ${title}（口径 ${acc}）"
   local handle
-  if ! handle=$(bin/worker-up.sh "$wt" "worker: #$num"); then
+  if ! handle=$(ensure_terminal "$role" "$wt" "worker: #$num"); then
     log "    ✗ 起 worker 终端失败，把 #$num 退回 s:ready"
     node bin/agentctl.mjs set --issue "$num" --to ready >/dev/null 2>&1 || \
       log "    ⚠ 自动退回失败，请手工把 #$num 改成 s:ready"
     return 1
   fi
-  log "    终端 $handle"
 
-  # spec 里带上"我在哪个 worktree"，worker 才知道该在哪改代码。
+  # spec 按官方 Task-spec contract 写：Target / Change / Constraints / Ownership / Observable acceptance。
   local spec
-  spec=$(printf '你是本仓库的%s agent（worktree=%s）。\n\n以下是你要做的工单：\n\n%s\n\n要求：\n- 严格按工单的「口径」验收条目实现\n- 完成后开 PR，body 含 Closes #%s 和证据包 YAML\n- 用 worker_done 结束，带 task-id 与 dispatch-id\n- 做不下去就发 escalation 并说明缺什么' \
-    "$role" "$wt" "$body" "$num")
+  spec=$(printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个 worktree 里工作，只动本分支。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+    "$num" "$title" "$wt" "$num" "$body")
 
-  local task
-  task=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>/dev/null \
-    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
-  if [ -z "$task" ]; then
+  local task taskid start dispatch
+  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "issue #$num 实现" --spec "$spec" --json 2>/dev/null) || task=""
+  taskid=$(printf '%s' "$task" | jfind taskId)
+  if [ -z "$taskid" ]; then
     log "    ✗ task-create 失败"
-    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     return 1
   fi
 
-  if orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$wt" --json >/dev/null 2>&1; then
-    log "    ✓ 已派工 task=$task"
-  else
-    log "    ✗ worker-start 失败"
-    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
+  start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$wt" --json 2>/dev/null) || start=""
+  dispatch=$(printf '%s' "$start" | jfind dispatchId)
+  if [ -z "$dispatch" ]; then
+    log "    ✗ worker-start 失败（issue 保持 s:doing，等 stale 规则处理）"
     return 1
   fi
+  record_dispatch "$dispatch" "$num" "$role"
+  log "    ✓ 已派工 task=$taskid dispatch=$dispatch"
   return 0
 }
 
-for i in $(seq 1 "$MAX"); do
-  dispatch_one engineer "$ENGINEER_WT" || FAILED=1
-done
+log "== 3/6 派工 =="
+# BSD 的 seq 1 0 会倒着输出 "1 0"，--max 0 反而派两次。显式挡掉。
+if [ "$MAX" -gt 0 ]; then
+  for i in $(seq 1 "$MAX"); do
+    dispatch_one engineer "$ENGINEER_WT" || FAILED=1
+  done
+fi
 
-# ---------------------------------------------------------------- 3. 验收派工
-log "== 3/3 验收派工 =="
+# ---------------------------------------------------------------- 4. 验收派工
+log "== 4/6 验收派工 =="
 
-# 验收与实现的差异：
-#   - 不抢单（多个验收方看同一 PR 只是浪费，不会损坏状态），但要靠锁去重
-#   - spec 必须带上 PR 号和"逐条引用 ACC id"的硬要求，否则 verdict 无法核对
-#   - 验收要跑真实服务看界面，所以要求用 8788 端口，避开实现方可能占用的 8787
 dispatch_acceptance() {
   local queue
   queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
-    log "  ✗ acceptance: 取队列失败"
-    return 1
+    log "  ✗ acceptance: 取队列失败"; return 1
   }
-  local num pull
-  num=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["number"] if q else "")')
+  local num pull head acc title
+  num=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["number"] if q else "")' 2>/dev/null || true)
   if [ -z "$num" ]; then
     log "  · acceptance: 没有待验收的"
     return 0
   fi
-  pull=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["pull"] or "")')
-  local title
-  title=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["title"])')
+  pull=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["pull"] or "")' 2>/dev/null || true)
+  head=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0].get("head") or "")' 2>/dev/null || true)
+  acc=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(", ".join(q[0].get("acc") or []))' 2>/dev/null || true)
+  title=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["title"])' 2>/dev/null || true)
 
   if [ "$DRY" = "1" ]; then
-    log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（worktree=${ACCEPTANCE_WT}）"
+    log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（head ${head:0:7}，口径 ${acc}）"
     return 0
   fi
 
-  # 同一 issue 同时只允许一个验收 dispatch；抢锁失败说明已有在跑的。
-  local lock="$LOCK_DIR/accept-$num.lock"
+  # 锁按 issue + head_sha：打回后同一 issue 的新 head 能立刻复审，不会被 TTL 误伤。
+  local lock="$LOCK_DIR/accept-$num-${head:0:8}.lock"
   if ! mkdir "$lock" 2>/dev/null; then
-    log "  · 验收 #$num 已在跑（锁存在），跳过"
+    log "  · 验收 #$num @${head:0:7} 已在跑（锁存在），跳过"
     return 0
   fi
 
-  log "  → 验收 #${num}（PR #${pull}）$title"
+  log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
   local handle
-  if ! handle=$(bin/worker-up.sh "$ACCEPTANCE_WT" "verify: #$num"); then
+  if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
     log "    ✗ 起验收终端失败"
     rm -rf "$lock"
     return 1
   fi
 
   local spec
-  spec=$(printf '你是本仓库的验收 agent（worktree=%s）。
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. PASS 时把 issue 改成 s:accept，并发一条 merge_ready 消息\n6. FAIL 时把 issue 改成 s:changes（不新建 issue）\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome' \
+    "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
-待验收：issue #%s 的 PR #%s。
-
-步骤：
-1. 用 gh api 或 bin/ghx 拉 PR 的 diff 与 body 里的证据包
-2. 打开 docs/design/ACCEPTANCE.md，找到该 issue 引用的 ACC 条目
-3. 逐条比对，每条给 pass/fail 并写明证据
-4. 本地跑 npm run ci（应当全绿；GitHub 的 test job 已修复）
-5. 需要看界面时起 npm run serve，用 8788 端口
-
-判定：
-- FAIL：在 PR 留带 <!-- agent-handback --> 的评论，必须含 item/expected/observed/repro 四件套，然后把 issue 改成 s:changes
-- PASS：必须引用全部相关 ACC id 且逐条 pass，然后把 issue 改成 s:accept
-
-禁止改实现代码、禁止自己合并 PR。用 worker_done 结束。' \
-    "$ACCEPTANCE_WT" "$num" "$pull")
-
-  local task
-  task=$(orca orchestration task-create --run "$RUN_ID" --spec "$spec" --json 2>/dev/null \
-    | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("result",{}).get("task",{}).get("id",""))')
-  if [ -z "$task" ]; then
+  local task taskid start dispatch
+  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "验收 #$num" --spec "$spec" --json 2>/dev/null) || task=""
+  taskid=$(printf '%s' "$task" | jfind taskId)
+  if [ -z "$taskid" ]; then
     log "    ✗ task-create 失败"
-    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     rm -rf "$lock"
     return 1
   fi
 
-  if orca orchestration worker-start --run "$RUN_ID" --task "$task" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json >/dev/null 2>&1; then
-    log "    ✓ 已派验收 task=$task"
-  else
+  start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json 2>/dev/null) || start=""
+  dispatch=$(printf '%s' "$start" | jfind dispatchId)
+  if [ -z "$dispatch" ]; then
     log "    ✗ worker-start 失败"
-    orca terminal close --terminal "$handle" --tab >/dev/null 2>&1 || true
     rm -rf "$lock"
     return 1
   fi
+  record_dispatch "$dispatch" "$num" "acceptance" "$pull"
+  log "    ✓ 已派验收 task=$taskid dispatch=$dispatch"
+  return 0
 }
 
 dispatch_acceptance || FAILED=1
 
+# ---------------------------------------------------------------- 5. 消费消息
+# 官方投递语义：check 返回最早的 FIFO 批次，**未 ack 会重放**。
+# 所以顺序只能是：取出 → 逐条处理 → ack。处理不完就 ack，等于把消息弄丢。
+log "== 5/6 消费消息 =="
+if [ "$CONSUME" = "0" ] || [ "$DRY" = "1" ]; then
+  log "  · 跳过（dry-run / --no-consume）"
+else
+  check=$(orca orchestration check --run "$RUN_ID" --json 2>/dev/null) || check=""
+  ok=$(printf '%s' "$check" | jget ok)
+  if [ "$ok" != "True" ]; then
+    # consumer_fenced = 这个终端不再拥有该 Run。重新绑定一次，只绑不改状态。
+    log "  ⚠ check 失败，尝试重新绑定 Run"
+    orca orchestration run-use --id "$RUN_ID" >/dev/null 2>&1 || true
+    check=$(orca orchestration check --run "$RUN_ID" --json 2>/dev/null) || check=""
+  fi
+
+  delivery=$(printf '%s' "$check" | jget result.deliveryId)
+  count=$(printf '%s' "$check" | jget result.count)
+  log "  本轮消息 ${count:-0} 条（delivery ${delivery:-none}）"
+
+  printf '%s' "$check" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+r=d.get("result") or {}
+for m in r.get("messages") or []:
+    p=m.get("payload")
+    if isinstance(p,str):
+        try: p=json.loads(p)
+        except Exception: p={}
+    print(json.dumps({
+        "id": m.get("id"),
+        "type": m.get("type") or "status",
+        "subject": m.get("subject") or "",
+        "dispatch": (p or {}).get("dispatchId") or "",
+        "outcome": (p or {}).get("outcome") or "",
+    }, ensure_ascii=False))
+' 2>/dev/null | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    mtype=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["type"])' 2>/dev/null || true)
+    msubj=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["subject"][:80])' 2>/dev/null || true)
+    mdisp=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["dispatch"])' 2>/dev/null || true)
+    mout=$(printf '%s' "$line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["outcome"])' 2>/dev/null || true)
+    issue=$(issue_for_dispatch "$mdisp")
+
+    case "$mtype" in
+      merge_ready)
+        log "  → merge_ready：${msubj}"
+        node bin/agentctl.mjs merge --pending 2>&1 | sed 's/^/    /' | head -6 || true
+        ;;
+      worker_done)
+        if [ "$mout" = "failed" ]; then
+          log "  ✗ worker 报告失败：${msubj}（issue ${issue:-未知}）"
+          if [ -n "$issue" ]; then
+            node bin/agentctl.mjs set --issue "$issue" --to blocked >/dev/null 2>&1 || true
+            bin/ghx issue edit "$issue" --add-label hold:human >/dev/null 2>&1 || true
+            log "    → #$issue 置 s:blocked + hold:human"
+          fi
+        else
+          log "  ✓ worker_done：${msubj}"
+        fi
+        ;;
+      escalation|question)
+        # 协调器是脚本，不能替人做产品判断。这类消息一律升级给人，
+        # 并且必须落成 issue 状态——留在聊天里等于没发生。
+        log "  ⚠ ${mtype}：${msubj}"
+        printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$mtype" "$msubj" >> "$STATE_DIR/escalations.log"
+        if [ -n "$issue" ]; then
+          node bin/agentctl.mjs set --issue "$issue" --to blocked >/dev/null 2>&1 || true
+          bin/ghx issue edit "$issue" --add-label hold:human >/dev/null 2>&1 || true
+          log "    → #$issue 置 s:blocked + hold:human（等人）"
+        fi
+        ;;
+      *)
+        log "  · ${mtype}：${msubj}"
+        ;;
+    esac
+  done || true
+
+  # ack 之后立刻 peek：只确认、不把下一批标记已读，留给下一轮处理。
+  if [ -n "$delivery" ]; then
+    if orca orchestration check --run "$RUN_ID" --ack "$delivery" --peek --json >/dev/null 2>&1; then
+      log "  已 ack ${delivery}"
+    else
+      log "  ⚠ ack 失败：${delivery}（下一轮会被重放，不是丢消息）"
+      FAILED=1
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------- 6. 结算
+# 官方铁律：协调器 turn 结束前 reclaimable 必须为空。retained 是"没有做决定"，
+# 不是"安全状态"——我们的外部终端是有意 retain（复用），所以只强制清 reclaimable。
+log "== 6/6 结算 =="
+if [ "$DRY" = "1" ]; then
+  log "  · 跳过（dry-run）"
+else
+  reclaimable=$(orca orchestration worker-list --run "$RUN_ID" --terminal-state reclaimable --json 2>/dev/null \
+    | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+for w in (d.get("result") or {}).get("workers") or []:
+    print(w.get("dispatchId",""))' 2>/dev/null || true)
+  if [ -z "$reclaimable" ]; then
+    log "  · 没有待回收的终端"
+  else
+    for d in $reclaimable; do
+      [ -n "$d" ] || continue
+      if orca orchestration worker-release --dispatch "$d" >/dev/null 2>&1; then
+        log "  ✓ released $d"
+      else
+        log "  ⚠ release 失败：${d}（留给下一轮，或按 receipt 的 recovery 处理）"
+      fi
+    done
+  fi
+fi
+
 if [ "$FAILED" = "1" ]; then
-  log "本轮有派工失败，见上方 ✗"
+  log "本轮有失败，见上方 ✗"
   exit 1
 fi
 log "本轮完成"

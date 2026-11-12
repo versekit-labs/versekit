@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-// agentctl —— 多 agent 协作的协调器（**只读版**）。
+// agentctl —— 多 agent 协作的协调器。
 //
 // 为什么需要它：docs/AGENT-COLLAB.md 定义了状态机（s:* label）与接力规则，但
 // "谁该动、为什么"如果靠人肉判断，两个 agent 就会互相等，或者同时动。
 // 这个脚本把判断变成确定性的：同样的工单状态，永远算出同样的结论。
 //
-// **本文件当前只读**。它只发 GET、只打印、不写任何状态。
-// 写状态（改 label、派工、合并）留到 `--apply`，而那一版必须建立在
-// "只读版连续跑 10 轮结论稳定"这个前提下——顺序反了就是在自动制造事故。
+// 写操作只有三处，且都能被机器复核：
+//   - tick --apply   只做 doing → review 这类机械迁移
+//   - claim          先删 s:ready 再写 s:doing（原子抢单）；口径不合格不抢
+//   - merge          双门禁通过后 squash 合并（verdict/head_sha/ACC/CI 四道校验）
+// 另外 reject 负责把人工验收意见变成结构化 FAIL 并回原 PR——不新建 issue。
+// 不在合法迁移表里的迁移一律拒绝（`set --force` 才放行且告警）。
 //
 // 设计上的三个硬约束（来自 AGENT-COLLAB §3 / §6）：
 //
@@ -26,8 +29,9 @@
 // **不把"有活要干"当成失败**——那会让 cron/循环误判。
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,6 +54,82 @@ const NEXT = {
   blocked: { actor: "human", action: "需要人", why: "状态机已停下，等人决策" },
   done: { actor: "coordinator", action: "应收口", why: "应已随 PR 合并关闭" },
 };
+
+/**
+ * 合法迁移表。**只有这里列出的边才允许走。**
+ *
+ * 为什么要把这张表写死在脚本里：agent 能改 label，就等于 agent 能自己宣布
+ * "验收通过"或"合并完成"。提示词约束不了这件事，只有"脚本拒绝并留事件"
+ * 才能约束。`set --force` 是给补偿动作留的逃生口，会打印一行告警。
+ *
+ * 三条容易被忽略但必须存在的边：
+ *   - doing → ready：派工失败回滚（worker 起不来）
+ *   - accept → changes：验收方/人在合并前发现新问题，回原分支改，不新建 issue
+ *   - done → changes：里程碑验收或事后复验打回，先 reopen 原 issue，同样不新建 issue
+ */
+const TRANSITIONS = {
+  triage: ["ready", "blocked"],
+  ready: ["doing", "triage", "blocked"],
+  doing: ["review", "ready", "blocked"],
+  review: ["changes", "accept", "blocked"],
+  changes: ["doing", "blocked"],
+  accept: ["done", "changes", "blocked"],
+  blocked: ["triage", "ready", "doing", "review", "changes", "accept"],
+  done: ["changes"],
+};
+
+function canTransition(from, to) {
+  if (from === to) return true;
+  return (TRANSITIONS[from] ?? []).includes(to);
+}
+
+// ---------------------------------------------------------------- 口径（ACC 条目）
+//
+// "口径齐"不能靠人肉判断：issue 正文里引用的每个 ACC-* 都必须能在
+// docs/design/ACCEPTANCE.md 里 grep 到。引用不到 = 口径没写全 = 不该派工。
+// 这条校验只读本地文件，不花 API 配额。
+
+const ACCEPTANCE_FILE = join(ROOT, "docs/design/ACCEPTANCE.md");
+
+let acceptanceCache = null;
+function acceptanceIds() {
+  if (acceptanceCache) return acceptanceCache;
+  if (!existsSync(ACCEPTANCE_FILE)) return (acceptanceCache = new Set());
+  const text = readFileSync(ACCEPTANCE_FILE, "utf8");
+  acceptanceCache = new Set((text.match(/ACC-[A-Za-z0-9_-]+/g) ?? []).map((s) => s.replace(/[.,;:]+$/, "")));
+  return acceptanceCache;
+}
+
+/** issue 正文里引用的 ACC id（去重，保持出现顺序）。 */
+function issueAccIds(body) {
+  const seen = new Set();
+  const out = [];
+  for (const id of (body ?? "").match(/ACC-[A-Za-z0-9_-]+/g) ?? []) {
+    const norm = id.replace(/[.,;:]+$/, "");
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      out.push(norm);
+    }
+  }
+  return out;
+}
+
+/**
+ * 派工前的口径校验。返回 { ok, ids, why }。
+ * 三种失败都要说清"缺什么"，否则 coordinator 只看到"跳过"会当成偶发。
+ */
+function validateScope(issue) {
+  const ids = issueAccIds(issue.body);
+  if (ids.length === 0) {
+    return { ok: false, ids, why: "正文没有任何 ACC-* 验收条目 id（口径未定义，不该派工）" };
+  }
+  const known = acceptanceIds();
+  const missing = ids.filter((id) => !known.has(id));
+  if (missing.length) {
+    return { ok: false, ids, why: `引用了 ACCEPTANCE.md 里不存在的条目：${missing.join(", ")}` };
+  }
+  return { ok: true, ids, why: `引用 ${ids.length} 条口径` };
+}
 
 // ---------------------------------------------------------------- 认证
 
@@ -177,6 +257,13 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
 
   const pull = findPull(pulls, issue);
   const base = NEXT[state];
+
+  // 口径不合格的 issue 派出去也只能猜。先纠正，再谈派工——
+  // 这一步同时挡掉"引用了一个不存在的 ACC id"这种看似齐活的情况。
+  if (state === "ready") {
+    const scope = validateScope(issue);
+    if (!scope.ok) return { actor: "human", action: "补口径", why: scope.why, blocked: true };
+  }
 
   // 状态与现场不一致时，先纠正认知，再谈派工。这几种情况都是"label 说一套、实际是另一套"，
   // 直接派工会让 agent 对着错误的前提干活。
@@ -353,7 +440,7 @@ async function claimIssue(repo, issue) {
  *   acceptance —— 不抢，只列队列。验收没有"半成品"，重复审只是浪费；
  *                 而抢单会引入"认领者崩了没人接手"的死结。
  */
-async function cmdClaim(repo, { role, milestone, json }) {
+async function cmdClaim(repo, { role, milestone, json, dryRun }) {
   const board = await loadBoard(repo);
   const pulls = board.pulls;
 
@@ -364,11 +451,49 @@ async function cmdClaim(repo, { role, milestone, json }) {
     const ready = candidates
       .filter((i) => readState(i).state === "ready" && !readState(i).hold)
       .sort((a, b) => a.number - b.number); // 老 issue 先做，避免新活插队把旧活饿死
-    if (ready.length === 0) {
-      process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "no-work" }) + "\n" : "no-work\n");
+
+    // 口径不合格的 issue 不认领：认领了 agent 也只能猜，最后一定打回。
+    // 这类 issue 需要人补口径，所以列出来而不是静默跳过。
+    const skipped = [];
+    const viable = [];
+    for (const issue of ready) {
+      const scope = validateScope(issue);
+      if (scope.ok) viable.push({ issue, scope });
+      else skipped.push({ number: issue.number, title: issue.title, why: scope.why });
+    }
+
+    if (viable.length === 0) {
+      const payload = { claimed: null, reason: ready.length ? "scope-invalid" : "no-work", skipped };
+      process.stdout.write(
+        json
+          ? JSON.stringify(payload, null, 2) + "\n"
+          : ready.length
+            ? `没有可派工的 issue：${ready.length} 个 s:ready 的口径不合格\n` +
+              skipped.map((s) => `  ✗ #${s.number} ${s.title}\n    ${s.why}`).join("\n") + "\n"
+            : "no-work\n",
+      );
       return 0;
     }
-    for (const issue of ready) {
+
+    if (dryRun) {
+      // 只读：列出会认领谁、跳过谁，不改任何 label。
+      const payload = {
+        claimed: null,
+        dryRun: true,
+        wouldClaim: viable.map(({ issue, scope }) => ({ number: issue.number, title: issue.title, ids: scope.ids })),
+        skipped,
+      };
+      process.stdout.write(
+        json
+          ? JSON.stringify(payload, null, 2) + "\n"
+          : viable.map(({ issue, scope }) => `会认领 #${issue.number}  ${issue.title}\n  ${scope.why}`).join("\n") +
+            (skipped.length ? "\n跳过：\n" + skipped.map((s) => `  ✗ #${s.number} ${s.why}`).join("\n") : "") +
+            "\n",
+      );
+      return 0;
+    }
+
+    for (const { issue, scope } of viable) {
       const res = await claimIssue(repo, issue);
       if (!res.ok) continue;
       const claimed = {
@@ -377,20 +502,22 @@ async function cmdClaim(repo, { role, milestone, json }) {
         body: issue.body ?? "",
         url: issue.html_url,
         milestone: issue.milestone?.title ?? null,
+        acc: scope.ids,
       };
       if (json) {
-        process.stdout.write(JSON.stringify({ claimed }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ claimed, skipped }, null, 2) + "\n");
       } else {
         process.stdout.write(
           `已认领 #${claimed.number}  ${claimed.title}\n` +
           (claimed.milestone ? `里程碑：${claimed.milestone}\n` : "") +
+          `口径：${claimed.acc.join(", ")}\n` +
           `${claimed.url}\n` +
           `${"─".repeat(64)}\n${claimed.body}\n`,
         );
       }
       return 0;
     }
-    process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "all-raced" }) + "\n" : "全被抢光了\n");
+    process.stdout.write(json ? JSON.stringify({ claimed: null, reason: "all-raced", skipped }) + "\n" : "全被抢光了\n");
     return 0;
   }
 
@@ -405,6 +532,9 @@ async function cmdClaim(repo, { role, milestone, json }) {
           url: i.html_url,
           pull: pull?.number ?? null,
           pullUrl: pull?.html_url ?? null,
+          // 验收方拿到的口径必须是派工那一刻的，不能让它自己去猜
+          acc: issueAccIds(i.body),
+          head: pull?.head?.sha ?? null,
         };
       })
       .filter((x) => x.pull)
@@ -415,7 +545,7 @@ async function cmdClaim(repo, { role, milestone, json }) {
     else
       for (const q of queue)
         process.stdout.write(
-          `待验收 #${q.number}  ${q.title}\n  PR #${q.pull}  ${q.pullUrl}\n  issue ${q.url}\n`,
+          `待验收 #${q.number}  ${q.title}\n  PR #${q.pull}  ${q.pullUrl}\n  head ${q.head}\n  口径 ${q.acc.join(", ") || "（无）"}\n  issue ${q.url}\n`,
         );
     return 0;
   }
@@ -426,17 +556,32 @@ async function cmdClaim(repo, { role, milestone, json }) {
 /**
  * 直接把某个 issue 拨到指定状态。给"派工失败要退回 s:ready"这类补偿用。
  *
- * 不做状态机校验：调用方是已经知道自己要干什么的脚本，再套一层校验只会让
- * 补偿动作也被拒绝。这里只保证"同时只有一个 s:*"这个不变量。
+ * 默认按 TRANSITIONS 校验：不在表里的边一律拒绝。这不是形式主义——"agent 能
+ * 把 issue 拨到任意状态"等于"agent 能自己宣布验收通过"。--force 是给脚本补偿
+ * 与人工抢修留的逃生口，会打印告警，方便事后审计。
  */
-async function cmdSet(repo, { issue, to, json }) {
-  const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue}/labels`;
-  // 先摘掉所有现有的 s:*
+async function cmdSet(repo, { issue, to, json, force }) {
+  if (!STATES.includes(to)) {
+    throw new Error(`未知状态：${to}（合法值：${STATES.join(", ")}）`);
+  }
   const cur = await api(`/repos/${repo.owner}/${repo.repo}/issues/${issue}`);
-  const states = (cur.data.labels ?? [])
-    .map((l) => (typeof l === "string" ? l : l.name))
-    .filter((n) => n.startsWith("s:"));
-  for (const name of states) {
+  const labels = (cur.data.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
+  const from = labels.filter((n) => n.startsWith("s:")).map((n) => n.slice(2)).at(-1) ?? null;
+
+  if (from && !canTransition(from, to) && !force) {
+    const allowed = TRANSITIONS[from] ?? [];
+    throw new Error(
+      `非法迁移 #${issue}: s:${from} → s:${to}\n` +
+      `  允许的下一状态：${allowed.length ? allowed.map((s) => `s:${s}`).join(", ") : "（无）"}\n` +
+      `  确实需要强制迁移时加 --force（会留告警）。`,
+    );
+  }
+  if (from && !canTransition(from, to) && force) {
+    process.stderr.write(`⚠ 强制迁移 #${issue}: s:${from} → s:${to}（不在合法迁移表内）\n`);
+  }
+
+  const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue}/labels`;
+  for (const name of labels.filter((n) => n.startsWith("s:"))) {
     try {
       await api(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
     } catch (err) {
@@ -444,8 +589,343 @@ async function cmdSet(repo, { issue, to, json }) {
     }
   }
   await api(base, { method: "POST", body: { labels: [`s:${to}`] } });
-  if (json) process.stdout.write(JSON.stringify({ issue: Number(issue), to }) + "\n");
+  if (json) process.stdout.write(JSON.stringify({ issue: Number(issue), from, to }) + "\n");
   else process.stdout.write(`#${issue} → s:${to}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- 验收与合并
+//
+// 这一段解决两个具体毛病：
+//   1. 验收方说"不行"时，默认只能新建 issue —— 分支越开越多，证据散在两处。
+//      正确做法是打回原 PR、同一分支继续改（docs/AGENT-COLLAB.md §5）。
+//   2. 合并靠人点 —— 人会忘、会看图省事。合并必须由脚本按机器可校验的条件执行：
+//      head_sha 对得上、verdict=PASS、ACC 条目逐条覆盖、五道 CI 门禁全绿。
+//
+// 判定只认 PR 评论里那块 ```yaml```，不认散文。散文可以写得很像 PASS。
+
+const MAX_ROUNDS = 3;
+const HANDOVER_MARKER = "<!-- agent-handback -->";
+const MERGE_MARKER = "<!-- agent-merge -->";
+
+/** 五道门禁。与 .github/workflows/ci.yml 的 job name 逐字一致。 */
+const REQUIRED_GATES = [
+  "test / npm test",
+  "parity / 命令表 = 路由 = 卡片 = CLI",
+  "adapter-contract / 形状 + ready + dry-run 无副作用",
+  "no-backdoor / web 与 channel 不得直连数据库",
+  "design / 任务书 · 导航 · 死链 · 检测器 · 触控",
+];
+
+/** 从评论里解析 ```yaml 块。解析不出 verdict 就当没有判定，不猜。 */
+function parseVerdict(body) {
+  // 一条评论里可能同时有证据包 YAML 和判定 YAML——必须扫完所有块，
+  // 只认带 verdict 的那一块。只看第一块会把"证据包在前"的评论误判成没有判定。
+  const blocks = [...String(body ?? "").matchAll(/```ya?ml\s*\n([\s\S]*?)```/gi)].map((m) => m[1]);
+  const text = blocks.find((b) => /^verdict:\s*(PASS|FAIL)\s*$/im.test(b));
+  if (!text) return null;
+  const verdict = /^verdict:\s*(PASS|FAIL)\s*$/im.exec(text)?.[1]?.toUpperCase();
+  if (!verdict) return null;
+  const headSha = /^head_sha:\s*"?([0-9a-fA-F]{7,40})"?\s*$/im.exec(text)?.[1] ?? null;
+  const round = Number(/^round:\s*(\d+)/im.exec(text)?.[1] ?? 0) || null;
+
+  const acceptance = [];
+  let cur = null;
+  for (const line of text.split("\n")) {
+    const idm = /^\s*-\s*id:\s*(ACC-[A-Za-z0-9_-]+)/.exec(line);
+    if (idm) {
+      cur = { id: idm[1], status: null };
+      acceptance.push(cur);
+      continue;
+    }
+    const sm = /^\s*status:\s*(pass|fail)\b/i.exec(line);
+    if (sm && cur) cur.status = sm[1].toLowerCase();
+  }
+  return { verdict, headSha, round, acceptance };
+}
+
+/** 最新一条带判定的评论。FAIL 之后又 PASS 是合法的，所以必须取最新。 */
+function latestVerdict(comments) {
+  for (const c of comments) {
+    const v = parseVerdict(c.body);
+    if (v) return { ...v, commentId: c.id, url: c.html_url, createdAt: c.created_at };
+  }
+  return null;
+}
+
+async function listComments(repo, number) {
+  const out = [];
+  for (let page = 1; page <= 3; page++) {
+    const { data } = await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}/comments`, {
+      params: { per_page: "100", page: String(page) },
+    });
+    out.push(...data);
+    if (data.length < 100) break;
+  }
+  // 新的在前，调用方只看"最新一条判定"
+  return out.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+}
+
+async function gateStatus(repo, sha) {
+  const { data } = await api(`/repos/${repo.owner}/${repo.repo}/commits/${sha}/check-runs`, {
+    params: { per_page: "100" },
+  });
+  const byName = new Map();
+  for (const run of data.check_runs ?? []) if (!byName.has(run.name)) byName.set(run.name, run);
+  const results = REQUIRED_GATES.map((name) => {
+    const run = byName.get(name);
+    return { name, status: run?.status ?? null, conclusion: run?.conclusion ?? null };
+  });
+  return { ok: results.every((r) => r.status === "completed" && r.conclusion === "success"), results };
+}
+
+async function replaceState(repo, number, to) {
+  const base = `/repos/${repo.owner}/${repo.repo}/issues/${number}/labels`;
+  const cur = await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}`);
+  const labels = (cur.data.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
+  for (const name of labels.filter((n) => n.startsWith("s:"))) {
+    try {
+      await api(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
+    } catch (err) {
+      if (!/^404 /.test(err.message)) throw err;
+    }
+  }
+  await api(base, { method: "POST", body: { labels: [`s:${to}`] } });
+}
+
+/**
+ * 人工/验收打回。**默认回原 PR，不新建 issue。**
+ *
+ * 三种来源都走这里：
+ *   - 验收 agent 判 FAIL（附 evidence）
+ *   - 人在验收时说"这里不对"（由协调器代跑，附 expected/observed/repro）
+ *   - 里程碑复验发现问题（done → changes，先 reopen）
+ *
+ * 条目必须能在 ACCEPTANCE.md 里 grep 到；确实超出原口径时用
+ * `--item manual-review --reason "..."`，显式承认这是人工观察到的新口径，
+ * 由协调器补进原 issue 后再派工——仍然不新建 issue。
+ */
+async function cmdReject(repo, opts) {
+  const { issue: number, item, expected, observed, repro, reason, dryRun, json } = opts;
+
+  // 已合并的 issue 也是合法打回对象（里程碑验收 / 事后复验），所以不能只看 open issues。
+  const { data: issue } = await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}`);
+  const { state, hold } = readState(issue);
+  if (hold) throw new Error(`#${number} 有 hold:human，先由人解除冻结再打回`);
+  if (!["review", "accept", "done"].includes(state)) {
+    throw new Error(`#${number} 当前 s:${state ?? "<none>"}，只有 review/accept/done 可以打回`);
+  }
+
+  // PR 可能在打开状态（回原分支改），也可能已合并（分支已删，只能回 issue 上重开）。
+  const { data: allPulls } = await api(`/repos/${repo.owner}/${repo.repo}/pulls`, {
+    params: { state: "all", per_page: "100", sort: "updated", direction: "desc" },
+  });
+  const pull = findPull(allPulls, issue);
+  if (!pull) throw new Error(`#${number} 找不到对应 PR；请先在 issue 里补一条能复现的说明，再派 engineer`);
+  const pullOpen = pull.state === "open";
+
+  // 条目校验：引用不到的 FAIL 无效，这是防"审美暴君"的机械保障。
+  const known = acceptanceIds();
+  if (!item) throw new Error("reject 需要 --item ACC-xxx（或 --item manual-review --reason '...'）");
+  if (item !== "manual-review" && !known.has(item)) {
+    throw new Error(
+      `--item ${item} 不在 docs/design/ACCEPTANCE.md 里。\n` +
+      `  如果这是原口径内的条目，请用正确的 ACC id；\n` +
+      `  如果这是新发现的问题，用 --item manual-review --reason "<一句话>"，并把口径补进原 issue。`,
+    );
+  }
+  if (item === "manual-review" && !reason) throw new Error("--item manual-review 需要 --reason 说明观察到什么");
+  if (!expected) throw new Error("reject 需要 --expected：应该是什么样");
+  if (!observed) throw new Error("reject 需要 --observed：实际是什么样");
+  const reproList = (Array.isArray(repro) ? repro : [repro]).filter(Boolean);
+  if (reproList.length === 0) throw new Error("reject 需要至少一个 --repro：怎么复现");
+
+  const comments = await listComments(repo, pull.number);
+  const round = comments.filter((c) => (c.body ?? "").includes(HANDOVER_MARKER)).length + 1;
+  const q = (s) => JSON.stringify(String(s)); // YAML 接受 JSON 风格的带引号字符串
+
+  const yaml = [
+    "```yaml",
+    "verdict: FAIL",
+    `round: ${round}`,
+    `head_sha: ${q(pull.head.sha)}`,
+    "source: human-verification",
+    "failed:",
+    `  - item: ${item}`,
+    `    expected: ${q(expected)}`,
+    `    observed: ${q(observed)}`,
+    "    repro:",
+    ...reproList.map((r) => `      - ${q(r)}`),
+    ...(reason ? [`    note: ${q(reason)}`] : []),
+    "```",
+  ].join("\n");
+
+  const body = [
+    HANDOVER_MARKER,
+    `## 验收结论：FAIL（round ${round}，head \`${pull.head.sha.slice(0, 7)}\`）`,
+    "",
+    pullOpen
+      ? "由协调器根据人工验收意见发出。**不新建 issue**：修复留在本 PR、本分支。"
+      : "由协调器根据人工验收意见发出。原 PR 已合并/关闭，**不新建 issue**：reopen 本工单，在新分支上修。",
+    "",
+    yaml,
+  ].join("\n");
+
+  if (dryRun) {
+    process.stdout.write(
+      (json
+        ? JSON.stringify({ dryRun: true, issue: Number(number), pull: pull.number, round, body }, null, 2)
+        : `[dry-run] 会给 PR #${pull.number} 留 FAIL 评论，并把 #${number} 置 s:changes（round ${round}）\n` + body) + "\n",
+    );
+    return { merged: false, round };
+  }
+
+  // 评论落在"还能改的那个地方"：PR 开着就回 PR（同分支修），
+  // 已合并/关闭就回 issue（重开、开新分支，但工单不变）。
+  const commentTarget = pullOpen ? pull.number : Number(number);
+  await api(`/repos/${repo.owner}/${repo.repo}/issues/${commentTarget}/comments`, {
+    method: "POST",
+    body: { body },
+  });
+
+  // 已合并的 issue 要先 reopen，状态才有意义。
+  if (issue.state === "closed" || state === "done") {
+    await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}`, {
+      method: "PATCH",
+      body: { state: "open" },
+    });
+  }
+
+  if (round > MAX_ROUNDS) {
+    await replaceState(repo, number, "blocked");
+    await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}/labels`, {
+      method: "POST",
+      body: { labels: ["hold:human"] },
+    });
+    process.stdout.write(`#${number} 已打回 ${round} 轮，超过上限，置 s:blocked + hold:human，等人决定\n`);
+    return { merged: false, round, blocked: true };
+  }
+
+  await replaceState(repo, number, "changes");
+  process.stdout.write(
+    `#${number} → s:changes（round ${round}），FAIL 评论已留在 ${pullOpen ? `PR #${pull.number}（同一分支继续改）` : `issue #${number}（重开，新分支修）`}\n`,
+  );
+  return { merged: false, round };
+}
+
+/**
+ * 脚本合并。**只有机器可校验的条件全过才合。**
+ *
+ * 顺序是刻意的：先证"该合"（状态、判定、覆盖、门禁），再做唯一一次写操作。
+ * 任何一条不过都不合，并把原因逐条打出来——含混的拒绝等于没拒绝。
+ */
+async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
+  const board = await loadBoard(repo);
+  let targets;
+  if (pending) {
+    targets = board.issues.filter((i) => readState(i).state === "accept" && !readState(i).hold);
+  } else {
+    const issue = board.issues.find((i) => i.number === Number(number));
+    if (!issue) throw new Error(`找不到 open issue #${number}`);
+    targets = [issue];
+  }
+
+  const results = [];
+  for (const issue of targets) {
+    const problems = [];
+    const { state, hold } = readState(issue);
+    if (hold) problems.push("有 hold:human");
+    if (state !== "accept") problems.push(`当前 s:${state ?? "<none>"}，只有 s:accept 才能合并`);
+
+    const pull = findPull(board.pulls, issue);
+    if (!pull) problems.push("找不到对应 PR");
+    if (pull?.draft) problems.push("PR 还是草稿");
+
+    let verdict = null;
+    if (pull) {
+      const comments = await listComments(repo, pull.number);
+      verdict = latestVerdict(comments);
+      if (!verdict) problems.push("PR 里没有可解析的 verdict（需要 ```yaml 块，含 verdict/head_sha）");
+      else if (verdict.verdict !== "PASS") problems.push(`最新判定是 ${verdict.verdict}`);
+      else if (!verdict.headSha || !pull.head.sha.startsWith(verdict.headSha)) {
+        problems.push(`判定针对的是 ${verdict.headSha ?? "<无>"}，当前 head 是 ${pull.head.sha.slice(0, 7)}（验收后又改过代码）`);
+      }
+    }
+
+    const wantedIds = issueAccIds(issue.body);
+    if (wantedIds.length === 0) problems.push("issue 正文没有 ACC-* 口径，无法核对覆盖");
+    if (verdict?.verdict === "PASS") {
+      const passed = new Set(verdict.acceptance.filter((a) => a.status === "pass").map((a) => a.id));
+      const uncovered = wantedIds.filter((id) => !passed.has(id));
+      if (uncovered.length) problems.push(`verdict 没有逐条覆盖：${uncovered.join(", ")}`);
+    }
+
+    let gates = null;
+    if (pull && problems.length === 0) {
+      gates = await gateStatus(repo, pull.head.sha);
+      if (!gates.ok) {
+        problems.push(
+          "门禁未全绿：" +
+            gates.results.filter((g) => g.conclusion !== "success").map((g) => `${g.name}=${g.conclusion ?? g.status ?? "缺失"}`).join("; "),
+        );
+      }
+    }
+
+    if (problems.length) {
+      results.push({ issue: issue.number, merged: false, problems });
+      continue;
+    }
+
+    if (dryRun) {
+      results.push({ issue: issue.number, merged: false, dryRun: true, pull: pull.number, head: pull.head.sha });
+      continue;
+    }
+
+    // sha 作为守卫：合并瞬间 head 变了，GitHub 会拒绝，而不是合进没验过的代码。
+    await api(`/repos/${repo.owner}/${repo.repo}/pulls/${pull.number}/merge`, {
+      method: "PUT",
+      body: { merge_method: "squash", sha: pull.head.sha },
+    });
+    const receipt = await api(`/repos/${repo.owner}/${repo.repo}/pulls/${pull.number}`);
+    const mergeSha = receipt.data.merge_commit_sha ?? null;
+
+    await replaceState(repo, issue.number, "done");
+    if (issue.state === "open") {
+      await api(`/repos/${repo.owner}/${repo.repo}/issues/${issue.number}`, {
+        method: "PATCH",
+        body: { state: "closed", state_reason: "completed" },
+      });
+    }
+    await api(`/repos/${repo.owner}/${repo.repo}/issues/${pull.number}/comments`, {
+      method: "POST",
+      body: {
+        body: [
+          MERGE_MARKER,
+          `已由 agentctl 合并：PR #${pull.number} head \`${pull.head.sha.slice(0, 7)}\` → \`${(mergeSha ?? "").slice(0, 7)}\``,
+          "",
+          `- verdict: PASS（${verdict.commentId ? `comment ${verdict.commentId}` : "PR 评论"}）`,
+          `- 门禁：${REQUIRED_GATES.length}/${REQUIRED_GATES.length} 通过`,
+          `- 口径：${wantedIds.join(", ")} 逐条 pass`,
+        ].join("\n"),
+      },
+    });
+    results.push({ issue: issue.number, merged: true, pull: pull.number, head: pull.head.sha, mergeSha });
+  }
+
+  const merged = results.filter((r) => r.merged);
+  if (json) {
+    process.stdout.write(JSON.stringify({ results }, null, 2) + "\n");
+  } else if (results.length === 0) {
+    process.stdout.write("没有待合并的 issue\n");
+  } else {
+    for (const r of results) {
+      if (r.merged) process.stdout.write(`✓ 合并 #${r.issue}（PR #${r.pull} → ${(r.mergeSha ?? "").slice(0, 7)}）\n`);
+      else if (r.dryRun) process.stdout.write(`· [dry-run] 会合并 #${r.issue}（PR #${r.pull}，head ${String(r.head).slice(0, 7)}）\n`);
+      else process.stdout.write(`✗ 不合并 #${r.issue}：\n${r.problems.map((p) => `    - ${p}`).join("\n")}\n`);
+    }
+  }
+  // 显式指定单个 issue 时，合不了就是失败；--pending 是巡检，跳过不算错。
+  if (!pending && results.length && !results[0].merged && !dryRun) return 1;
   return 0;
 }
 
@@ -456,6 +936,18 @@ async function main(argv) {
   const json = argv.includes("--json");
   const verbose = argv.includes("--verbose");
   const apply = argv.includes("--apply");
+  const dryRun = argv.includes("--dry-run");
+  const force = argv.includes("--force");
+  const arg = (name, fallback = null) => {
+    const i = argv.indexOf(name);
+    return i >= 0 && argv[i + 1] != null ? argv[i + 1] : fallback;
+  };
+  /** 同一个参数可以出现多次：--repro "第一步" --repro "第二步" */
+  const argAll = (name) => {
+    const out = [];
+    for (let i = 0; i < argv.length; i++) if (argv[i] === name && argv[i + 1] != null) out.push(argv[i + 1]);
+    return out;
+  };
 
   if (!cmd || ["-h", "--help", "help"].includes(cmd)) {
     process.stdout.write(
@@ -472,47 +964,98 @@ async function main(argv) {
   claim     自己找活（worker 用，不需要人来派）。
             --role engineer|acceptance   （必填）
             --milestone <标题>           只在该里程碑内找
+            --dry-run                    只列出会认领谁、跳过谁，不改状态
             --json                       机器可读
 
-  engineer  抢 s:ready，抢到即改 s:doing；同一时刻只有一个 agent 能拿到。
-  acceptance 列出 s:review 且已有 PR 的队列（不抢单：验收可以重复，认领者崩了才是死结）。
+  set       把 issue 拨到指定状态（补偿用）。
+            --issue <n> --to <state>
+            --force                      跳过合法迁移校验（会告警）
 
-退出码：0 正常（含"没活"）；1 配置/网络/API 出错，或迁移/认领失败。
+  reject    人工/验收打回：回原 PR，同一分支继续改，**不新建 issue**。
+            --issue <n>
+            --item ACC-xxx | manual-review
+            --expected "应该是什么样"
+            --observed "实际是什么样"
+            --repro "怎么复现"（可重复）
+            --reason "..."               manual-review 时必填
+            --round-limit 3              超过轮次强制 s:blocked + hold:human
+            --dry-run
+
+  merge     脚本合并：verdict=PASS + head_sha 对齐 + ACC 逐条覆盖 + 五门禁全绿。
+            --issue <n>                  合这一个
+            --pending                    把所有 s:accept 的都过一遍（巡检用）
+            --dry-run
+
+  engineer  抢 s:ready，抢到即改 s:doing；口径不合格（ACC 引用不到）不抢。
+  acceptance 列出 s:review 且已有 PR 的队列（不抢单；附该 issue 的口径 id 与 head）。
+
+退出码：0 正常（含"没活"）；1 配置/网络/API 出错，或迁移/认领/合并失败。
          "有活要干"不算失败——那会让定时任务误判。
 
-文档：docs/AGENT-COLLAB.md · docs/AGENT-WORKFLOW.md
+文档：docs/AGENT-COLLAB.md · docs/AGENT-WORKFLOW.md · docs/ORCA-TEAM-PLAYBOOK.md
 `,
     );
     return 0;
   }
+
   if (cmd === "claim") {
-    const roleIdx = argv.indexOf("--role");
-    const role = roleIdx >= 0 ? argv[roleIdx + 1] : null;
+    const role = arg("--role");
     if (!role) {
       process.stderr.write("claim 需要 --role engineer|acceptance\n");
       return 1;
     }
-    const msIdx = argv.indexOf("--milestone");
-    const milestone = msIdx >= 0 ? argv[msIdx + 1] : null;
     const repo = resolveRepo();
     TOKEN = resolveToken();
-    return cmdClaim(repo, { role, milestone, json });
+    return cmdClaim(repo, { role, milestone: arg("--milestone"), json, dryRun });
   }
 
   if (cmd === "set") {
-    const iIdx = argv.indexOf("--issue");
-    const tIdx = argv.indexOf("--to");
-    if (iIdx < 0 || tIdx < 0) {
+    const issue = arg("--issue");
+    const to = arg("--to");
+    if (!issue || !to) {
       process.stderr.write("set 需要 --issue <n> --to <state>\n");
       return 1;
     }
     const repo = resolveRepo();
     TOKEN = resolveToken();
-    return cmdSet(repo, { issue: argv[iIdx + 1], to: argv[tIdx + 1], json });
+    return cmdSet(repo, { issue, to, json, force });
+  }
+
+  if (cmd === "reject") {
+    const issue = arg("--issue");
+    if (!issue) {
+      process.stderr.write("reject 需要 --issue <n>\n");
+      return 1;
+    }
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    const res = await cmdReject(repo, {
+      issue,
+      item: arg("--item"),
+      expected: arg("--expected"),
+      observed: arg("--observed"),
+      repro: argAll("--repro"),
+      reason: arg("--reason"),
+      dryRun,
+      json,
+    });
+    return res?.blocked ? 1 : 0;
+  }
+
+  if (cmd === "merge") {
+    const issue = arg("--issue");
+    const pending = argv.includes("--pending");
+    if (!issue && !pending) {
+      process.stderr.write("merge 需要 --issue <n> 或 --pending\n");
+      return 1;
+    }
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    return cmdMerge(repo, { issue, pending, dryRun, json });
   }
 
   if (cmd !== "tick") {
-    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set）\n`);
+    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set / reject / merge）\n`);
     return 1;
   }
 
@@ -556,11 +1099,20 @@ async function main(argv) {
   return 0;
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err) => {
-    // 失败要留现场，且不能伪装成"没事"。
-    process.stderr.write(`agentctl 失败：${err.message}\n`);
-    process.exit(1);
-  },
-);
+// 作为脚本执行时才跑 main；被测试 import 时只暴露纯函数。
+// 判定逻辑（verdict 解析、迁移表、口径校验）必须能被单测钉住——
+// 这些规则一旦漂了，整条流水线会静默放行。
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (err) => {
+      // 失败要留现场，且不能伪装成"没事"。
+      process.stderr.write(`agentctl 失败：${err.message}\n`);
+      process.exit(1);
+    },
+  );
+}
+
+export { TRANSITIONS, canTransition, issueAccIds, parseVerdict, validateScope };

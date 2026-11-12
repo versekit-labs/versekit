@@ -41,6 +41,7 @@ npm run ci
 - [ACC-account-01] 只显示**当前账号组**的五个平台槽位；未接入的显示缺口与添加入口。
 - [ACC-account-02] 点账号行，详情在组内就位；主动作指向具体账号。
 - [ACC-account-03] 空组：五个缺口 + 一句引导，不能白屏。
+- [ACC-account-04] 状态文案与接口一致：`/api/accounts` 返回 `state=ok` 时页面显示「正常」，不得显示「即将过期」；同一平台只渲染一个槽位。
 - 实现提示 命令：`vk account list --group <g>`、`vk account reauth <id>`、`vk account remove <id>`
 
 ### 选择账号组 `groups.html`
