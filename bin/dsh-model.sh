@@ -41,10 +41,16 @@ probe() {
   local name="$1" url="$2" keyenv="$3" model="$4" key code
   key=$(get_key "$keyenv")
   if [ -z "$key" ]; then echo "dsh-model: $name 不可用：密钥 $keyenv 既不在环境变量也不在 ~/.dsh/.credentials.yaml" >&2; return 2; fi
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-    -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
-    -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
-    "$url/chat/completions" 2>/dev/null) || code=000
+  # 超时/5xx 是偶发的网络或服务抖动，重试一次再下结论；401/403/429 是确定的"不能用"，不重试。
+  local attempt
+  for attempt in 1 2; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+      -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+      "$url/chat/completions" 2>/dev/null) || code=000
+    case "$code" in 000|5??) [ "$attempt" = 1 ] && { sleep 2; continue; } ;; esac
+    break
+  done
   case "$code" in
     2??) return 0 ;;
     429) echo "dsh-model: $name 不可用：HTTP 429（限流或额度用尽）" >&2 ;;
