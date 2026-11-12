@@ -218,13 +218,16 @@ automation（每 10 分钟）拉起协调器，跑 bin/cycle.sh
 | 文档说 3 个 automation：engineer-claim / acceptance-claim / agentctl-tick | **只有 1 个 `coordinator`**（id `d43265fa`，`*/10 * * * *`，`reuseSession:false`，provider dsh；当前状态 **disabled**），prompt 里跑 `bin/cycle.sh`，由脚本内部做三段 |
 | 派工：claim 原子锁 | `bin/agentctl.mjs`：`DELETE s:ready`，404 = 被抢；再 `POST s:doing` |
 | 验收也抢单 | **不抢，但有去重锁**：`cycle.sh` 用 `mkdir` 原子锁 `accept-<issue>.lock`（TTL 45 分钟），同 issue 同时只派一个验收；不是按 head_sha 去重（见 §9.1） |
-| 协调器消费消息 | 没有 `check --wait` / `ack`；`worker_done` 的 `read=0` 堆在库里，靠人看 |
+| 协调器消费消息 | **已实现**：每轮 `check` → 逐条处理（merge_ready / escalation / question）→ `--ack <delivery>` → `--peek` 预看下一批 |
+| 合并 | **已实现**：`agentctl merge --pending`，verdict PASS + head_sha 对齐 + ACC 逐条覆盖 + 五门禁全绿才 squash 合并 |
+| 验收打回 | **已实现**：`agentctl reject`，回原 PR 同一分支，3 轮上限转 `blocked`；不新建 issue |
 | 决策门 | `gate-list` = 0；唯一的 `question` 停在库里（`question_threads` = 1） |
 | 终端回收 | `retained=10`，`reclaimable=1`，从不 `worker-release` |
 | 派发巡检 | 两个 engineer Dispatch 卡在 `starting` **11 小时**，直到 daemon 重启才被判 `abandoned`（`terminal_missing`） |
 | 验收上下文 | 起了新 session，但 cycle.sh 用的是同一个 dsh profile；不是同一 session，这点符合“换上下文” |
 
-**结论**：我们实现的是一套“工单状态机 + 派工脚本”，**Orca 编排层只用了三分之一**——用了 Task/Dispatch/worker_done，没用 check/ack、gate、release、worker-list 巡检。所以它更像“自动派活的脚本”，还不是“可监督的团队”。
+**结论（11-12 更新）**：check/ack、release 巡检、脚本合并已经补上，`cycle.sh` 现在是官方 loop 的六段结构。
+仍未用的只有 decision gate 与 `worker-read` 深读——这两项在“脚本做协调器”的形态下不是必需。
 
 ---
 
