@@ -137,6 +137,18 @@ fi
 [ -n "${RUN_ID:-}" ] || { log "拿不到 Run id，无法派工"; exit 1; }
 log "Run: $RUN_ID"
 
+# 先绑定再干活：Run 同一时刻只有一个终端是所有者，task-create / worker-start 这类写操作
+# 对非所有者一律 consumer_fenced。别的会话（比如人对话的协调器）若占了所有权，
+# 不先拿回来，派工会在 task-create 上失败，而且错误信息是空的。
+# 这个脚本是 Run 的所有者；人对话的协调器只读，不拥有 Run（见 docs/COORDINATOR.md）。
+if [ "$DRY" != "1" ]; then
+  bind_out=$(orca orchestration run-use --id "$RUN_ID" --json 2>&1) || true
+  if [ "$(printf '%s' "$bind_out" | jget ok)" != "True" ]; then
+    log "  ✗ 绑定 Run 失败：$(printf '%s' "$bind_out" | jget error.code) $(printf '%s' "$bind_out" | jget error.message | head -c 200)"
+    exit 1
+  fi
+fi
+
 # ---------------------------------------------------------------- 1. 机械迁移
 log "== 1/6 机械迁移 =="
 if [ "$DRY" = "1" ]; then

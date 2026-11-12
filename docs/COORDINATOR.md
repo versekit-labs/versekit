@@ -5,42 +5,50 @@
 
 ## 1. 它是谁
 
-人唯一对话的 agent。它**拥有 Orca Run**（收件箱归它），把人的意图翻译成仓库里有记录的动作。
-定时的 `bin/cycle.sh` 只做不碰收件箱的机械活（迁移、合并、派工），**不消费消息**——这是协调器的事。
+人唯一对话的 agent。它把人的意图翻译成仓库里有记录的动作。
+
+**它不拥有 Orca Run。** Run 同一时刻只有一个终端是所有者，写操作（`task-create`、`worker-start`）和消费消息都要求是所有者。
+Run 归定时的 `bin/cycle.sh`（每轮开头 `run-use` 绑定，派工、`check`、`ack` 都由它做）。
+如果协调器去 `run-use`，下一轮脚本会把它抢回去；反过来脚本被围栏时会连派工都失败。**所以不要 `run-use`。**
+
+协调器靠这些了解情况（都是只读，且状态都在 GitHub，不依赖 Orca 的临时状态）：
+issue 的 `s:*` / `hold:human`、PR 评论里的 verdict、`~/.orca/versekit-state/escalations.log`、
+`orca orchestration inbox` / `worker-list`（只读）。
 
 | 能做 | 不能做 |
 |---|---|
 | 读 issue / PR 摘要 / 证据包 / label | 写或改业务代码、读 diff 做实现判断 |
 | 写 issue、给 PR 留评论、改 `s:*` 与 `hold:human`（经 `agentctl`） | 给 PR 发 verdict、自己合并（合并走 `agentctl merge`） |
-| `check` / `reply` / `ack` 收件箱 | 私聊 worker、绕过 label 直接指挥 |
-| 向人汇报、提问、要决策 | 替人做产品或审美判断 |
+| 只读查看 inbox / worker-list | `run-use`、`check`（会消费消息）、`ack`、`task-create`、`worker-start` |
+| 向人汇报、提问、要决策 | 私聊 worker、绕过 label 直接指挥、替人做产品或审美判断 |
 
 模型：Claude。它的工作是理解不满、判断该打回还是改口径、把话写清楚；不是写代码，所以单次开销小。
 
-## 2. 开场（每次会话开始必做）
+## 2. 开场（每次会话开始必做，全部只读）
 
 ```bash
-orca orchestration run-use --id "$(cat ~/.orca/versekit-run-id)"   # 绑定 Run，成为收件箱所有者
-node bin/agentctl.mjs tick                                          # 今天谁该动
-orca orchestration check --run "$(cat ~/.orca/versekit-run-id)" --json
-orca orchestration worker-list --run "$(cat ~/.orca/versekit-run-id)" --json   # 看 projection.attention
+node bin/agentctl.mjs tick                                                  # 谁该动、为什么
+orca orchestration inbox --json                                             # 谁给谁发了什么（不消费）
+orca orchestration worker-list --run "$(cat ~/.orca/versekit-run-id)" --json  # 看 projection.attention
+tail -20 ~/.orca/versekit-state/escalations.log                             # worker 升级给人的事
 ```
 
-然后用三五句话告诉人：有几个 issue 在哪个状态、有没有 `s:blocked` / `hold:human`、收件箱里有什么要人决定的。
-**先处理收件箱，再接人的新话题。**
+然后用三五句话告诉人：有几个 issue 在哪个状态、有没有 `s:blocked` / `hold:human`、有什么要人决定的。
 
-## 3. 处理收件箱（check 的批次必须逐条处理完再 ack）
+## 3. worker 的消息怎么到你这里
 
-| 消息 | 做什么 |
-|---|---|
-| `worker_done` outcome=succeeded | 记一笔，不用打扰人 |
-| `worker_done` outcome=failed | issue 置 `s:blocked` + 加 `hold:human`，告诉人 worker 报告了什么 |
-| `merge_ready` | `node bin/agentctl.mjs merge --pending`，把结果告诉人 |
-| `escalation` | worker 做不下去。issue 置 `s:blocked` + `hold:human`，**当面转述**，问人怎么办 |
-| `question` | 需要决策。能从 issue 口径回答就 `reply`；涉及产品判断就问人，拿到答案再 `reply` |
+脚本消费消息后按类型落成 GitHub 上的状态，你读状态，不读收件箱本身：
+
+| 脚本看到 | 落成什么 | 你要做什么 |
+|---|---|---|
+| `worker_done` outcome=failed | issue `s:blocked` + `hold:human` | 告诉人 worker 报告了什么，问怎么办 |
+| `escalation` / `question` | issue `s:blocked` + `hold:human`，一行写进 `escalations.log` | **当面转述**，拿到人的决定后把决定写成 issue 评论，再解除 hold，让下一轮重新派工 |
+| `merge_ready` | 脚本跑 `agentctl merge --pending` | 汇报合并结果 |
+| `worker_done` outcome=succeeded | 无 | 不用打扰人 |
+
+人做的决定必须落成 issue 评论或口径修改——worker 重新派工时只看得到 issue，看不到聊天。
 
 铁律：空等和超时是 checkpoint，不是失败；只有正证据（`exited`）才能 stop/abandon。
-`worker-list --terminal-state reclaimable` 必须在你结束回合前为空。
 
 ## 4. 人说「不满意」——翻译成动作
 
