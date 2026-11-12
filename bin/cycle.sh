@@ -54,6 +54,20 @@ find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_
 
 log() { printf '%s\n' "$*"; }
 
+# 同一时刻只允许一个协调器在跑。launchd 与手动触发很容易撞车——
+# 撞车的后果不是报错，是"两个人都以为自己在派工"。
+CYCLE_LOCK="$LOCK_DIR/cycle.lock"
+if ! mkdir "$CYCLE_LOCK" 2>/dev/null; then
+  if [ -n "$(find "$CYCLE_LOCK" -maxdepth 0 -mmin +15 2>/dev/null)" ]; then
+    rm -rf "$CYCLE_LOCK"
+    mkdir "$CYCLE_LOCK" 2>/dev/null || { log "另一个协调器在跑，本轮跳过"; exit 0; }
+  else
+    log "另一个协调器在跑（锁 $CYCLE_LOCK），本轮跳过"
+    exit 0
+  fi
+fi
+trap 'rm -rf "$CYCLE_LOCK"' EXIT
+
 # 从 JSON 里取点号路径（缺失打空）。失败不抛错——CLI 版本差异不该让整轮崩掉。
 # 用 stdin 传 JSON：消息批次可能很大，塞 argv 会撞 ARG_MAX。
 jget() {
@@ -65,6 +79,26 @@ for k in sys.argv[1].split("."):
     d = d.get(k) if isinstance(d, dict) else None
 print("" if d is None else d)
 ' "$1" 2>/dev/null || true
+}
+
+# 取嵌套路径；多个候选按顺序试。
+# task-create 的 task id 在 result.task.id，worker-start 的 dispatch 在 result.dispatch.id
+# 或顶层 —— 不同版本不一样，所以按候选列表试，而不是猜一个。
+jpick() {
+  python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception:
+    print(""); raise SystemExit
+for path in sys.argv[1:]:
+    cur=d
+    ok=True
+    for k in path.split("."):
+        if isinstance(cur,dict) and k in cur: cur=cur[k]
+        else: ok=False; break
+    if ok and isinstance(cur,str) and cur:
+        print(cur); break
+' "$@" 2>/dev/null || true
 }
 
 # 递归找第一个非空的键（worker-start 的 receipt 层级随版本变）。
@@ -223,17 +257,21 @@ for s in d.get("skipped") or []:
     "$num" "$title" "$wt" "$num" "$body")
 
   local task taskid start dispatch
-  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "issue #$num 实现" --spec "$spec" --json 2>/dev/null) || task=""
-  taskid=$(printf '%s' "$task" | jfind taskId)
+  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "issue #$num 实现" --spec "$spec" --json 2>&1) || task=""
+  taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
   if [ -z "$taskid" ]; then
-    log "    ✗ task-create 失败"
+    log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
+    log "    退回 s:ready"
+    node bin/agentctl.mjs set --issue "$num" --to ready >/dev/null 2>&1 || log "    ⚠ 退回失败，请手工处理 #$num"
     return 1
   fi
 
   start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$wt" --json 2>/dev/null) || start=""
-  dispatch=$(printf '%s' "$start" | jfind dispatchId)
+  dispatch=$(printf '%s' "$start" | jpick result.dispatchId result.dispatch.id dispatchId)
   if [ -z "$dispatch" ]; then
-    log "    ✗ worker-start 失败（issue 保持 s:doing，等 stale 规则处理）"
+    log "    ✗ worker-start 失败：$(printf '%s' "$start" | head -c 300)"
+    log "    退回 s:ready"
+    node bin/agentctl.mjs set --issue "$num" --to ready >/dev/null 2>&1 || log "    ⚠ 退回失败，请手工处理 #$num"
     return 1
   fi
   record_dispatch "$dispatch" "$num" "$role"
@@ -289,20 +327,20 @@ dispatch_acceptance() {
   fi
 
   local spec
-  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. PASS 时把 issue 改成 s:accept，并发一条 merge_ready 消息\n6. FAIL 时把 issue 改成 s:changes（不新建 issue）\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome' \
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome' \
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid start dispatch
-  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "验收 #$num" --spec "$spec" --json 2>/dev/null) || task=""
-  taskid=$(printf '%s' "$task" | jfind taskId)
+  task=$(orca orchestration task-create --run "$RUN_ID" --task-title "验收 #$num" --spec "$spec" --json 2>&1) || task=""
+  taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
   if [ -z "$taskid" ]; then
-    log "    ✗ task-create 失败"
+    log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
     rm -rf "$lock"
     return 1
   fi
 
   start=$(orca orchestration worker-start --run "$RUN_ID" --task "$taskid" --terminal "$handle" --worktree "$ACCEPTANCE_WT" --json 2>/dev/null) || start=""
-  dispatch=$(printf '%s' "$start" | jfind dispatchId)
+  dispatch=$(printf '%s' "$start" | jpick result.dispatchId result.dispatch.id dispatchId)
   if [ -z "$dispatch" ]; then
     log "    ✗ worker-start 失败"
     rm -rf "$lock"

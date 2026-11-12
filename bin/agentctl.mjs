@@ -823,7 +823,9 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
   const board = await loadBoard(repo);
   let targets;
   if (pending) {
-    targets = board.issues.filter((i) => readState(i).state === "accept" && !readState(i).hold);
+    // s:review 也要看：验收 agent 只负责给 verdict，状态迁移是协调器的事
+    // （AGENT-COLLAB §2）。所以"verdict=PASS 但还挂在 review"不该等人手改。
+    targets = board.issues.filter((i) => ["accept", "review"].includes(readState(i).state) && !readState(i).hold);
   } else {
     const issue = board.issues.find((i) => i.number === Number(number));
     if (!issue) throw new Error(`找不到 open issue #${number}`);
@@ -835,16 +837,35 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
     const problems = [];
     const { state, hold } = readState(issue);
     if (hold) problems.push("有 hold:human");
-    if (state !== "accept") problems.push(`当前 s:${state ?? "<none>"}，只有 s:accept 才能合并`);
 
     const pull = findPull(board.pulls, issue);
-    if (!pull) problems.push("找不到对应 PR");
-    if (pull?.draft) problems.push("PR 还是草稿");
 
     let verdict = null;
     if (pull) {
       const comments = await listComments(repo, pull.number);
       verdict = latestVerdict(comments);
+    }
+
+    // review → accept 的迁移由这里做：verdict=PASS 且 head 对得上才算验收通过。
+    if (state === "review") {
+      const headOk = verdict?.headSha && pull?.head.sha.startsWith(verdict.headSha);
+      if (verdict?.verdict === "PASS" && headOk) {
+        await replaceState(repo, issue.number, "accept");
+      } else if (verdict?.verdict === "FAIL" && headOk) {
+        // 验收方只给判定，迁移由协调器做——否则"谁改了状态"永远说不清。
+        await replaceState(repo, issue.number, "changes");
+        results.push({ issue: issue.number, merged: false, handback: true, pull: pull?.number ?? null });
+        continue;
+      } else {
+        continue; // 还在验收中（没有 verdict）或 verdict 与 head 不匹配
+      }
+    } else if (state !== "accept") {
+      problems.push(`当前 s:${state ?? "<none>"}，只有 s:accept（或已 PASS 的 s:review）才能合并`);
+    }
+    if (!pull) problems.push("找不到对应 PR");
+    if (pull?.draft) problems.push("PR 还是草稿");
+
+    if (pull) {
       if (!verdict) problems.push("PR 里没有可解析的 verdict（需要 ```yaml 块，含 verdict/head_sha）");
       else if (verdict.verdict !== "PASS") problems.push(`最新判定是 ${verdict.verdict}`);
       else if (!verdict.headSha || !pull.head.sha.startsWith(verdict.headSha)) {
@@ -920,6 +941,7 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
   } else {
     for (const r of results) {
       if (r.merged) process.stdout.write(`✓ 合并 #${r.issue}（PR #${r.pull} → ${(r.mergeSha ?? "").slice(0, 7)}）\n`);
+      else if (r.handback) process.stdout.write(`↩ #${r.issue} 判定 FAIL → s:changes（PR #${r.pull}，回原分支改）\n`);
       else if (r.dryRun) process.stdout.write(`· [dry-run] 会合并 #${r.issue}（PR #${r.pull}，head ${String(r.head).slice(0, 7)}）\n`);
       else process.stdout.write(`✗ 不合并 #${r.issue}：\n${r.problems.map((p) => `    - ${p}`).join("\n")}\n`);
     }
