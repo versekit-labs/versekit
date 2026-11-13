@@ -59,6 +59,8 @@ npm run ci
 - [ACC-publish-01] 只列**当前组**账号；已失效的账号不可选并说明原因。
 - [ACC-publish-02] 平台差异字段只出现在真正不同的地方；预演列出将发生什么。
 - [ACC-publish-03] 发布后生成 work + 多条 publish，状态可查。
+- [ACC-publish-04] 素材类型与平台能力不匹配时在**创建前**拒绝并说人话：小红书适配器目前只支持视频，选了图片素材发小红书，发布台直接提示「这个平台目前只能发视频」并不创建 publish；不得把图片当视频硬传。
+- [ACC-publish-05] `auto_running` 有总时限（默认 5 分钟，可配置）：超时后转 `failed`，写 `error_code=timeout` 与人话原因（停在哪一步），关闭为它开的浏览器；发布台与 `vk publish list` 都能看到失败原因和「重试」入口。任何发布不得无限停在 `auto_running` 而没有错误。
 - 实现提示 命令：`vk publish <asset> --group <g> --to ... --schedule ... --dry-run`
 
 ### 发布计划 `calendar.html`
