@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # 选 dsh worker 用哪条模型通道：火山 V4.1 Flash 优先，不可用就切千问 V4.1 Flash。
 #
+# 角色分工（issue #87 / ACC-harness-claude-02）：
+#   - 验收 worker **始终**用这个脚本选的 DeepSeek 通道，绝不选 claude；
+#   - 实现 / 返工 worker 默认 claude，只有 claude 不可用或显式 IMPL_CHANNEL=dsh 时才回退到这里。
+#   通道/模型的完整选路在 bin/worker-channel.sh，本脚本只管 DeepSeek 的 volc→qwen 兜底。
+#
 # 输出（stdout）：`volc` 或 `qwen`。退出码 1 = 两条都不可用（stderr 说清原因）。
 #
 # 为什么要探测而不是等 dsh 自己失败：dsh 的 retryPolicy 只在同一个 provider 内重试，
