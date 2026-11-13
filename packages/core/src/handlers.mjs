@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit } from "./index.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
+import { assetKindOf, ASSET_KIND_LABEL } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -32,6 +33,33 @@ const platformList = (to) => {
 };
 
 const RETRYABLE_STATES = new Set(["failed", "blocked", "expired", "notify_pending", "draft_pending"]);
+
+const platformLabel = (platform) =>
+  overview.MATRIX_COLUMNS.find((column) => column.platform === platform || column.aliases.includes(platform))?.label ?? platform;
+
+/**
+ * 素材类型 × 平台能力的创建前校验（ACC-publish-04）。
+ *
+ * 放在写 work / publish 之前：图片素材发小红书时，用户拿到的是一句能照做的话，而不是一条
+ * 8 分钟后仍然 auto_running 的发布。只拦适配器**明确声明过**的能力（capabilities.assetTypes）；
+ * 没声明的旧适配器照旧交给它自己判断，不在这里猜。
+ */
+function assertAssetSupported(asset, platforms, byPlatform) {
+  const kind = assetKindOf(asset);
+  if (!kind) return;
+  const refused = platforms
+    .map((platform) => ({ platform, types: byPlatform.get(platform)?.assetTypes }))
+    .filter(({ types }) => Array.isArray(types) && !types.includes(kind));
+  if (!refused.length) return;
+
+  const label = ASSET_KIND_LABEL[kind];
+  const alternative = ASSET_KIND_LABEL[kind === "image" ? "video" : "image"];
+  const detail = refused
+    .map(({ platform, types }) => `${platformLabel(platform)}目前只能发${types.map((t) => ASSET_KIND_LABEL[t]).join("、")}`)
+    .join("；");
+  const excluded = refused.map(({ platform }) => platform).join("、");
+  fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或从 --to 里去掉 ${excluded}（这条没有创建）`);
+}
 
 export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
@@ -100,6 +128,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         draft: a.draft,
         visibility: a.visibility,
         requiresQualification: a.requiresQualification,
+        // 发布台据此在选素材时提前提示；null = 适配器没声明，页面不猜。
+        assetTypes: a.assetTypes ?? null,
         ready: a.adapter.ready(),
       })),
     }),
@@ -164,6 +194,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       }
       const noAdapter = platforms.filter((p) => !byPlatform.has(p));
       if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
+
+      // 素材类型 × 平台能力在写任何行之前就拦下（ACC-publish-04）；dry-run 同样适用——
+      // 预演的意义就是提前看到「这条真发会怎样」。
+      assertAssetSupported(asset, platforms, byPlatform);
 
       // 快失效的仍然可选，但提前告诉人：不是阻塞，不应该等到发布当天才在任务页发现。
       const warnings = accounts

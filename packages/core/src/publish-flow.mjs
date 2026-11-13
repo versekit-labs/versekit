@@ -9,6 +9,7 @@ import { open, transitionPublish, emit, enqueue, newId } from "./index.mjs";
 import { ERROR_CODES, toAdapterError } from "./errors.mjs";
 import { assertPublishResult } from "./contract.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
+import { DEFAULT_PUBLISH_TIMEOUT_MS } from "./config.mjs";
 
 const SNAPSHOT_SOURCES = ["api", "intercept", "csv"];
 const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
@@ -143,6 +144,15 @@ export function applyPublishError(publishId, err) {
     return { terminal: true, retryable: false, code: error.code };
   }
 
+  // 超时必须有终点（ACC-publish-05）：停在 auto_running 的发布既不是成功也不是失败，
+  // 人看不到原因，也没法重试。转 failed 并保留 error_code=timeout + 人话（停在哪一步）。
+  if (error.code === "timeout") {
+    if (["queued", "auto_running", "draft_running", "draft_pending"].includes(row.state)) {
+      transitionPublish(publishId, "failed", { reason: "timeout" });
+    }
+    return { terminal: true, retryable: false, code: error.code };
+  }
+
   return { terminal: false, retryable: spec.retryable, code: error.code };
 }
 
@@ -154,6 +164,7 @@ const FALLBACK_OF = {
   unknown: "flaky_automation",
   asset_invalid: "asset_invalid",
   platform_reject: "app_only_feature",
+  timeout: "flaky_automation",
 };
 
 /**
@@ -165,6 +176,9 @@ export function applyTerminalFailure(publishId, err) {
   const row = getPublishRow(publishId);
   if (!row) return null;
   if (!["queued", "auto_running", "draft_running", "draft_pending", "failed"].includes(row.state)) return null;
+  // 已经 failed 的行已经有原因和重试入口了；队列放弃只是把 run 标成失败，别再把它翻成
+  // notify_pending——那会把 error_code=timeout / asset_invalid 的口径冲掉（ACC-publish-05）。
+  if (row.state === "failed") return null;
 
   const fallback = FALLBACK_OF[error.code] ?? "flaky_automation";
   transitionPublish(publishId, "notify_pending", {
@@ -172,4 +186,43 @@ export function applyTerminalFailure(publishId, err) {
     patch: { fallback_reason: fallback, error_code: error.code, error_message: String(error.message).slice(0, 500) },
   });
   return { state: "notify_pending", fallback };
+}
+
+/**
+ * 总时限的第二道保险（ACC-publish-05）：handler 里的定时器只管「适配器还在手上」的那一次；
+ * 进程崩过、run 丢了、租约卡住的行没人管，就会永久停在 auto_running。
+ *
+ * 只处理**没有活 run** 的行：有活 run 时超时由 handler 的定时器负责，fallback 扫到同一行
+ * 会跟正在返回的适配器抢状态（一个转 failed、一个转 published，白挨一次非法迁移）。
+ */
+export function sweepStuckPublishes({ timeoutMs = DEFAULT_PUBLISH_TIMEOUT_MS, now = Date.now() } = {}) {
+  const ms = Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return { failed: [] };
+  const cutoff = now - ms;
+  const rows = open()
+    .prepare(
+      `SELECT p.id, p.state FROM publish p
+        WHERE p.state IN ('auto_running', 'draft_running')
+          AND p.updated_at <= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM run r
+             WHERE r.kind = 'publish' AND r.target_type = 'publish' AND r.target_id = p.id
+               AND r.state = 'running' AND (r.lease_until IS NULL OR r.lease_until > ?))`,
+    )
+    .all(cutoff, now);
+
+  const minutes = Math.max(1, Math.round(ms / 60e3));
+  const failed = [];
+  for (const row of rows) {
+    const stage = row.state === "draft_running" ? "草稿" : "自动发布";
+    transitionPublish(row.id, "failed", {
+      reason: "timeout",
+      patch: {
+        error_code: "timeout",
+        error_message: `${stage}超过 ${minutes} 分钟没有推进：适配器没有返回结果，已判超时；重试前先确认账号浏览器状态`,
+      },
+    });
+    failed.push(row.id);
+  }
+  return { failed };
 }

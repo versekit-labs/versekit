@@ -11,8 +11,10 @@
 //   3. 发布按钮是 <xhs-publish-btn> 的 closed shadow root，页面 JS 看不见，要走 CDP 穿透点击。
 
 import { existsSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { assetKindOf, ASSET_KIND_LABEL } from "../../core/src/asset-kind.mjs";
 import { openAccount, closeAccount, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
@@ -154,16 +156,41 @@ function wrap(tab, accountId, tag) {
   };
 }
 
-async function publish({ publishId, dryRun = false } = {}) {
+async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
   requireId(publishId);
   let tab = null;
   let accountId = null;
+  let aborted = false;
+  // 内核到总时限会 abort（ACC-publish-05）。适配器这边只做一件事：把为这个账号打开的
+  // 浏览器关掉——否则「超时」只是数据库里的一行，Chrome 还停在半截的上传页。
+  const onAbort = () => {
+    aborted = true;
+    if (accountId) closeAccount(accountId).catch(() => {});
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const step = (label) => {
+    try {
+      onStep?.(label);
+    } catch {
+      // 进度回调坏了不能影响发布本身；超时文案退化成「还没进入具体步骤」。
+    }
+  };
   try {
     const row = load(publishId);
     accountId = row.account_id;
     const note = planNote(row);
     const asset = text(row.asset_path);
     if (!existsSync(asset)) throw new AdapterError("asset_invalid", `找不到素材：${asset}`);
+
+    // 能力声明的本地兜底：内核已在创建前拦过一次（ACC-publish-04），但库里可能还有旧行，
+    // 或者有人直接调适配器。图片绝不能被当成视频硬传——那正是「发布无声卡死」的起点。
+    const kind = assetKindOf(asset);
+    if (kind && kind !== "video") {
+      throw new AdapterError(
+        "asset_invalid",
+        `小红书目前只能发${ASSET_KIND_LABEL.video}：${basename(asset)} 是${ASSET_KIND_LABEL[kind]}素材。换成视频，或在发布台取消勾选小红书`,
+      );
+    }
 
     if (dryRun) {
       return {
@@ -172,6 +199,7 @@ async function publish({ publishId, dryRun = false } = {}) {
       };
     }
 
+    step("打开创作服务平台");
     tab = await openAccount({ accountId });
     await tab.goto(CREATE);
     const where = await tab.waitFor(
@@ -181,13 +209,16 @@ async function publish({ publishId, dryRun = false } = {}) {
     );
     if (where === "login") throw new AdapterError("auth", LOGIN_DETAIL);
 
-    // 页面可能停在「上传图文」；这条是视频。
+    // 页面可能停在「上传图文」；这条是视频，必须先点回「上传视频」再传文件。
+    step("切换到上传视频");
     if (!(await tab.eval(`!!document.querySelector('input.upload-input[accept*=mp4], input[type=file][accept*=mp4]')`))) {
       await clickOn(tab, `(R) => [...R.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && e.innerText?.trim() === '上传视频').pop()`, "上传视频");
       await tab.waitFor(`!!document.querySelector('input.upload-input, input[type=file][accept*=mp4]')`, [], { timeout: 30e3, what: "视频上传控件" });
     }
 
+    step("上传视频文件");
     await tab.upload(`document.querySelector('input.upload-input, input[type=file][accept*=mp4]')`, [asset]);
+    step("等待视频上传完成");
     await tab.waitFor(
       `(() => !!document.querySelector('input[placeholder*="标题"]') && !/上传中|处理中|正在上传|\\d+%/.test(document.body.innerText))()`,
       [],
@@ -195,6 +226,7 @@ async function publish({ publishId, dryRun = false } = {}) {
     );
     await sleep(1000);
 
+    step("填写标题");
     await clickOn(tab, `(R) => R.querySelector('input[placeholder*="标题"]')`, "标题");
     if (!(await tab.eval(`document.activeElement === document.querySelector('input[placeholder*="标题"]')`))) {
       await tab.eval(`document.querySelector('input[placeholder*="标题"]').focus()`);
@@ -204,6 +236,7 @@ async function publish({ publishId, dryRun = false } = {}) {
       throw new AdapterError("flaky_ui", "小红书标题没有填进输入框");
     }
 
+    step("填写正文");
     await clickOn(tab, `(R) => R.querySelector('div[contenteditable="true"]') || R.querySelector('textarea[placeholder*="正文"]')`, "正文");
     if (!(await tab.eval(`document.activeElement?.classList?.contains('tiptap')`))) {
       await tab.eval(`document.querySelector('div.tiptap')?.focus()`);
@@ -216,15 +249,18 @@ async function publish({ publishId, dryRun = false } = {}) {
 
     const missed = [];
     if (note.tags.length) {
+      step("添加话题");
       await tab.key("Enter", "Enter", 13);
       for (const tag of note.tags) await addTag(tab, tag, missed);
     }
 
+    step("等待发布按钮可用");
     await tab.waitFor(
       `(() => { const b = document.querySelector('xhs-publish-btn'); return b && b.getAttribute('submit-loading') === 'false' && b.getAttribute('submit-disabled') === 'false' ? 'ready' : ''; })()`,
       [],
       { timeout: 20e3, what: "发布按钮可用" },
     );
+    step("等待发布成功");
     await tab.clickInShadow("xhs-publish-btn", "发布");
     await tab.waitFor(`location.pathname.includes('/publish/success') || /发布成功/.test(document.body.innerText)`, [], { timeout: 120e3, what: "发布成功" });
 
@@ -238,7 +274,11 @@ async function publish({ publishId, dryRun = false } = {}) {
   } catch (err) {
     throw await wrap(tab, accountId, "publish")(err);
   } finally {
-    await tab?.close().catch(() => {});
+    signal?.removeEventListener("abort", onAbort);
+    // 超时中止时关掉整个浏览器（不只是 tab）：发布页不会有后台任务在跑；
+    // 正常结束时只关自己开的 tab，账号的浏览器留给下一次复用。
+    if (aborted) await closeAccount(accountId).catch(() => {});
+    else await tab?.close().catch(() => {});
   }
 }
 
@@ -362,6 +402,9 @@ export default {
     draft: false,
     visibility: [],
     requiresQualification: false,
+    // 当前只实现了视频发布（图文发布是另一个 issue）。声明出来，发布台才能在创建前拦住
+    // 图片素材，而不是让适配器打开浏览器后卡在「上传图文」页（ACC-publish-04）。
+    assetTypes: ["video"],
   },
   ready() {
     const reason = browserReady();

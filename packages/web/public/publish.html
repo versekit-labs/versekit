@@ -28,6 +28,15 @@
 .file-name{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all}
 .warn-note{color:var(--amber);font-size:12px;line-height:1.6;margin:8px 16px 0}
 .ok-note{color:var(--green);font-size:12px;line-height:1.6;margin:8px 16px 0}
+.muted-note{color:var(--muted);font-size:13px;margin:0;line-height:1.7}
+.recent{display:flex;flex-direction:column;gap:10px}
+.recent-item{border-top:1px solid var(--line-soft);padding-top:10px}
+.recent-item:first-child{border-top:0;padding-top:0}
+.recent-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.recent-name{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.recent-state{font-size:12px;color:var(--muted)}
+.recent-state.bad{color:var(--red)}
+.recent-why{color:var(--muted);font-size:12px;line-height:1.6;margin:4px 0 6px}
 @media (max-width:900px){
   .cols{grid-template-columns:minmax(0,1fr)}
   .row2{grid-template-columns:1fr}
@@ -67,6 +76,7 @@
               <input class="input" id="asset" type="file" accept="video/*,image/*" aria-label="选择素材文件">
               <span class="file-name" id="asset-name">还没有选择文件</span>
             </div>
+            <p class="warn-note" id="asset-warn" hidden style="margin:8px 0 0"></p>
             <p class="field-label" style="margin-top:12px">标题</p>
             <input class="input" id="title" placeholder="留空则用文件名">
             <p class="field-label" style="margin-top:12px">正文 / 简介</p>
@@ -117,6 +127,11 @@
           <div class="panel-head"><h2>等价命令</h2><span class="hint">Web 只调用同一条命令</span></div>
           <div class="pad"><div class="cmd"><code id="cmd-line">vk publish &lt;素材&gt; --to &lt;平台&gt;</code></div></div>
         </section>
+
+        <section class="panel" aria-label="最近发布">
+          <div class="panel-head"><h2>最近发布</h2><span class="hint">失败会留原因，可直接重试</span></div>
+          <div class="pad" id="recent"><p class="muted-note">还没有发布记录。</p></div>
+        </section>
       </div>
     </div>
 
@@ -135,9 +150,51 @@
   let selected = new Set();
   let assetPath = null;
   let assetName = "";
+  let assetKind = null; // video / image / null（判不出来就不本地拦，交给服务端）
   let dryResult = null;
+  /* 平台声明的素材能力（/api/platforms 的 assetTypes）。null = 适配器没声明，不限制。 */
+  const assetTypes = {};
+
+  const KIND_LABEL = { video: "视频", image: "图片" };
+  const EXT_KIND = {
+    mp4:"video", mov:"video", m4v:"video", webm:"video", mkv:"video", avi:"video", flv:"video",
+    png:"image", jpg:"image", jpeg:"image", webp:"image", gif:"image", heic:"image", bmp:"image", avif:"image", tif:"image", tiff:"image",
+  };
+  const kindOf = (name) => EXT_KIND[String(name || "").toLowerCase().split(".").pop()] ?? null;
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
+  const platformName = (platform) => VK.platformMap()[platform]?.name ?? platform;
 
   const levelOf = (a) => (a.state === "expired" || a.state === "banned") ? "bad" : a.state === "expiring" ? "warn" : "ok";
+
+  /** 选中的账号里，哪些平台明确发不了当前这类素材（ACC-publish-04）。 */
+  function mismatched(){
+    if(!assetKind) return [];
+    const out = [];
+    for(const id of selected){
+      const acc = VK.account(id);
+      if(!acc) continue;
+      const types = assetTypes[acc.platform];
+      if(Array.isArray(types) && !types.includes(assetKind)) out.push({ platform: acc.platform, types });
+    }
+    return out;
+  }
+
+  function assetWarning(){
+    const bad = mismatched();
+    if(!bad.length) return "";
+    const label = KIND_LABEL[assetKind];
+    const alt = KIND_LABEL[assetKind === "image" ? "video" : "image"];
+    const detail = bad.map(b => platformName(b.platform) + "目前只能发" + (b.types || []).map(t => KIND_LABEL[t] ?? t).join("、")).join("；");
+    return detail + "，选的是" + label + "素材「" + (assetName || "") + "」：换成" + alt +
+      "，或取消勾选 " + bad.map(b => platformName(b.platform)).join("、") + "。这条不会创建发布。";
+  }
+
+  const STATE_LABEL = {
+    queued: "排队中", auto_running: "发布中", draft_running: "草稿中", draft_pending: "草稿待确认",
+    notify_pending: "待人工确认", published: "已发布", published_limited: "有限可见",
+    failed: "失败", blocked: "登录失效", expired: "已过期", canceled: "已取消",
+  };
+  const RETRY_STATES = new Set(["failed", "blocked", "notify_pending", "draft_pending"]);
 
   function render(){
     const group = VK.current();
@@ -182,17 +239,69 @@
 
   function updateCount(){
     const n = selected.size;
+    const warn = assetWarning();
+    $("asset-warn").hidden = !warn;
+    $("asset-warn").textContent = warn;
     $("action-count").textContent = n ? ("将发布到 " + n + " 个账号") : "还没选账号";
-    $("go").disabled = !(n && assetPath);
+    // 素材类型对不上时连按钮都点不了：服务端也会拦，但这里先让人少走一步。
+    $("go").disabled = !(n && assetPath) || Boolean(warn);
     const plats = platformsOfSelected();
     $("cmd-line").textContent = "vk publish " + (assetName || "<素材>") + " --to " + (plats.join(",") || "<平台>") +
       ($("sched").value ? (" --schedule " + $("sched").value) : "");
+  }
+
+  async function loadPlatforms(){
+    try{
+      const data = await VK.request("/api/platforms");
+      for(const p of data.platforms ?? []) assetTypes[p.platform] = Array.isArray(p.assetTypes) ? p.assetTypes : null;
+    }catch{
+      // 平台清单读不到就不做本地提示；发布时服务端仍会在创建前拦住（ACC-publish-04）。
+    }
+  }
+
+  function renderRecent(rows){
+    const box = $("recent");
+    if(!rows.length){ box.innerHTML = '<p class="muted-note">还没有发布记录。</p>'; return; }
+    box.innerHTML = '<div class="recent">' + rows.map(r => {
+      const bad = r.state === "failed" || r.state === "blocked";
+      const why = r.error_message || r.fallback_reason || "";
+      const retry = RETRY_STATES.has(r.state);
+      return '<div class="recent-item">' +
+        '<div class="recent-top"><b>' + esc(platformName(r.platform)) + '</b>' +
+        '<span class="recent-name">' + esc(r.title || r.id) + '</span>' +
+        '<span class="recent-state' + (bad ? ' bad' : '') + '">' + esc(STATE_LABEL[r.state] ?? r.state) + '</span></div>' +
+        (why ? '<p class="recent-why">' + esc(why) + '</p>' : '') +
+        (retry ? '<button class="btn" type="button" data-retry="' + esc(r.id) + '">重试</button>' : '') +
+        '</div>';
+    }).join("") + '</div>';
+    box.querySelectorAll("[data-retry]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true; btn.textContent = "正在重试…";
+        try{
+          await VK.request("/api/publishes/" + encodeURIComponent(btn.dataset.retry) + "/retry", { method: "POST", body: { publishId: btn.dataset.retry } });
+          await loadRecent();
+        }catch(err){
+          btn.disabled = false; btn.textContent = "重试";
+          alert("重试失败：" + err.message);
+        }
+      });
+    });
+  }
+
+  async function loadRecent(){
+    try{
+      const data = await VK.request("/api/publishes?limit=8");
+      renderRecent(data.rows ?? []);
+    }catch(err){
+      $("recent").innerHTML = '<p class="muted-note">读不到发布记录：' + esc(err.message) + '</p>';
+    }
   }
 
   $("asset").addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if(!file) return;
     assetName = file.name;
+    assetKind = kindOf(file.name);
     $("asset-name").textContent = "正在上传 " + file.name + " …";
     try{
       const res = await fetch("/api/assets", {
@@ -231,6 +340,11 @@
   async function run(dryRun){
     if(!assetPath){ $("preview").innerHTML = '<li>先选一个素材文件。</li>'; return; }
     if(!selected.size){ $("preview").innerHTML = '<li>至少勾一个账号。</li>'; return; }
+    // 发布按钮已经灰了；这里再挡一次，保证「提示过就绝不下单」（ACC-publish-04）。
+    if(!dryRun && mismatched().length){
+      $("preview").innerHTML = '<li><b>没有创建：</b>' + assetWarning() + '</li>';
+      return;
+    }
     const btn = dryRun ? $("dry") : $("go");
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = dryRun ? "正在预演…" : "正在发布…";
@@ -238,6 +352,7 @@
     try{
       const data = await VK.request("/api/publishes", { method: "POST", body: payload(dryRun) });
       renderResult(data, dryRun);
+      if(!dryRun) await loadRecent();
     }catch(err){
       $("preview").innerHTML = '<li><b>失败：</b>' + String(err.message) + '</li>';
     }finally{
@@ -270,7 +385,12 @@
   $("sched").addEventListener("change", updateCount);
   $("visibility").addEventListener("change", updateCount);
 
-  VK.ready().then(render).catch(err => { $("sub").textContent = "读不到账号：" + err.message; });
+  VK.ready().then(async () => {
+    render();
+    await loadPlatforms();
+    updateCount();
+    await loadRecent();
+  }).catch(err => { $("sub").textContent = "读不到账号：" + err.message; });
 })();
 </script>
 </body>

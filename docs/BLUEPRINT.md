@@ -243,9 +243,11 @@ interface PlatformAdapter {
 | quota | 配额/频率限制 | 延后重试（不计数） |
 | flaky_ui | 页面改版 | 退避重试 → draft/notify |
 | asset_invalid | 素材不合法 | 直接 failed，不重试 |
+| timeout | 总时限内没有结果 | 直接 failed（带停在哪一步），人可重试 |
 | unknown | 其他 | 退避重试 |
 
-适配器只负责抛/返回错误码；人话与按钮由核心生成。
+适配器只负责抛/返回错误码；人话与按钮由核心生成。`auto_running` 有总时限（默认 5 分钟）：
+到点 abort 适配器关浏览器、转 `failed`，不允许无声停在 running。
 
 ### 3.6 事件与通道
 

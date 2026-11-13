@@ -9,9 +9,10 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { open, transitionPublish, emit, enqueue } from "./index.mjs";
 import { validateAdapter } from "./contract.mjs";
-import { toAdapterError } from "./errors.mjs";
+import { AdapterError, toAdapterError } from "./errors.mjs";
 import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow } from "./publish-flow.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
+import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -111,9 +112,10 @@ export async function checkAccount(adapters, accountId) {
   }
 }
 
-export function buildHandlers(adapters, { log = () => {} } = {}) {
+export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = configuredPublishTimeoutMs() } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   const handlers = {};
+  const timeoutMs = Number.isFinite(Number(publishTimeoutMs)) && Number(publishTimeoutMs) > 0 ? Number(publishTimeoutMs) : configuredPublishTimeoutMs();
 
   // The platform lives on the publish row, not on the run: the runner stays platform-agnostic.
   const platformOf = (publishId) =>
@@ -155,16 +157,55 @@ export function buildHandlers(adapters, { log = () => {} } = {}) {
       const running = row.mode === "draft" ? "draft_running" : "auto_running";
       if (row.state === "queued") transitionPublish(publishId, running);
 
+      // 发布总时限（ACC-publish-05）：适配器可能永远不返回（页面停在「上传视频」，文件根本
+      // 没上传）。这里给整次发布一个硬截止时间：到点先中止适配器（它据此关掉浏览器），再把
+      // error_code=timeout 落到 failed——任何发布都不允许无限停在 auto_running。
+      const progress = { step: null };
+      const controller = new AbortController();
+      let timer = null;
+      const runAdapter = Promise.resolve().then(() =>
+        adapter.adapter.publish({
+          publishId,
+          signal: controller.signal,
+          // 适配器边跑边报「现在停在哪一步」，超时文案才能说人话，而不是一句「出错了」。
+          onStep: (step) => {
+            if (step) progress.step = String(step).slice(0, 80);
+          },
+        }),
+      );
+      const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+          const span = seconds >= 90 ? `${Math.round(seconds / 60)} 分钟` : `${seconds} 秒`;
+          const where = progress.step ? `停在「${progress.step}」` : "还没进入具体步骤";
+          try {
+            controller.abort();
+          } catch {
+            /* 适配器没监听 signal：至少发布行会落到 failed，不会无声卡住 */
+          }
+          reject(new AdapterError("timeout", `发布超过 ${span}没有结果（${where}）：已中止并关闭浏览器，可以重试`));
+        }, timeoutMs);
+        // 不 unref：这个定时器就是「发布总时限」本身，唯一的 goroutine 如果只剩它，进程也该
+        // 等到它触发后再退，而不是让发布悄悄消失。finally 里一定会 clearTimeout。
+      });
+
       try {
-        const result = await adapter.adapter.publish({ publishId });
+        const result = await Promise.race([runAdapter, deadline]);
         if (result?.dryRun) return result;
         return applyPublishResult(publishId, result);
       } catch (err) {
         const disposition = applyPublishError(publishId, err);
         if (disposition.retryable) throw toAdapterError(err);
+        // 超时还要把 run 标成失败：任务页靠 run.state=failed 显示这条错误并给出「重试」入口。
+        // 其他终态失败（auth / asset_invalid …）已有对应状态与人话，run 正常结束即可。
+        if (disposition.code === "timeout") throw toAdapterError(err);
         // Terminal or already handed to a human: the run is done, the row carries the reason.
         log(`[publish] ${adapter.platform} ${publishId} 失败（${disposition.code}），不再重试`);
         return { state: getPublishRow(publishId)?.state, error: disposition.code };
+      } finally {
+        clearTimeout(timer);
+        // 超时后适配器可能还在收尾；它的 rejection 不能在别处冒成 unhandled。
+        runAdapter.catch(() => {});
       }
     };
   }
