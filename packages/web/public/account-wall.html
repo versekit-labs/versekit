@@ -405,6 +405,24 @@
         }
       }
 
+      /* 登录完成前 status 先回 idle 是正常的（小红书尤其如此）。这里顺带刷新一次服务端快照：
+       * 登录也可能由另一个页面/CLI 完成，account.state 已经是 ok 时必须让页面跟上，
+       * 不能因为 status 还没切到 ok 就把人一直留在「已失效」。B站同样适用。 */
+      if(status.state === "idle"){
+        try{
+          await VK.ready({ force: true });
+          if(VK.account(accountId)?.state === "ok"){
+            verifyTokens.delete(accountId);
+            render();
+            say("重新登录完成：登录状态已确认「正常」，页面已更新。", false);
+            toast("重新登录完成：账号已恢复正常");
+            return true;
+          }
+        }catch(_err){
+          /* 快照刷新失败不改变登录判断：下一次轮询继续。 */
+        }
+      }
+
       if(status.state === "failed" || (status.state === "idle" && platform === "bilibili")){
         say(status.note ?? "没有检测到登录完成。点「重新登录」再试。", true);
         toast("登录未完成", true);
