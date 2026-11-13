@@ -31,10 +31,19 @@
 #   CYCLE_LANE_IDLE_TTL_MIN       观测不到 lane 的 dispatch 状态时，多久视为空闲（默认 90）
 #   WORKER_AGENT                  指定则用 worker-start --agent，否则走 worker-up.sh
 #                                 （dsh 需要预配置 profile，--agent 会停在 landing page）
+#   IMPL_CHANNEL=claude|dsh       实现/返工 worker 的通道覆盖（默认 claude）
+#   IMPL_MODEL=sonnet|opus        实现/返工 worker 的 claude 模型覆盖
 #   CYCLE_WORKER_RETRIES          worker-start 首次失败后的重试次数（默认 2）
 #   CYCLE_RETRY_BACKOFF_1/_2      第 1/2 次失败后的等待秒数（默认 2 / 4）
 #   CYCLE_MAX_STALE_TERMINALS     已完成未关 worker 终端的上限（默认 lane 数 + 2）；
 #                                 超过就先回收，清完仍超则本轮不开新终端
+#
+# 通道按角色选（issue #87 / ACC-harness-claude-02）：
+#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；issue 带 model:opus label 或返工
+#     round >= 3 时用 Opus；
+#   - 验收 worker 始终走 DeepSeek（bin/dsh-model.sh：volc 优先、qwen 兜底），绝不选 claude；
+#   - claude 不可用时实现 worker 自动降级 DeepSeek，日志写明原因。
+# 选路逻辑集中在 bin/worker-channel.sh；每次派工日志写「角色 → 通道 → 模型」。
 #
 # 并行规则（ACC-harness-cycle-08/09/10）：
 #   - 每个 issue 一个独立 worktree、独立终端、独立 Dispatch；lane 上限默认 3。
@@ -195,6 +204,62 @@ except Exception: print("")
 ' "$1" 2>/dev/null || true
 }
 
+# 角色名（日志里「角色 → 通道 → 模型」用）。
+role_label() {
+  case "$1" in
+    engineer) printf '实现' ;;
+    rework) printf '返工' ;;
+    acceptance) printf '验收' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# issue 的 label 列表，逗号连接。model:opus 决定实现 worker 是否升级 Opus。
+# 走 bin/ghx（与 agentctl 同一账号，不切换全局活跃账号）；gh 失败时当作没有 label，
+# 不阻断派工——最坏只是这一单用 Sonnet。
+issue_labels() {
+  local num="$1" out
+  [ -n "$num" ] || return 0
+  out=$(bin/ghx issue view "$num" --json labels --jq '.labels[].name' 2>/dev/null) || return 0
+  printf '%s' "$out" | tr '\n' ',' | sed 's/,$//'
+}
+
+# 选通道 + 模型。结果写 CHOSEN_CHANNEL / CHOSEN_MODEL / CHOSEN_REASON。
+# no_probe=1 只在 dry-run 用：不花探测请求，按默认假设 claude 可用。
+CHOSEN_CHANNEL=""
+CHOSEN_MODEL=""
+CHOSEN_REASON=""
+choose_worker_channel() {
+  local role="$1" labels="${2:-}" round="${3:-}" noprobe="${4:-0}" out
+  local args=(--role "$role")
+  if [ -n "$labels" ]; then args+=(--labels "$labels"); fi
+  if [ -n "$round" ]; then args+=(--round "$round"); fi
+  if [ "$noprobe" = "1" ]; then args+=(--no-probe); fi
+  # worker-channel 的失败原因走 stderr，直接落到本轮日志，不被 $(...) 吞掉。
+  out=$(bin/worker-channel.sh "${args[@]}" 2>/dev/null) || return 1
+  IFS='|' read -r CHOSEN_CHANNEL CHOSEN_MODEL CHOSEN_REASON <<< "$out"
+  case "${CHOSEN_CHANNEL}:${CHOSEN_MODEL}" in
+    claude:sonnet|claude:opus|volc:deepseek-v4.1-flash|qwen:deepseek-v4.1-flash-1017) return 0 ;;
+  esac
+  CHOSEN_CHANNEL=""
+  CHOSEN_MODEL=""
+  CHOSEN_REASON=""
+  return 1
+}
+
+# 终端对应的通道/模型/原因（ensure_terminal 落在 `$STATE_DIR/<key>.*` 里）。
+terminal_field() {
+  cat "$STATE_DIR/$1.$2" 2>/dev/null || true
+}
+
+# claude 通道的任务书额外约束（ACC-harness-claude-05）：
+# 只动本 worktree 与工单「涉及」的文件，不碰 worktree 以外，不改用户全局配置。
+claude_task_constraints() {
+  printf '%s' '- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径
+- 不改用户全局配置（~/.claude、~/.dsh 等）；临时文件放本 worktree 或 TMPDIR
+'
+}
+
 # ---------------------------------------------------------------- 0. Run
 # Run 是命名空间 + 协调器收件箱，所有权归协调器（docs/COORDINATOR.md）。
 # cycle.sh 不 run-use、不创建 Run：automation precheck 没有终端句柄，绑定必然失败；
@@ -236,31 +301,46 @@ fi
 # 官方 Completion accounting 的第一选项是"同一终端接下一单"。复用有两个好处：
 # 不泄漏终端，worker 也保留已经初始化的 profile（dsh 尤其需要）。
 ensure_terminal() {
-  local role="$1" wt="$2" title="$3" branch="${4:-}" key="${5:-$1}"
-  local f="$STATE_DIR/$key.terminal" cf="$STATE_DIR/$key.channel" bf="$STATE_DIR/$key.branch"
-  # dsh worker 的模型通道（volc/qwen）。WORKER_AGENT 指定时走原生 agent，不涉及。
-  local channel=""
+  local role="$1" wt="$2" title="$3" branch="${4:-}" key="${5:-$1}" labels="${6:-}" round="${7:-}"
+  local f="$STATE_DIR/$key.terminal" cf="$STATE_DIR/$key.channel" mf="$STATE_DIR/$key.model" rf="$STATE_DIR/$key.reason" bf="$STATE_DIR/$key.branch"
+  local channel="" model="" reason="" role_zh h oldch oldmd
+  role_zh=$(role_label "$role")
+  # 选路：实现/返工默认 claude（Sonnet/Opus），验收固定 DeepSeek；
+  # claude 不可用时实现 worker 自动降级，不让整轮停派。
   if [ -z "$WORKER_AGENT" ]; then
-    channel=$(bin/dsh-model.sh) || { log "    ✗ 没有可用的模型通道（火山与千问都不可用）"; return 1; }
+    choose_worker_channel "$role" "$labels" "$round" 0 || {
+      logerr "    ✗ ${role_zh} 没有可用通道（claude 与 DeepSeek 都不可用）"
+      return 1
+    }
+    channel="$CHOSEN_CHANNEL"; model="$CHOSEN_MODEL"; reason="$CHOSEN_REASON"
+  else
+    # 原生 agent 模式没有通道概念；清掉旧映射，避免调用方读到上一单的通道。
+    rm -f "$cf" "$mf" "$rf"
   fi
   if [ -s "$f" ]; then
-    local h; h=$(cat "$f")
+    h=$(cat "$f")
+    oldch=$(cat "$cf" 2>/dev/null || true)
+    oldmd=$(cat "$mf" 2>/dev/null || true)
     # 返工换了分支就不能复用：终端里的工作树还停在上一单的分支上。
     if [ -n "$branch" ] && [ "$(cat "$bf" 2>/dev/null || true)" != "$branch" ]; then
-      logerr "    · ${role} 目标分支变为 ${branch}，不复用旧终端 ${h}"
-      rm -f "$f"
-    # 通道变了（火山→千问或反过来）就不能复用：终端里的 dsh 已经绑定了旧模型。
-    # 旧终端必须**先关再建**：只解除映射会在通道切换后留下两个 dsh 同时吃内存。
-    elif [ -n "$channel" ] && [ "$(cat "$cf" 2>/dev/null || true)" != "$channel" ]; then
-      logerr "    · ${role} 通道切换，已关旧终端 ${h}（$(cat "$cf" 2>/dev/null || true) → ${channel}）"
+      logerr "    · ${role_zh} 目标分支变为 ${branch}，不复用旧终端 ${h}"
+      rm -f "$f" "$bf" "$cf" "$mf" "$rf"
+    # 通道或模型变了就不能复用：终端里的 agent 已经绑定了旧通道/旧模型。
+    # 旧终端必须**先关再建**：只解除映射会在切换后留下两个进程同时吃内存
+    # （ACC-harness-leak-02）。
+    elif [ -n "$channel" ] && { [ "$oldch" != "$channel" ] || { [ -n "$oldmd" ] && [ "$oldmd" != "$model" ]; }; }; then
+      logerr "    · ${role_zh} 通道切换，已关旧终端 ${h}（${oldch:-?}/${oldmd:-?} → ${channel}/${model}）"
       if orca terminal close --terminal "$h" --json >/dev/null 2>&1; then
-        rm -f "$f" "$cf"
+        rm -f "$f" "$cf" "$mf" "$rf"
       else
         # 关不掉就不建新终端：两个同时留存正是这次要修的问题；下一轮再试。
         logerr "    ⚠ 通道切换关闭旧终端 ${h} 失败，本轮不建新终端（避免两个终端同时留存）"
         return 1
       fi
     elif orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
+      [ -n "$channel" ] && printf '%s' "$channel" > "$cf"
+      [ -n "$model" ] && printf '%s' "$model" > "$mf"
+      [ -n "$reason" ] && printf '%s' "$reason" > "$rf"
       printf '%s\n' "$h"; return 0
     else
       rm -f "$f"
@@ -273,11 +353,13 @@ ensure_terminal() {
     made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
     new=$(printf '%s' "$made" | jfind handle)
   else
-    new=$(DSH_CHANNEL="$channel" bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
+    new=$(WORKER_CHANNEL="$channel" WORKER_MODEL="$model" bin/worker-up.sh "$wt" "$title" 2>/dev/null) || new=""
   fi
   [ -n "$new" ] || return 1
   printf '%s' "$new" > "$f"
   [ -n "$channel" ] && printf '%s' "$channel" > "$cf"
+  [ -n "$model" ] && printf '%s' "$model" > "$mf"
+  [ -n "$reason" ] && printf '%s' "$reason" > "$rf"
   [ -n "$branch" ] && printf '%s' "$branch" > "$bf"
   printf '%s\n' "$new"
 }
@@ -715,6 +797,25 @@ for s in d.get("skipped") or []:
 ' 2>/dev/null || true
 }
 
+# 任务书按官方 Task-spec contract 写：Target / Change / Constraints / Ownership / Observable acceptance。
+# channel=claude 时追加 worktree 边界与“不改用户全局配置”的约束（ACC-harness-claude-05）。
+engineer_spec() {
+  local num="$1" title="$2" wt="$3" lane="$4" branch="$5" body="$6" channel="$7"
+  local extra=""
+  if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+    "$num" "$title" "$extra" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body"
+}
+
+rework_spec() {
+  local num="$1" title="$2" pull="$3" branch="$4" round="$5" comment_url="$6" comment_body="$7" rwt="$8" body="$9" channel="${10}"
+  local extra=""
+  if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+    "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
+    "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
+}
+
 dispatch_engineer_dry_run() {
   local cap="$1" claimed
   claimed=$(node bin/agentctl.mjs claim --role engineer --dry-run --json 2>/dev/null) || {
@@ -741,6 +842,29 @@ for i,w in enumerate(would):
 for s in d.get("skipped") or []:
     print("  ✗ 跳过 #%s：%s" % (s.get("number"), s.get("why")))
 ' "$cap" 2>/dev/null || log "  · [dry-run] 没有可派的活"
+
+  # dry-run 也写明每次派工会选的「角色 → 通道 → 模型」（ACC-harness-claude-02）。
+  # --no-probe：演练不花探测请求；真实派工仍会探测 claude 是否可用。
+  local nums n labels
+  nums=$(printf '%s' "$claimed" | python3 -c '
+import json,sys
+cap=int(sys.argv[1])
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    d={}
+for i,w in enumerate(d.get("wouldClaim") or []):
+    if i < cap:
+        print(w.get("number"))
+' "$cap" 2>/dev/null || true)
+  for n in $nums; do
+    labels=$(issue_labels "$n")
+    if choose_worker_channel engineer "$labels" "" 1; then
+      log "    · [dry-run] #${n} 角色 实现 → 通道 ${CHOSEN_CHANNEL} → 模型 ${CHOSEN_MODEL}（${CHOSEN_REASON}）"
+    else
+      log "    · [dry-run] #${n} 没有可用通道"
+    fi
+  done
   return 0
 }
 
@@ -778,18 +902,25 @@ dispatch_engineer_lane() {
   local selector; selector=$(lane_selector "$wt")
   local branch; branch=$(lane_read "$lane" branch)
 
+  local labels; labels=$(issue_labels "$num")
   local handle
-  if ! handle=$(ensure_terminal engineer "$selector" "worker: #$num" "" "lane-$lane"); then
+  if ! handle=$(ensure_terminal engineer "$selector" "worker: #$num" "" "lane-$lane" "$labels"); then
     log "    ✗ 起 worker 终端失败，把 #$num 退回 s:ready"
     set_issue_state "$num" ready || true
     return 1
   fi
 
-  # spec 按官方 Task-spec contract 写：Target / Change / Constraints / Ownership / Observable acceptance。
-  # 归属必须写真实路径：写 current 会让 worker 不知道自己在哪个 worktree。
+  # 每次派工写明「角色 → 通道 → 模型」；升级 Opus 的原因也在 reason 里。
+  local ch md rsn
+  ch=$(terminal_field "lane-$lane" channel)
+  md=$(terminal_field "lane-$lane" model)
+  rsn=$(terminal_field "lane-$lane" reason)
+  if [ -n "$ch" ]; then
+    log "    · 角色 实现 → 通道 ${ch} → 模型 ${md}（${rsn}）"
+  fi
+
   local spec
-  spec=$(printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
-    "$num" "$title" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body")
+  spec=$(engineer_spec "$num" "$title" "$wt" "$lane" "$branch" "$body" "$ch")
 
   local task taskid
   task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 实现" --spec "$spec" --json 2>&1) || task=""
@@ -934,12 +1065,16 @@ print(",".join(d.get("files") or []))
     log "    · 没找到分支 ${branch} 的 worktree，仍在 ${ENGINEER_WT} 里派工（任务书要求先切到该分支）"
   fi
 
-  local spec
-  spec=$(printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
-    "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" \
-    "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body")
-
+  local labels; labels=$(issue_labels "$num")
+  local ch="" md="" rsn="" spec
   if [ "$DRY" = "1" ]; then
+    if choose_worker_channel rework "$labels" "$round" 1; then
+      ch="$CHOSEN_CHANNEL"; md="$CHOSEN_MODEL"; rsn="$CHOSEN_REASON"
+      log "    · [dry-run] 角色 返工 → 通道 ${ch} → 模型 ${md}（${rsn}）"
+    else
+      log "    · [dry-run] 没有可用通道"
+    fi
+    spec=$(rework_spec "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$rwt" "$body" "$ch")
     log "  · [dry-run] 会派返工 #${num}（PR #${pull}，原分支 ${branch}，head ${head:0:7}，round ${round}，口径 ${acc}）"
     log "$spec"
     return 0
@@ -947,11 +1082,19 @@ print(",".join(d.get("files") or []))
 
   log "  → 返工 #$num ${title}（PR #${pull}，分支 ${branch}，round ${round}，口径 ${acc}）"
   local handle
-  if ! handle=$(ensure_terminal rework "$rwt" "rework: #$num" "$branch"); then
+  if ! handle=$(ensure_terminal rework "$rwt" "rework: #$num" "$branch" "" "$labels" "$round"); then
     log "    ✗ 起返工终端失败，把 #$num 退回 s:changes（补偿迁移）"
     set_issue_state "$num" changes force || true
     return 1
   fi
+
+  ch=$(terminal_field rework channel)
+  md=$(terminal_field rework model)
+  rsn=$(terminal_field rework reason)
+  if [ -n "$ch" ]; then
+    log "    · 角色 返工 → 通道 ${ch} → 模型 ${md}（${rsn}）"
+  fi
+  spec=$(rework_spec "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$rwt" "$body" "$ch")
 
   local task taskid
   task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 返工（round ${round}）" --spec "$spec" --json 2>&1) || task=""
@@ -997,7 +1140,11 @@ dispatch_acceptance() {
   title=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["title"])' 2>/dev/null || true)
 
   if [ "$DRY" = "1" ]; then
-    log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（head ${head:0:7}，口径 ${acc}）"
+    if choose_worker_channel acceptance "" "" 1; then
+      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（head ${head:0:7}，口径 ${acc}；角色 验收 → 通道 ${CHOSEN_CHANNEL} → 模型 ${CHOSEN_MODEL}）"
+    else
+      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}；但 DeepSeek 通道不可用"
+    fi
     return 0
   fi
 
@@ -1014,6 +1161,15 @@ dispatch_acceptance() {
     log "    ✗ 起验收终端失败"
     rm -rf "$lock"
     return 1
+  fi
+
+  # 验收固定 DeepSeek：日志写明「角色 → 通道 → 模型」，并证明不会选 claude。
+  local ch md rsn
+  ch=$(terminal_field acceptance channel)
+  md=$(terminal_field acceptance model)
+  rsn=$(terminal_field acceptance reason)
+  if [ -n "$ch" ]; then
+    log "    · 角色 验收 → 通道 ${ch} → 模型 ${md}（${rsn}）"
   fi
 
   local spec
