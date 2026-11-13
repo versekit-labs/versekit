@@ -96,7 +96,7 @@ test("auth failure is not retried; quota does not consume the retry budget", () 
 });
 
 test("AdapterError refuses a code nobody registered", () => {
-  assert.throws(() => new AdapterError("timeout", "x"), /未登记的错误码/);
+  assert.throws(() => new AdapterError("not_a_real_code", "x"), /未登记的错误码/);
 });
 
 test("a plain Error becomes unknown, keeping its message", () => {

@@ -4,6 +4,8 @@
 // that runs against every adapter package. Keeping one implementation matters: when the loader is
 // lenient and the test is strict, a bad adapter ships and fails in front of a user instead of in CI.
 
+import { ASSET_KINDS } from "./asset-kind.mjs";
+
 export const CAPABILITY_VALUES = ["api", "web", "cli", "none"];
 export const VISIBILITIES = ["public", "private", "friends"];
 
@@ -47,6 +49,9 @@ export function normaliseCapabilities(adapter) {
     requiresQualification: caps.requiresQualification ?? false,
     minScheduleLeadMs: caps.minScheduleLeadMs ?? null,
     maxFileSizeMb: caps.maxFileSizeMb ?? null,
+    // null/undefined = 适配器没声明，不限制；数组 = 这个平台只收这几种素材（如小红书目前只收视频）。
+    // 「没声明」和「声明了空数组」必须区分：前者是旧适配器的兼容路径，后者是「什么都不收」的 bug。
+    assetTypes: Array.isArray(caps.assetTypes) ? [...new Set(caps.assetTypes)] : null,
   };
 }
 
@@ -81,6 +86,16 @@ export function validateAdapter(adapter, where = "adapter") {
     if (!Array.isArray(declared)) fail(where, "capabilities.visibility 必须是数组（[] 表示发布时不能选）");
     const bad = declared.filter((v) => !VISIBILITIES.includes(v));
     if (bad.length) fail(where, `capabilities.visibility 含未知值：${bad.join(", ")}（只能是 ${VISIBILITIES.join(" / ")}）`);
+  }
+
+  // assetTypes 同理：没声明 = 不限制（旧适配器兼容），声明了就必须是合法且非空的数组。
+  // 空数组不是「什么都能发」，而是「什么都不收」——那不该是一个可用的适配器。
+  const assetTypes = adapter.capabilities?.assetTypes;
+  if (assetTypes != null) {
+    if (!Array.isArray(assetTypes)) fail(where, `capabilities.assetTypes 必须是数组（如 ["video"]；不限制就省略）`);
+    if (!assetTypes.length) fail(where, "capabilities.assetTypes 不能是空数组：不限制就省略，别声明一个什么都不收的平台");
+    const bad = assetTypes.filter((v) => !ASSET_KINDS.includes(v));
+    if (bad.length) fail(where, `capabilities.assetTypes 含未知值：${bad.join(", ")}（只能是 ${ASSET_KINDS.join(" / ")}）`);
   }
 
   if (caps.publish === "none" && caps.collect === "none") {

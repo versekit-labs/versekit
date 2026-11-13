@@ -31,8 +31,15 @@ interface PlatformAdapter {
   ready(): string | null;                 // null = 可用；否则返回「人能看懂」的缺失原因
   login?(ctx): Promise<void>;             // 扫码/授权，落到 Web 页；走平台自带 CLI 登录时可为 null
   check?(ctx): Promise<AccountHealth>;    // 主动探测登录态；缺省时靠发布/采集失败反向驱动
-  publish(input): Promise<PublishResult>;
+  publish(input: PublishInput): Promise<PublishResult>;
   collect?(input): Promise<Metrics>;
+}
+
+interface PublishInput {
+  publishId: string;
+  dryRun?: boolean;
+  signal?: AbortSignal;                    // 内核到总时限时 abort；适配器据此关掉浏览器
+  onStep?: (step: string) => void;         // 报「现在停在哪一步」，超时人话里要用
 }
 
 interface Capabilities {
@@ -46,9 +53,12 @@ interface Capabilities {
   requiresQualification: boolean;          // 只有官方 API 路线为 true
   minScheduleLeadMs?: number;              // 平台对定时发布的最小提前量（B站 4h）
   maxFileSizeMb?: number;
+  assetTypes?: Array<"video" | "image">;   // 能发的素材类型；不写 = 不限制（旧适配器兼容）
+  //   写出来才能让发布台在「创建 publish 之前」拦住发不了的素材（ACC-publish-04）。
+  //   空数组不合法：不支持任何素材的平台不要声明。目前小红书只声明 ["video"]。
 }
 // 缺省规则（core/src/contract.mjs 的 normaliseCapabilities）：没写 publish/collect 时，
-// 有 publish() 就按 "web"，否则 "none"；draft 默认 false，visibility 默认 []。
+// 有 publish() 就按 "web"，否则 "none"；draft 默认 false，visibility 默认 []，assetTypes 默认 null。
 
 interface AccountHealth {
   state: "ok" | "expiring" | "expired" | "banned" | "manual";
@@ -75,8 +85,9 @@ interface Followup {
 ```
 
 **错误约定**：适配器只抛 `AdapterError(code, detail)`（`core/src/errors.mjs`），`code` 只能是
-`auth` / `platform_reject` / `quota` / `flaky_ui` / `asset_invalid` / `unknown` 之一。
-人话、重试策略、卡片按钮由核心按这张表生成——适配器拼文案是反模式。
+`auth` / `platform_reject` / `quota` / `flaky_ui` / `asset_invalid` / `timeout` / `unknown` 之一。
+人话、重试策略、卡片按钮由核心按这张表生成——适配器拼文案是反模式。`timeout` 由内核在总时限
+到达时产生（不要求适配器自己发），适配器要做的是响应 `signal`、把浏览器关掉。
 普通 `Error` 会被归为 `unknown` 并保留原文，不会丢失。
 
 **可执行版本**：上面的形状不是靠文档自觉，`core/src/contract.mjs` 是唯一校验实现，

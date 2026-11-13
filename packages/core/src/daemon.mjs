@@ -16,14 +16,14 @@ import { paths, newId, open } from "./index.mjs";
 import { matchRoute, ROUTES } from "./routes.mjs";
 import { findCommand, parseArgs } from "./commands.mjs";
 import { createRunner } from "./runner.mjs";
-import { applyTerminalFailure } from "./publish-flow.mjs";
+import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publish-flow.mjs";
+import { publishTimeoutMs } from "./config.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, executeAction } from "./notify.mjs";
 import { resultCard } from "./cards.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
 import { verifyApproval, applyApproval } from "./approval.mjs";
-import { getPublishRow } from "./publish-flow.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -474,9 +474,25 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   }
 
   let stopSweeper = () => {};
+  let stuckTimer = null;
   if (runQueue) {
     runner.loop();
     stopSweeper = startCheckSweeper({ log });
+
+    // auto_running 的第二道保险（ACC-publish-05）：handler 的定时器只管进程还活着、run 还在
+    // 手上的那一次。这里每 30 秒扫一遍「没有活 run 却还停在 auto_running」的行，按同一个
+    // 总时限判 failed——进程崩过、租约卡住都不会留下一条无声卡死的发布。
+    const sweep = () => {
+      try {
+        const { failed } = sweepStuckPublishes({ timeoutMs: publishTimeoutMs() });
+        for (const publishId of failed) log(`[publish] 总时限到：${publishId} 停在 auto_running，已判 timeout`);
+      } catch (err) {
+        log(`[publish] 超时扫描失败：${err.message}`);
+      }
+    };
+    sweep();
+    stuckTimer = setInterval(sweep, 30e3);
+    stuckTimer.unref?.();
   }
 
   // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
@@ -570,6 +586,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     socketPath,
     async close() {
       stopSweeper();
+      if (stuckTimer) clearInterval(stuckTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);
       if (channelTimer) clearInterval(channelTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);
