@@ -9,6 +9,7 @@
  *  4. hidden 属性被 display 覆盖，导致"点了不跳转"
  *  5. 机械检测不过（颜色、字号、圆角、对比度）
  *  6. 手机横向溢出、触控目标过小
+ *  7. 页面控制台出现未捕获异常 / error 级消息（语法错误会让整段脚本静默不执行）
  *
  * 用法：node scripts/design-check.mjs [--json]
  * 退出码：0 通过；1 有阻塞项。
@@ -114,6 +115,16 @@ function runDetect(page) {
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 控制台错误的可读化：堆栈只留第一行，避免一条错误刷满整屏。
+const MAX_ERROR_TEXT = 300;
+const oneLine = text => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ERROR_TEXT);
+function exceptionText(details) {
+  return oneLine(details?.exception?.description ?? details?.text) || '（未命名的脚本异常）';
+}
+function consoleErrorText(args) {
+  return oneLine((args ?? []).map(a => a.value ?? a.description ?? a.type ?? '').join(' ')) || '（空的 console.error）';
+}
+
 async function withChrome(fn) {
   if (!existsSync(CHROME)) { warn.push('未找到 Chrome，跳过运行时检查'); return; }
   const dir = mkdtempSync(join(tmpdir(), 'vk-gate-'));
@@ -129,9 +140,17 @@ async function withChrome(fn) {
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise(r => ws.addEventListener('open', r, { once: true }));
     let id = 0; const pending = new Map();
+    // Runtime.exceptionThrown 与 error 级 console 消息是页面脚本坏掉的直接证据：
+    // 语法错误（如重复声明）会让整段脚本不执行，但不会让任何既有检查变红。
+    const consoleErrors = [];
     ws.addEventListener('message', e => {
       const m = JSON.parse(e.data);
-      if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+      if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
+      if (m.method === 'Runtime.exceptionThrown') {
+        consoleErrors.push(exceptionText(m.params.exceptionDetails));
+      } else if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') {
+        consoleErrors.push(consoleErrorText(m.params.args));
+      }
     });
     const send = (method, params = {}) => new Promise(res => {
       const n = ++id; pending.set(n, res);
@@ -139,7 +158,7 @@ async function withChrome(fn) {
     });
     await send('Page.enable');
     await send('Runtime.enable');
-    await fn(send);
+    await fn(send, consoleErrors);
     ws.close();
   } finally {
     chrome.kill();
@@ -160,7 +179,7 @@ async function runtimeChecks() {
     { name: 'view3', run: "document.querySelectorAll('.view-btn')[2]?.click()" }
   ];
 
-  await withChrome(async send => {
+  await withChrome(async (send, consoleErrors) => {
     for (const { page, url } of cases) {
       if (URL_ARG) {
         try {
@@ -171,6 +190,16 @@ async function runtimeChecks() {
         }
       }
       for (const width of [1440, 390]) {
+        const seenErrors = new Set();
+        const reportConsoleErrors = tag => {
+          const batch = consoleErrors.splice(0);
+          for (const text of batch) {
+            if (seenErrors.has(text)) continue;
+            seenErrors.add(text);
+            add('console-error', `${tag} 控制台报错：${text}`);
+          }
+        };
+        consoleErrors.length = 0; // 上一页/上一视口的迟到事件不归到这一页
         await send('Emulation.setDeviceMetricsOverride', {
           width, height: width === 1440 ? 900 : 844,
           deviceScaleFactor: 1, mobile: width === 390
@@ -217,6 +246,7 @@ async function runtimeChecks() {
         if (v.small.length) add('tap-target', `${tag} 触控过小：${[...new Set(v.small)].slice(0,3).join(', ')}`);
         if (v.hiddenShown.length) add('hidden-shown', `${tag} hidden 元素仍然可见：${v.hiddenShown.slice(0,3).join(', ')}`);
         if (v.overflow.length) add('text-overflow', `${tag} 文字被截断：${v.overflow.slice(0,3).join(', ')}`);
+        reportConsoleErrors(tag);
         }
       }
     }
@@ -247,7 +277,7 @@ if (JSON_OUT) {
 } else {
   console.log('\n设计闸门 — versekit' + (URL_ARG ? '（目标：' + URL_ARG + '）' : '（目标：静态文件）') + '\n');
   if (!problems.length) {
-    console.log(`  通过：${PAGES.length} 个页面，全部有任务书、导航一致、无死链、检测器干净、触控与溢出合规。`);
+    console.log(`  通过：${PAGES.length} 个页面，全部有任务书、导航一致、无死链、控制台无报错、检测器干净、触控与溢出合规。`);
   } else {
     for (const [kind, msgs] of Object.entries(byKind)) {
       console.log(`  ✗ ${kind}（${msgs.length}）`);
