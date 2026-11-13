@@ -63,3 +63,26 @@ test("视频 dry-run 照常返回，不改状态、不打开浏览器", async ()
   assert.equal(result.target.asset, mp4);
   assert.equal(db().prepare("SELECT state FROM publish WHERE id=?").get(publishId).state, "auto_running");
 });
+// ---- ACC-publish-08 / 09：以发布接口响应为准；点击后判不出不可重试
+import { noteIdFromPublishResponse, findPostedNote } from "../src/index.mjs";
+import { ERROR_CODES, isRetryable } from "../../core/src/errors.mjs";
+
+test("publish API response gives the note id; failures give null", () => {
+  assert.equal(noteIdFromPublishResponse({ success: true, data: { id: "n1" } }), "n1");
+  assert.equal(noteIdFromPublishResponse({ code: 0, data: { note_id: 7 } }), "7");
+  assert.equal(noteIdFromPublishResponse({ success: false, data: { id: "n1" } }), null);
+  assert.equal(noteIdFromPublishResponse(null), null);
+});
+
+test("note manager lookup matches title and ignores older same-title notes", () => {
+  const since = Date.now();
+  const bodies = [{ data: { notes: [{ id: "old", title: "T", post_time: since - 3600e3 }, { id: "new", title: "T", post_time: since + 1000 }] } }];
+  assert.equal(findPostedNote(bodies, "T", since), "new");
+  assert.equal(findPostedNote(bodies, "other", since), null);
+});
+
+test("result_unconfirmed is not retryable and never escalates to draft", () => {
+  assert.equal(isRetryable("result_unconfirmed"), false);
+  assert.equal(ERROR_CODES.result_unconfirmed.escalateTo, undefined);
+  assert.equal(ERROR_CODES.result_unconfirmed.publishState, "notify_pending");
+});
