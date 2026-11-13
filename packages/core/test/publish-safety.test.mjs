@@ -7,7 +7,7 @@
 
 import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -186,6 +186,72 @@ test("ACC-publish-04：图片素材发小红书在创建前被拒绝，且不留
   const ok = handlers["publish.create"]({ asset: mp4, to: ["xiaohongshu"], title: "视频照常" });
   assert.equal(ok.publishes.length, 1, "视频照常创建");
   assert.equal(getPublishRow(ok.publishes[0].publishId).state, "queued");
+});
+
+// ---------------------------------------------------------------- ACC-publish-06（多图口径）
+
+const xhsBoth = () => [{ platform: "xiaohongshu", assetTypes: ["video", "image"] }];
+
+test("ACC-publish-06：图集（目录 = 1–18 张图片）在创建前放行，work 记住目录", () => {
+  const dir = join(HOME, "note-two-images");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "2-blue.png"), "fake image");
+  writeFileSync(join(dir, "01-red.png"), "fake image");
+
+  const handlers = createCoreHandlers({ adapters: xhsBoth(), log: () => {} });
+  handlers["group.add"]({ name: "ACC06 图文探针" });
+  handlers["account.add"]({ platform: "xiaohongshu", name: "@测试", group: "ACC06 图文探针" });
+
+  const ok = handlers["publish.create"]({ asset: dir, to: ["xiaohongshu"], title: "两张图", body: "正文", tags: ["测试"] });
+  assert.equal(ok.publishes.length, 1, "图片发小红书不再被拒");
+  const work = db().prepare("SELECT asset_path FROM work WHERE id=?").get(ok.workId);
+  assert.equal(work.asset_path, dir, "目录就是图集：不改 schema，asset_path 直接指向目录");
+});
+
+test("ACC-publish-06：同一作品图片与视频混装时创建前拒绝并说人话，不留任何行", () => {
+  const dir = join(HOME, "note-mixed");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "01-red.png"), "fake image");
+  writeFileSync(join(dir, "clip.mp4"), "fake video");
+
+  const handlers = createCoreHandlers({ adapters: xhsBoth(), log: () => {} });
+  handlers["group.add"]({ name: "ACC06 混装探针" });
+  handlers["account.add"]({ platform: "xiaohongshu", name: "@测试", group: "ACC06 混装探针" });
+  const before = count();
+
+  assert.throws(
+    () => handlers["publish.create"]({ asset: dir, to: ["xiaohongshu"] }),
+    (err) => /不能把图片和视频混在一起/.test(err.message) && /图文发一组图片，视频发一个文件/.test(err.message) && /没有创建/.test(err.message),
+    "混选必须在创建前拒绝，而不是交给适配器打开浏览器后才发现",
+  );
+  assert.throws(() => handlers["publish.create"]({ asset: dir, to: ["xiaohongshu"], dryRun: true }), /混在一起/, "预演同样适用");
+  assert.deepEqual(count(), before, "被拒绝的发布不能留下 work / publish 行");
+});
+
+test("ACC-publish-06：图集最多 18 张，19 张在创建前拒绝", () => {
+  const dir = join(HOME, "note-too-many");
+  mkdirSync(dir, { recursive: true });
+  for (let i = 1; i <= 19; i++) writeFileSync(join(dir, `img-${String(i).padStart(2, "0")}.png`), "fake image");
+
+  const handlers = createCoreHandlers({ adapters: xhsBoth(), log: () => {} });
+  handlers["group.add"]({ name: "ACC06 超量探针" });
+  handlers["account.add"]({ platform: "xiaohongshu", name: "@测试", group: "ACC06 超量探针" });
+  assert.throws(() => handlers["publish.create"]({ asset: dir, to: ["xiaohongshu"] }), /最多 18 张/);
+});
+
+test("空目录与多视频目录也在创建前拒绝（不把空目录当成 0 张图文发出去）", () => {
+  const empty = join(HOME, "note-empty");
+  mkdirSync(empty, { recursive: true });
+  const twoVideos = join(HOME, "note-two-videos");
+  mkdirSync(twoVideos, { recursive: true });
+  writeFileSync(join(twoVideos, "a.mp4"), "fake video");
+  writeFileSync(join(twoVideos, "b.mp4"), "fake video");
+
+  const handlers = createCoreHandlers({ adapters: xhsBoth(), log: () => {} });
+  handlers["group.add"]({ name: "ACC06 空目录探针" });
+  handlers["account.add"]({ platform: "xiaohongshu", name: "@测试", group: "ACC06 空目录探针" });
+  assert.throws(() => handlers["publish.create"]({ asset: empty, to: ["xiaohongshu"] }), /目录是空的/);
+  assert.throws(() => handlers["publish.create"]({ asset: twoVideos, to: ["xiaohongshu"] }), /视频作品只能放一个视频文件/);
 });
 
 // ---------------------------------------------------------------- 能力声明

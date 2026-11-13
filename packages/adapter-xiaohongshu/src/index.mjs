@@ -14,7 +14,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
-import { assetKindOf, ASSET_KIND_LABEL } from "../../core/src/asset-kind.mjs";
+import { assetSetOf } from "../../core/src/asset-kind.mjs";
+import { planImageNote, publishImageNote } from "./image-note.mjs";
 import { openAccount, closeAccount, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
@@ -156,6 +157,30 @@ function wrap(tab, accountId, tag) {
   };
 }
 
+/** 标题/正文的编辑器动作由视频与图文两条路径共用，避免「话题面板」「tiptap 焦点」两套实现。 */
+async function fillTitle(tab, title) {
+  await clickOn(tab, `(R) => R.querySelector('input[placeholder*="标题"]')`, "标题");
+  if (!(await tab.eval(`document.activeElement === document.querySelector('input[placeholder*="标题"]')`))) {
+    await tab.eval(`document.querySelector('input[placeholder*="标题"]').focus()`);
+  }
+  await tab.type(title);
+  if ((await tab.eval(`document.querySelector('input[placeholder*="标题"]')?.value`)) !== title) {
+    throw new AdapterError("flaky_ui", "小红书标题没有填进输入框");
+  }
+}
+
+async function fillBody(tab, body) {
+  await clickOn(tab, `(R) => R.querySelector('div[contenteditable="true"]') || R.querySelector('textarea[placeholder*="正文"]')`, "正文");
+  if (!(await tab.eval(`document.activeElement?.classList?.contains('tiptap')`))) {
+    await tab.eval(`document.querySelector('div.tiptap')?.focus()`);
+  }
+  const lines = body.split("\n");
+  for (const [i, line] of lines.entries()) {
+    await tab.type(line);
+    if (i < lines.length - 1) await tab.key("Enter", "Enter", 13);
+  }
+}
+
 async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
   requireId(publishId);
   let tab = null;
@@ -182,20 +207,41 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     const asset = text(row.asset_path);
     if (!existsSync(asset)) throw new AdapterError("asset_invalid", `找不到素材：${asset}`);
 
-    // 能力声明的本地兜底：内核已在创建前拦过一次（ACC-publish-04），但库里可能还有旧行，
-    // 或者有人直接调适配器。图片绝不能被当成视频硬传——那正是「发布无声卡死」的起点。
-    const kind = assetKindOf(asset);
-    if (kind && kind !== "video") {
+    // 能力声明的本地兜底：内核已在创建前拦过（ACC-publish-04 / ACC-publish-06），但库里可能
+    // 还有旧行，或者有人直接调适配器。视频是「一个文件」，图文是「一个目录里的 1–18 张图片」；
+    // 混装目录绝不能被当成视频硬传——那正是「发布无声卡死」的起点。
+    const set = assetSetOf(asset);
+    if (!set.files.length) throw new AdapterError("asset_invalid", `找不到素材文件：${asset}`);
+    if (set.mixed) {
       throw new AdapterError(
         "asset_invalid",
-        `小红书目前只能发${ASSET_KIND_LABEL.video}：${basename(asset)} 是${ASSET_KIND_LABEL[kind]}素材。换成视频，或在发布台取消勾选小红书`,
+        `同一个作品不能把图片和视频混在一起：${basename(asset)} 里两种都有。拆成两个作品再发，或只留其中一种`,
       );
     }
+    const kind = set.kind;
+    if (!kind) {
+      throw new AdapterError(
+        "asset_invalid",
+        `认不出小红书素材类型：${basename(asset)}。发视频给一个视频文件，发图文给一个 1–18 张图片的目录`,
+      );
+    }
+    if (kind === "video" && set.files.length > 1) {
+      throw new AdapterError("asset_invalid", `视频作品只能放一个视频文件：${asset} 里有 ${set.files.length} 个文件`);
+    }
+    // 图文的平台口径（1–18 张、jpg/png/webp、可见性）在打开浏览器之前就判定。
+    const imagePlan = kind === "image" ? planImageNote({ asset, files: set.files, visibility: row.visibility ?? "public" }) : null;
 
     if (dryRun) {
       return {
         dryRun: true,
-        target: { title: note.title, bodyPreview: [...note.body].slice(0, 80).join(""), tags: note.tags, asset },
+        target: {
+          title: note.title,
+          bodyPreview: [...note.body].slice(0, 80).join(""),
+          tags: note.tags,
+          asset,
+          kind,
+          ...(imagePlan ? { images: imagePlan.files, imageCount: imagePlan.count, visibility: imagePlan.visibility } : {}),
+        },
       };
     }
 
@@ -209,6 +255,22 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     );
     if (where === "login") throw new AdapterError("auth", LOGIN_DETAIL);
 
+    if (imagePlan) {
+      // 图文路径：切页签、按顺序传图、标题/正文/话题、谁可以看、发布。细节见 image-note.mjs。
+      const published = await publishImageNote(tab, { note, plan: imagePlan, step, clickOn, addTag, fillTitle, fillBody });
+      return {
+        id: note.title,
+        url: "https://creator.xiaohongshu.com/new/note-manager",
+        visibility: published.visibility,
+        state: published.state,
+        // private_then_public：「先发仅自己可见，确认后再放公开」是人的决定、系统执行（ARCHITECTURE §4.1）。
+        followups: imagePlan.wantsPublicFollowup
+          ? [{ kind: "set_visibility_public", hint: "确认图文无误后改成公开（现在仅自己可见）", verify: "visibility" }]
+          : [],
+        notes: published.missed.length ? `没有话题结果、已跳过：${published.missed.map((t) => `#${t}`).join(" ")}` : null,
+      };
+    }
+
     // 页面可能停在「上传图文」；这条是视频，必须先点回「上传视频」再传文件。
     step("切换到上传视频");
     if (!(await tab.eval(`!!document.querySelector('input.upload-input[accept*=mp4], input[type=file][accept*=mp4]')`))) {
@@ -217,7 +279,7 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     }
 
     step("上传视频文件");
-    await tab.upload(`document.querySelector('input.upload-input, input[type=file][accept*=mp4]')`, [asset]);
+    await tab.upload(`document.querySelector('input.upload-input, input[type=file][accept*=mp4]')`, [set.files[0]]);
     step("等待视频上传完成");
     await tab.waitFor(
       `(() => !!document.querySelector('input[placeholder*="标题"]') && !/上传中|处理中|正在上传|\\d+%/.test(document.body.innerText))()`,
@@ -227,25 +289,10 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     await sleep(1000);
 
     step("填写标题");
-    await clickOn(tab, `(R) => R.querySelector('input[placeholder*="标题"]')`, "标题");
-    if (!(await tab.eval(`document.activeElement === document.querySelector('input[placeholder*="标题"]')`))) {
-      await tab.eval(`document.querySelector('input[placeholder*="标题"]').focus()`);
-    }
-    await tab.type(note.title);
-    if ((await tab.eval(`document.querySelector('input[placeholder*="标题"]')?.value`)) !== note.title) {
-      throw new AdapterError("flaky_ui", "小红书标题没有填进输入框");
-    }
+    await fillTitle(tab, note.title);
 
     step("填写正文");
-    await clickOn(tab, `(R) => R.querySelector('div[contenteditable="true"]') || R.querySelector('textarea[placeholder*="正文"]')`, "正文");
-    if (!(await tab.eval(`document.activeElement?.classList?.contains('tiptap')`))) {
-      await tab.eval(`document.querySelector('div.tiptap')?.focus()`);
-    }
-    const lines = note.body.split("\n");
-    for (const [i, line] of lines.entries()) {
-      await tab.type(line);
-      if (i < lines.length - 1) await tab.key("Enter", "Enter", 13);
-    }
+    await fillBody(tab, note.body);
 
     const missed = [];
     if (note.tags.length) {
@@ -264,10 +311,13 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     await tab.clickInShadow("xhs-publish-btn", "发布");
     await tab.waitFor(`location.pathname.includes('/publish/success') || /发布成功/.test(document.body.innerText)`, [], { timeout: 120e3, what: "发布成功" });
 
+    // 视频路径行为不变（流程与超时都和以前一样）；只把返回的 visibility/state 修正成契约值：
+    // 旧值是 "公开" 且没有 state，applyPublishResult 会直接打回，等于平台发完了、库里却记失败。
     return {
       id: note.title,
       url: "https://creator.xiaohongshu.com/new/note-manager",
-      visibility: "公开",
+      visibility: "public",
+      state: "published",
       followups: [],
       notes: missed.length ? `没有话题结果、已跳过：${missed.map((t) => `#${t}`).join(" ")}` : null,
     };
@@ -402,9 +452,9 @@ export default {
     draft: false,
     visibility: [],
     requiresQualification: false,
-    // 当前只实现了视频发布（图文发布是另一个 issue）。声明出来，发布台才能在创建前拦住
-    // 图片素材，而不是让适配器打开浏览器后卡在「上传图文」页（ACC-publish-04）。
-    assetTypes: ["video"],
+    // 视频 + 图文（ACC-publish-06）：图文用「一个目录」当图集（1–18 张，jpg/png/webp），
+    // 目录内按文件名自然排序上传。声明出来，发布台才能在创建前拦住发不了的素材（ACC-publish-04）。
+    assetTypes: ["video", "image"],
   },
   ready() {
     const reason = browserReady();
