@@ -11,11 +11,16 @@
 #      派工返工      s:changes → 原 PR 原分支      （引用最近验收 FAIL 评论，3 轮封顶转 blocked）
 #   4. 派工验收      queue + 锁 → worker-start
 #   5. 消费消息      归协调器；脚本只做只读 peek，失败留痕后继续
-#   6. 结算          归协调器；脚本不 worker-list / release
+#   6. 结算          归协调器；脚本只读 worker-list 做终端回收，不 release、不 ack
 #
 # 两条来自官方指南的硬约束，改动时不要违反：
 #   - `worker_done` 只发一次，必须带 taskId + dispatchId；心跳不等于完成。
 #   - 空等/超时是 checkpoint，不是失败；只有正证据（exited）才能 stop/abandon/retry。
+#
+# 终端防泄漏：已完成（worker_done 被协调器 ack）的 worker 终端不会自己消失，
+# 每个残留的 dsh 进程都是一份内存。派工前先回收「已结算 dispatch」的终端进程；
+# 仍在跑的 dispatch 只读不碰。回收只调用 `terminal close`，不做 orchestration release
+# ——Run 所有权、收件箱与 release 仍归协调器（ACC-harness-run-01）。
 #
 # 用法：
 #   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
@@ -28,6 +33,8 @@
 #                                 （dsh 需要预配置 profile，--agent 会停在 landing page）
 #   CYCLE_WORKER_RETRIES          worker-start 首次失败后的重试次数（默认 2）
 #   CYCLE_RETRY_BACKOFF_1/_2      第 1/2 次失败后的等待秒数（默认 2 / 4）
+#   CYCLE_MAX_STALE_TERMINALS     已完成未关 worker 终端的上限（默认 lane 数 + 2）；
+#                                 超过就先回收，清完仍超则本轮不开新终端
 #
 # 并行规则（ACC-harness-cycle-08/09/10）：
 #   - 每个 issue 一个独立 worktree、独立终端、独立 Dispatch；lane 上限默认 3。
@@ -73,11 +80,19 @@ case "$CYCLE_LANES" in ''|*[!0-9]*) CYCLE_LANES=3 ;; esac
 [ "$CYCLE_LANES" -ge 1 ] || CYCLE_LANES=1
 CYCLE_LANE_IDLE_TTL_MIN="${CYCLE_LANE_IDLE_TTL_MIN:-90}"
 case "$CYCLE_LANE_IDLE_TTL_MIN" in ''|*[!0-9]*) CYCLE_LANE_IDLE_TTL_MIN=90 ;; esac
+# 已完成但没关掉的 worker 终端，超过「lane 数 + 2」就认为在泄漏（ACC-harness-leak-03）。
+# 上限可配置；回收后仍超限时不再开新终端，并给协调器留 alert。
+STALE_TERMINAL_LIMIT="${CYCLE_MAX_STALE_TERMINALS:-}"
+case "$STALE_TERMINAL_LIMIT" in ''|*[!0-9]*) STALE_TERMINAL_LIMIT=$((CYCLE_LANES + 2)) ;; esac
 LANE_DIR="$STATE_DIR/lanes"
 mkdir -p "$LANE_DIR"
 LANES_USED=""   # 本轮已经用掉的 lane，绝不在一轮内复用（否则两个 issue 会共用同一 worktree）
 
 log() { printf '%s\n' "$*"; }
+
+# ensure_terminal 的返回值是「终端 handle」且被 $(...) 捕获：
+# 函数里的说明性日志必须走 stderr，否则会和 handle 一起被当成终端名。
+logerr() { printf '%s\n' "$*" >&2; }
 
 # 第 N 次失败后等多久再重试（秒）。默认 2s / 4s，退避而不是立刻打同一个接口。
 retry_backoff() {
@@ -93,7 +108,12 @@ retry_backoff() {
 OWNER_FAIL_LOG="$STATE_DIR/cycle-owner-failures.log"
 reset_owner_failures() {
   : > "$OWNER_FAIL_LOG"
-  rm -f "$STATE_DIR/cycle-owner-alert.txt"
+  # 本轮的终端泄漏 alert 不能被同轮的消费段静默清掉：协调器开场要读它。
+  # 用 marker 文件而不是变量：ensure_terminal 跑在 $(...) 子 shell 里，变量带不回来。
+  if [ ! -e "$STATE_DIR/cycle-terminal-leak.marker" ]; then
+    rm -f "$STATE_DIR/cycle-owner-alert.txt"
+  fi
+  return 0
 }
 record_owner_failure() {
   local code="$1" msg="$2" n
@@ -227,19 +247,27 @@ ensure_terminal() {
     local h; h=$(cat "$f")
     # 返工换了分支就不能复用：终端里的工作树还停在上一单的分支上。
     if [ -n "$branch" ] && [ "$(cat "$bf" 2>/dev/null || true)" != "$branch" ]; then
-      log "    · $role 目标分支变为 ${branch}，不复用旧终端 $h"
+      logerr "    · ${role} 目标分支变为 ${branch}，不复用旧终端 ${h}"
       rm -f "$f"
     # 通道变了（火山→千问或反过来）就不能复用：终端里的 dsh 已经绑定了旧模型。
-    # 旧终端不关——可能还有 dispatch 在用；只解除映射并留痕，空闲终端由人或 TTL 清理。
+    # 旧终端必须**先关再建**：只解除映射会在通道切换后留下两个 dsh 同时吃内存。
     elif [ -n "$channel" ] && [ "$(cat "$cf" 2>/dev/null || true)" != "$channel" ]; then
-      log "    · $role 模型通道变为 ${channel}，不复用旧终端 $h"
-      rm -f "$f"
+      logerr "    · ${role} 通道切换，已关旧终端 ${h}（$(cat "$cf" 2>/dev/null || true) → ${channel}）"
+      if orca terminal close --terminal "$h" --json >/dev/null 2>&1; then
+        rm -f "$f" "$cf"
+      else
+        # 关不掉就不建新终端：两个同时留存正是这次要修的问题；下一轮再试。
+        logerr "    ⚠ 通道切换关闭旧终端 ${h} 失败，本轮不建新终端（避免两个终端同时留存）"
+        return 1
+      fi
     elif orca terminal show --terminal "$h" --json >/dev/null 2>&1; then
       printf '%s\n' "$h"; return 0
     else
       rm -f "$f"
     fi
   fi
+  # 已完成未关的终端回收之后仍超上限：不再开新终端（ACC-harness-leak-03）。
+  terminal_budget_exceeded || return 1
   local new
   if [ -n "$WORKER_AGENT" ]; then
     made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
@@ -252,6 +280,131 @@ ensure_terminal() {
   [ -n "$channel" ] && printf '%s' "$channel" > "$cf"
   [ -n "$branch" ] && printf '%s' "$branch" > "$bf"
   printf '%s\n' "$new"
+}
+
+# ---------------------------------------------------------------- 终端回收（防泄漏）
+# 已完成 worker 的终端不会自己消失：一次清理时见过 33 个 dsh 进程约占 2GB。
+# 协调器 ack worker_done 之后，这里把**已结算 dispatch** 对应的终端关掉；
+# 仍在跑的不关（只有正证据才动手），关闭失败只记日志，不阻断整轮。
+# 只关进程，不 release、不 ack：Run 所有权与收件箱仍归协调器。
+CLOSED_TERMINALS_LEDGER="$STATE_DIR/closed-worker-terminals.log"
+: >> "$CLOSED_TERMINALS_LEDGER" 2>/dev/null || true
+# 每轮开头清掉上一轮的泄漏 marker：本轮还漏水就重新落，不漏了就让消费段正常清 alert。
+TERMINAL_LEAK_MARKER="$STATE_DIR/cycle-terminal-leak.marker"
+rm -f "$TERMINAL_LEAK_MARKER"
+
+# 终端关掉后同步清掉 state 里的映射：下一轮 ensure_terminal 会按新终端重建，
+# 免得拿着已关闭的 handle 去复用。
+forget_terminal_mapping() {
+  local h="$1" f
+  for f in "$STATE_DIR"/*.terminal; do
+    [ -f "$f" ] || continue
+    if [ "$(cat "$f" 2>/dev/null || true)" = "$h" ]; then
+      rm -f "$f" "${f%.terminal}.channel" "${f%.terminal}.branch"
+    fi
+  done
+}
+
+# 从 worker-list 提取「已结算且终端未释放」的 handle。
+# 同一个 handle 只要还有任何一个未结算的 dispatch 在用，就整个跳过——
+# 终端会被 lane 复用，只看某一行 settled 就关会误杀正在跑的 worker。
+worker_terminal_rows() {
+  orca orchestration worker-list --run "$RUN_ID" --limit 100 --json 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(2)
+root=d.get("result") if isinstance(d,dict) and isinstance(d.get("result"),dict) else d
+rows=root.get("workers") or [] if isinstance(root,dict) else (root if isinstance(root,list) else [])
+settled_status={"completed","complete","done","settled","failed","cancelled","canceled","abandoned","stopped","exited","timed_out","timeout","released"}
+settled_outcome={"succeeded","failed","cancelled","canceled","abandoned","timed_out","timeout","exited","stopped"}
+def handle(w):
+    v=(w.get("agentTerminalHandle") or w.get("terminalHandle") or w.get("handle")
+       or (w.get("resource") or {}).get("terminalHandle"))
+    if not v:
+        t=w.get("terminal")
+        v=t.get("handle") if isinstance(t,dict) else (t if isinstance(t,str) else None)
+    return v or ""
+def terminal_state(w):
+    return str(w.get("terminalState") or (w.get("resource") or {}).get("state") or "").lower()
+def is_settled(w):
+    st=str(w.get("dispatchStatus") or w.get("status") or w.get("state") or "").lower()
+    ws=str(w.get("workerState") or "").lower()
+    out=str((w.get("projection") or {}).get("outcome") or w.get("outcome") or "").lower()
+    return st in settled_status or out in settled_outcome or ws in {"succeeded","failed","cancelled","canceled","abandoned","stopped","exited","timed_out","timeout"}
+active=set()
+for w in rows:
+    h=handle(w)
+    if h and not is_settled(w):
+        active.add(h)
+seen=set()
+for w in rows:
+    h=handle(w)
+    if not h or h in active or h in seen:
+        continue
+    if terminal_state(w) in {"released","release_pending","release_unknown"}:
+        continue
+    if not is_settled(w):
+        continue
+    seen.add(h)
+    print("%s\t%s" % (h, w.get("dispatchId") or ""))
+' 2>/dev/null
+}
+
+# 清完仍超上限就不开新终端，并给协调器留一条开场会读的 alert。
+terminal_budget_exceeded() {
+  [ "${RECLAIM_REMAINING:-0}" -gt "$STALE_TERMINAL_LIMIT" ] || return 0
+  local msg="已完成未关 worker 终端 ${RECLAIM_REMAINING} 个，超过上限 ${STALE_TERMINAL_LIMIT}（lane 数 ${CYCLE_LANES} + 2；可用 CYCLE_MAX_STALE_TERMINALS 调整），本轮不开新终端。"
+  logerr "    ✗ ${msg}"
+  if ! grep -qF '[终端回收]' "$STATE_DIR/cycle-owner-alert.txt" 2>/dev/null; then
+    printf '[终端回收] %s\n时间：%s\n' "$msg" "$(date -u +%FT%TZ)" >> "$STATE_DIR/cycle-owner-alert.txt"
+  fi
+  : > "$TERMINAL_LEAK_MARKER"
+  return 1
+}
+
+# 派工前回收：候选 = 已完成、终端仍在、且没有活着的 dispatch 共用该终端。
+RECLAIM_CANDIDATES=0
+RECLAIM_REMAINING=0
+reclaim_settled_worker_terminals() {
+  local rows handle dispatch out
+  RECLAIM_CANDIDATES=0
+  RECLAIM_REMAINING=0
+  if ! rows=$(worker_terminal_rows); then
+    log "  ⚠ worker-list 查询失败，跳过终端回收（不阻断本轮）"
+    return 0
+  fi
+  [ -n "$rows" ] || return 0
+  while IFS=$'\t' read -r handle dispatch; do
+    [ -n "$handle" ] || continue
+    # 已经成功关过的不重复 close（worker-list 可能短暂仍报 retained），也不计入本轮候选。
+    if grep -qxF -- "$handle" "$CLOSED_TERMINALS_LEDGER" 2>/dev/null; then
+      continue
+    fi
+    RECLAIM_CANDIDATES=$((RECLAIM_CANDIDATES + 1))
+    if [ "$DRY" = "1" ]; then
+      log "  · [dry-run] 会关闭已完成 worker 终端 ${handle}（dispatch=${dispatch:-未知}）"
+      RECLAIM_REMAINING=$((RECLAIM_REMAINING + 1))
+      continue
+    fi
+    if out=$(orca terminal close --terminal "$handle" --json 2>&1); then
+      printf '%s\n' "$handle" >> "$CLOSED_TERMINALS_LEDGER"
+      forget_terminal_mapping "$handle"
+      log "  · 已关闭已完成 worker 终端 ${handle}（dispatch=${dispatch:-未知}）"
+    else
+      # 失败只写日志：终端关不掉不该让整轮派工/合并停摆。
+      RECLAIM_REMAINING=$((RECLAIM_REMAINING + 1))
+      log "  ⚠ 关闭已完成 worker 终端 ${handle} 失败，只记日志：$(printf '%s' "$out" | tr '\n' ' ' | head -c 200)"
+    fi
+  done <<< "$rows"
+  if [ "$RECLAIM_CANDIDATES" -gt 0 ]; then
+    log "  · 终端回收：候选 ${RECLAIM_CANDIDATES} 个，剩余未关 ${RECLAIM_REMAINING} 个"
+  fi
+  if [ "$RECLAIM_CANDIDATES" -gt "$STALE_TERMINAL_LIMIT" ]; then
+    log "  · 派工前清理：已完成未关 worker 终端 ${RECLAIM_CANDIDATES} 个 > 上限 ${STALE_TERMINAL_LIMIT}"
+  fi
+  return 0
 }
 
 # 派工：一次建 Task + Dispatch，再把 dispatch 与 issue 的对应写下来。
@@ -664,6 +817,9 @@ dispatch_engineer_lane() {
 }
 
 log "== 3/6 派工 =="
+# 派工前先回收：已完成 worker 的终端没人关，dsh 会一直占内存（ACC-harness-leak-01/03）。
+# 放在 claim 之前：清理失败也不影响 claim/合并，且超限时 ensure_terminal 会拒绝开新终端。
+reclaim_settled_worker_terminals
 # BSD 的 seq 1 0 会倒着输出 "1 0"，--max 0 反而派两次。显式挡掉。
 LANES_THIS_RUN="$MAX"
 if [ "$LANES_THIS_RUN" -gt "$CYCLE_LANES" ]; then
@@ -861,7 +1017,7 @@ dispatch_acceptance() {
   fi
 
   local spec
-  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome' \
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid
