@@ -21,6 +21,9 @@
 # 每个残留的 dsh 进程都是一份内存。派工前先回收「已结算 dispatch」的终端进程；
 # 仍在跑的 dispatch 只读不碰。回收只调用 `terminal close`，不做 orchestration release
 # ——Run 所有权、收件箱与 release 仍归协调器（ACC-harness-run-01）。
+# 电脑重启后旧 handle 会回 `terminal_handle_stale`（或已不在 `terminal list`）：
+# 这种终端本来就不存在，按「已关」记账，不重复 close、不计入未关上限；
+# 只有真实存活却关不掉的才计数（ACC-harness-leak-05）。
 #
 # 用法：
 #   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
@@ -36,7 +39,8 @@
 #   CYCLE_WORKER_RETRIES          worker-start 首次失败后的重试次数（默认 2）
 #   CYCLE_RETRY_BACKOFF_1/_2      第 1/2 次失败后的等待秒数（默认 2 / 4）
 #   CYCLE_MAX_STALE_TERMINALS     已完成未关 worker 终端的上限（默认 lane 数 + 2）；
-#                                 超过就先回收，清完仍超则本轮不开新终端
+#                                 超过就先回收，清完仍超则本轮不开新终端。
+#                                 重启后已不存在的 handle 按已关处理，不占这个上限。
 #
 # 通道按角色选（issue #87 / ACC-harness-claude-02）：
 #   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；issue 带 model:opus label 或返工
@@ -110,6 +114,92 @@ retry_backoff() {
     2) printf '%s' "${CYCLE_RETRY_BACKOFF_2:-4}" ;;
     *) printf '0' ;;
   esac
+}
+
+# ---------------------------------------------------------------- 终端探针
+# `terminal close` 的回执里是否写明 handle 已失效。
+# 电脑重启或 Orca server 换实例后，旧 handle 会回 terminal_handle_stale；
+# 这种终端本来就不存在，必须按「已关」处理，否则会一直被算成未关、拖死整轮派工。
+terminal_close_receipt_is_stale() {
+  printf '%s' "$1" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+codes={"terminal_handle_stale","terminal_not_found","no_such_terminal","terminal_does_not_exist","handle_not_found"}
+def stale(o):
+    if isinstance(o,dict):
+        c=o.get("code")
+        if isinstance(c,str) and c.strip().lower() in codes:
+            return True
+        return any(stale(v) for v in o.values())
+    if isinstance(o,list):
+        return any(stale(x) for x in o)
+    return False
+try:
+    d=json.loads(raw)
+except Exception:
+    d=None
+if d is not None and stale(d):
+    raise SystemExit(0)
+if "terminal_handle_stale" in raw:
+    raise SystemExit(0)
+raise SystemExit(1)
+' 2>/dev/null
+}
+
+# handle 是否还在 `orca terminal list` 里。0=在，1=不在（已不存在），2=查不到（不下结论）。
+# 只在 close 失败后调用：close 成功已经说明处理完，不必多打一次接口。
+terminal_listed() {
+  local h="$1" raw
+  raw=$(orca terminal list --json 2>/dev/null) || return 2
+  [ -n "$raw" ] || return 2
+  printf '%s' "$raw" | python3 -c '
+import json,sys
+h=sys.argv[1]
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(2)
+root=d.get("result") if isinstance(d,dict) and isinstance(d.get("result"),dict) else d
+terms=root.get("terminals") if isinstance(root,dict) else root
+if not isinstance(terms,list):
+    raise SystemExit(2)
+for t in terms:
+    v=t.get("handle") if isinstance(t,dict) else (t if isinstance(t,str) else "")
+    if v==h:
+        raise SystemExit(0)
+raise SystemExit(1)
+' "$h" 2>/dev/null
+}
+
+# 关闭终端的统一口径：0 = 已关或本来就不存在；1 = 真实存活却关不掉。
+# 结果放 TERMINAL_CLOSE_RESULT（closed|stale|failed），失败回执放 TERMINAL_CLOSE_OUT，
+# 供调用方记账与「每轮至多一行」汇总使用。
+TERMINAL_CLOSE_RESULT=""
+TERMINAL_CLOSE_OUT=""
+close_terminal_worker() {
+  local h="$1" out rc listed_rc
+  TERMINAL_CLOSE_RESULT=""
+  TERMINAL_CLOSE_OUT=""
+  rc=0
+  out=$(orca terminal close --terminal "$h" --json 2>&1) || rc=$?
+  TERMINAL_CLOSE_OUT="$out"
+  if [ "$rc" -eq 0 ]; then
+    TERMINAL_CLOSE_RESULT="closed"
+    return 0
+  fi
+  if terminal_close_receipt_is_stale "$out"; then
+    TERMINAL_CLOSE_RESULT="stale"
+    return 0
+  fi
+  # 回执没写 stale 时再查一次 list：不在列表里同样说明终端已不存在。
+  listed_rc=0
+  terminal_listed "$h" || listed_rc=$?
+  if [ "$listed_rc" -eq 1 ]; then
+    TERMINAL_CLOSE_RESULT="stale"
+    return 0
+  fi
+  TERMINAL_CLOSE_RESULT="failed"
+  return 1
 }
 
 # 所有权探测失败不能静默：逐轮写日志；连续失败 >=2 次再落一个协调器开场会读的
@@ -330,10 +420,12 @@ ensure_terminal() {
     # （ACC-harness-leak-02）。
     elif [ -n "$channel" ] && { [ "$oldch" != "$channel" ] || { [ -n "$oldmd" ] && [ "$oldmd" != "$model" ]; }; }; then
       logerr "    · ${role_zh} 通道切换，已关旧终端 ${h}（${oldch:-?}/${oldmd:-?} → ${channel}/${model}）"
-      if orca terminal close --terminal "$h" --json >/dev/null 2>&1; then
+      # 旧终端可能重启后已不存在（terminal_handle_stale / 不在 terminal list）：
+      # 统一口径按「已关」处理，否则会因为一个不存在的 handle 停掉整轮派工。
+      if close_terminal_worker "$h"; then
         rm -f "$f" "$cf" "$mf" "$rf"
       else
-        # 关不掉就不建新终端：两个同时留存正是这次要修的问题；下一轮再试。
+        # 真实存活却关不掉就不建新终端：两个同时留存正是这次要修的问题；下一轮再试。
         logerr "    ⚠ 通道切换关闭旧终端 ${h} 失败，本轮不建新终端（避免两个终端同时留存）"
         return 1
       fi
@@ -371,6 +463,9 @@ ensure_terminal() {
 # 只关进程，不 release、不 ack：Run 所有权与收件箱仍归协调器。
 CLOSED_TERMINALS_LEDGER="$STATE_DIR/closed-worker-terminals.log"
 : >> "$CLOSED_TERMINALS_LEDGER" 2>/dev/null || true
+# 台账里的 handle = 已确认处理完（关闭成功，或重启后判定已不存在）。
+# 下一轮不再对这些 handle 调 close：Orca 对 external terminal 仍可能报 retained，
+# 重复 close 只会刷屏，不会让 worker-list 变干净（ACC-harness-leak-05）。
 # 每轮开头清掉上一轮的泄漏 marker：本轮还漏水就重新落，不漏了就让消费段正常清 alert。
 TERMINAL_LEAK_MARKER="$STATE_DIR/cycle-terminal-leak.marker"
 rm -f "$TERMINAL_LEAK_MARKER"
@@ -435,9 +530,11 @@ for w in rows:
 }
 
 # 清完仍超上限就不开新终端，并给协调器留一条开场会读的 alert。
+# 只有真实存活却关不掉的终端会进 RECLAIM_REMAINING；重启后已不存在的
+# handle 在回收段就按「已关」记账，不会把上限撑爆（ACC-harness-leak-05）。
 terminal_budget_exceeded() {
   [ "${RECLAIM_REMAINING:-0}" -gt "$STALE_TERMINAL_LIMIT" ] || return 0
-  local msg="已完成未关 worker 终端 ${RECLAIM_REMAINING} 个，超过上限 ${STALE_TERMINAL_LIMIT}（lane 数 ${CYCLE_LANES} + 2；可用 CYCLE_MAX_STALE_TERMINALS 调整），本轮不开新终端。"
+  local msg="已完成但仍存活且关不掉的 worker 终端 ${RECLAIM_REMAINING} 个，超过上限 ${STALE_TERMINAL_LIMIT}（lane 数 ${CYCLE_LANES} + 2；可用 CYCLE_MAX_STALE_TERMINALS 调整），本轮不开新终端。"
   logerr "    ✗ ${msg}"
   if ! grep -qF '[终端回收]' "$STATE_DIR/cycle-owner-alert.txt" 2>/dev/null; then
     printf '[终端回收] %s\n时间：%s\n' "$msg" "$(date -u +%FT%TZ)" >> "$STATE_DIR/cycle-owner-alert.txt"
@@ -447,10 +544,14 @@ terminal_budget_exceeded() {
 }
 
 # 派工前回收：候选 = 已完成、终端仍在、且没有活着的 dispatch 共用该终端。
+# 三档结果分开记：关闭成功 / 已不存在（stale 或不在 list） / 真实存活但关不掉。
+# 前两档都记台账并清映射；只有第三档计入未关上限。日志每轮至多一行汇总。
 RECLAIM_CANDIDATES=0
 RECLAIM_REMAINING=0
 reclaim_settled_worker_terminals() {
-  local rows handle dispatch out
+  local rows handle dispatch
+  local ledgered=0 candidates=0 closed_now=0 stale_now=0 still_open=0
+  local first_open_error=""
   RECLAIM_CANDIDATES=0
   RECLAIM_REMAINING=0
   if ! rows=$(worker_terminal_rows); then
@@ -460,31 +561,45 @@ reclaim_settled_worker_terminals() {
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r handle dispatch; do
     [ -n "$handle" ] || continue
-    # 已经成功关过的不重复 close（worker-list 可能短暂仍报 retained），也不计入本轮候选。
+    # 已记台账（关闭成功或判定已不存在）的不再尝试 close，也不计入本轮候选。
     if grep -qxF -- "$handle" "$CLOSED_TERMINALS_LEDGER" 2>/dev/null; then
+      ledgered=$((ledgered + 1))
       continue
     fi
-    RECLAIM_CANDIDATES=$((RECLAIM_CANDIDATES + 1))
+    candidates=$((candidates + 1))
     if [ "$DRY" = "1" ]; then
-      log "  · [dry-run] 会关闭已完成 worker 终端 ${handle}（dispatch=${dispatch:-未知}）"
-      RECLAIM_REMAINING=$((RECLAIM_REMAINING + 1))
+      # dry-run 不写台账、不发 close；只报告本轮会处理多少个。
+      still_open=$((still_open + 1))
       continue
     fi
-    if out=$(orca terminal close --terminal "$handle" --json 2>&1); then
+    if close_terminal_worker "$handle"; then
       printf '%s\n' "$handle" >> "$CLOSED_TERMINALS_LEDGER"
       forget_terminal_mapping "$handle"
-      log "  · 已关闭已完成 worker 终端 ${handle}（dispatch=${dispatch:-未知}）"
+      if [ "$TERMINAL_CLOSE_RESULT" = "stale" ]; then
+        stale_now=$((stale_now + 1))
+      else
+        closed_now=$((closed_now + 1))
+      fi
     else
-      # 失败只写日志：终端关不掉不该让整轮派工/合并停摆。
-      RECLAIM_REMAINING=$((RECLAIM_REMAINING + 1))
-      log "  ⚠ 关闭已完成 worker 终端 ${handle} 失败，只记日志：$(printf '%s' "$out" | tr '\n' ' ' | head -c 200)"
+      # 真实存活却关不掉：计入未关数（会撞上限），但只留一行汇总，不逐 handle 刷屏。
+      still_open=$((still_open + 1))
+      if [ -z "$first_open_error" ]; then
+        first_open_error=$(printf '%s' "$TERMINAL_CLOSE_OUT" | tr '\n' ' ' | head -c 120)
+      fi
     fi
   done <<< "$rows"
-  if [ "$RECLAIM_CANDIDATES" -gt 0 ]; then
-    log "  · 终端回收：候选 ${RECLAIM_CANDIDATES} 个，剩余未关 ${RECLAIM_REMAINING} 个"
-  fi
-  if [ "$RECLAIM_CANDIDATES" -gt "$STALE_TERMINAL_LIMIT" ]; then
-    log "  · 派工前清理：已完成未关 worker 终端 ${RECLAIM_CANDIDATES} 个 > 上限 ${STALE_TERMINAL_LIMIT}"
+  RECLAIM_CANDIDATES=$candidates
+  RECLAIM_REMAINING=$still_open
+  if [ "$candidates" -gt 0 ] || [ "$ledgered" -gt 0 ]; then
+    local note=""
+    if [ "$DRY" = "1" ]; then
+      note="（dry-run 未实际关闭）"
+    fi
+    local msg="  · 终端回收：候选 ${candidates} 个，关闭 ${closed_now} 个，已不存在 ${stale_now} 个，仍存活关不掉 ${still_open} 个，台账跳过 ${ledgered} 个${note}"
+    if [ -n "$first_open_error" ]; then
+      msg="${msg}；首个失败：${first_open_error}"
+    fi
+    log "$msg"
   fi
   return 0
 }
