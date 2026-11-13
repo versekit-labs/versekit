@@ -43,6 +43,7 @@ npm run ci
 - [ACC-account-02] 点账号行，详情在组内就位；主动作指向具体账号。
 - [ACC-account-03] 空组：五个缺口 + 一句引导，不能白屏。
 - [ACC-account-04] 状态文案与接口一致：`/api/accounts` 返回 `state=ok` 时页面显示「正常」，不得显示「即将过期」；同一平台只渲染一个槽位。
+- [ACC-account-05] 在账号页点「重新登录」并在弹出的窗口里完成登录后，不用刷新、不用再点别的：页面自己检查登录态，成功才把该账号显示为「正常」；没登录成功时不得显示成功，也不得保持「已失效」不变（小红书、B站都要）。数据库里的 `account.state` 与页面一致。
 - 实现提示 命令：`vk account list --group <g>`、`vk account reauth <id>`、`vk account remove <id>`
 
 ### 选择账号组 `groups.html`
