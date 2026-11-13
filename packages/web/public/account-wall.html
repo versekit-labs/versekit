@@ -12,7 +12,11 @@
 .slot:last-child{border-bottom:0}
 .slot.connected{cursor:pointer}
 .slot.connected:hover{background:var(--paper-subtle)}
-.slot.selected{background:var(--ground);box-shadow:inset 2px 0 0 var(--navy)}
+/* 「详情」切到哪一行必须一眼可见：整行着色 + 左侧粗色条 + 账号名变深，
+   不能只靠详情面板里一行小字。 */
+.slot.selected{background:#eef4fb;box-shadow:inset 3px 0 0 var(--navy)}
+.slot.selected .slot-name{color:var(--navy)}
+.slot.selected .slot-sub{color:var(--navy)}
 .slot-who{display:flex;align-items:center;gap:10px;min-width:0}
 .plogo{width:22px;height:22px;flex:none;border-radius:4px}
 .slot-name{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -41,7 +45,7 @@
 .fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
 .detail-note{margin-top:12px}
 .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(420px,calc(100vw - 40px));padding:10px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.5}
-.toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red)}
+.toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red);cursor:pointer}
 
 @media (max-width:1100px){
   .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
@@ -194,6 +198,28 @@
     return Math.round(hours / 24) + " 天前";
   }
 
+  // 详情标题要能区分「同组两个平台都叫同一个名字」：平台名 + 账号名，缺一不可。
+  // handle 可能为空（历史数据），退回 display_name / id，绝不显示空白标题。
+  function accountName(account){
+    return String(account?.handle ?? "").trim() || String(account?.display_name ?? "").trim() || String(account?.id ?? "");
+  }
+
+  function accountTitle(account, column){
+    return (column?.label ?? account?.platform ?? "账号") + " · " + accountName(account);
+  }
+
+  function inViewport(element){
+    if(!element || element.hidden) return true;
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= window.innerHeight;
+  }
+
+  // 点了「详情」/主动作后，结果必须在人眼前。已经可见就不打扰，避免每次轮询都抖一下。
+  function reveal(element, block){
+    if(!element || element.hidden || inViewport(element)) return;
+    element.scrollIntoView({ block: block || "nearest", behavior: "smooth" });
+  }
+
   // 登录异常只看账号状态：采集新鲜度是另一条口径，不能混成一个"坏"。
   function levelOf(account){
     return account ? (STATE_LEVEL[account.state] ?? "") : "";
@@ -286,14 +312,22 @@
     el.textContent = message;
     el.className = "toast" + (bad ? " bad" : "");
     el.hidden = false;
+    // 失败/需要人动手的说明不能 4 秒就消失：留在原地，点一下才关。
+    el.title = bad ? "点击关闭" : "";
+    el.onclick = () => { el.hidden = true; clearTimeout(toastTimer); };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
+    toastTimer = null;
+    if(!bad) toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
   }
 
   function feedback(element, message, bad){
+    const changed = element.hidden || element.textContent !== (message ?? "");
     element.hidden = !message;
     element.textContent = message ?? "";
     element.className = "notice detail-note" + (bad ? " bad" : "");
+    // 反馈在详情面板底部，面板可能已经在首屏之外；内容真正变化时滚到人眼前。
+    // 同一条扫码提示每 2 秒重写一次时不重复滚动，避免把正在看列表的人拽回去。
+    if(message && changed) reveal(element, "nearest");
   }
 
   function busy(button, pending, label){
@@ -394,7 +428,9 @@
     }
     selected = accountId;
     document.querySelectorAll(".slot.connected").forEach((row) => {
-      row.classList.toggle("selected", row.dataset.account === accountId);
+      const active = row.dataset.account === accountId;
+      row.classList.toggle("selected", active);
+      row.setAttribute("aria-current", active ? "true" : "false");
     });
 
     const column = VK.platformOf(account);
@@ -403,7 +439,9 @@
     const detail = $("detail");
     detail.hidden = false;
     $("d-location").textContent = (VK.current()?.name ?? "当前账号组") + " · " + (column?.label ?? account.platform);
-    $("d-title").textContent = account.handle;
+    // 标题必须带平台名：两个平台同名时，只有「小红书 · X」和「B站 · X」能让人看出切到了谁。
+    $("d-title").textContent = accountTitle(account, column);
+    detail.setAttribute("aria-label", "账号详情：" + accountTitle(account, column));
     const issue = $("d-issue");
     issue.textContent = issueOf(account);
     issue.className = "detail-issue" + (level ? " " + level : "");
@@ -430,7 +468,7 @@
 
     feedback($("d-feedback"), "", false);
 
-    if(scroll) detail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if(scroll) reveal(detail, "start");
   }
 
   /* 槽位是平台列，不是账号行：同一平台只落一个账号。
@@ -462,7 +500,7 @@
     return platformColumns().map((column) => ({ column, account: slotAccount(column, accounts) }));
   }
 
-  function renderSlots(slots){
+  function renderSlots(slots, ambiguousNames, groupName){
     const element = $("slots");
     element.innerHTML = "";
     if(!slots.length){
@@ -476,12 +514,19 @@
     slots.forEach(({ column, account }) => {
       if(account){
         const level = levelOf(account);
+        const name = accountName(account);
+        // 同名账号（包括历史数据里把组名当账号名的那两条）必须在行上就分开：
+        // 只显示同名 handle 时，人看到的是两行一模一样的「AssureLane」。
+        const ambiguous = ambiguousNames.has(name.toLocaleLowerCase()) ||
+          (groupName && name.toLocaleLowerCase() === String(groupName).toLocaleLowerCase());
+        const shownName = ambiguous ? column.label + " · " + name : name;
         const row = document.createElement("div");
         row.className = "slot connected" + (selected === account.id ? " selected" : "");
         row.tabIndex = 0;
         row.setAttribute("role", "button");
         row.dataset.account = account.id;
-        row.setAttribute("aria-label", column.label + " · " + account.handle + " · " + statusText(account));
+        row.setAttribute("aria-current", selected === account.id ? "true" : "false");
+        row.setAttribute("aria-label", column.label + " · " + shownName + " · " + statusText(account));
         row.innerHTML =
           '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
             '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>' +
@@ -490,7 +535,8 @@
           '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>' +
           '<div class="slot-act"></div>';
 
-        row.querySelector(".slot-name").textContent = account.handle;
+        row.querySelector(".slot-name").textContent = shownName;
+        row.querySelector(".slot-name").title = accountTitle(account, column);
         row.querySelector(".slot-sub").textContent = column.label + " · " + statusSub(account, level);
         row.querySelector(".slot-status").innerHTML = statusHtml(account);
 
@@ -629,7 +675,10 @@
 
     renderDuplicates(slots, accounts);
     renderTodos(connected);
-    renderSlots(slots);
+    // 同一个显示名出现多次（或直接用了组名）时，行上要加平台前缀，否则两行看起来一模一样。
+    const displayNames = connected.map((a) => accountName(a).toLocaleLowerCase());
+    const ambiguousNames = new Set(displayNames.filter((name, index) => displayNames.indexOf(name) !== index));
+    renderSlots(slots, ambiguousNames, group.name);
 
     const keep = selected && connected.some((a) => a.id === selected)
       ? selected
