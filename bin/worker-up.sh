@@ -38,11 +38,65 @@ esac
 PATCH="$HERE/dsh/$CHANNEL-flash.patch.yml"
 [ -f "$PATCH" ] || die "缺少补丁文件：$PATCH"
 
+# 0.5 给这个终端一份隔离的 TUI 偏好目录（ACC-harness-model-06 的根因）。
+#
+# 为什么 --patch 单独不够：TUI 的启动路由优先级是
+#   ~/.dsh-tui/model.json（上次 /model 选择）> cordis.yml 的 provider+model
+#   > agent-default-model
+# （modelRoute.ts 的 resolveModelRoute；TUI 的 `/model` 每次切换都写 model.json）。
+# 用户在自己的终端里切过千问后，这份全局偏好一直是
+# qwen-token-plan-cn/deepseek-v4.1-flash-1017，于是 worker 的 --patch 只改了
+# 最低优先级那层：--dump-config 显示火山，运行时却仍走千问。
+#
+# TUI 数据目录固定为 $HOME/.dsh-tui，不跟 $DSH_HOME 走，所以这里用一次性 HOME
+# 把它挪开：新 HOME 里除 .dsh-tui 外全部软链回真实 home（git/gh/zsh/凭据等行为
+# 不变）；.dsh-tui 软链真实条目，但**唯独不链 model.json**——没有这份偏好，
+# 启动路由就回落到 --patch 的 agent-default-model，正是本通道该用的模型。
+# 不改用户任何文件；worker 内 /model 的新选择也只落在自己的目录里。
+#
+# 目录留在 TMPDIR（终端进程还要继续用它），系统会清理长期不访问的临时目录。
+make_worker_home() {
+  local real="$HOME" base dir entry name
+  base="${TMPDIR:-/tmp}"
+  base="${base%/}"
+  dir=$(mktemp -d "$base/dsh-worker-home.XXXXXX") || return 1
+  for entry in "$real"/* "$real"/.[!.]* "$real"/..?*; do
+    { [ -e "$entry" ] || [ -L "$entry" ]; } || continue
+    name=${entry##*/}
+    [ "$name" = ".dsh-tui" ] && continue
+    ln -s "$entry" "$dir/$name" || return 1
+  done
+  mkdir -p "$dir/.dsh-tui" || return 1
+  if [ -d "$real/.dsh-tui" ]; then
+    for entry in "$real/.dsh-tui"/* "$real/.dsh-tui"/.[!.]*; do
+      { [ -e "$entry" ] || [ -L "$entry" ]; } || continue
+      name=${entry##*/}
+      # 唯一的例外：不继承上次的 /model 选择。
+      [ "$name" = "model.json" ] && continue
+      ln -s "$entry" "$dir/.dsh-tui/$name" || return 1
+    done
+  fi
+  printf '%s\n' "$dir"
+}
+
+# 没有 ~/.dsh-tui 就没有可继承的 /model 偏好，也不需要隔离：照旧直启，
+# 免得在首次运行的机器上把 TUI 带进引导页。
+WORKER_HOME=""
+if [ -d "$HOME/.dsh-tui" ]; then
+  WORKER_HOME=$(make_worker_home) || die "建 worker 的隔离 TUI 偏好目录失败"
+fi
+TUI_PREFS_ENV=""
+if [ -n "$WORKER_HOME" ]; then
+  TUI_PREFS_ENV="HOME=$(printf '%q' "$WORKER_HOME") DSH_HOME=$(printf '%q' "$HOME/.dsh") "
+fi
+
 # 1. 起终端。DSH_PROFILE 已在用户 shell 里配好（dsh-tui），这里显式写出来，
 #    避免依赖调用方的环境——自动化跑起来时环境不一定和交互式 shell 一致。
+#    DSH_HOME 显式指向真实 home，profile/会话/凭据仍用用户那一份，只有 TUI 的
+#    ~/.dsh-tui 被上面的一次性 HOME 隔离。
 out=$(orca terminal create \
   --worktree "$WT" \
-  --command "dsh --profile dsh-tui --patch $PATCH" \
+  --command "${TUI_PREFS_ENV}dsh --profile dsh-tui --patch $(printf '%q' "$PATCH")" \
   --title "$TITLE" \
   --json 2>&1) || die "terminate create 失败：$out"
 

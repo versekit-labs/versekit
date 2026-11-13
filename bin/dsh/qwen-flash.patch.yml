@@ -1,5 +1,8 @@
 # 备用通道：千问 token plan 上的 DeepSeek V4.1 Flash。火山额度用尽/限流时切到这里。
 # provider 是 dsh 内置的（baseURL 已知），只需要环境变量 QWEN_TOKEN_PLAN_CN_API_KEY。
+# 注意：agent-default-model 只是最低优先级——TUI 的 ~/.dsh-tui/model.json
+# （上次 /model 选择）会整对盖过它；worker-up.sh 因此给每个 worker 隔离了一份
+# 不含 model.json 的 TUI 偏好目录（ACC-harness-model-06）。
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:

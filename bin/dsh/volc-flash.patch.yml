@@ -1,5 +1,8 @@
 # 主通道：火山 coding plan 上的 DeepSeek V4.1 Flash。
 # 叠在 dsh-tui profile 之上（dsh --patch），只改默认模型，不复制整个 profile。
+# 注意：agent-default-model 只是最低优先级——TUI 的 ~/.dsh-tui/model.json
+# （上次 /model 选择）会整对盖过它；worker-up.sh 因此给每个 worker 隔离了一份
+# 不含 model.json 的 TUI 偏好目录（ACC-harness-model-06）。
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
