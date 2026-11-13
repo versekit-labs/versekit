@@ -21,11 +21,18 @@
 #   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
 #
 # 环境变量：
-#   ENGINEER_WT / ACCEPTANCE_WT   worktree selector（默认 current）
+#   ENGINEER_WT / ACCEPTANCE_WT   worktree selector（默认 current；仅返工兜底与验收用）
+#   CYCLE_LANES                   并行 lane 上限（默认 3；--max 超过时按此封顶）
+#   CYCLE_LANE_IDLE_TTL_MIN       观测不到 lane 的 dispatch 状态时，多久视为空闲（默认 90）
 #   WORKER_AGENT                  指定则用 worker-start --agent，否则走 worker-up.sh
 #                                 （dsh 需要预配置 profile，--agent 会停在 landing page）
 #   CYCLE_WORKER_RETRIES          worker-start 首次失败后的重试次数（默认 2）
 #   CYCLE_RETRY_BACKOFF_1/_2      第 1/2 次失败后的等待秒数（默认 2 / 4）
+#
+# 并行规则（ACC-harness-cycle-08/09/10）：
+#   - 每个 issue 一个独立 worktree、独立终端、独立 Dispatch；lane 上限默认 3。
+#   - 工单「涉及」文件相交的 issue 串行；没写「涉及」按串行（由 agentctl claim 判定）。
+#   - lane 的 worktree 在空闲后复用，不无限新建；同一 PR 同一 head 不重复派验收（验收锁）。
 #
 # 退出码：0 正常（含"没活"）；1 有派工失败。
 
@@ -58,6 +65,17 @@ STATE_DIR="${STATE_DIR:-$HOME/.orca/versekit-state}"
 ACCEPT_LOCK_TTL_MIN="${ACCEPT_LOCK_TTL_MIN:-45}"
 mkdir -p "$LOCK_DIR" "$STATE_DIR"
 find "$LOCK_DIR" -maxdepth 1 -type d -name 'accept-*.lock' -mmin +"$ACCEPT_LOCK_TTL_MIN" -exec rm -rf {} + 2>/dev/null || true
+
+# 并行 lane 数上限。--max 是"这一轮想派几个"，这里是"同一时刻最多几个"。
+# 两个都要守：只守 --max，调用方写 --max 10 就会开 10 个 worktree。
+CYCLE_LANES="${CYCLE_LANES:-${CYCLE_MAX_LANES:-3}}"
+case "$CYCLE_LANES" in ''|*[!0-9]*) CYCLE_LANES=3 ;; esac
+[ "$CYCLE_LANES" -ge 1 ] || CYCLE_LANES=1
+CYCLE_LANE_IDLE_TTL_MIN="${CYCLE_LANE_IDLE_TTL_MIN:-90}"
+case "$CYCLE_LANE_IDLE_TTL_MIN" in ''|*[!0-9]*) CYCLE_LANE_IDLE_TTL_MIN=90 ;; esac
+LANE_DIR="$STATE_DIR/lanes"
+mkdir -p "$LANE_DIR"
+LANES_USED=""   # 本轮已经用掉的 lane，绝不在一轮内复用（否则两个 issue 会共用同一 worktree）
 
 log() { printf '%s\n' "$*"; }
 
@@ -198,8 +216,8 @@ fi
 # 官方 Completion accounting 的第一选项是"同一终端接下一单"。复用有两个好处：
 # 不泄漏终端，worker 也保留已经初始化的 profile（dsh 尤其需要）。
 ensure_terminal() {
-  local role="$1" wt="$2" title="$3" branch="${4:-}"
-  local f="$STATE_DIR/$role.terminal" cf="$STATE_DIR/$role.channel" bf="$STATE_DIR/$role.branch"
+  local role="$1" wt="$2" title="$3" branch="${4:-}" key="${5:-$1}"
+  local f="$STATE_DIR/$key.terminal" cf="$STATE_DIR/$key.channel" bf="$STATE_DIR/$key.branch"
   # dsh worker 的模型通道（volc/qwen）。WORKER_AGENT 指定时走原生 agent，不涉及。
   local channel=""
   if [ -z "$WORKER_AGENT" ]; then
@@ -239,15 +257,165 @@ ensure_terminal() {
 # 派工：一次建 Task + Dispatch，再把 dispatch 与 issue 的对应写下来。
 # 没有这份对应，收到 escalation 时协调器只知道"某个 dispatch 卡住了"，不知道是哪个工单。
 record_dispatch() {
-  local dispatch="$1" issue="$2" role="$3" pull="${4:-}"
+  local dispatch="$1" issue="$2" role="$3" pull="${4:-}" files="${5:-}"
   [ -n "$dispatch" ] || return 0
-  printf '{"issue":%s,"role":"%s","pull":"%s"}\n' "$issue" "$role" "$pull" > "$STATE_DIR/dispatch-$dispatch.json"
+  python3 -c '
+import json,sys
+dispatch, issue, role, pull, files = sys.argv[1:6]
+json.dump(
+    {"issue": int(issue), "role": role, "pull": pull, "files": [f for f in files.split(",") if f]},
+    open(sys.argv[6], "w"),
+)
+' "$dispatch" "$issue" "$role" "$pull" "$files" "$STATE_DIR/dispatch-$dispatch.json" 2>/dev/null \
+    || printf '{"issue":%s,"role":"%s","pull":"%s"}\n' "$issue" "$role" "$pull" > "$STATE_DIR/dispatch-$dispatch.json"
 }
 
 issue_for_dispatch() {
   local f="$STATE_DIR/dispatch-$1.json"
   [ -f "$f" ] || return 0
   python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("issue",""))' "$f" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- 并行 lane
+# 一个 lane = 一个 worktree + 一个终端。状态落盘到 STATE_DIR/lanes/lane-N.*：
+# cycle.sh 是短进程，下一轮还要能认出"这条 lane 上是谁、跑完没有"，不能只放内存。
+lane_read() {
+  local f="$LANE_DIR/lane-$1.$2"
+  [ -s "$f" ] && cat "$f" || true
+}
+lane_write() {
+  printf '%s\n' "$3" > "$LANE_DIR/lane-$1.$2"
+}
+lane_selector() { printf 'path:%s' "$1"; }
+
+# dispatch 是否已经结束。0=结束 1=还在跑 2=查不到。
+# 只在查得到时相信它：查不到不能当"空闲"，否则会把还在跑的工作树抢过来。
+worker_settled() {
+  local dispatch="$1" out
+  [ -n "$dispatch" ] || return 0
+  out=$(orca orchestration worker-show --dispatch "$dispatch" --json 2>/dev/null) || return 2
+  [ -n "$out" ] || return 2
+  printf '%s' "$out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(2)
+r=d.get("result") or d
+dispatch=r.get("dispatch") or {}
+worker=r.get("worker") or {}
+status=str(dispatch.get("status") or "").lower()
+state=str(worker.get("state") or "").lower()
+outcome=str((worker.get("projection") or {}).get("outcome") or "").lower()
+completed=dispatch.get("completedAt") or dispatch.get("completed_at")
+settled={"completed","complete","done","settled","failed","cancelled","canceled","abandoned","stopped","exited","timed_out","timeout","released"}
+if completed or status in settled or state in settled or outcome in {"succeeded","failed","cancelled","abandoned"}:
+    raise SystemExit(0)
+raise SystemExit(1)
+' 2>/dev/null
+}
+
+# lane 是否可接新单：没有 dispatch = 新 lane；有 dispatch = 已结束才复用。
+# 查不到状态时退回 TTL：默认 90 分钟内不动，避免把长任务的工作树抢走。
+lane_available() {
+  local lane="$1" dispatch rc=0 since now ttl
+  dispatch=$(lane_read "$lane" dispatch)
+  [ -n "$dispatch" ] || return 0
+  worker_settled "$dispatch" || rc=$?
+  if [ "$rc" -eq 0 ]; then return 0; fi
+  if [ "$rc" -eq 1 ]; then return 1; fi
+  since=$(lane_read "$lane" since)
+  case "$since" in ''|*[!0-9]*) since=0 ;; esac
+  now=$(date +%s)
+  ttl=$((CYCLE_LANE_IDLE_TTL_MIN * 60))
+  [ $((now - since)) -ge "$ttl" ]
+}
+
+pick_free_lane() {
+  local i
+  for i in $(seq 1 "$CYCLE_LANES"); do
+    # 同一轮里刚派过单的 lane 即使 worker-show 说"已结束"也不能再用：
+    # 那是"刚结束"还是"还没开始"在观测上无法区分，复用会让两个 issue 撞同一个 worktree。
+    case " ${LANES_USED:-} " in
+      *" $i "*) continue ;;
+    esac
+    if lane_available "$i"; then
+      printf '%s\n' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 复用旧 worktree 前把它拨到新分支：lane 是资源，不是 issue 的私产。
+# 有未提交修改就拒绝复用（宁可多建一个，也不覆盖别人没提交的现场）。
+reset_lane_worktree() {
+  local wt="$1" lane="$2" issue="$3" branch n=2 base
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  [ -z "$(git -C "$wt" status --porcelain 2>/dev/null || true)" ] || return 1
+
+  branch="issue-$issue-lane-$lane"
+  while git -C "$wt" show-ref --verify --quiet "refs/heads/$branch"; do
+    branch="issue-$issue-lane-$lane-$n"
+    n=$((n + 1))
+  done
+
+  base=""
+  for ref in origin/main main; do
+    if git -C "$wt" rev-parse --verify --quiet "$ref" >/dev/null; then
+      base="$ref"
+      break
+    fi
+  done
+  [ -n "$base" ] || base="HEAD"
+
+  # 用 -b 新建分支，不动上一单的分支指针：旧分支可能还没推送，-B 会把提交冲掉。
+  git -C "$wt" checkout -b "$branch" "$base" >/dev/null 2>&1 || return 1
+  lane_write "$lane" branch "$branch"
+  return 0
+}
+
+# 取 lane 的 worktree：有且能安全复用就复用，否则用 Orca 新建（不自己拿 git 命令建工作树）。
+prepare_lane_worktree() {
+  local lane="$1" issue="$2" title="$3"
+  local wt name out rc branch
+  wt=$(lane_read "$lane" worktree)
+  if [ -n "$wt" ] && [ -d "$wt" ]; then
+    if reset_lane_worktree "$wt" "$lane" "$issue"; then
+      printf '%s\n' "$wt"
+      return 0
+    fi
+    log "    · lane ${lane} 的旧 worktree 不能安全复用（${wt}），改为新建"
+  fi
+
+  name="cycle-issue-$issue"
+  rc=0
+  out=$(orca worktree create --name "$name" --no-parent --setup skip --json 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # 名字被占用是常见情况（上一轮建过、Orca 元数据还在）。换唯一名再试一次，
+    # 但绝不自己拿 git 命令建工作树：worktree 必须由 Orca 管理，否则终端/生命周期都对不上。
+    name="cycle-issue-$issue-$(date +%s)"
+    rc=0
+    out=$(orca worktree create --name "$name" --no-parent --setup skip --json 2>&1) || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    log "    ✗ orca worktree create 失败：$(printf '%s' "$out" | tr '\n' ' ' | head -c 400)"
+    return 1
+  fi
+
+  wt=$(printf '%s' "$out" | jfind path)
+  if [ -z "$wt" ]; then
+    log "    ✗ worktree create 回执里没有 path：$(printf '%s' "$out" | tr '\n' ' ' | head -c 300)"
+    return 1
+  fi
+  branch=$(printf '%s' "$out" | jfind branch)
+  branch=${branch#refs/heads/}
+  lane_write "$lane" worktree "$wt"
+  lane_write "$lane" name "$name"
+  lane_write "$lane" branch "$branch"
+  lane_write "$lane" since "$(date +%s)"
+  printf '%s\n' "$wt"
 }
 
 # 从 worker-start 失败回执里抽现场：failedStage / stage / residualResources / error。
@@ -381,66 +549,94 @@ worker_start_with_retry() {
   return 1
 }
 
-dispatch_one() {
-  local role="$1" wt="$2"
-  local claimed
-  # dry-run 必须连 claim 都用只读版，否则"演练"会真的把 issue 抢走。
-  if [ "$DRY" = "1" ]; then
-    claimed=$(node bin/agentctl.mjs claim --role "$role" --dry-run --json 2>/dev/null) || {
-      log "  ✗ $role: claim 失败"; return 1
-    }
-  else
-    claimed=$(node bin/agentctl.mjs claim --role "$role" --json 2>/dev/null) || {
-      log "  ✗ $role: claim 失败"; return 1
-    }
+# claim 的 skipped 是"为什么没派"的唯一证据：口径不合格、文件重叠串行都在这里。
+print_claim_skipped() {
+  printf '%s' "$1" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+for s in d.get("skipped") or []:
+    print("    ✗ #%s 跳过：%s" % (s.get("number"), s.get("why")))
+' 2>/dev/null || true
+}
+
+dispatch_engineer_dry_run() {
+  local cap="$1" claimed
+  claimed=$(node bin/agentctl.mjs claim --role engineer --dry-run --json 2>/dev/null) || {
+    log "  ✗ engineer: claim 失败"
+    return 1
+  }
+  printf '%s' "$claimed" | python3 -c '
+import json,sys
+cap=int(sys.argv[1])
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    d={}
+would=d.get("wouldClaim") or []
+if not would:
+    print("  · [dry-run] 没有可派的活")
+for i,w in enumerate(would):
+    if i >= cap:
+        print("  · [dry-run] 并行 lane 上限 %s，本轮不派 #%s" % (cap, w.get("number")))
+        continue
+    print("  · [dry-run] 会派 #%s 到 lane %s（独立 worktree/终端，口径 %s，涉及 %s）" % (
+        w.get("number"), i + 1, ", ".join(w.get("ids") or []),
+        ", ".join(w.get("files") or []) or "未声明（按串行）"))
+for s in d.get("skipped") or []:
+    print("  ✗ 跳过 #%s：%s" % (s.get("number"), s.get("why")))
+' "$cap" 2>/dev/null || log "  · [dry-run] 没有可派的活"
+  return 0
+}
+
+# 一个 lane 派一个 issue：claim → 独立 worktree → 独立终端 → 1 task + 1 Dispatch。
+# 任何一步失败都退回 s:ready；lane 的旧 worktree 不回滚（它是资源，不是这一单的产物）。
+dispatch_engineer_lane() {
+  local lane="$1" claimed rc=0
+  local claimed_json
+  claimed_json=$(node bin/agentctl.mjs claim --role engineer --json 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "  ✗ engineer: claim 失败：$(printf '%s' "$claimed_json" | tr '\n' ' ' | head -c 400)"
+    return 1
   fi
-  local num title body
+  claimed="$claimed_json"
+
+  local num title body acc files
   num=$(printf '%s' "$claimed" | jget claimed.number)
   if [ -z "$num" ]; then
-    log "  · $role: 没有可派的活"
-    # 口径不合格时把原因打出来，否则"没活"会掩盖"工单写坏了"
-    printf '%s' "$claimed" | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-for s in d.get("skipped") or []:
-    sys.stderr.write("    ✗ #%s 口径不合格：%s\n" % (s.get("number"), s.get("why")))
-' 2>/dev/null || true
-    return 0
+    log "  · engineer: 没有可派的活"
+    print_claim_skipped "$claimed"
+    return 2
   fi
   title=$(printf '%s' "$claimed" | jget claimed.title)
   body=$(printf '%s' "$claimed" | jget claimed.body)
-  local acc; acc=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(", ".join(json.load(sys.stdin)["claimed"].get("acc") or []))' 2>/dev/null || true)
+  acc=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(", ".join(json.load(sys.stdin)["claimed"].get("acc") or []))' 2>/dev/null || true)
+  files=$(printf '%s' "$claimed" | python3 -c 'import json,sys;print(",".join(json.load(sys.stdin)["claimed"].get("files") or []))' 2>/dev/null || true)
 
-  if [ "$DRY" = "1" ]; then
-    # claim --dry-run 不返回 claimed，只返回 wouldClaim；这里逐条报告。
-    printf '%s' "$claimed" | python3 -c '
-import json,sys
-role, wt = sys.argv[1], sys.argv[2]
-d = json.load(sys.stdin)
-would = d.get("wouldClaim") or []
-if not would:
-    print("  · [dry-run] 没有可派的活")
-for w in would:
-    print("  · [dry-run] 会派 #%s 给 %s（worktree=%s，口径 %s）" % (
-        w.get("number"), role, wt, ", ".join(w.get("ids") or [])))
-for s in d.get("skipped") or []:
-    print("  ✗ 跳过 #%s：%s" % (s.get("number"), s.get("why")))
-' "$role" "$wt" 2>/dev/null || log "  · [dry-run] 没有可派的活"
-    return 0
+  log "  → #$num ${title}（lane ${lane}，口径 ${acc}；涉及 ${files:-未声明/按串行}）"
+  local wt
+  if ! wt=$(prepare_lane_worktree "$lane" "$num" "$title"); then
+    log "    ✗ 独立 worktree 准备失败，把 #$num 退回 s:ready"
+    set_issue_state "$num" ready || true
+    return 1
   fi
+  local selector; selector=$(lane_selector "$wt")
+  local branch; branch=$(lane_read "$lane" branch)
 
-  log "  → #$num ${title}（口径 ${acc}）"
   local handle
-  if ! handle=$(ensure_terminal "$role" "$wt" "worker: #$num"); then
+  if ! handle=$(ensure_terminal engineer "$selector" "worker: #$num" "" "lane-$lane"); then
     log "    ✗ 起 worker 终端失败，把 #$num 退回 s:ready"
     set_issue_state "$num" ready || true
     return 1
   fi
 
   # spec 按官方 Task-spec contract 写：Target / Change / Constraints / Ownership / Observable acceptance。
+  # 归属必须写真实路径：写 current 会让 worker 不知道自己在哪个 worktree。
   local spec
-  spec=$(printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个 worktree 里工作，只动本分支。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
-    "$num" "$title" "$wt" "$num" "$body")
+  spec=$(printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+    "$num" "$title" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body")
 
   local task taskid
   task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 实现" --spec "$spec" --json 2>&1) || task=""
@@ -453,23 +649,45 @@ for s in d.get("skipped") or []:
   fi
 
   # 首次失败不再重建 task：同一个 taskid 退避重试。成功的路径仍然只有 1 task + 1 Dispatch。
-  if ! worker_start_with_retry "$taskid" "$handle" "$wt" "实现 #$num"; then
+  if ! worker_start_with_retry "$taskid" "$handle" "$selector" "实现 #$num"; then
     log "    ✗ worker-start 连续失败 $((WORKER_RETRIES + 1)) 次，放弃 task=${taskid}，退回 s:ready"
     abandon_task "$taskid" "$num" "worker-start failed after $((WORKER_RETRIES + 1)) attempts (issue #$num)"
     set_issue_state "$num" ready || true
     return 1
   fi
-  record_dispatch "$START_DISPATCH" "$num" "$role"
-  log "    ✓ 已派工 task=$taskid dispatch=$START_DISPATCH"
+  record_dispatch "$START_DISPATCH" "$num" engineer "" "$files"
+  lane_write "$lane" issue "$num"
+  lane_write "$lane" dispatch "$START_DISPATCH"
+  lane_write "$lane" since "$(date +%s)"
+  log "    ✓ 已派工 lane=$lane task=$taskid dispatch=$START_DISPATCH worktree=$wt"
   return 0
 }
 
 log "== 3/6 派工 =="
 # BSD 的 seq 1 0 会倒着输出 "1 0"，--max 0 反而派两次。显式挡掉。
-if [ "$MAX" -gt 0 ]; then
-  for i in $(seq 1 "$MAX"); do
-    dispatch_one engineer "$ENGINEER_WT" || FAILED=1
-  done
+LANES_THIS_RUN="$MAX"
+if [ "$LANES_THIS_RUN" -gt "$CYCLE_LANES" ]; then
+  log "  · --max ${MAX} 超过并行 lane 上限 ${CYCLE_LANES}，本轮最多派 ${CYCLE_LANES} 个"
+  LANES_THIS_RUN="$CYCLE_LANES"
+fi
+if [ "$LANES_THIS_RUN" -gt 0 ]; then
+  if [ "$DRY" = "1" ]; then
+    dispatch_engineer_dry_run "$LANES_THIS_RUN" || FAILED=1
+  else
+    for _i in $(seq 1 "$LANES_THIS_RUN"); do
+      lane=""
+      if ! lane=$(pick_free_lane); then
+        log "  · 并行 lane 已满（上限 ${CYCLE_LANES}），本轮停止派工"
+        break
+      fi
+      LANES_USED="${LANES_USED} ${lane}"
+      rc=0
+      dispatch_engineer_lane "$lane" || rc=$?
+      # 2 = 没有可派的活，不必再占下一个 lane。
+      [ "$rc" -eq 2 ] && break
+      [ "$rc" -ne 0 ] && FAILED=1
+    done
+  fi
 fi
 
 # ---------------------------------------------------------------- 返工自动派
@@ -544,6 +762,13 @@ d=json.load(sys.stdin)
 d=d.get("claimed") or d
 print(", ".join(d.get("ids") or d.get("acc") or []))
 ' 2>/dev/null || true)
+  local files
+  files=$(printf '%s' "$payload" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+d=d.get("claimed") or d
+print(",".join(d.get("files") or []))
+' 2>/dev/null || true)
   comment_body=${comment_body:0:1200}
 
   local rwt="$ENGINEER_WT" resolved
@@ -589,7 +814,7 @@ print(", ".join(d.get("ids") or d.get("acc") or []))
     set_issue_state "$num" changes force || true
     return 1
   fi
-  record_dispatch "$START_DISPATCH" "$num" "rework" "$pull"
+  record_dispatch "$START_DISPATCH" "$num" "rework" "$pull" "$files"
   log "    ✓ 已派返工 task=$taskid dispatch=${START_DISPATCH}（原分支 ${branch}）"
   return 0
 }

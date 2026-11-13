@@ -114,6 +114,151 @@ function issueAccIds(body) {
   return out;
 }
 
+// ---------------------------------------------------------------- 涉及文件
+//
+// 并行派工的安全边界不是"issue 号不同"，而是"改的文件不同"。同一个文件被两个
+// worktree 同时改，合并时必冲突，且两边谁都不知道对方存在。
+//
+// 工单约定用「涉及」段列出会改的文件：
+//
+//   ## 涉及与不可动
+//   - 改：`bin/cycle.sh`、`bin/agentctl.mjs`；删除 `bin/cycle.sh-E`
+//   - 不动：`packages/`、`commands.mjs`
+//
+// 只解析「改/删除/新增」行；「不动/不可动」行必须显式排除，否则 packages/ 会把
+// 每个 issue 都判成重叠，并行直接失效。**没写「涉及」= 未知 = 按串行处理**：
+// 猜错方向比慢一轮危险得多。
+
+/** 行首的 markdown 装饰去掉，便于统一判断是不是「改：」行。 */
+function normalizeScopeLine(line) {
+  return String(line ?? "")
+    .replace(/\*\*/g, "")
+    .replace(/^[\s>*\-+]+/, "")
+    .trim();
+}
+
+function isScopeHeading(line) {
+  const h = /^(#{1,6})\s+(.*)$/.exec(String(line ?? "").trim());
+  if (!h) return null;
+  return /^涉及/.test(h[2].trim());
+}
+
+function isExcludedScopeLine(line) {
+  const s = normalizeScopeLine(line);
+  return /^(?:不动|不可动|不改|不修改|不删除|不新增|不碰|禁止|不得)\S*\s*[：:]/.test(s);
+}
+
+function isChangeScopeLine(line) {
+  const s = normalizeScopeLine(line);
+  return /^(?:改|修改|删除|新增|动)\S*\s*[：:]/.test(s);
+}
+
+/** 反引号里的 token 是不是一个"文件/目录"，而不是 `claim` 这类词。 */
+function looksLikePath(token) {
+  const p = String(token ?? "").trim();
+  if (!p || /\s/.test(p)) return false;
+  if (/^[-+]/.test(p) || p.includes("://")) return false;
+  const base = p.replace(/\/+$/, "");
+  if (!base) return false;
+  return p.includes("/") || base.includes(".") || /[*?]/.test(p);
+}
+
+function normalizeScopePath(token) {
+  let p = String(token ?? "").trim();
+  p = p.replace(/^\.\//, "").replace(/[，,；;。]+$/, "");
+  if (!p) return "";
+  if (p.endsWith("/")) return p;
+  return p.replace(/\/+$/, "");
+}
+
+/**
+ * issue 正文「涉及」段里会被改动的文件。
+ * 解析不到时返回 []；调用方必须把空数组当成"未知，串行"，不能当成"没有文件"。
+ */
+function issueTouchedFiles(body) {
+  const text = String(body ?? "");
+  const lines = text.split(/\r?\n/);
+  const files = [];
+  const seen = new Set();
+  const add = (raw) => {
+    if (!looksLikePath(raw)) return;
+    const p = normalizeScopePath(raw);
+    if (!p || seen.has(p)) return;
+    seen.add(p);
+    files.push(p);
+  };
+
+  let inSection = false;
+  let sawSection = false;
+  for (const line of lines) {
+    const heading = isScopeHeading(line);
+    if (heading !== null) {
+      inSection = heading;
+      if (inSection) sawSection = true;
+      continue;
+    }
+    if (!inSection) continue;
+    if (isExcludedScopeLine(line) || !isChangeScopeLine(line)) continue;
+    for (const m of line.matchAll(/`([^`\n]+)`/g)) add(m[1]);
+  }
+
+  // 没有「## 涉及…」小节时的兼容写法：单行「涉及：`a`、`b`」。
+  if (!sawSection) {
+    for (const line of lines) {
+      if (!/^\s*(?:[-*]\s*)?涉及\s*[：:]/.test(line)) continue;
+      if (isExcludedScopeLine(line)) continue;
+      for (const m of line.matchAll(/`([^`\n]+)`/g)) add(m[1]);
+    }
+  }
+
+  return files;
+}
+
+/** issue 是否显式声明了「涉及」文件。声明了但解析为空也算未声明（按串行）。 */
+function issueScopeDeclared(body) {
+  const text = String(body ?? "");
+  if (text.split(/\r?\n/).some((line) => isScopeHeading(line) === true)) return true;
+  return text.split(/\r?\n/).some((line) => /^\s*(?:[-*]\s*)?涉及\s*[：:]/.test(line));
+}
+
+/** 两个「涉及」路径是否相交。目录以 / 结尾，按前缀匹配。 */
+function filesOverlap(a, b) {
+  const clean = (p) => normalizeScopePath(p).replace(/\/+$/, "");
+  const na = clean(a);
+  const nb = clean(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.startsWith(nb + "/") || nb.startsWith(na + "/");
+}
+
+/** 正在被实现的 issue 占用的文件（只认 s:doing：s:changes 还没开工，不该挡住新活）。 */
+function activeFileScope(issues) {
+  const locks = [];
+  let unknown = null;
+  for (const issue of issues ?? []) {
+    if (readState(issue).state !== "doing") continue;
+    const files = issueTouchedFiles(issue.body);
+    const declared = issueScopeDeclared(issue.body) && files.length > 0;
+    if (!declared) {
+      // 在跑但没写「涉及」= 不知道会不会撞文件。按串行处理，不能再并行派新活。
+      if (unknown == null) unknown = issue.number;
+      continue;
+    }
+    for (const file of files) locks.push({ file, number: issue.number });
+  }
+  return { locks, unknown };
+}
+
+/** 在已占用文件里找第一个与 files 相交的锁。 */
+function findFileConflict(locks, files) {
+  for (const file of files ?? []) {
+    for (const lock of locks ?? []) {
+      if (filesOverlap(file, lock.file)) return { file, number: lock.number };
+    }
+  }
+  return null;
+}
+
 /**
  * 派工前的口径校验。返回 { ok, ids, why }。
  * 三种失败都要说清"缺什么"，否则 coordinator 只看到"跳过"会当成偶发。
@@ -455,6 +600,10 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
   const skipped = [];
   const blocked = [];
   const viable = [];
+  // 返工同样受「涉及文件」约束：正在被实现的 issue 占着同一个文件时，先等它。
+  const activeScope = activeFileScope(candidates);
+  const locks = activeScope.locks;
+  let serialUnknown = null;
 
   for (const issue of changes) {
     const pull = findPull(pulls, issue);
@@ -501,7 +650,50 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
       continue;
     }
 
-    viable.push({ issue, pull, scope, fail, round });
+    if (activeScope.unknown != null) {
+      skipped.push({
+        number: issue.number,
+        title: issue.title,
+        why: `与 #${activeScope.unknown} 串行（#${activeScope.unknown} 正在实现且没写「涉及」文件，按串行处理）`,
+      });
+      continue;
+    }
+
+    const files = issueTouchedFiles(issue.body);
+    const declared = issueScopeDeclared(issue.body) && files.length > 0;
+    if (serialUnknown) {
+      skipped.push({
+        number: issue.number,
+        title: issue.title,
+        why: `与 #${serialUnknown} 串行（#${serialUnknown} 没写「涉及」文件，按串行处理）`,
+      });
+      continue;
+    }
+    if (!declared) {
+      const active = locks[0];
+      if (active) {
+        skipped.push({
+          number: issue.number,
+          title: issue.title,
+          why: `没写「涉及」文件，按串行处理（等 #${active.number} 完成）`,
+        });
+        continue;
+      }
+      viable.push({ issue, pull, scope, files, fail, round });
+      serialUnknown = issue.number;
+      continue;
+    }
+    const conflict = findFileConflict(locks, files);
+    if (conflict) {
+      skipped.push({
+        number: issue.number,
+        title: issue.title,
+        why: `与 #${conflict.number} 涉及同一文件（${conflict.file}），串行`,
+      });
+      continue;
+    }
+    viable.push({ issue, pull, scope, files, fail, round });
+    for (const file of files) locks.push({ file, number: issue.number });
   }
 
   const renderBlocked = () =>
@@ -511,11 +703,12 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
     const payload = {
       claimed: null,
       dryRun: true,
-      wouldClaim: viable.map(({ issue, pull, scope, fail, round }) => ({
+      wouldClaim: viable.map(({ issue, pull, scope, files, fail, round }) => ({
         number: issue.number,
         title: issue.title,
         body: issue.body ?? "",
         ids: scope.ids,
+        files,
         pull: pull.number,
         pullUrl: pull.html_url,
         branch: pull.head.ref,
@@ -543,7 +736,7 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
     return 0;
   }
 
-  for (const { issue, pull, scope, fail, round } of viable) {
+  for (const { issue, pull, scope, files, fail, round } of viable) {
     const res = await claimIssue(repo, issue, "changes", "doing");
     if (!res.ok) continue;
     const claimed = {
@@ -553,6 +746,7 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
       url: issue.html_url,
       milestone: issue.milestone?.title ?? null,
       acc: scope.ids,
+      files,
       pull: pull.number,
       pullUrl: pull.html_url,
       branch: pull.head.ref,
@@ -612,21 +806,85 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
 
     // 口径不合格的 issue 不认领：认领了 agent 也只能猜，最后一定打回。
     // 这类 issue 需要人补口径，所以列出来而不是静默跳过。
+    //
+    // 文件重叠是第二条闸门：同一文件同时被两个 worktree 改，合并时必冲突。
+    // 锁来自 s:doing 的 issue（正在被实现）；同一轮里 dry-run 也会把"将要认领"的
+    // 文件加进锁，保证演练结果和真实串行顺序一致。
     const skipped = [];
     const viable = [];
+    const activeScope = activeFileScope(candidates);
+    const locks = activeScope.locks;
+    let serialUnknown = null;
+
     for (const issue of ready) {
       const scope = validateScope(issue);
-      if (scope.ok) viable.push({ issue, scope });
-      else skipped.push({ number: issue.number, title: issue.title, why: scope.why });
+      if (!scope.ok) {
+        skipped.push({ number: issue.number, title: issue.title, why: scope.why });
+        continue;
+      }
+
+      if (activeScope.unknown != null) {
+        // 已有一个 s:doing 的 issue 没写「涉及」：文件边界未知，只能串行。
+        skipped.push({
+          number: issue.number,
+          title: issue.title,
+          why: `与 #${activeScope.unknown} 串行（#${activeScope.unknown} 正在实现且没写「涉及」文件，按串行处理）`,
+        });
+        continue;
+      }
+
+      if (serialUnknown) {
+        skipped.push({
+          number: issue.number,
+          title: issue.title,
+          why: `与 #${serialUnknown} 串行（#${serialUnknown} 没写「涉及」文件，按串行处理）`,
+        });
+        continue;
+      }
+
+      const files = issueTouchedFiles(issue.body);
+      const declared = issueScopeDeclared(issue.body) && files.length > 0;
+      if (!declared) {
+        // 没写「涉及」= 不知道会不会撞文件。只能在没有任何在跑的实现时单独派。
+        const active = locks[0];
+        if (active) {
+          skipped.push({
+            number: issue.number,
+            title: issue.title,
+            why: `没写「涉及」文件，按串行处理（等 #${active.number} 完成）`,
+          });
+          continue;
+        }
+        viable.push({ issue, scope, files });
+        serialUnknown = issue.number;
+        continue;
+      }
+
+      const conflict = findFileConflict(locks, files);
+      if (conflict) {
+        skipped.push({
+          number: issue.number,
+          title: issue.title,
+          why: `与 #${conflict.number} 涉及同一文件（${conflict.file}），串行`,
+        });
+        continue;
+      }
+      viable.push({ issue, scope, files });
+      for (const file of files) locks.push({ file, number: issue.number });
     }
 
     if (viable.length === 0) {
-      const payload = { claimed: null, reason: ready.length ? "scope-invalid" : "no-work", skipped };
+      const conflictSkipped = skipped.some((s) => /涉及同一文件|按串行/.test(s.why));
+      const payload = {
+        claimed: null,
+        reason: ready.length ? (conflictSkipped ? "file-conflict" : "scope-invalid") : "no-work",
+        skipped,
+      };
       process.stdout.write(
         json
           ? JSON.stringify(payload, null, 2) + "\n"
           : ready.length
-            ? `没有可派工的 issue：${ready.length} 个 s:ready 的口径不合格\n` +
+            ? `没有可派工的 issue：${ready.length} 个 s:ready 被口径或文件重叠挡住\n` +
               skipped.map((s) => `  ✗ #${s.number} ${s.title}\n    ${s.why}`).join("\n") + "\n"
             : "no-work\n",
       );
@@ -638,20 +896,25 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
       const payload = {
         claimed: null,
         dryRun: true,
-        wouldClaim: viable.map(({ issue, scope }) => ({ number: issue.number, title: issue.title, ids: scope.ids })),
+        wouldClaim: viable.map(({ issue, scope, files }) => ({
+          number: issue.number,
+          title: issue.title,
+          ids: scope.ids,
+          files,
+        })),
         skipped,
       };
       process.stdout.write(
         json
           ? JSON.stringify(payload, null, 2) + "\n"
-          : viable.map(({ issue, scope }) => `会认领 #${issue.number}  ${issue.title}\n  ${scope.why}`).join("\n") +
+          : viable.map(({ issue, scope, files }) => `会认领 #${issue.number}  ${issue.title}\n  ${scope.why}${files.length ? `\n  涉及：${files.join(", ")}` : ""}`).join("\n") +
             (skipped.length ? "\n跳过：\n" + skipped.map((s) => `  ✗ #${s.number} ${s.why}`).join("\n") : "") +
             "\n",
       );
       return 0;
     }
 
-    for (const { issue, scope } of viable) {
+    for (const { issue, scope, files } of viable) {
       const res = await claimIssue(repo, issue);
       if (!res.ok) continue;
       const claimed = {
@@ -661,6 +924,7 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
         url: issue.html_url,
         milestone: issue.milestone?.title ?? null,
         acc: scope.ids,
+        files,
       };
       if (json) {
         process.stdout.write(JSON.stringify({ claimed, skipped }, null, 2) + "\n");
@@ -669,6 +933,7 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
           `已认领 #${claimed.number}  ${claimed.title}\n` +
           (claimed.milestone ? `里程碑：${claimed.milestone}\n` : "") +
           `口径：${claimed.acc.join(", ")}\n` +
+          `涉及：${files.join(", ") || "（未声明，按串行）"}\n` +
           `${claimed.url}\n` +
           `${"─".repeat(64)}\n${claimed.body}\n`,
         );
@@ -1311,4 +1576,13 @@ if (invokedDirectly) {
   );
 }
 
-export { TRANSITIONS, canTransition, issueAccIds, parseVerdict, validateScope };
+export {
+  TRANSITIONS,
+  canTransition,
+  issueAccIds,
+  issueTouchedFiles,
+  issueScopeDeclared,
+  filesOverlap,
+  parseVerdict,
+  validateScope,
+};
