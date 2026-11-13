@@ -80,7 +80,7 @@
           <div class="field" style="margin-top:14px">
             <label class="field-label" for="handle">账号名（用于区分同一平台的账号）</label>
             <input class="input" id="handle" placeholder="例如：@AI工具研究所" autocomplete="off" maxlength="200">
-            <p class="hint" id="handle-hint">登记后，这个名称会显示在账号页和发布台。</p>
+            <p class="hint" id="handle-hint">登记后，这个名称会显示在账号页和发布台；不要把账号组名当账号名，重名会提示。</p>
           </div>
           <p class="notice warn" id="auth-warn" role="alert" style="margin-top:12px" hidden></p>
           <div class="form-actions">
@@ -457,7 +457,7 @@
     const handle = $("handle");
     handle.value = "";
     handle.placeholder = "例如：@AI工具研究所";
-    $("handle-hint").textContent = "登记后，这个名称会显示在账号页和发布台。";
+    $("handle-hint").textContent = "登记后，这个名称会显示在账号页和发布台；不要把账号组名当账号名，重名会提示。";
     $("auth-warn").hidden = true;
     $("cancel-auth").href = "/accounts";
     setStep(2);
@@ -469,6 +469,8 @@
     const input = $("handle");
     const warn = $("auth-warn");
     if(!chosen){ setStep(1); return; }
+    const platform = chosen;
+    const column = columnOf(platform);
     const name = input.value.trim();
     if(!name){
       warn.hidden = false;
@@ -476,13 +478,31 @@
       input.focus();
       return;
     }
+    // 组名不是账号名。历史事故就是两个平台都把组名填进来，列表里出现两行一模一样的名字。
+    if(group && name.toLocaleLowerCase() === String(group.name).trim().toLocaleLowerCase()){
+      warn.hidden = false;
+      warn.textContent = "别把账号组名当账号名：请填平台上的账号名（例如「" + (column?.label ?? name) + " · " + name + "」也不容易重名）";
+      input.focus();
+      input.select();
+      return;
+    }
+    // 重名会让账号页和发布台分不清「这条属于哪个账号」，所以先提示、不提交。
+    const duplicate = VK.accounts().find((account) =>
+      String(account.handle ?? account.display_name ?? "").trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    if(duplicate){
+      const other = VK.platformOf(duplicate);
+      warn.hidden = false;
+      warn.textContent = "组里已经有一个叫「" + name + "」的账号（" + (other?.label ?? duplicate.platform) +
+        "）。两个平台同名会分不清，请换一个名字，例如「" + (column?.label ?? name) + " · " + name + "」。";
+      input.focus();
+      input.select();
+      return;
+    }
 
     button.disabled = true;
     button.textContent = "正在登记…";
     try{
-      const result = await VK.addAccount({ platform: chosen, name });
-      const platform = chosen;
-      const column = columnOf(platform);
+      const result = await VK.addAccount({ platform, name });
       $("done-text").textContent = group.name + " · " + column.label + " · " + name + " 已登记。";
       $("back-account").href = "/accounts";
       $("next-platform").href = "/accounts/add";
@@ -501,6 +521,10 @@
   }
 
   $("finish").addEventListener("click", finish);
+  $("handle").addEventListener("input", () => {
+    const warn = $("auth-warn");
+    if(warn && !warn.hidden) warn.hidden = true;
+  });
   $("handle").addEventListener("keydown", (event) => {
     if(event.key === "Enter"){ event.preventDefault(); finish(); }
   });

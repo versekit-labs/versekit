@@ -12,7 +12,11 @@
 .slot:last-child{border-bottom:0}
 .slot.connected{cursor:pointer}
 .slot.connected:hover{background:var(--paper-subtle)}
-.slot.selected{background:var(--ground);box-shadow:inset 2px 0 0 var(--navy)}
+/* 「详情」切到哪一行必须一眼可见：整行着色 + 左侧粗色条 + 账号名变深，
+   不能只靠详情面板里一行小字。 */
+.slot.selected{background:#eef4fb;box-shadow:inset 3px 0 0 var(--navy)}
+.slot.selected .slot-name{color:var(--navy)}
+.slot.selected .slot-sub{color:var(--navy)}
 .slot-who{display:flex;align-items:center;gap:10px;min-width:0}
 .plogo{width:22px;height:22px;flex:none;border-radius:4px}
 .slot-name{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -41,7 +45,7 @@
 .fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
 .detail-note{margin-top:12px}
 .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(420px,calc(100vw - 40px));padding:10px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.5}
-.toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red)}
+.toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red);cursor:pointer}
 
 @media (max-width:1100px){
   .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
@@ -176,6 +180,9 @@
 
   let selected = null;
   let toastTimer = null;
+  /* 每个账号一次登录确认：重复点「重新登录」时旧轮询自动作废，不会两个循环抢着写反馈。
+   * 值只存在页面内存里；刷新页面后登录窗口还在，重新点一次即可。 */
+  const verifyTokens = new Map();
 
   function formatTime(ts){
     if(!ts) return "";
@@ -192,6 +199,28 @@
     const hours = Math.round(minutes / 60);
     if(hours < 24) return hours + " 小时前";
     return Math.round(hours / 24) + " 天前";
+  }
+
+  // 详情标题要能区分「同组两个平台都叫同一个名字」：平台名 + 账号名，缺一不可。
+  // handle 可能为空（历史数据），退回 display_name / id，绝不显示空白标题。
+  function accountName(account){
+    return String(account?.handle ?? "").trim() || String(account?.display_name ?? "").trim() || String(account?.id ?? "");
+  }
+
+  function accountTitle(account, column){
+    return (column?.label ?? account?.platform ?? "账号") + " · " + accountName(account);
+  }
+
+  function inViewport(element){
+    if(!element || element.hidden) return true;
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= window.innerHeight;
+  }
+
+  // 点了「详情」/主动作后，结果必须在人眼前。已经可见就不打扰，避免每次轮询都抖一下。
+  function reveal(element, block){
+    if(!element || element.hidden || inViewport(element)) return;
+    element.scrollIntoView({ block: block || "nearest", behavior: "smooth" });
   }
 
   // 登录异常只看账号状态：采集新鲜度是另一条口径，不能混成一个"坏"。
@@ -258,7 +287,8 @@
   function primaryOf(account){
     const level = levelOf(account);
     if(level){
-      const bilibili = VK.platformOf(account)?.platform === "bilibili";
+      const platform = VK.platformOf(account)?.platform;
+      const bilibili = platform === "bilibili";
       return {
         label: "重新登录",
         primary: true,
@@ -266,8 +296,8 @@
         // 高级折叠项里。这里的 cmd 仅在详情面板显示，B站直接隐藏整格。
         cmd: bilibili ? "页面扫码登录（无需终端）" : "vk account reauth " + account.id,
         run: () => VK.reauthAccount(account.id),
-        feedback: (result) => bilibili
-          ? "登录窗口已打开：扫码后页面会自动确认；没确认成功不会显示「已完成」。"
+        feedback: (result) => bilibili || platform === "xiaohongshu"
+          ? "登录窗口已打开：完成登录后页面会自动确认；没确认成功不会显示「已完成」。"
           : (result?.next ?? "登录窗口已打开，按提示完成。")
       };
     }
@@ -286,14 +316,24 @@
     el.textContent = message;
     el.className = "toast" + (bad ? " bad" : "");
     el.hidden = false;
+    // 失败/需要人动手的说明不能 4 秒就消失：留在原地，点一下才关。
+    el.title = bad ? "点击关闭" : "";
+    el.onclick = () => { el.hidden = true; clearTimeout(toastTimer); };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
+    toastTimer = null;
+    if(!bad) toastTimer = setTimeout(() => { el.hidden = true; }, 4200);
   }
 
   function feedback(element, message, bad){
+    const changed = element.hidden || element.textContent !== (message ?? "");
     element.hidden = !message;
     element.textContent = message ?? "";
     element.className = "notice detail-note" + (bad ? " bad" : "");
+    // 反馈在详情面板底部，面板可能已经在首屏之外；内容真正变化时滚到人眼前。
+    // 用 center 而不是 nearest：nearest 会把元素正好停在视口底边，子像素下仍有一截被裁掉
+    // （实测距底 0.5px，人看到的是「反馈被切了」）。center 在页面底部会自然夹到最大滚动位置，
+    // 整条反馈稳定落在视口内。同一条扫码提示每 2 秒重写一次时不重复滚动，避免把人拽来拽去。
+    if(message && changed) reveal(element, "center");
   }
 
   function busy(button, pending, label){
@@ -303,13 +343,27 @@
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  /* B站重新登录：接口只负责打开扫码窗口，成功与否必须由 login.status + check 确认。
-   * 没确认成功时页面绝不写「重新登录完成」，失败原因和重试入口都留在详情面板里。 */
-  async function verifyBiliLogin(accountId){
-    const deadline = Date.now() + 180e3;
-    feedback($("d-feedback"), "登录窗口已打开：请用 B站 App 扫码；页面会自动确认结果。", false);
+  /* 重新登录：接口只负责打开登录窗口，成功与否必须由 login.status + check 确认。
+   * 小红书和 B站都走同一条路（与 add.html 一致，不新增命令），只有 check 说 ok 才刷新成「正常」。
+   * 没确认成功时页面绝不写「重新登录完成」，失败原因和重试入口都留在详情面板里。
+   *
+   * 小红书注意：点 account.reauth 只会打开登录页，不会在服务端登记登录会话，所以
+   * login.status 在登录完成前先回 idle 是正常的——继续等，不能把「还没开始」当成「失败」。
+   * B站的 idle 则明确是「登录窗口没打开」，直接给出重试提示。 */
+  async function verifyLogin(accountId){
+    const account = VK.account(accountId);
+    const platform = VK.platformOf(account)?.platform ?? account?.platform;
+    const label = VK.platformOf(account)?.label ?? platform;
+    const deadline = Date.now() + 300e3;
+    // 重复点「重新登录」时只认最后一次：旧循环下一拍看到 token 变了就退出，不会两个循环抢写反馈。
+    const token = (verifyTokens.get(accountId) ?? 0) + 1;
+    verifyTokens.set(accountId, token);
+    const live = () => verifyTokens.get(accountId) === token;
+    // 人可能切去看另一个账号；旧账号的进度不能写到别人的详情面板里。
+    const say = (message, bad) => { if(selected === accountId) feedback($("d-feedback"), message, bad); };
+    let lastNote = "";
+    say("登录窗口已打开：请在" + label + "窗口里完成登录；页面会自动确认，没确认成功不会显示「已完成」。", false);
     while(Date.now() < deadline){
-      await wait(2000);
       let status;
       try{
         status = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/status", {
@@ -317,45 +371,80 @@
           body: { accountId },
         });
       }catch(err){
-        feedback($("d-feedback"), "读取登录状态失败：" + err.message + "。可点「重新登录」再试。", true);
+        if(!live()) return false;
+        say("读取登录状态失败：" + err.message + "。可点「重新登录」再试。", true);
+        toast("读取登录状态失败：" + err.message, true);
         return false;
       }
+      if(!live()) return false;
 
-      if(status.state === "pending"){
-        feedback($("d-feedback"), status.note ?? "等待扫码…", false);
-        continue;
-      }
       if(status.state === "ok"){
-        feedback($("d-feedback"), "已拿到登录信息，正在用 biliup 确认…", false);
+        say("已拿到登录信息，正在确认登录状态…", false);
         try{
           const check = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/check", {
             method: "POST",
             body: { accountId },
           });
           if(check.state === "ok"){
+            verifyTokens.delete(accountId);
+            // 先刷新快照再渲染：徽标、主动作都必须和库里的 account.state 一致。
             await VK.ready({ force: true });
             render();
-            feedback($("d-feedback"), "重新登录完成：登录状态已确认正常。", false);
-            toast("重新登录完成");
+            say("重新登录完成：登录状态已确认「正常」，页面已更新。", false);
+            toast("重新登录完成：账号已恢复正常");
             return true;
           }
-          feedback($("d-feedback"), "登录没完成：" + (check.detail ?? check.state) + "。可点「重新登录」再试。", true);
+          say("登录没完成：" + (check.detail ?? check.state) + "。可点「重新登录」再试。", true);
           toast("登录未完成：" + (check.detail ?? check.state), true);
           return false;
         }catch(err){
-          feedback($("d-feedback"), "登录信息已保存，但 biliup 确认失败：" + err.message + "。可点「重新登录」再试。", true);
+          if(!live()) return false;
+          say("登录信息已保存，但确认失败：" + err.message + "。可点「重新登录」再试。", true);
           toast("登录未完成：" + err.message, true);
           return false;
         }
       }
-      if(status.state === "idle" || status.state === "failed"){
-        feedback($("d-feedback"), status.note ?? "没有检测到登录完成。点「重新登录」再试。", true);
+
+      /* 登录完成前 status 先回 idle 是正常的（小红书尤其如此）。这里顺带刷新一次服务端快照：
+       * 登录也可能由另一个页面/CLI 完成，account.state 已经是 ok 时必须让页面跟上，
+       * 不能因为 status 还没切到 ok 就把人一直留在「已失效」。B站同样适用。 */
+      if(status.state === "idle"){
+        try{
+          await VK.ready({ force: true });
+          if(VK.account(accountId)?.state === "ok"){
+            verifyTokens.delete(accountId);
+            render();
+            say("重新登录完成：登录状态已确认「正常」，页面已更新。", false);
+            toast("重新登录完成：账号已恢复正常");
+            return true;
+          }
+        }catch(_err){
+          /* 快照刷新失败不改变登录判断：下一次轮询继续。 */
+        }
+      }
+
+      if(status.state === "failed" || (status.state === "idle" && platform === "bilibili")){
+        say(status.note ?? "没有检测到登录完成。点「重新登录」再试。", true);
         toast("登录未完成", true);
         return false;
       }
+
+      /* pending 与小红书登录完成前的 idle：继续每 2 秒确认一次，直到成功或明确失败。
+       * 小红书的 idle 不是失败——account.reauth 打开的窗口不登记服务端内存登录会话，
+       * 所以登录完成前 login/status 先回 idle 是正常的。这里写自己的说明，不照抄服务端
+       * 那句会让人再去点一次「打开登录窗口」的 note。 */
+      const note = status.state === "pending"
+        ? (status.note ?? "等你在浏览器里完成登录…")
+        : "等你在浏览器窗口里完成登录…（成功后这里会自动变成「正常」）";
+      if(note !== lastNote){
+        lastNote = note;
+        say(note, false);
+      }
+      await wait(2000);
     }
-    feedback($("d-feedback"), "3 分钟内没有检测到登录完成；登录窗口可能已关闭。点「重新登录」再试。", true);
-    toast("登录未完成：还没检测到扫码结果", true);
+    if(!live()) return false;
+    say("5 分钟内没有检测到登录完成；登录窗口可能已关闭。点「重新登录」再试。", true);
+    toast("登录未完成：还没检测到登录结果", true);
     return false;
   }
 
@@ -363,26 +452,35 @@
     const account = VK.account(accountId);
     if(!account) return;
     const action = primaryOf(account);
-    const bilibili = VK.platformOf(account)?.platform === "bilibili";
+    const platform = VK.platformOf(account)?.platform;
+    // 小红书/B站的登录在页面窗口里完成：点完必须自己轮询确认，不能只弹一句「自动更新」。
+    const autoConfirm = action.label === "重新登录" && (platform === "bilibili" || platform === "xiaohongshu");
     const button = $("d-action");
     busy(button, true, action.label);
     try{
       const result = await action.run();
-      if(bilibili && action.label === "重新登录"){
-        await verifyBiliLogin(accountId);
+      if(autoConfirm){
+        // 窗口已打开、正在等登录：按钮给人明确的等待态，而不是长时间停在「正在处理…」。
+        const current = $("d-action");
+        if(current && selected === accountId){ current.textContent = "等待登录…"; current.disabled = true; }
+        await verifyLogin(accountId);
         return;
       }
       render();
       feedback($("d-feedback"), action.feedback(result), false);
       // 「打开登录窗口」不等于「登录完成」：没有 check 确认就绝不报成功。
-      toast(action.label === "重新登录" ? "登录窗口已打开，完成登录后页面会自动更新" : action.label + "完成");
+      // 只有小红书/B站能自己确认；其余平台的 reauth 只打开页面，必须让人刷新后自查。
+      toast(action.label === "重新登录" ? "登录窗口已打开；完成登录后刷新本页查看状态" : action.label + "完成");
     }catch(err){
       feedback($("d-feedback"), action.label + "失败：" + err.message, true);
       toast(action.label + "失败：" + err.message, true);
     }finally{
       // render() 会重建详情内容；按钮可能已经换成新对象，这里按 id 再取一次。
-      const current = $("d-action");
-      busy(current, false, primaryOf(VK.account(accountId) ?? account).label);
+      // 人如果在等登录时切到别的账号，按钮已经属于新账号，不能再按旧账号的主动作改写。
+      if(selected === accountId){
+        const current = $("d-action");
+        if(current) busy(current, false, primaryOf(VK.account(accountId) ?? account).label);
+      }
     }
   }
 
@@ -394,7 +492,9 @@
     }
     selected = accountId;
     document.querySelectorAll(".slot.connected").forEach((row) => {
-      row.classList.toggle("selected", row.dataset.account === accountId);
+      const active = row.dataset.account === accountId;
+      row.classList.toggle("selected", active);
+      row.setAttribute("aria-current", active ? "true" : "false");
     });
 
     const column = VK.platformOf(account);
@@ -403,7 +503,9 @@
     const detail = $("detail");
     detail.hidden = false;
     $("d-location").textContent = (VK.current()?.name ?? "当前账号组") + " · " + (column?.label ?? account.platform);
-    $("d-title").textContent = account.handle;
+    // 标题必须带平台名：两个平台同名时，只有「小红书 · X」和「B站 · X」能让人看出切到了谁。
+    $("d-title").textContent = accountTitle(account, column);
+    detail.setAttribute("aria-label", "账号详情：" + accountTitle(account, column));
     const issue = $("d-issue");
     issue.textContent = issueOf(account);
     issue.className = "detail-issue" + (level ? " " + level : "");
@@ -421,6 +523,7 @@
 
     const primary = $("d-action");
     primary.textContent = action.label;
+    primary.disabled = false;
     primary.className = "btn" + (action.primary ? " primary" : "");
     primary.onclick = () => runPrimary(accountId);
 
@@ -430,7 +533,7 @@
 
     feedback($("d-feedback"), "", false);
 
-    if(scroll) detail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if(scroll) reveal(detail, "start");
   }
 
   /* 槽位是平台列，不是账号行：同一平台只落一个账号。
@@ -462,7 +565,7 @@
     return platformColumns().map((column) => ({ column, account: slotAccount(column, accounts) }));
   }
 
-  function renderSlots(slots){
+  function renderSlots(slots, ambiguousNames, groupName){
     const element = $("slots");
     element.innerHTML = "";
     if(!slots.length){
@@ -476,12 +579,19 @@
     slots.forEach(({ column, account }) => {
       if(account){
         const level = levelOf(account);
+        const name = accountName(account);
+        // 同名账号（包括历史数据里把组名当账号名的那两条）必须在行上就分开：
+        // 只显示同名 handle 时，人看到的是两行一模一样的「AssureLane」。
+        const ambiguous = ambiguousNames.has(name.toLocaleLowerCase()) ||
+          (groupName && name.toLocaleLowerCase() === String(groupName).toLocaleLowerCase());
+        const shownName = ambiguous ? column.label + " · " + name : name;
         const row = document.createElement("div");
         row.className = "slot connected" + (selected === account.id ? " selected" : "");
         row.tabIndex = 0;
         row.setAttribute("role", "button");
         row.dataset.account = account.id;
-        row.setAttribute("aria-label", column.label + " · " + account.handle + " · " + statusText(account));
+        row.setAttribute("aria-current", selected === account.id ? "true" : "false");
+        row.setAttribute("aria-label", column.label + " · " + shownName + " · " + statusText(account));
         row.innerHTML =
           '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
             '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>' +
@@ -490,7 +600,8 @@
           '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>' +
           '<div class="slot-act"></div>';
 
-        row.querySelector(".slot-name").textContent = account.handle;
+        row.querySelector(".slot-name").textContent = shownName;
+        row.querySelector(".slot-name").title = accountTitle(account, column);
         row.querySelector(".slot-sub").textContent = column.label + " · " + statusSub(account, level);
         row.querySelector(".slot-status").innerHTML = statusHtml(account);
 
@@ -629,7 +740,10 @@
 
     renderDuplicates(slots, accounts);
     renderTodos(connected);
-    renderSlots(slots);
+    // 同一个显示名出现多次（或直接用了组名）时，行上要加平台前缀，否则两行看起来一模一样。
+    const displayNames = connected.map((a) => accountName(a).toLocaleLowerCase());
+    const ambiguousNames = new Set(displayNames.filter((name, index) => displayNames.indexOf(name) !== index));
+    renderSlots(slots, ambiguousNames, group.name);
 
     const keep = selected && connected.some((a) => a.id === selected)
       ? selected
