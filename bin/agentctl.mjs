@@ -168,7 +168,8 @@ function resolveRepo() {
   return { owner: m[1], repo: m[2], full: `${m[1]}/${m[2]}` };
 }
 
-const API = "https://api.github.com";
+// 测试时允许指向本地 mock；生产不设该变量就走 GitHub。
+const API = process.env.AGENTCTL_API_BASE || "https://api.github.com";
 let TOKEN = "";
 
 /** 唯一的出网口。所有请求都走这里，才能统一计数与报错。 */
@@ -409,24 +410,181 @@ async function applyTransitions(repo, rows, { dryRun }) {
  * "它是我的"。这里用「先删 s:ready」当锁——只有删成功的那个赢，另一个收到 404 就换下一个。
  * 这比加 claimed 字段可靠：label 本身就是状态，不存在两份真相。
  */
-async function claimIssue(repo, issue) {
+async function claimIssue(repo, issue, from = "ready", to = "doing") {
   const base = `/repos/${repo.owner}/${repo.repo}/issues/${issue.number}/labels`;
   try {
-    await api(`${base}/${encodeURIComponent("s:ready")}`, { method: "DELETE" });
+    await api(`${base}/${encodeURIComponent(`s:${from}`)}`, { method: "DELETE" });
   } catch (err) {
     if (/^404 /.test(err.message)) return { ok: false, why: "被抢了" };
     throw err;
   }
   try {
-    await api(base, { method: "POST", body: { labels: ["s:doing"] } });
+    await api(base, { method: "POST", body: { labels: [`s:${to}`] } });
   } catch (err) {
     // 锁已拿、状态没写上：最危险的中间态，必须让调用方知道 issue 现在无状态。
     throw new Error(
-      `认领 #${issue.number} 时已移除 s:ready，但没能加上 s:doing。\n` +
-      `  issue 现在无状态，请手工加 s:doing 或 s:blocked。\n  原因：${err.message}`,
+      `认领 #${issue.number} 时已移除 s:${from}，但没能加上 s:${to}。\n` +
+      `  issue 现在无状态，请手工加 s:${to} 或 s:blocked。\n  原因：${err.message}`,
     );
   }
   return { ok: true };
+}
+
+/** 给 issue 加冻结标记。3 轮封顶后必须停下来等人，而不是继续自动派工。 */
+async function addHumanHold(repo, number) {
+  await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}/labels`, {
+    method: "POST",
+    body: { labels: ["hold:human"] },
+  });
+}
+
+/**
+ * 返工认领（role=rework）。
+ *
+ * 为什么单独一个角色：`s:changes` 与 `s:ready` 的派工输入完全不同——
+ * 返工要回到**原 PR 的原分支**，任务书必须引用**最近一条验收 FAIL 评论**，
+ * 而且轮次到顶后不能继续派。把它塞进 engineer 会让"新活"和"返工"抢同一个队列。
+ *
+ * 与 engineer 一样用「先删旧 label」做原子锁：多个协调器同时跑时只有一个能派出去。
+ */
+async function claimRework(repo, candidates, pulls, { json, dryRun }) {
+  const changes = candidates
+    .filter((i) => readState(i).state === "changes" && !readState(i).hold)
+    .sort((a, b) => a.number - b.number);
+
+  const skipped = [];
+  const blocked = [];
+  const viable = [];
+
+  for (const issue of changes) {
+    const pull = findPull(pulls, issue);
+    if (!pull) {
+      skipped.push({
+        number: issue.number,
+        title: issue.title,
+        why: "s:changes 但找不到对应 PR（无法定位原分支；请人工确认分支或改回 s:blocked）",
+      });
+      continue;
+    }
+
+    const comments = await listComments(repo, pull.number);
+    const fail = latestFail(comments);
+    if (!fail) {
+      skipped.push({
+        number: issue.number,
+        title: issue.title,
+        why: `PR #${pull.number} 里没有可解析的验收 FAIL 评论（返工任务书无意见可引用）`,
+      });
+      continue;
+    }
+    const failCount = comments.filter((c) => parseVerdict(c.body)?.verdict === "FAIL").length;
+    const round = Number(fail.round) || failCount || 1;
+
+    if (round >= MAX_ROUNDS) {
+      if (!dryRun) {
+        await replaceState(repo, issue.number, "blocked");
+        await addHumanHold(repo, issue.number);
+      }
+      blocked.push({
+        number: issue.number,
+        title: issue.title,
+        round,
+        pull: pull.number,
+        why: `已打回 ${round} 轮（上限 ${MAX_ROUNDS}），不再自动派返工，转 s:blocked + hold:human`,
+      });
+      continue;
+    }
+
+    const scope = validateScope(issue);
+    if (!scope.ok) {
+      skipped.push({ number: issue.number, title: issue.title, why: scope.why });
+      continue;
+    }
+
+    viable.push({ issue, pull, scope, fail, round });
+  }
+
+  const renderBlocked = () =>
+    blocked.map((b) => `#${b.number} ${b.why}`).join("\n");
+
+  if (dryRun) {
+    const payload = {
+      claimed: null,
+      dryRun: true,
+      wouldClaim: viable.map(({ issue, pull, scope, fail, round }) => ({
+        number: issue.number,
+        title: issue.title,
+        body: issue.body ?? "",
+        ids: scope.ids,
+        pull: pull.number,
+        pullUrl: pull.html_url,
+        branch: pull.head.ref,
+        head: pull.head.sha,
+        round,
+        commentUrl: fail.url,
+        commentBody: fail.body,
+        commentCreatedAt: fail.createdAt,
+      })),
+      wouldBlock: blocked.map(({ number, title, round, why }) => ({ number, title, round, why })),
+      skipped,
+    };
+    if (json) process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    else {
+      for (const w of payload.wouldClaim) {
+        process.stdout.write(
+          `[dry-run] 会派返工 #${w.number}（PR #${w.pull}，原分支 ${w.branch}，round ${w.round}）\n` +
+            `  最近验收评论：${w.commentUrl}\n`,
+        );
+      }
+      for (const b of payload.wouldBlock) process.stdout.write(`[dry-run] 会转 s:blocked + hold:human #${b.number}：${b.why}\n`);
+      for (const s of skipped) process.stdout.write(`✗ 跳过 #${s.number}：${s.why}\n`);
+      if (!payload.wouldClaim.length && !payload.wouldBlock.length && !skipped.length) process.stdout.write("no-work\n");
+    }
+    return 0;
+  }
+
+  for (const { issue, pull, scope, fail, round } of viable) {
+    const res = await claimIssue(repo, issue, "changes", "doing");
+    if (!res.ok) continue;
+    const claimed = {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body ?? "",
+      url: issue.html_url,
+      milestone: issue.milestone?.title ?? null,
+      acc: scope.ids,
+      pull: pull.number,
+      pullUrl: pull.html_url,
+      branch: pull.head.ref,
+      head: pull.head.sha,
+      round,
+      commentUrl: fail.url,
+      commentBody: fail.body,
+      commentCreatedAt: fail.createdAt,
+    };
+    if (json) process.stdout.write(JSON.stringify({ claimed, blocked, skipped }, null, 2) + "\n");
+    else {
+      process.stdout.write(
+        `已认领返工 #${claimed.number}  ${claimed.title}\n` +
+          `PR #${claimed.pull} · 原分支 ${claimed.branch} · head ${claimed.head.slice(0, 7)} · round ${claimed.round}\n` +
+          `最近验收评论：${claimed.commentUrl}\n` +
+          `${claimed.url}\n${"─".repeat(64)}\n${claimed.body}\n`,
+      );
+    }
+    return 0;
+  }
+
+  const payload = {
+    claimed: null,
+    reason: blocked.length ? "blocked" : changes.length ? "all-raced" : "no-work",
+    blocked,
+    skipped,
+  };
+  if (json) process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+  else if (blocked.length) process.stdout.write(renderBlocked() + "\n");
+  else if (skipped.length) process.stdout.write(skipped.map((s) => `✗ 跳过 #${s.number}：${s.why}`).join("\n") + "\n");
+  else process.stdout.write("no-work\n");
+  return 0;
 }
 
 /**
@@ -521,6 +679,10 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
     return 0;
   }
 
+  if (role === "rework") {
+    return claimRework(repo, candidates, pulls, { json, dryRun });
+  }
+
   if (role === "acceptance") {
     const queue = candidates
       .filter((i) => readState(i).state === "review" && !readState(i).hold)
@@ -550,7 +712,7 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
     return 0;
   }
 
-  throw new Error(`未知角色：${role}（只支持 engineer / acceptance）`);
+  throw new Error(`未知角色：${role}（只支持 engineer / acceptance / rework）`);
 }
 
 /**
@@ -648,7 +810,18 @@ function parseVerdict(body) {
 function latestVerdict(comments) {
   for (const c of comments) {
     const v = parseVerdict(c.body);
-    if (v) return { ...v, commentId: c.id, url: c.html_url, createdAt: c.created_at };
+    if (v) return { ...v, commentId: c.id, url: c.html_url, body: c.body ?? "", createdAt: c.created_at };
+  }
+  return null;
+}
+
+/** 最新一条验收 FAIL 评论（返工任务书要引用的就是它）。comments 已按时间倒序。 */
+function latestFail(comments) {
+  for (const c of comments) {
+    const v = parseVerdict(c.body);
+    if (v?.verdict === "FAIL") {
+      return { ...v, commentId: c.id, url: c.html_url, body: c.body ?? "", createdAt: c.created_at };
+    }
   }
   return null;
 }
@@ -984,7 +1157,7 @@ async function main(argv) {
             --verbose 附带原始 label 与链接
 
   claim     自己找活（worker 用，不需要人来派）。
-            --role engineer|acceptance   （必填）
+            --role engineer|acceptance|rework  （必填；rework 只认 s:changes）
             --milestone <标题>           只在该里程碑内找
             --dry-run                    只列出会认领谁、跳过谁，不改状态
             --json                       机器可读
@@ -1009,6 +1182,7 @@ async function main(argv) {
             --dry-run
 
   engineer  抢 s:ready，抢到即改 s:doing；口径不合格（ACC 引用不到）不抢。
+  rework    抢 s:changes，抢到即改 s:doing；附原 PR/分支/最近验收 FAIL 评论，round 到顶转 s:blocked + hold:human。
   acceptance 列出 s:review 且已有 PR 的队列（不抢单；附该 issue 的口径 id 与 head）。
 
 退出码：0 正常（含"没活"）；1 配置/网络/API 出错，或迁移/认领/合并失败。
@@ -1023,7 +1197,7 @@ async function main(argv) {
   if (cmd === "claim") {
     const role = arg("--role");
     if (!role) {
-      process.stderr.write("claim 需要 --role engineer|acceptance\n");
+      process.stderr.write("claim 需要 --role engineer|acceptance|rework\n");
       return 1;
     }
     const repo = resolveRepo();
