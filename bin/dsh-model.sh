@@ -23,12 +23,39 @@ if [ "${1:-}" != "--force" ] && [ -f "$CACHE" ]; then
   if [ "$age" -lt "$TTL" ]; then cat "$CACHE"; exit 0; fi
 fi
 
-# 取密钥：先看环境变量，没有再读 dsh 自己的凭据文件（~/.dsh/.credentials.yaml 的 refs）。
+# 从 ~/.zshrc 的 export 行取密钥。
+# 为什么要读它：automation / launchd 不经登录 shell，环境里没有用户交互终端 export 的
+# 变量，于是"火山明明可用"却被判成不可用，每轮都白降到千问。这里只解析目标变量的
+# 那几行，不 source 整个文件（不执行用户 shell 配置，避免副作用）。
+# 值只在内存里传递，不打印、不写文件。
+key_from_zshrc() {
+  local name="$1" line val
+  [ -r "$HOME/.zshrc" ] || return 0
+  # 同一个变量可能被改过多次，取最后一条赋值。
+  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${name}=" "$HOME/.zshrc" 2>/dev/null | tail -1) || return 0
+  val=${line#*=}
+  # 支持三种写法：KEY="x"、KEY='x'、KEY=x（行尾可带注释）。
+  case "$val" in
+    \"*) val=${val#\"}; val=${val%%\"*} ;;
+    \'*) val=${val#\'}; val=${val%%\'*} ;;
+    *)   val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//') ;;
+  esac
+  # 命令替换/变量引用不能安全求值（也不该在这里 eval 用户的任意命令），当作没有。
+  case "$val" in
+    *'$('*|*'`'*|'$'*) return 0 ;;
+  esac
+  printf '%s' "$val"
+}
+
+# 取密钥：先看环境变量，再看 ~/.zshrc 的 export 行，最后读 dsh 自己的凭据文件。
 # 千问的 key 只存在后者——dsh 能用它，探测脚本也必须能用，否则"备用通道"形同虚设。
 # 只在内存里用，绝不打印。refs 里是 uuid 形状的值说明它指向别处的存储，这里解不开，当作没有。
 get_key() {
   local env="$1" v
   v="${!env:-}"
+  # 只有"变量未设置"才回退读 ~/.zshrc；显式设置为空表示调用方要求不要用它
+  # （验收里用 KEY= 模拟不可用，不能被 zshrc 悄悄兜回来）。
+  if [ -z "${!env+x}" ]; then v=$(key_from_zshrc "$env"); fi
   if [ -z "$v" ] && [ -f "$HOME/.dsh/.credentials.yaml" ]; then
     v=$(sed -n "s/^  $env: *//p" "$HOME/.dsh/.credentials.yaml" | head -1 | tr -d "\"' ")
     case "$v" in *-*-*-*-*) [ "${#v}" -eq 36 ] && v="" ;; esac
