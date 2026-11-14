@@ -44,6 +44,22 @@
 .fact-value.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
 .fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
 .detail-note{margin-top:12px}
+/* 小红书扫码登录（#101）：二维码就在详情面板里，不弹浏览器窗口。
+   [hidden] 必须显式 display:none，否则 .login-box 的 display:flex 会把它顶出来。 */
+.login-box{display:flex;gap:18px;align-items:flex-start;margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper-subtle)}
+.login-box[hidden],.sms-form[hidden],.qr-img[hidden],.qr-wait[hidden],.qr-frame[hidden]{display:none}
+.qr-frame{position:relative;flex:none;width:176px;height:176px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.qr-img{width:168px;height:168px;image-rendering:pixelated}
+.qr-frame.dim .qr-img{opacity:.25}
+.qr-wait{padding:0 12px;color:var(--muted);font-size:13px;line-height:1.5;text-align:center}
+.login-side{flex:1;min-width:0}
+.login-title{font-size:14px;font-weight:650}
+.login-state{margin-top:4px;color:var(--muted);font-size:13px;line-height:1.5}
+.login-state.bad{color:var(--red)}.login-state.ok{color:var(--green)}
+.login-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.login-alt{margin-top:14px;padding-top:10px;border-top:1px solid var(--line-soft);color:var(--muted);font-size:12px}
+.sms-form{margin-top:10px;max-width:420px}
+.sms-form .field-label{display:block;margin-top:8px}
 .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(420px,calc(100vw - 40px));padding:10px 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:13px;line-height:1.5}
 .toast.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red);cursor:pointer}
 
@@ -75,6 +91,9 @@
   .fact{padding-bottom:10px;border-bottom:1px solid var(--line-soft)}.fact:last-child{border-bottom:0;padding-bottom:0}
   .detail-actions{width:100%}.detail-actions .btn{flex:1;min-height:40px}
   .nav .nav-pending{min-height:40px;padding:0}
+  .login-box{flex-direction:column;align-items:stretch}
+  .qr-frame{align-self:center}
+  .login-actions .btn{flex:1;min-height:40px}
 }
 </style>
 </head>
@@ -147,6 +166,39 @@
         <div class="fact"><div class="fact-label">最近发布</div><div class="fact-value mono" id="d-publish"></div><div class="fact-meta" id="d-publish-meta"></div></div>
         <div class="fact"><div class="fact-label">最近采集</div><div class="fact-value mono" id="d-collect"></div><div class="fact-meta" id="d-collect-meta"></div></div>
         <div class="fact" id="d-cmd-fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
+      </div>
+      <div class="login-box" id="d-login" aria-label="小红书扫码登录" hidden>
+        <div class="qr-frame" id="d-qr-frame">
+          <img class="qr-img" id="d-qr-img" alt="小红书登录二维码：用手机小红书扫一扫" hidden>
+          <p class="qr-wait" id="d-qr-wait">正在取二维码…</p>
+        </div>
+        <div class="login-side">
+          <p class="login-title" id="d-login-title">用手机小红书扫码登录</p>
+          <p class="login-state" id="d-qr-state" role="status">正在后台打开登录页，取二维码…</p>
+          <div class="login-actions">
+            <button class="btn" id="d-qr-refresh" type="button">刷新二维码</button>
+            <button class="btn" id="d-qr-cancel" type="button">取消登录</button>
+          </div>
+          <div class="login-alt">
+            扫不了，或被小红书风控拦下？换一种方式：
+            <div class="login-actions">
+              <button class="btn" id="d-alt-sms" type="button">短信验证码登录</button>
+              <button class="btn" id="d-alt-window" type="button">打开登录窗口</button>
+            </div>
+          </div>
+          <form class="sms-form" id="d-sms" hidden>
+            <label class="field-label" for="d-sms-phone">手机号（11 位）</label>
+            <div class="rename-row">
+              <input class="input" id="d-sms-phone" inputmode="numeric" maxlength="11" autocomplete="tel-national">
+              <button class="btn" id="d-sms-send" type="button">发送验证码</button>
+            </div>
+            <label class="field-label" for="d-sms-code">短信验证码</label>
+            <div class="rename-row">
+              <input class="input" id="d-sms-code" inputmode="numeric" maxlength="8" autocomplete="one-time-code">
+              <button class="btn primary" id="d-sms-verify" type="submit">登录</button>
+            </div>
+          </form>
+        </div>
       </div>
       <p class="notice detail-note" id="d-feedback" role="status" hidden></p>
     </section>
@@ -289,6 +341,17 @@
     if(level){
       const platform = VK.platformOf(account)?.platform;
       const bilibili = platform === "bilibili";
+      // 小红书默认扫码：二维码直接显示在详情面板里，不弹浏览器窗口（#101）。
+      if(platform === "xiaohongshu"){
+        return {
+          label: "重新登录",
+          primary: true,
+          qr: true,
+          cmd: "vk account login " + account.id + " --qr",
+          run: () => qrLogin(account.id),
+          feedback: () => ""
+        };
+      }
       return {
         label: "重新登录",
         primary: true,
@@ -448,10 +511,231 @@
     return false;
   }
 
+  /* ------------------------------------------------------------ 小红书扫码登录（#101）
+   * 后台无头 Chrome 取创作平台登录页的二维码（POST login/qr），页面每 2 秒问一次 login/status：
+   *   waiting 等待扫码 · scanned 请在手机上确认 · expired 过期（服务端会自动换新，换不了才停）
+   *   pending 已确认、正在确认登录态已保存 · ok 成功 · failed 风控/页面改版（给备用入口）
+   * ok 之后再跑一次 account.check，只有 check 说 ok 才把页面写成「正常」。
+   * 任何一步失败都写人话并留着备用入口（短信验证码、打开登录窗口），不静默卡住（ACC-account-07）。 */
+  const qr = { accountId: null, token: 0 };
+  const QR_MAX_MS = 10 * 60e3;
+
+  function qrState(message, tone){
+    const el = $("d-qr-state");
+    el.textContent = message;
+    el.className = "login-state" + (tone ? " " + tone : "");
+  }
+
+  function qrImage(src, { dim = false, wait = "" } = {}){
+    const img = $("d-qr-img");
+    if(src && img.getAttribute("src") !== src) img.setAttribute("src", src);
+    img.hidden = !src && !img.getAttribute("src");
+    if(!src && wait){ img.hidden = true; img.removeAttribute("src"); }
+    $("d-qr-wait").hidden = !img.hidden;
+    $("d-qr-wait").textContent = wait || "正在取二维码…";
+    $("d-qr-frame").classList.toggle("dim", dim);
+  }
+
+  function showLoginBox(accountId){
+    qr.accountId = accountId;
+    $("d-login").hidden = false;
+    $("d-sms").hidden = true;
+    $("d-qr-frame").hidden = false;
+    $("d-login-title").textContent = "用手机小红书扫码登录";
+    feedback($("d-feedback"), "", false);
+    reveal($("d-login"), "center");
+  }
+
+  // 作废当前扫码轮询；cancel=true 时顺带让服务端收掉无头登录页。
+  function stopQr(cancel){
+    const accountId = qr.accountId;
+    qr.token += 1;
+    qr.accountId = null;
+    $("d-login").hidden = true;
+    if(cancel && accountId){
+      VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/cancel", { method: "POST", body: { accountId } }).catch(() => {});
+    }
+  }
+
+  // 登录拿到后用 account.check 复核：只有它说 ok 才算完成。
+  async function confirmLogin(accountId, live){
+    qrState("已登录，正在确认账号状态…", "");
+    try{
+      const check = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/check", { method: "POST", body: { accountId } });
+      if(!live()) return false;
+      if(check.state === "ok"){
+        stopQr(false);
+        await VK.ready({ force: true });
+        render();
+        if(selected === accountId) feedback($("d-feedback"), "重新登录完成：登录状态已确认「正常」，页面已更新。", false);
+        toast("重新登录完成：账号已恢复正常");
+        return true;
+      }
+      qrState("登录没完成：" + (check.detail ?? check.state) + "。可以刷新二维码再扫，或换用下面的方式。", "bad");
+    }catch(err){
+      if(!live()) return false;
+      qrState("登录信息已保存，但确认失败：" + err.message + "。可以刷新二维码再扫，或换用下面的方式。", "bad");
+    }
+    return false;
+  }
+
+  async function qrLogin(accountId){
+    const token = ++qr.token;
+    verifyTokens.set(accountId, (verifyTokens.get(accountId) ?? 0) + 1); // 作废可能还在跑的窗口登录轮询
+    const live = () => qr.token === token && selected === accountId;
+    showLoginBox(accountId);
+    qrImage(null, { wait: "正在取二维码…" });
+    qrState("正在后台打开小红书登录页取二维码，约 10–30 秒…（不会弹出浏览器窗口）", "");
+
+    let start;
+    try{
+      start = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/qr", { method: "POST", body: { accountId } });
+    }catch(err){
+      if(!live()) return false;
+      qrImage(null, { wait: "没取到二维码" });
+      qrState("取二维码失败：" + err.message + "。可以点「刷新二维码」再试，或换用下面的方式。", "bad");
+      return false;
+    }
+    if(!live()) return false;
+    if(start.state === "failed"){
+      qrImage(null, { wait: "没取到二维码" });
+      qrState(start.note ?? "取不到二维码。请换用下面的方式登录。", "bad");
+      return false;
+    }
+    if(start.qr){
+      qrImage(start.qr);
+      qrState("用手机小红书「扫一扫」扫这个二维码，再在手机上确认。二维码约 1–2 分钟过期，会自动换新。", "");
+    }else{
+      qrImage(null, { wait: "正在确认…" });
+      qrState(start.note ?? "正在确认登录状态…", "");
+    }
+
+    const deadline = Date.now() + QR_MAX_MS;
+    while(Date.now() < deadline){
+      await wait(2000);
+      if(!live()) return false;
+      let status;
+      try{
+        status = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/status", { method: "POST", body: { accountId } });
+      }catch(err){
+        if(!live()) return false;
+        qrState("读取扫码状态失败：" + err.message + "。点「刷新二维码」重来，或换用下面的方式。", "bad");
+        return false;
+      }
+      if(!live()) return false;
+
+      if(status.state === "ok") return confirmLogin(accountId, live);
+      if(status.state === "waiting"){
+        if(status.qr) qrImage(status.qr);
+        qrState(status.refreshed
+          ? "二维码过期了，已自动换成新的，请重新扫码。"
+          : "等待扫码…用手机小红书「扫一扫」，再在手机上确认。", "");
+        continue;
+      }
+      if(status.state === "scanned"){
+        qrImage(null, { dim: true });
+        qrState("已扫码，请在手机上确认登录。", "ok");
+        continue;
+      }
+      if(status.state === "pending"){
+        qrImage(null, { dim: true });
+        qrState(status.note ?? "已确认，正在保存登录态…", "ok");
+        continue;
+      }
+      if(status.state === "expired"){
+        qrImage(null, { dim: true });
+        qrState(status.note ?? "二维码已过期。点「刷新二维码」换一个新的。", "bad");
+        return false;
+      }
+      // failed（风控 / 页面改版 / 会话断开）与 idle（守护进程重启后会话没了）：说人话，留备用入口。
+      qrImage(null, { wait: "二维码已作废" });
+      qrState(status.note ?? "扫码会话已结束。点「刷新二维码」重来，或换用下面的方式。", "bad");
+      return false;
+    }
+    if(!live()) return false;
+    qrImage(null, { wait: "二维码已作废" });
+    qrState("10 分钟内没有完成扫码。点「刷新二维码」重来，或换用下面的方式。", "bad");
+    return false;
+  }
+
+  // 备用入口一：打开可见的登录窗口（原来的那条路），由 verifyLogin 等结果。
+  async function altWindow(){
+    const accountId = qr.accountId ?? selected;
+    if(!accountId) return;
+    stopQr(false);
+    try{
+      await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/open", { method: "POST", body: { accountId } });
+    }catch(err){
+      feedback($("d-feedback"), "打开登录窗口失败：" + err.message, true);
+      toast("打开登录窗口失败：" + err.message, true);
+      return;
+    }
+    await verifyLogin(accountId);
+  }
+
+  // 备用入口二：短信验证码（创作平台原生的手机号登录）。
+  function altSms(){
+    $("d-sms").hidden = false;
+    // 切到短信就不再轮询二维码：两条登录路抢同一个页面会互相打断。
+    qr.token += 1;
+    qrImage(null, { wait: "已改用短信登录" });
+    $("d-qr-frame").hidden = true;
+    $("d-login-title").textContent = "用短信验证码登录";
+    qrState("填手机号 → 发送验证码 → 填验证码 → 登录。", "");
+    $("d-sms-phone").focus();
+  }
+
+  async function smsSend(){
+    const accountId = qr.accountId;
+    const phone = $("d-sms-phone").value.trim();
+    if(!/^\d{11}$/.test(phone)){ qrState("手机号要填 11 位数字。", "bad"); return; }
+    const button = $("d-sms-send");
+    busy(button, true, "发送验证码");
+    try{
+      const result = await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/start", { method: "POST", body: { accountId, phone } });
+      qrState(result.next ?? "验证码已发送。", "ok");
+      $("d-sms-code").focus();
+    }catch(err){
+      qrState("发送验证码失败：" + err.message + "。也可以点「打开登录窗口」自己登录。", "bad");
+    }finally{
+      busy(button, false, "发送验证码");
+    }
+  }
+
+  async function smsVerify(event){
+    event.preventDefault();
+    const accountId = qr.accountId;
+    const code = $("d-sms-code").value.trim();
+    if(!/^\d{4,8}$/.test(code)){ qrState("验证码是 4–8 位数字。", "bad"); return; }
+    const button = $("d-sms-verify");
+    busy(button, true, "登录");
+    const token = qr.token;
+    try{
+      await VK.request("/api/accounts/" + encodeURIComponent(accountId) + "/login/verify", { method: "POST", body: { accountId, code } });
+      await confirmLogin(accountId, () => qr.token === token && selected === accountId);
+    }catch(err){
+      qrState("短信登录失败：" + err.message, "bad");
+    }finally{
+      busy(button, false, "登录");
+    }
+  }
+
+  $("d-qr-refresh").addEventListener("click", () => { if(qr.accountId || selected) qrLogin(qr.accountId ?? selected); });
+  $("d-qr-cancel").addEventListener("click", () => { stopQr(true); feedback($("d-feedback"), "已取消扫码登录。", false); });
+  $("d-alt-window").addEventListener("click", altWindow);
+  $("d-alt-sms").addEventListener("click", altSms);
+  $("d-sms-send").addEventListener("click", smsSend);
+  $("d-sms").addEventListener("submit", smsVerify);
+
   async function runPrimary(accountId){
     const account = VK.account(accountId);
     if(!account) return;
     const action = primaryOf(account);
+    if(action.qr){
+      // 扫码自己管按钮与反馈：二维码面板就是进度条，不再走「打开窗口 → 等待」那条。
+      qrLogin(accountId);
+      return;
+    }
     const platform = VK.platformOf(account)?.platform;
     // 小红书/B站的登录在页面窗口里完成：点完必须自己轮询确认，不能只弹一句「自动更新」。
     const autoConfirm = action.label === "重新登录" && (platform === "bilibili" || platform === "xiaohongshu");
@@ -490,6 +774,7 @@
       $("detail").hidden = true;
       return;
     }
+    if(qr.accountId && qr.accountId !== accountId) stopQr(true);
     selected = accountId;
     document.querySelectorAll(".slot.connected").forEach((row) => {
       const active = row.dataset.account === accountId;

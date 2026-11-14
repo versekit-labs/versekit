@@ -141,3 +141,109 @@ export async function pageLoggedIn(tab) {
     .eval(`/发布笔记|笔记管理|数据看板|发布图文|发布视频|创作服务/.test(document.body.innerText || '')`)
     .catch(() => false);
 }
+
+// ---------------------------------------------------------------- 扫码登录（#101）
+//
+// 2026-11-14 真机验证：创作服务平台登录卡片右上角有个小图标（64px 的 data:image 图片），
+// 点它切到「APP扫一扫登录」；二维码本身也是 data:image/png 的 <img>（约 160px）。
+// 类名是哈希（css-xxxx），改版就变，所以这里只认「文案 + 图片尺寸 + data: 源」三样东西。
+// 页面状态文案：
+//   · 已扫未确认：「请在手机上确认登录」
+//   · 过期：「二维码已失效，请刷新」+「刷新」按钮（约 1–2 分钟）
+//   · 成功：离开 /login，跳到 /new/home
+
+/** 页面里一次性读出扫码相关的全部信号；字符串形式便于在假页面上测。 */
+const QR_PROBE = `(() => {
+  const text = (document.body && document.body.innerText) || '';
+  const imgs = [...document.querySelectorAll('img')].filter((i) => (i.getAttribute('src') || '').startsWith('data:image'))
+    .map((i) => ({ i, r: i.getBoundingClientRect() })).filter((x) => x.r.width > 0 && x.r.height > 0);
+  const big = imgs.filter((x) => x.r.width >= 100).sort((a, b) => b.r.width - a.r.width)[0];
+  return JSON.stringify({
+    path: location.pathname,
+    qrMode: /扫一扫登录|扫码登录|扫码即同意/.test(text),
+    smsMode: /短信登录|发送验证码/.test(text),
+    qr: big ? big.i.src : null,
+    expired: /二维码已失效|二维码已过期|已失效|已过期/.test(text),
+    scanned: /请在手机上确认|手机上确认登录|扫码成功/.test(text),
+    risk: (text.match(/[^\\n]*(安全验证|滑块|拖动|风险|异常|频繁|稍后再试)[^\\n]*/) || [null])[0],
+  });
+})()`;
+
+export async function qrProbe(tab) {
+  return JSON.parse(await tab.eval(QR_PROBE));
+}
+
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 切到扫码登录。已经是扫码模式就什么都不做；否则点卡片右上角那个小 data:image 图标
+ * （尺寸 40–100px 里最靠右上的一个），再回读确认真的切过去了——只点不回读就会把
+ * 「页面改版、点了没反应」报成成功。
+ */
+export async function switchToQr(tab, { timeout = 8000 } = {}) {
+  let probe = await qrProbe(tab);
+  if (probe.qrMode) return probe;
+  const clicked = await tab.eval(`(() => {
+    const icons = [...document.querySelectorAll('img')].filter((i) => (i.getAttribute('src') || '').startsWith('data:image'))
+      .map((i) => ({ i, r: i.getBoundingClientRect() })).filter((x) => x.r.width >= 24 && x.r.width < 100 && x.r.height > 0);
+    if (!icons.length) return false;
+    icons.sort((a, b) => (b.r.right - b.r.top) - (a.r.right - a.r.top));
+    icons[0].i.click();
+    return true;
+  })()`);
+  if (!clicked) throw new Error("找不到切换到扫码登录的图标，页面可能改版了");
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    await pause(250);
+    probe = await qrProbe(tab);
+    if (probe.qrMode) return probe;
+  }
+  throw new Error("点了扫码图标但没切到「APP扫一扫登录」，页面可能改版了");
+}
+
+/** 等二维码图片出现（切换后是异步渲染的）。返回 data:image/png 源。 */
+export async function readQr(tab, { timeout = 10000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const probe = await qrProbe(tab);
+    if (probe.qr && !probe.expired) return probe.qr;
+    await pause(250);
+  }
+  throw new Error("扫码登录页没有出现二维码，页面可能改版了");
+}
+
+/**
+ * 过期后点「刷新」换新码，并回读：新码必须和旧码不同且不再显示「已失效」，
+ * 否则就是没换成功，不能把旧码当新码给人扫。
+ */
+export async function refreshQr(tab, previous = null, { timeout = 10000 } = {}) {
+  const clicked = await tab.eval(`(() => {
+    const leaves = [...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && /^(刷新|点击刷新|刷新二维码)$/.test((e.innerText || '').trim()));
+    const el = leaves.find((e) => e.getBoundingClientRect().width > 0) || leaves[0];
+    if (!el) return false;
+    (el.closest('button,[role=button]') || el).click();
+    return true;
+  })()`);
+  if (!clicked) throw new Error("二维码已失效，但找不到「刷新」按钮，页面可能改版了");
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    await pause(300);
+    const probe = await qrProbe(tab);
+    if (probe.qr && !probe.expired && probe.qr !== previous) return probe.qr;
+  }
+  throw new Error("点了「刷新」但二维码没有换新");
+}
+
+/**
+ * 一次轮询：把页面状态归成五种之一。成功只看「离开了 /login」这一条页面信号，
+ * 真正的「已登录」由调用方再用 pageLoggedIn + 持久 cookie 确认。
+ *   ok · waiting · scanned · expired · failed
+ */
+export function qrStateOf(probe) {
+  if (probe.path && !/\/login/.test(probe.path)) return "ok";
+  if (probe.risk) return "failed";
+  if (probe.expired) return "expired";
+  if (probe.scanned) return "scanned";
+  if (probe.qrMode && probe.qr) return "waiting";
+  return "failed";
+}
