@@ -12,7 +12,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { paths } from "../../core/src/index.mjs";
-import { hasLiveBrowser, openAccount } from "../../driver-browser/src/index.mjs";
+import { closeLoginWindow, hasLiveBrowser, openAccount } from "../../driver-browser/src/index.mjs";
 
 export const LOGIN_URL = "https://passport.bilibili.com/login";
 
@@ -270,5 +270,7 @@ async function readAndExchange({ accountId, credentialRef }) {
   const result = { state: "ok", mode: "browser-qrcode", credentialRef: file, note };
   const live = sessions.get(accountId);
   if (live) live.completed = result;
+  // cookie 已换成凭证文件，登录窗口没用了：几秒后收掉，别一直占屏幕和内存（#91）。
+  closeLoginWindow(accountId).catch(() => {});
   return result;
 }
