@@ -1243,16 +1243,39 @@ dispatch_acceptance() {
   queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
     log "  ✗ acceptance: 取队列失败"; return 1
   }
-  local num pull head acc title
-  num=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["number"] if q else "")' 2>/dev/null || true)
+  # 队列里可能有多条。旧实现只看 queue[0]：队首有锁（已验过这个 head，或被协调器暂停）
+  # 就整队停派，后面的 PR 永远等不到验收。现在逐条找第一个没锁的。
+  local num="" pull="" head="" acc="" title="" total=0 skipped=0
+  while IFS=$'\t' read -r q_num q_pull q_head q_acc q_title; do
+    [ -n "$q_num" ] || continue
+    total=$((total + 1))
+    if [ -d "$LOCK_DIR/accept-$q_num-${q_head:0:8}.lock" ]; then
+      skipped=$((skipped + 1))
+      log "  · 验收 #$q_num @${q_head:0:7} 已派过（锁存在），看下一条"
+      continue
+    fi
+    num="$q_num"; pull="$q_pull"; head="$q_head"; acc="$q_acc"; title="$q_title"
+    break
+  done < <(printf '%s' "$queue" | python3 -c '
+import json,sys
+for q in (json.load(sys.stdin).get("queue") or []):
+    print("\t".join([str(q.get("number") or ""), str(q.get("pull") or ""), str(q.get("head") or ""), ", ".join(q.get("acc") or []), str(q.get("title") or "").replace("\t"," ")]))
+' 2>/dev/null || true)
   if [ -z "$num" ]; then
-    log "  · acceptance: 没有待验收的"
+    if [ "$total" -eq 0 ]; then log "  · acceptance: 没有待验收的"; else log "  · acceptance: 队列 ${total} 条都已派过，等结果"; fi
     return 0
   fi
-  pull=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["pull"] or "")' 2>/dev/null || true)
-  head=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0].get("head") or "")' 2>/dev/null || true)
-  acc=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(", ".join(q[0].get("acc") or []))' 2>/dev/null || true)
-  title=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["title"])' 2>/dev/null || true)
+
+  # 验收共用一个终端：上一单还没结算就不派下一单（否则 worker-start 会被拒）。
+  local prev rc_prev=0
+  prev=$(cat "$STATE_DIR/acceptance.dispatch" 2>/dev/null || true)
+  if [ -n "$prev" ]; then
+    worker_settled "$prev" || rc_prev=$?
+    if [ "$rc_prev" -eq 1 ]; then
+      log "  · 验收终端还在跑上一单（dispatch ${prev}），#$num 等下一轮"
+      return 0
+    fi
+  fi
 
   if [ "$DRY" = "1" ]; then
     if choose_worker_channel acceptance "" "" 1; then
@@ -1266,7 +1289,7 @@ dispatch_acceptance() {
   # 锁按 issue + head_sha：打回后同一 issue 的新 head 能立刻复审，不会被 TTL 误伤。
   local lock="$LOCK_DIR/accept-$num-${head:0:8}.lock"
   if ! mkdir "$lock" 2>/dev/null; then
-    log "  · 验收 #$num @${head:0:7} 已在跑（锁存在），跳过"
+    log "  · 验收 #$num @${head:0:7} 刚被别的进程派走，跳过"
     return 0
   fi
 
@@ -1288,7 +1311,7 @@ dispatch_acceptance() {
   fi
 
   local spec
-  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 口径里写明要真机/真实账号执行的条目，必须自己实际执行并留下自己的证据；不得只读实现方证据包就下结论。因为账号未登录、外部服务不可用等环境原因做不了时，不要判 FAIL：发 escalation 说明卡在哪，由协调器处理\n9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid
@@ -1307,6 +1330,7 @@ dispatch_acceptance() {
     return 1
   fi
   record_dispatch "$START_DISPATCH" "$num" "acceptance" "$pull"
+  printf '%s\n' "$START_DISPATCH" > "$STATE_DIR/acceptance.dispatch"
   log "    ✓ 已派验收 task=$taskid dispatch=$START_DISPATCH"
   return 0
 }
