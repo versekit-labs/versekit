@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit } from "./index.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
-import { assetKindOf, ASSET_KIND_LABEL } from "./asset-kind.mjs";
+import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -38,15 +38,35 @@ const platformLabel = (platform) =>
   overview.MATRIX_COLUMNS.find((column) => column.platform === platform || column.aliases.includes(platform))?.label ?? platform;
 
 /**
- * 素材类型 × 平台能力的创建前校验（ACC-publish-04）。
+ * 素材类型 × 平台能力的创建前校验（ACC-publish-04、ACC-publish-06）。
  *
  * 放在写 work / publish 之前：图片素材发小红书时，用户拿到的是一句能照做的话，而不是一条
  * 8 分钟后仍然 auto_running 的发布。只拦适配器**明确声明过**的能力（capabilities.assetTypes）；
  * 没声明的旧适配器照旧交给它自己判断，不在这里猜。
+ *
+ * 多图的模型口径：一个作品只有一个 asset 字段，**目录就是图集**（目录里按文件名自然排序的
+ * 1–18 张图片）。所以「同一个作品里图片与视频混选」在数据层面就是目录里混装了两种文件——
+ * 在创建 publish 之前拦下，不把混装目录交给适配器去发现。
  */
 function assertAssetSupported(asset, platforms, byPlatform) {
-  const kind = assetKindOf(asset);
-  if (!kind) return;
+  const set = assetSetOf(asset);
+  if (!set.files.length) {
+    fail(`素材目录是空的：${asset}（图集是一个目录里放 1–${MAX_IMAGE_NOTE} 张图片，按文件名顺序上传）`);
+  }
+  if (set.mixed) {
+    fail(
+      `同一个作品不能把图片和视频混在一起：「${basename(asset)}」里同时有图片和视频（共 ${set.files.length} 个文件）。` +
+        `图文发一组图片，视频发一个文件——请拆成两个作品再发（这条没有创建）`,
+    );
+  }
+  if (set.kind === "video" && set.files.length > 1) {
+    fail(`视频作品只能放一个视频文件：「${basename(asset)}」里有 ${set.files.length} 个文件（这条没有创建）`);
+  }
+  if (set.kind === "image" && set.files.length > MAX_IMAGE_NOTE) {
+    fail(`图集最多 ${MAX_IMAGE_NOTE} 张图片，现在是 ${set.files.length} 张：删掉多余的再发（这条没有创建）`);
+  }
+  const kind = set.kind;
+  if (!kind) return; // 判不出来（未知扩展名）：交给适配器在 dry-run / 上传时给判断
   const refused = platforms
     .map((platform) => ({ platform, types: byPlatform.get(platform)?.assetTypes }))
     .filter(({ types }) => Array.isArray(types) && !types.includes(kind));
@@ -173,7 +193,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags, group }) => {
       const platforms = platformList(to);
-      if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
+      if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，可以是视频文件或图片目录）`);
 
       // 默认作用域是 group.use 记录的当前组：发布台打开时看到的是哪一组，就只发哪一组。
       // 没选组（首次使用、旧数据）才退回「全部账号」，与引入账号组之前一致。

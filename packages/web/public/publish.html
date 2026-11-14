@@ -73,7 +73,9 @@
           <div class="panel-head"><h2>素材</h2><span class="hint">本机文件，上传后只在本地</span></div>
           <div class="pad">
             <div class="file">
-              <input class="input" id="asset" type="file" accept="video/*,image/*" aria-label="选择素材文件">
+              <input class="input" id="asset" type="file" multiple accept="video/*,image/*" aria-label="选择素材文件（图片可多选，按选择顺序发出）">
+              <label class="btn" for="asset-dir" style="cursor:pointer">选文件夹（图集）</label>
+              <input id="asset-dir" type="file" webkitdirectory hidden aria-label="选择图片文件夹，按文件名顺序发出">
               <span class="file-name" id="asset-name">还没有选择文件</span>
             </div>
             <p class="warn-note" id="asset-warn" hidden style="margin:8px 0 0"></p>
@@ -150,6 +152,8 @@
   let selected = new Set();
   let assetPath = null;
   let assetName = "";
+  let assetMixed = false;
+  let assetOver = false;
   let assetKind = null; // video / image / null（判不出来就不本地拦，交给服务端）
   let dryResult = null;
   /* 平台声明的素材能力（/api/platforms 的 assetTypes）。null = 适配器没声明，不限制。 */
@@ -180,6 +184,8 @@
   }
 
   function assetWarning(){
+    if(assetMixed) return "同一个作品不能图片和视频混着发：只留图片（做图文），或只留一个视频。这条不会创建发布。";
+    if(assetOver) return $("asset-name").textContent + "。这条不会创建发布。";
     const bad = mismatched();
     if(!bad.length) return "";
     const label = KIND_LABEL[assetKind];
@@ -297,27 +303,67 @@
     }
   }
 
-  $("asset").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if(!file) return;
-    assetName = file.name;
-    assetKind = kindOf(file.name);
-    $("asset-name").textContent = "正在上传 " + file.name + " …";
+  const MAX_IMAGES = 18;
+  const NAME_ORDER = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+
+  /** 上传一批文件：单个走老路径；多个同属一个批次，守护进程返回的 path 是图集目录。 */
+  async function uploadAssets(files, label){
+    assetKind = null; assetPath = null; assetName = label;
+    const kinds = new Set(files.map(f => kindOf(f.name)).filter(Boolean));
+    assetMixed = kinds.size > 1;
+    assetKind = kinds.size === 1 ? [...kinds][0] : null;
+    if(assetMixed){
+      $("asset-name").textContent = "同时选了图片和视频，一个作品只能是其中一种";
+      dryResult = null; updateCount(); return;
+    }
+    if(assetKind === "image" && files.length > MAX_IMAGES){
+      $("asset-name").textContent = "图片最多 " + MAX_IMAGES + " 张，选了 " + files.length + " 张";
+      assetOver = true; dryResult = null; updateCount(); return;
+    }
+    assetOver = false;
+    if(assetKind === "video" && files.length > 1){
+      $("asset-name").textContent = "视频一次只能选一个，选了 " + files.length + " 个";
+      assetOver = true; dryResult = null; updateCount(); return;
+    }
+    $("asset-name").textContent = "正在上传 " + label + " …";
     try{
-      const res = await fetch("/api/assets", {
-        method: "POST",
-        headers: { "x-vk-filename": encodeURIComponent(file.name) },
-        body: file,
-      });
-      const data = await res.json();
-      if(!res.ok || data.ok === false) throw new Error(data.error?.message ?? ("HTTP " + res.status));
-      assetPath = data.path;
-      $("asset-name").textContent = file.name + " · 已就绪";
+      const batch = files.length > 1 ? Date.now().toString(36) + Math.random().toString(36).slice(2, 8) : null;
+      let path = null;
+      for(let i = 0; i < files.length; i++){
+        const headers = { "x-vk-filename": encodeURIComponent(files[i].name) };
+        if(batch){ headers["x-vk-batch"] = batch; headers["x-vk-index"] = String(i + 1); }
+        const res = await fetch("/api/assets", { method: "POST", headers, body: files[i] });
+        const data = await res.json();
+        if(!res.ok || data.ok === false) throw new Error(data.error?.message ?? ("HTTP " + res.status));
+        path = data.path;
+      }
+      assetPath = path;
+      $("asset-name").textContent = label + " · 已就绪";
     }catch(err){
       assetPath = null;
       $("asset-name").textContent = "上传失败：" + err.message;
     }
     dryResult = null; updateCount();
+  }
+
+  $("asset").addEventListener("change", async (e) => {
+    const files = [...(e.target.files ?? [])];
+    if(!files.length) return;
+    // 多选保持用户选择顺序之外的兜底：浏览器给的顺序就是发出顺序。
+    await uploadAssets(files, files.length === 1 ? files[0].name : files.length + " 个文件（" + files[0].name + " 起）");
+  });
+
+  $("asset-dir").addEventListener("change", async (e) => {
+    const all = [...(e.target.files ?? [])];
+    const files = all.filter(f => kindOf(f.name) && !f.name.startsWith("."))
+      .sort((a, b) => NAME_ORDER.compare(a.name, b.name));
+    if(!files.length){
+      assetPath = null; assetKind = null; assetMixed = false; assetOver = false;
+      $("asset-name").textContent = all.length ? "这个文件夹里没有图片或视频" : "还没有选择文件";
+      updateCount(); return;
+    }
+    const dirName = (all[0].webkitRelativePath || "").split("/")[0] || "文件夹";
+    await uploadAssets(files, dirName + "/（" + files.length + " 个，按文件名顺序）");
   });
 
   function payload(dryRun){
@@ -341,7 +387,7 @@
     if(!assetPath){ $("preview").innerHTML = '<li>先选一个素材文件。</li>'; return; }
     if(!selected.size){ $("preview").innerHTML = '<li>至少勾一个账号。</li>'; return; }
     // 发布按钮已经灰了；这里再挡一次，保证「提示过就绝不下单」（ACC-publish-04）。
-    if(!dryRun && mismatched().length){
+    if(!dryRun && assetWarning()){
       $("preview").innerHTML = '<li><b>没有创建：</b>' + assetWarning() + '</li>';
       return;
     }
