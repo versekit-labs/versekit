@@ -15,6 +15,7 @@ import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
+import { checkAccount } from "./adapters.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -61,8 +62,116 @@ function assertAssetSupported(asset, platforms, byPlatform) {
   fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或从 --to 里去掉 ${excluded}（这条没有创建）`);
 }
 
+/** 「正常」只在最近 24 小时内真实检查过才成立；更久没查就是「待确认」（ACC-account-09）。 */
+export const CHECK_STALE_AFTER_MS = 24 * 3600e3;
+
+/**
+ * 给账号视图补「上次检查时间」和对人展示的状态。
+ * 只改 ok：expired/banned/expiring 本来就是明确的坏消息，不能被「待确认」盖住。
+ */
+export function withCheckStatus(account, now = Date.now()) {
+  const lastCheckedAt = account.last_checked_at ?? null;
+  const stale = account.state === "ok" && (lastCheckedAt == null || now - lastCheckedAt > CHECK_STALE_AFTER_MS);
+  return {
+    ...account,
+    lastCheckedAt,
+    checkStaleAfterMs: CHECK_STALE_AFTER_MS,
+    displayState: stale ? "unconfirmed" : account.state,
+    displayStateLabel: stale ? "待确认" : null,
+    ...(stale ? { checkHint: `超过 24 小时没有检查登录：vk account check ${account.id}` } : {}),
+  };
+}
+
 export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
+
+  /** 创建发布的本地校验：不写任何行、不碰网络。 */
+  function planPublish({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags, group }) {
+    const platforms = platformList(to);
+      if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
+
+      // 默认作用域是 group.use 记录的当前组：发布台打开时看到的是哪一组，就只发哪一组。
+      // 没选组（首次使用、旧数据）才退回「全部账号」，与引入账号组之前一致。
+      const selectedGroup = group ? requireGroup(group) : store.currentGroup();
+      const groupId = selectedGroup?.id ?? null;
+      const scope = selectedGroup ? `账号组「${selectedGroup.name}」里` : "";
+
+      // account.add 在 #21 起要求必填 --group，所以缺号提示也带上组名；没有当前组时退回通用提示。
+      const { accounts, missing, unusable, blocked } = store.accountsForPlatforms(platforms, { groupId });
+      if (missing.length) {
+        fail(`${scope}没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号${selectedGroup ? ` --group ${selectedGroup.name}` : " --group <组>"}`);
+      }
+      // 已失效的账号不可选，而且必须说清为什么：静默跳过等于「以为发了，其实没发」。
+      // 只有「这个平台一个可用号都没有」才拦下整单；同平台还有可用号时，失效号只是不选它。
+      if (blocked.length) {
+        const reasons = unusable.filter((u) => blocked.includes(u.platform)).map((u) => u.reason);
+        fail(`这些账号已失效，不能选：${reasons.join("；")}。换可用账号，或从 --to 里去掉这些平台`);
+      }
+      const noAdapter = platforms.filter((p) => !byPlatform.has(p));
+      if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
+
+      // 素材类型 × 平台能力在写任何行之前就拦下（ACC-publish-04）；dry-run 同样适用——
+      // 预演的意义就是提前看到「这条真发会怎样」。
+      assertAssetSupported(asset, platforms, byPlatform);
+
+      // 快失效的仍然可选，但提前告诉人：不是阻塞，不应该等到发布当天才在任务页发现。
+      const warnings = accounts
+        .filter((a) => a.state === "expiring")
+        .map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, state: a.state, reason: `${a.platform} ${store.handleLabel(a.handle)} 登录即将失效：发布前确认或重登` }));
+
+      const planned = accounts.map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, visibility }));
+      const workTitle = title ?? titleOf(asset);
+      const base = { group: selectedGroup ? { id: selectedGroup.id, name: selectedGroup.name } : null, ...(warnings.length ? { warnings } : {}) };
+
+      // Dry-run answers "what would happen" without writing rows or touching a network.
+      if (dryRun) {
+        return { accounts, result: { ...base, dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false } };
+      }
+
+    const commit = (extra) => {
+      // 正文/话题是平台相关的素材（小红书用），放进 work.meta，不塞进 publish 的通用列。
+      const meta = body || tags?.length ? { ...(body ? { body } : {}), ...(tags?.length ? { tags } : {}) } : null;
+      const work = store.createWork({ title: workTitle, assetPath: asset, meta });
+      const created = [];
+      for (const account of accounts) {
+        const { id } = store.createPublish({
+          workId: work.id,
+          accountId: account.id,
+          visibility,
+          scheduledAt: schedule ?? null,
+        });
+        created.push({ publishId: id, platform: account.platform, handle: account.handle });
+      }
+      log(`[handlers] 创建 ${created.length} 条发布：${created.map((c) => c.platform).join(", ")}`);
+      return { ...base, ...(extra ?? {}), workId: work.id, publishes: created };
+    };
+    return { accounts, commit };
+  }
+
+  /**
+   * 发布前对目标账号做一次真实检查（ACC-account-09）：掉线就在创建阶段拦下，
+   * 不要等到执行时才失败。check() 自己出错（网络、浏览器没起）不等于掉线，放行但说明没确认。
+   */
+  async function verifyLogins(accounts) {
+    const unconfirmed = [];
+    for (const account of accounts) {
+      try {
+        await checkAccount(adapters, account.id);
+      } catch (err) {
+        if (err?.code !== "auth") {
+          unconfirmed.push({ platform: account.platform, accountId: account.id, handle: account.handle, reason: `${account.platform} ${store.handleLabel(account.handle)} 发布前检查没能完成（${String(err?.message ?? err).slice(0, 120)}），登录状态未确认` });
+        }
+      }
+    }
+    const dead = accounts
+      .map((a) => store.getAccount(a.id))
+      .filter((a) => a && store.UNUSABLE_ACCOUNT_STATES.includes(a.state));
+    if (dead.length) {
+      const reasons = dead.map((a) => store.accountUnusableReason(a));
+      fail(`发布前检查发现账号已掉线，不能发布：${reasons.join("；")}。请先重新登录（vk account reauth <id>），这条没有创建`);
+    }
+    return unconfirmed.length ? { unconfirmed } : {};
+  }
 
   return {
     now: () => ({ ...store.statusSnapshot() }),
@@ -71,9 +180,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "account.list": ({ group } = {}) => {
       // 账号页与总览新鲜度面板共用 overview.listAccountViews 的同一份对象（ACC-overview-02）。
-      if (!group) return { accounts: overview.listAccountViews() };
+      const stamp = (list) => list.map((a) => withCheckStatus(a));
+      if (!group) return { accounts: stamp(overview.listAccountViews()) };
       const g = requireGroup(group);
-      const accounts = overview.listAccountViews({ groupId: g.id });
+      const accounts = stamp(overview.listAccountViews({ groupId: g.id }));
       // 添加账号页据此灰掉已接入平台并写出「被谁占用」；同组同平台唯一，所以一个平台最多一人。
       const occupants = Object.fromEntries(
         accounts.map((a) => [a.platform, { accountId: a.id, handle: a.handle, name: a.display_name ?? a.handle }]),
@@ -171,63 +281,16 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
     },
 
-    "publish.create": ({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags, group }) => {
-      const platforms = platformList(to);
-      if (!existsSync(asset)) fail(`找不到素材：${asset}（路径要在本机，且是文件）`);
-
-      // 默认作用域是 group.use 记录的当前组：发布台打开时看到的是哪一组，就只发哪一组。
-      // 没选组（首次使用、旧数据）才退回「全部账号」，与引入账号组之前一致。
-      const selectedGroup = group ? requireGroup(group) : store.currentGroup();
-      const groupId = selectedGroup?.id ?? null;
-      const scope = selectedGroup ? `账号组「${selectedGroup.name}」里` : "";
-
-      // account.add 在 #21 起要求必填 --group，所以缺号提示也带上组名；没有当前组时退回通用提示。
-      const { accounts, missing, unusable, blocked } = store.accountsForPlatforms(platforms, { groupId });
-      if (missing.length) {
-        fail(`${scope}没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号${selectedGroup ? ` --group ${selectedGroup.name}` : " --group <组>"}`);
-      }
-      // 已失效的账号不可选，而且必须说清为什么：静默跳过等于「以为发了，其实没发」。
-      // 只有「这个平台一个可用号都没有」才拦下整单；同平台还有可用号时，失效号只是不选它。
-      if (blocked.length) {
-        const reasons = unusable.filter((u) => blocked.includes(u.platform)).map((u) => u.reason);
-        fail(`这些账号已失效，不能选：${reasons.join("；")}。换可用账号，或从 --to 里去掉这些平台`);
-      }
-      const noAdapter = platforms.filter((p) => !byPlatform.has(p));
-      if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
-
-      // 素材类型 × 平台能力在写任何行之前就拦下（ACC-publish-04）；dry-run 同样适用——
-      // 预演的意义就是提前看到「这条真发会怎样」。
-      assertAssetSupported(asset, platforms, byPlatform);
-
-      // 快失效的仍然可选，但提前告诉人：不是阻塞，不应该等到发布当天才在任务页发现。
-      const warnings = accounts
-        .filter((a) => a.state === "expiring")
-        .map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, state: a.state, reason: `${a.platform} ${store.handleLabel(a.handle)} 登录即将失效：发布前确认或重登` }));
-
-      const planned = accounts.map((a) => ({ platform: a.platform, accountId: a.id, handle: a.handle, visibility }));
-      const workTitle = title ?? titleOf(asset);
-      const base = { group: selectedGroup ? { id: selectedGroup.id, name: selectedGroup.name } : null, ...(warnings.length ? { warnings } : {}) };
-
-      // Dry-run answers "what would happen" without writing rows or touching a network.
-      if (dryRun) {
-        return { ...base, dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false };
-      }
-
-      // 正文/话题是平台相关的素材（小红书用），放进 work.meta，不塞进 publish 的通用列。
-      const meta = body || tags?.length ? { ...(body ? { body } : {}), ...(tags?.length ? { tags } : {}) } : null;
-      const work = store.createWork({ title: workTitle, assetPath: asset, meta });
-      const created = [];
-      for (const account of accounts) {
-        const { id } = store.createPublish({
-          workId: work.id,
-          accountId: account.id,
-          visibility,
-          scheduledAt: schedule ?? null,
-        });
-        created.push({ publishId: id, platform: account.platform, handle: account.handle });
-      }
-      log(`[handlers] 创建 ${created.length} 条发布：${created.map((c) => c.platform).join(", ")}`);
-      return { ...base, workId: work.id, publishes: created };
+    /**
+     * 创建发布：先做全部本地校验，再（有 check() 的账号）真实检查一次登录，最后才写行。
+     * 没有任何适配器带 check() 时保持同步返回；否则返回 Promise（daemon / CLI 都会 await）。
+     */
+    "publish.create": (args) => {
+      const plan = planPublish(args);
+      if (plan.result) return plan.result;
+      const checkable = plan.accounts.filter((a) => typeof byPlatform.get(a.platform)?.adapter?.check === "function");
+      if (!checkable.length) return plan.commit();
+      return verifyLogins(checkable).then((extra) => plan.commit(extra));
     },
 
     "approval.link": ({ publishId }) => {
