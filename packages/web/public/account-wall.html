@@ -167,8 +167,10 @@
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const two = (n) => String(n).padStart(2, "0");
-  /* 状态文案只认 /api/accounts 的 state 字段，页面不再按采集新鲜度或到期时间自己推断。
-   * 这正是一致性口径（ACC-account-04）：接口 state=ok 时页面只能显示「正常」。 */
+  /* 状态文案只认账号的 state 与 last_checked_at，页面不再按采集新鲜度或到期时间自己推断。
+   * 「正常」只是上次检查的结果（ACC-account-09）：state=ok 但超过 24 小时没检查（或从未检查）
+   * 一律显示「待确认」，与 /api/accounts 的 displayState 同一口径；服务端带了 displayState 就用它。 */
+  const CHECK_STALE_MS = 24 * 3600e3;
   const STATE_LEVEL = { expiring: "warn", expired: "bad", banned: "bad" };
   const STATE_TEXT = { ok: "正常", manual: "仅手动", expiring: "即将过期", expired: "已失效", banned: "已封禁" };
   const PUBLISH_STATES = {
@@ -228,8 +230,22 @@
     return account ? (STATE_LEVEL[account.state] ?? "") : "";
   }
 
+  function unconfirmed(account){
+    if(!account || account.state !== "ok") return false;
+    if(account.displayState) return account.displayState === "unconfirmed";
+    const at = Number(account.lastCheckedAt ?? account.last_checked_at);
+    return !Number.isFinite(at) || at <= 0 || Date.now() - at > CHECK_STALE_MS;
+  }
+
+  function checkedText(account){
+    const at = Number(account?.lastCheckedAt ?? account?.last_checked_at);
+    if(!Number.isFinite(at) || at <= 0) return "从未检查";
+    return "上次检查 " + timeAgo(at);
+  }
+
   function statusText(account){
     if(!account) return "";
+    if(unconfirmed(account)) return "待确认";
     return STATE_TEXT[account.state] ?? String(account.state);
   }
 
@@ -238,13 +254,14 @@
     const level = levelOf(account);
     const text = esc(statusText(account));
     if(level) return '<span class="badge ' + level + '">' + text + "</span>";
-    if(account.state === "ok") return '<span class="status-ok"><i></i>' + text + "</span>";
+    if(account.state === "ok" && !unconfirmed(account)) return '<span class="status-ok"><i></i>' + text + "</span>";
     return '<span class="badge mute">' + text + "</span>";
   }
 
   function statusSub(account, level){
     if(level === "bad") return "发布与采集已暂停";
     if(level === "warn") return "建议提前续期";
+    if(unconfirmed(account)) return "登录状态待确认";
     return account.is_manual || account.state === "manual" ? "仅手动发布" : "运行中";
   }
 
@@ -262,7 +279,8 @@
       }
       return text + " · 到期将自动暂停发布与采集";
     }
-    return text + (account.is_manual || account.state === "manual" ? " · 仅手动发布" : " · 发布与采集运行中");
+    if(unconfirmed(account)) return text + " · " + checkedText(account) + " · 超过 24 小时没检查，发布前会再查一次";
+    return text + " · " + checkedText(account) + (account.is_manual || account.state === "manual" ? " · 仅手动发布" : " · 发布与采集运行中");
   }
 
   function publishCell(account){
@@ -299,6 +317,18 @@
         feedback: (result) => bilibili || platform === "xiaohongshu"
           ? "登录窗口已打开：完成登录后页面会自动确认；没确认成功不会显示「已完成」。"
           : (result?.next ?? "登录窗口已打开，按提示完成。")
+      };
+    }
+    if(unconfirmed(account)){
+      return {
+        label: "立即检查",
+        primary: true,
+        cmd: "vk account check " + account.id,
+        run: () => VK.request("/api/accounts/" + encodeURIComponent(account.id) + "/check", { method: "POST", body: { accountId: account.id } })
+          .then(async (result) => { await VK.ready({ force: true }); return result; }),
+        feedback: (result) => result?.state === "ok"
+          ? "检查完成：登录状态正常"
+          : "检查结果：" + (result?.detail ?? result?.state ?? "未知") + "。需要的话点「重新登录」。"
       };
     }
     const mode = account.is_manual ? "auto" : "manual";
@@ -591,11 +621,11 @@
         row.setAttribute("role", "button");
         row.dataset.account = account.id;
         row.setAttribute("aria-current", selected === account.id ? "true" : "false");
-        row.setAttribute("aria-label", column.label + " · " + shownName + " · " + statusText(account));
+        row.setAttribute("aria-label", column.label + " · " + shownName + " · " + statusText(account) + " · " + checkedText(account));
         row.innerHTML =
           '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#' + esc(column.logo) + '"/></svg>' +
             '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>' +
-          '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span></div>' +
+          '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span><div class="slot-m checkm"></div></div>' +
           '<div class="slot-col"><span class="slot-k">最近发布</span><div class="slot-v pub"></div><div class="slot-m pubm"></div></div>' +
           '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>' +
           '<div class="slot-act"></div>';
@@ -604,6 +634,7 @@
         row.querySelector(".slot-name").title = accountTitle(account, column);
         row.querySelector(".slot-sub").textContent = column.label + " · " + statusSub(account, level);
         row.querySelector(".slot-status").innerHTML = statusHtml(account);
+        row.querySelector(".checkm").textContent = checkedText(account);
 
         const publish = publishCell(account);
         const collect = collectCell(account);
@@ -614,12 +645,12 @@
 
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "btn sm" + (level ? " primary" : "");
-        button.textContent = level ? "重新登录" : "详情";
+        button.className = "btn sm" + (level || unconfirmed(account) ? " primary" : "");
+        button.textContent = level ? "重新登录" : unconfirmed(account) ? "立即检查" : "详情";
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           select(account.id, true);
-          if(level) runPrimary(account.id);
+          if(level || unconfirmed(account)) runPrimary(account.id);
         });
         row.querySelector(".slot-act").appendChild(button);
 
@@ -671,7 +702,7 @@
     todos.innerHTML = "";
     const need = accounts
       .map((account) => ({ account, level: levelOf(account), column: VK.platformOf(account) }))
-      .filter((item) => item.level);
+      .filter((item) => item.level || unconfirmed(item.account));
 
     if(need.length){
       const strong = document.createElement("strong");
@@ -681,7 +712,7 @@
         const button = document.createElement("button");
         button.type = "button";
         button.className = "todo-link";
-        button.textContent = (column?.label ?? account.platform) + (level === "bad" ? "重登" : "续期");
+        button.textContent = (column?.label ?? account.platform) + (level === "bad" ? "重登" : level === "warn" ? "续期" : "检查");
         button.addEventListener("click", () => {
           select(account.id, true);
           runPrimary(account.id);
@@ -707,6 +738,7 @@
     const connected = slots.map((slot) => slot.account).filter(Boolean);
     const bad = connected.filter((a) => levelOf(a) === "bad").length;
     const warn = connected.filter((a) => levelOf(a) === "warn").length;
+    const pending = connected.filter(unconfirmed).length;
 
     // 注意别叫 select：页面里 select(id) 是「选中某个账号」的函数，同名会把它覆盖掉。
     const groupSelect = $("group-select");
@@ -721,7 +753,8 @@
     else {
       if(bad) parts.push(bad + " 个登录异常");
       if(warn) parts.push(warn + " 个即将过期");
-      if(!bad && !warn) parts.push("登录正常");
+      if(pending) parts.push(pending + " 个待确认");
+      if(!bad && !warn && !pending) parts.push("登录正常");
     }
     $("sub").textContent = parts.join(" · ");
 
