@@ -39,6 +39,14 @@ export const ERROR_CODES = {
     human: "页面没按预期走，可能改版了",
     action: "retry_or_draft",
   },
+  result_unconfirmed: {
+    // 已点「发布」但判不出结果：帖子可能已经发出。绝不能重试或转草稿（会重复发帖，ACC-publish-09），
+    // 停在待人工确认，由人去笔记管理核对后再决定。
+    retryable: false,
+    publishState: "notify_pending",
+    human: "已点击发布、未确认结果，请到笔记管理核对",
+    action: "verify_manually",
+  },
   asset_invalid: {
     retryable: false,
     publishState: "failed",
