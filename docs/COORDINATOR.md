@@ -125,6 +125,21 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 写完**先给人确认**，人说可以再打 `s:ready`。`s:ready` 一打，下一轮 `cycle.sh` 就会派工。
 一次只放 1 个 issue 进 `s:ready`——这套流程还在练熟阶段，别急着并行。
 
+## 5.1 选哪个模型（省 Claude 额度）
+
+写新 issue 时按下表打 label，并在 issue「涉及」下一行写明理由。**拿不准就按更便宜的一档，做不过再升。**
+
+| 档 | label | 通道 | 适合 | 例子 |
+|---|---|---|---|---|
+| 简单活 | `model:deepseek` | opencode + DeepSeek（火山优先，千问兜底） | 口径写得很死、改动小、模式固定、有现成测试可对照 | 改文档与验收口径；补测试；改脚本里的一个分支；按已有模式加一条命令或字段；改文案 |
+| 默认 | （无） | Claude Sonnet | 要读懂跨模块逻辑、改适配器或页面、新功能 | 手机交接页；新适配器能力；账号登录流程 |
+| 难单 | `model:opus` | Claude Opus | **须人点头**；只在 Sonnet 反复做不过且原因是推理难度时用 | 状态机重构；并发与时序类缺陷 |
+
+规则：
+- 验收 worker 始终是 DeepSeek，与实现分开。
+- `model:deepseek` 的返工第 2 轮起自动升到 Sonnet；Opus 只靠显式 label，返工轮次不再自动升。
+- 不要为了省事把"改页面""动适配器"这类放 DeepSeek；DeepSeek 做砸的成本（返工、真机重试）比省下的额度高。
+
 ## 6. 模型与通道（供你解释给人听）
 
 - 实现 / 验收 worker 目前走 dsh：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。
