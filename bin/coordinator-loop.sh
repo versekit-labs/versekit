@@ -23,7 +23,8 @@
 #   COORD_IDLE_ROUNDS    连续空转几轮后退出（默认 2）
 #   CYCLE_LANES          并行 lane 数（默认 2）
 # 退出码：
-#   0   没活可等了（全部结算，且没有新单可派）
+#   0   没活可等了（全部结算，没有新单可派，s:triage 里也没有待整理的 issue）
+#   13  没活可派，但 s:triage 里还有 issue：要协调器补验收口径、转 s:ready（流程「停住」最常见的原因）
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
 #   11  worker-list 报告有 worker 需要处理（requiresAction 或已退出）
 #   12  等待被取消（多半是同一终端跑了 run-use）或 check 报错
@@ -123,7 +124,10 @@ run_cycle() {
 ack=""
 empties=0
 idle=0
-say "开始等待（Run ${RUN_ID}，单次等待 $((WAIT_MS / 1000))s，每轮最多派 ${MAX} 单）"
+say "开始（Run ${RUN_ID}，单次等待 $((WAIT_MS / 1000))s，每轮最多派 ${MAX} 单）"
+# 先派一轮再等：否则启动时如果没有在跑的 worker，要白等一个超时才会派工。
+say "先跑一轮派工"
+run_cycle || true
 while :; do
   args=(--run "$RUN_ID" --wait --types "$TYPES" --timeout-ms "$WAIT_MS" --json)
   [ -n "$ack" ] && args=(--run "$RUN_ID" --ack "$ack" --wait --types "$TYPES" --timeout-ms "$WAIT_MS" --json)
@@ -170,6 +174,17 @@ while :; do
     if [ "$idle" -ge "$IDLE_LIMIT" ]; then
       # 退出前把手里的 delivery ack 掉，不留给下次重放。
       [ -n "$ack" ] && orca orchestration check --run "$RUN_ID" --ack "$ack" --json >/dev/null 2>&1
+      triage=$(node bin/agentctl.mjs tick --json 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: raise SystemExit(0)
+rows=d.get("rows") or d.get("issues") or []
+print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage" and "hold:human" not in (r.get("labels") or [])))
+' 2>/dev/null || true)
+      if [ -n "$triage" ]; then
+        say "没有可派的活，但 s:triage 里还有：${triage}。需要协调器补验收口径并转 s:ready，然后重新启动本脚本。"
+        exit 13
+      fi
       say "没有在跑的 worker，也没有新单可派：结束等待。"
       exit 0
     fi
