@@ -19,7 +19,7 @@ import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
-import { browserReady, openAccount, closeAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { browserReady, openAccount, closeAccount, cookiePersistenceCheck, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
@@ -139,12 +139,19 @@ function cmdNow() {
 
 async function doctorReport() {
   const loaded = await loadAdapters();
-  return buildDoctorReport({
+  const report = buildDoctorReport({
     browserReady,
     browser: { profile: PROFILE, port: PORT },
     adapters: loaded.adapters,
     adapterErrors: loaded.errors,
   });
+  // #100：cookie 存不下来时不能静默——这一项红灯会让整体 ok=false。
+  const cookie = cookiePersistenceCheck();
+  report.checks.push({ id: "cookie_persist", ok: cookie.ok, detail: cookie.detail, ...(cookie.next ? { next: cookie.next } : {}) });
+  report.total = report.checks.length;
+  report.passed = report.checks.filter((c) => c.ok).length;
+  report.ok = report.ok && cookie.ok;
+  return report;
 }
 
 async function cmdDoctor() {
@@ -219,7 +226,12 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
-    "account.check": ({ accountId }) => checkAccount(adapters, accountId),
+    "account.check": async ({ accountId }) => {
+      const result = await checkAccount(adapters, accountId);
+      const cookie = cookiePersistenceCheck();
+      // 登录会掉线是环境问题，账号检查要把话说出来，而不是只报「已登录」。
+      return cookie.ok ? result : { ...result, cookie_persist: { ok: false, warning: cookie.detail, next: cookie.next } };
+    },
 
     /**
      * 小红书创作平台只有短信登录，没有扫码。把「填手机号 → 发验证码 → 填验证码」做进
