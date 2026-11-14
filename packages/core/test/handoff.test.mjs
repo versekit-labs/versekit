@@ -397,3 +397,11 @@ test("ACC-handoff-08 本文件全部流程结束后：driver 调用 0 次，没�
   assert.equal(driverCalls.publish + driverCalls.collect + driverCalls.check, 0);
   assert.deepEqual(touchedXhs(), []);
 });
+
+test("ACC-handoff-05 CLI：--url / --reason 登记为取值 flag（否则值被当成布尔开关静默丢弃）", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../cli/src/vk.mjs", import.meta.url), "utf8");
+  const set = src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\)/)[1];
+  assert.match(set, /"--url"/);
+  assert.match(set, /"--reason"/);
+});

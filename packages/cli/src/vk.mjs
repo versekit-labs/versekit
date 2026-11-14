@@ -29,7 +29,7 @@ const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta
 const VALUE_FLAGS = new Set([
   "--to", "--name", "--handle", "--credential", "--title", "--schedule", "--visibility",
   "--range", "--publish", "--platform", "--concurrency", "--port", "--actor", "--origin",
-  "--group", "--from", "--to", "--at",
+  "--group", "--from", "--to", "--at", "--url", "--reason",
 ]);
 
 function parseArgv(argv) {
