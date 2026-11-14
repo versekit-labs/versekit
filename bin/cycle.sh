@@ -31,7 +31,8 @@
 #   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
 #
 # 环境变量：
-#   ENGINEER_WT / ACCEPTANCE_WT   worktree selector（默认 current；仅返工兜底与验收用）
+#   ENGINEER_WT                   返工兜底 worktree（默认 current；正常情况下返工用分支所在 worktree 或新建 rework-<issue>）
+#   ACCEPTANCE_WT                 验收 worktree（默认仓库同级的 acceptance/，不存在就建；不在协调器 worktree 里跑）
 #   CYCLE_LANES                   并行 lane 上限（默认 3；--max 超过时按此封顶）
 #   CYCLE_LANE_IDLE_TTL_MIN       观测不到 lane 的 dispatch 状态时，多久视为空闲（默认 90）
 #   WORKER_AGENT                  指定则用 worker-start --agent，否则走 worker-up.sh
@@ -74,7 +75,9 @@ while [ $# -gt 0 ]; do
 done
 
 ENGINEER_WT="${ENGINEER_WT:-current}"
-ACCEPTANCE_WT="${ACCEPTANCE_WT:-current}"
+# 验收不在协调器 worktree 里跑：协调器自己的工作区要保持干净（2026-11-14 用户发现协调器
+# worktree 里同时挂着验收、返工几个 session）。默认用仓库旁边的 acceptance worktree，不存在就建。
+ACCEPTANCE_WT="${ACCEPTANCE_WT:-}"
 WORKER_AGENT="${WORKER_AGENT:-}"
 # worker-start 首次失败后的自动重试次数（口径 ACC-harness-cycle-04：至多 2 次）。
 # 重试用**同一个 task**，不重建；等待时间可调，便于演练时缩短。
@@ -1172,6 +1175,42 @@ worktree_for_branch() {
   printf 'branch:%s' "$branch"
 }
 
+# 仓库同级目录（各 lane / 验收 / 返工 worktree 都放在这里）。
+wt_parent() { dirname "$(git rev-parse --show-toplevel)"; }
+
+# 返工找不到已检出该分支的 worktree 时，就在同级建一个 rework-<issue>，而不是退回协调器 worktree。
+# 本地同名分支一律对齐 origin（本地可能残留协调器早先的 merge 提交）。
+ensure_rework_worktree() {
+  local num="$1" branch="$2" dir
+  dir="$(wt_parent)/rework-$num"
+  git fetch -q origin "$branch" 2>/dev/null || return 1
+  if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+    git -C "$dir" status --porcelain 2>/dev/null | grep -q . && { logerr "    ✗ $dir 有未提交改动，不动它"; return 1; }
+    git -C "$dir" switch -q "$branch" 2>/dev/null || git -C "$dir" switch -q -c "$branch" "origin/$branch" || return 1
+    git -C "$dir" reset -q --hard "origin/$branch" || return 1
+  else
+    git worktree prune
+    if git show-ref -q --verify "refs/heads/$branch"; then
+      git branch -f "$branch" "origin/$branch" 2>/dev/null || return 1
+      git worktree add -q "$dir" "$branch" || return 1
+    else
+      git worktree add -q -b "$branch" "$dir" "origin/$branch" || return 1
+    fi
+  fi
+  printf 'path:%s' "$dir"
+}
+
+# 验收专用 worktree：detached 在 origin/main，验收 worker 在里面再建自己的临时 worktree。
+ensure_acceptance_worktree() {
+  local dir
+  dir="$(wt_parent)/acceptance"
+  if [ ! -e "$dir/.git" ]; then
+    git worktree prune
+    git worktree add -q --detach "$dir" origin/main || return 1
+  fi
+  printf 'path:%s' "$dir"
+}
+
 dispatch_rework() {
   local claimed rc
   rc=0
@@ -1243,6 +1282,8 @@ print(",".join(d.get("files") or []))
 
   local rwt="$ENGINEER_WT" resolved
   if resolved=$(worktree_for_branch "$branch"); then
+    rwt="$resolved"
+  elif [ "$DRY" != "1" ] && resolved=$(ensure_rework_worktree "$num" "$branch"); then
     rwt="$resolved"
   else
     log "    · 没找到分支 ${branch} 的 worktree，仍在 ${ENGINEER_WT} 里派工（任务书要求先切到该分支）"
@@ -1363,6 +1404,9 @@ for q in (json.load(sys.stdin).get("queue") or []):
 
   log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
   local handle
+  if [ -z "$ACCEPTANCE_WT" ]; then
+    ACCEPTANCE_WT=$(ensure_acceptance_worktree) || { log "    ✗ 建验收 worktree 失败"; rm -rf "$lock"; return 1; }
+  fi
   if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
     log "    ✗ 起验收终端失败"
     rm -rf "$lock"

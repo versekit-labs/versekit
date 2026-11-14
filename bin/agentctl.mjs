@@ -512,6 +512,31 @@ function render({ repo, rows, quota, verbose, transitions = [], applied = false 
  *   - 单条失败不中断其余，最后汇总；有任何失败就返回非零退出码。
  *   - 幂等：重复跑同一轮，因为源 label 已经没了，第二次会全部 skip。
  */
+/**
+ * s:doing → s:review 只在「PR head 不是最新有效 FAIL 判定的那个 head」时才放行。
+ * 否则（返工刚派出、还没推新提交）把该行改成「返工中，等新提交」，不迁移。
+ */
+async function holdReworkWithoutNewCommit(repo, rows, pulls) {
+  for (const row of rows) {
+    if (row.transition?.from !== "s:doing" || row.transition?.to !== "s:review") continue;
+    const pull = findPull(pulls ?? [], { number: row.number });
+    if (!pull) continue;
+    let comments;
+    try {
+      comments = await listComments(repo, pull.number);
+    } catch {
+      continue; // 查不到评论就按原逻辑走，不因为网络问题卡住
+    }
+    const v = latestVerdict(comments);
+    if (v?.verdict === "FAIL" && v.headSha && pull.head?.sha?.startsWith(v.headSha)) {
+      row.transition = null;
+      row.actor = "engineer";
+      row.action = "返工中";
+      row.why = `PR #${pull.number} 仍停在验收 FAIL 的 head ${v.headSha.slice(0, 7)}，等返工推新提交再转 review`;
+    }
+  }
+}
+
 async function applyTransitions(repo, rows, { dryRun }) {
   const todo = rows.filter((r) => r.transition);
   const results = [];
@@ -1654,6 +1679,11 @@ async function main(argv) {
       };
     })
     .sort((a, b) => a.number - b.number);
+
+  // 返工中的 issue（s:doing + PR）在 worker 推新提交之前不能转 review：
+  // PR head 还停在上次验收 FAIL 的那个提交上，转回 review 后 merge --pending 会立刻按旧 FAIL
+  // 把它打回 s:changes，下一轮又派一次返工——同一个 issue 被派出多个返工 worker（2026-11-14 #93）。
+  await holdReworkWithoutNewCommit(repo, rows, pulls);
 
   // 即使不加 --apply 也走一遍（dryRun），这样输出里能看到"本轮会改什么"——
   // 只读观察和真实执行共用同一条代码路径，避免"演练和实战不一样"。
