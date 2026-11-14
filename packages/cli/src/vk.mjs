@@ -6,7 +6,8 @@
 // through the daemon over the unix socket. That split is the whole point of the architecture:
 // one writer, many faces.
 
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { basename, extname, join } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
@@ -16,36 +17,16 @@ import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState } from "../../core/src/store.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
-import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn } from "./login-xhs.mjs";
+import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
-import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
+import { parseArgv, loginCommandOf } from "./argv.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
 
 // ---------------------------------------------------------------- argv
-
-const VALUE_FLAGS = new Set([
-  "--to", "--name", "--handle", "--credential", "--title", "--schedule", "--visibility",
-  "--range", "--publish", "--platform", "--concurrency", "--port", "--actor", "--origin",
-  "--group", "--from", "--to", "--at",
-]);
-
-function parseArgv(argv) {
-  const flags = {};
-  const pos = [];
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (token.startsWith("--")) {
-      if (VALUE_FLAGS.has(token)) flags[token] = argv[++i];
-      else flags[token] = true;
-    } else {
-      pos.push(token);
-    }
-  }
-  return { flags, pos };
-}
 
 const { flags, pos } = parseArgv(process.argv.slice(2));
 const has = (flag) => Boolean(flags[flag]);
@@ -184,7 +165,7 @@ let subscriptionCache = null;
 // 只放进程内存，不落库；daemon 重启就失效，这是有意的（验证码是一次性的）。
 const loginSessions = new Map();
 
-/** 创作平台的登录页（所有登录动作都在这个域名下，扫码不会给这里的会话）。 */
+/** 创作平台的登录页（所有登录动作都在这个域名下；www.xiaohongshu.com 的扫码会话进不了这里）。 */
 async function creatorLoginTab(accountId, { fresh = false } = {}) {
   const tab = await openAccount({
     accountId,
@@ -218,6 +199,152 @@ async function creatorLoggedIn(accountId, knownTab = null) {
   }
 }
 
+// ---------------------------------------------------------------- 小红书扫码登录（#101）
+//
+// 后台用该账号自己的 Chrome profile **无头**打开创作平台登录页 → 切到「APP扫一扫登录」→
+// 把页面里的二维码图片（data:image/png）原样交给前端/CLI。人不需要看到任何浏览器窗口。
+// 会话只放进程内存（与短信登录一样）：daemon 重启后二维码自然作废，重新点一次即可。
+
+const XHS_CREATOR = "https://creator.xiaohongshu.com";
+const XHS_LOGIN = `${XHS_CREATOR}/login`;
+const QR_SESSION_MS = 10 * 60e3; // 一次扫码会话最长 10 分钟（中间自动换码）
+const QR_PERSIST_MS = 60e3; // 登录成功后最多等 60 秒让会话 cookie 落成持久 cookie
+const QR_STALE_MS = 150e3; // 同一张码最多挂 150 秒（平台约 1–2 分钟过期），再久就主动换新
+const SESSION_COOKIES = ["web_session", "access-token", "customer-session"];
+
+function setQr(session, qr) {
+  session.qr = qr;
+  session.qrAt = Date.now();
+}
+
+/** 整页重开登录页 → 切扫码 → 取新码。用于「刷新」按钮点不动或页面不显示过期时。 */
+async function reloadQr(session) {
+  await session.tab.goto(XHS_LOGIN, { waitUntil: "domcontentloaded" });
+  await session.tab.waitFor(`/短信登录|扫一扫登录|发送验证码/.test(document.body.innerText || '')`, [], { timeout: 20e3, every: 200, what: "小红书登录页" });
+  await switchToQr(session.tab);
+  setQr(session, await readQr(session.tab));
+}
+
+/** 备用入口：扫码失败（风控、页面改版）时页面和 CLI 都给出这两条，不让人卡住。 */
+const QR_FALLBACK = [
+  { mode: "sms", label: "短信验证码登录", cli: "vk account login <id> --phone <11 位手机号>" },
+  { mode: "window", label: "打开登录窗口", cli: "vk account login <id> --open" },
+];
+const fallbackFor = (accountId) => QR_FALLBACK.map((f) => ({ ...f, cli: f.cli.replace("<id>", accountId) }));
+
+/** 只看有没有「持久」会话 cookie（expires>0），绝不读取或返回 cookie 的值。 */
+async function sessionPersisted(tab) {
+  const cookies = await tab.cookies(XHS_CREATOR).catch(() => []);
+  return cookies.some((c) => SESSION_COOKIES.includes(c.name) && Boolean(c.value) && c.expires > 0);
+}
+
+/** 收尾：只关自己开的东西。账号原本就有活着的浏览器（例如用户的登录窗口）时只关二维码标签页。 */
+async function endQrSession(accountId, session) {
+  if (loginSessions.get(accountId) === session) loginSessions.delete(accountId);
+  if (!session?.tab) return;
+  if (session.ownsBrowser) {
+    // 自己起的无头实例：整个关掉，Browser.close 会把 cookie 刷到磁盘（关 Chrome 后检查仍为 ok）。
+    await closeAccount(accountId).catch(() => {});
+  } else {
+    await session.tab.close().catch(() => {});
+  }
+}
+
+function qrFailed(accountId, reason, note) {
+  return { mode: "qr", state: "failed", reason, note, fallback: fallbackFor(accountId) };
+}
+
+/** account.login.status 的扫码分支。拆出来是为了让 status 主体保持「窗口登录」那条原样。 */
+async function qrStatus(accountId, account, session) {
+  // 排队期间会话已被前一次轮询收尾（成功/失败）或被新会话替换：按库里的结果回答，不再碰旧标签页。
+  if (loginSessions.get(accountId) !== session) {
+    return getAccount(accountId)?.state === "ok"
+      ? { mode: "qr", state: "ok", persisted: true, next: "登录成功" }
+      : { mode: "qr", state: "idle", note: "这次扫码会话已结束。点「刷新二维码」重新开始。" };
+  }
+  if (Date.now() - session.startedAt > QR_SESSION_MS) {
+    await endQrSession(accountId, session);
+    return qrFailed(accountId, "timeout", "10 分钟内没有完成扫码，二维码已作废。点「刷新二维码」重新开始。");
+  }
+  let probe;
+  try {
+    probe = await qrProbe(session.tab);
+  } catch (err) {
+    await endQrSession(accountId, session);
+    return qrFailed(accountId, "session_lost", `扫码页面已断开（${err.message}）。点「刷新二维码」重新开始。`);
+  }
+  const state = session.loggedInAt ? "ok" : qrStateOf(probe);
+
+  if (state === "ok") {
+    // 成功判定沿用 creatorLoggedIn 的口径（pageLoggedIn），再要求会话 cookie 已是持久 cookie。
+    if (!session.loggedInAt) {
+      if (!(await creatorLoggedIn(accountId, session.tab))) return { mode: "qr", state: "pending", note: "已在手机上确认，正在进入创作平台…" };
+      session.loggedInAt = Date.now();
+    }
+    if (await sessionPersisted(session.tab)) {
+      if (account.state !== "ok") setAccountState(accountId, "ok");
+      await endQrSession(accountId, session);
+      log(`[login.qr] ${accountId} 扫码登录成功，登录态已保存`);
+      return { mode: "qr", state: "ok", persisted: true, next: "登录成功，登录态已保存到这个账号的浏览器资料里" };
+    }
+    if (Date.now() - session.loggedInAt > QR_PERSIST_MS) {
+      await endQrSession(accountId, session);
+      return qrFailed(accountId, "not_persisted", "登录成功了，但小红书只给了临时会话（关掉浏览器就会丢）。请改用「打开登录窗口」登录一次。");
+    }
+    return { mode: "qr", state: "pending", note: "登录成功，正在确认登录态已保存…" };
+  }
+
+  if (state === "expired") {
+    // 先点页面自己的「刷新」；点不动再整页重开取新码。两条都不行才停下让人点。
+    try {
+      setQr(session, await refreshQr(session.tab, session.qr));
+    } catch {
+      try {
+        await reloadQr(session);
+      } catch (err) {
+        return { mode: "qr", state: "expired", qr: null, note: `二维码已过期，自动换新失败（${err.message}）。点「刷新二维码」再来一次。`, fallback: fallbackFor(accountId) };
+      }
+    }
+    session.refreshes += 1;
+    return { mode: "qr", state: "waiting", qr: session.qr, refreshed: true, note: "二维码过期了，已自动换成新的，请重新扫码" };
+  }
+
+  if (state === "failed") {
+    // 没有风控文案、只是一拍没找到二维码（页面重绘中）时多给两拍，别把正常的刷新当成改版。
+    if (!probe.risk && (session.misses = (session.misses ?? 0) + 1) < 3) {
+      return { mode: "qr", state: "waiting", qr: session.qr, note: "等待二维码…" };
+    }
+    await endQrSession(accountId, session);
+    const note = probe.risk
+      ? `小红书拦下了这次扫码登录：「${probe.risk.trim().slice(0, 60)}」。请改用短信验证码登录，或打开登录窗口自己登录。`
+      : "扫码登录页面变了样，没找到二维码。请改用短信验证码登录，或打开登录窗口自己登录。";
+    log(`[login.qr] ${accountId} 扫码失败：${probe.risk ? "风控" : "页面结构变化"}`);
+    return qrFailed(accountId, probe.risk ? "risk_control" : "page_changed", note);
+  }
+  session.misses = 0;
+
+  if (state === "scanned") return { mode: "qr", state: "scanned", note: "已扫码，请在手机上确认登录" };
+
+  // 页面自己换了码时把新码带上，前端只在变化时更新图片。
+  let refreshed = false;
+  if (probe.qr && probe.qr !== session.qr) {
+    setQr(session, probe.qr);
+    refreshed = true;
+  }
+  // 兜底：无头页面不一定显示「已失效」（2026-11-14 实测 4 分钟文案不变），
+  // 同一张码挂太久还没被扫就主动整页重开换新，免得人扫一张早已作废的码。
+  if (!refreshed && Date.now() - session.qrAt > QR_STALE_MS) {
+    try {
+      await reloadQr(session);
+      session.refreshes += 1;
+      refreshed = true;
+    } catch (err) {
+      return { mode: "qr", state: "expired", qr: null, note: `二维码可能已过期，换新失败（${err.message}）。点「刷新二维码」再来一次。`, fallback: fallbackFor(accountId) };
+    }
+  }
+  return { mode: "qr", state: "waiting", qr: session.qr, ...(refreshed ? { refreshed: true } : {}), note: "等待用手机小红书扫码…" };
+}
+
 function daemonHandlers(adapters, log) {
   const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
@@ -234,10 +361,6 @@ function daemonHandlers(adapters, log) {
     },
 
     /**
-     * 小红书创作平台只有短信登录，没有扫码。把「填手机号 → 发验证码 → 填验证码」做进
-     * 网页，而不是让人切到一个单独的 Chrome 窗口。
-     */
-    /**
      * 打开登录窗口，由人自己登录。
      *
      * 为什么不再自动填手机号/验证码：那一段是小红书风控最敏感的地方（受控输入框、
@@ -247,6 +370,9 @@ function daemonHandlers(adapters, log) {
     "account.login.open": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+      // 从扫码切到登录窗口（备用入口）：无头的二维码页先收掉，再起可见窗口。
+      const qrSession = loginSessions.get(accountId);
+      if (qrSession?.mode === "qr") await endQrSession(accountId, qrSession);
       const adapter = adapterOf(account.platform);
       if (typeof adapter?.login === "function") {
         const result = await adapter.login({ accountId, credentialRef: account.credential_ref ?? null });
@@ -275,12 +401,10 @@ function daemonHandlers(adapters, log) {
     },
 
     /**
-     * 小红书登录：只有一条路——创作服务平台的短信登录。
+     * 小红书短信验证码登录：扫码登录（account.login.qr）的备用入口，遇到风控时用。
      *
-     * 审计结论（2026-11-07，无头/有头各验一次）：
-     *   · creator.xiaohongshu.com/login 只提供「短信登录」，页面没有二维码；
-     *   · www.xiaohongshu.com/login 的扫码会话进不了创作平台（发布页仍跳 /login）。
-     * 所以这里不再有扫码分支，也不再假装支持。
+     * 11-07 的审计结论「创作平台只有短信登录」已在 2026-11-14 被推翻：登录卡片右上角
+     * 可切到「APP扫一扫登录」，见 account.login.qr。
      */
     "account.login.start": async ({ accountId, phone: rawPhone }) => {
       const account = getAccount(accountId);
@@ -290,11 +414,68 @@ function daemonHandlers(adapters, log) {
       }
       const phone = String(rawPhone ?? "").trim();
       if (!/^\d{11}$/.test(phone)) throw new Error("手机号要填 11 位数字");
+      // 从扫码切到短信（备用入口）：先收掉二维码那一页，免得两个登录页抢同一个会话。
+      const qrSession = loginSessions.get(accountId);
+      if (qrSession?.mode === "qr") await endQrSession(accountId, qrSession);
 
       const tab = await creatorLoginTab(accountId, { fresh: true });
       await fillAndSendCode(tab, phone);
       loginSessions.set(accountId, { phone, sentAt: Date.now() });
       return { mode: "sms", phone, sent: true, next: "验证码已发送，填进页面上的输入框" };
+    },
+
+    /**
+     * 小红书扫码登录：开始（或重来）。返回二维码图片的 data URL，之后由 account.login.status 轮询。
+     * 页面上「刷新二维码」也走这里：旧会话的标签页先收掉，再开一个新的。
+     */
+    "account.login.qr": async ({ accountId }) => {
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+      if (account.platform !== "xiaohongshu") {
+        throw new Error(`${account.platform} 不走这条扫码登录：在账号卡上点「重新登录」`);
+      }
+      const previous = loginSessions.get(accountId);
+      if (previous?.mode === "qr") await endQrSession(accountId, previous);
+
+      const ownsBrowser = !hasLiveBrowser(accountId);
+      let tab;
+      try {
+        tab = await openAccount({ accountId, headless: true });
+        await tab.goto(XHS_LOGIN, { waitUntil: "domcontentloaded" });
+        // 登录页是 SPA：等卡片渲染出来（短信或扫码任一），或者已经被跳走（本来就登录着）。
+        await tab.waitFor(`!location.pathname.includes('/login') || /短信登录|扫一扫登录|发送验证码/.test(document.body.innerText || '')`, [], {
+          timeout: 30e3,
+          every: 200,
+          what: "小红书创作平台登录页",
+        });
+      } catch (err) {
+        if (tab) await endQrSession(accountId, { tab, ownsBrowser });
+        throw new Error(`打不开小红书创作平台登录页：${err.message}`);
+      }
+      const session = { mode: "qr", tab, ownsBrowser, startedAt: Date.now(), qr: null, qrAt: Date.now(), refreshes: 0, misses: 0, loggedInAt: null };
+      loginSessions.set(accountId, session);
+
+      if (await pageLoggedIn(tab)) {
+        // 本来就登录着：仍要确认是持久会话，交给 status 统一收尾。
+        session.loggedInAt = Date.now();
+        return { mode: "qr", state: "pending", qr: null, note: "这个账号已经是登录状态，正在确认登录态已保存…" };
+      }
+      try {
+        await switchToQr(tab);
+        setQr(session, await readQr(tab));
+      } catch (err) {
+        await endQrSession(accountId, session);
+        log(`[login.qr] ${accountId} 取二维码失败：${err.message}`);
+        return qrFailed(accountId, "page_changed", `取不到二维码：${err.message}。可以改用短信验证码登录，或打开登录窗口自己登录。`);
+      }
+      log(`[login.qr] ${accountId} 已生成二维码（无头）`);
+      return {
+        mode: "qr",
+        state: "waiting",
+        qr: session.qr,
+        startedAt: session.startedAt,
+        next: "用手机小红书扫一扫这个二维码，并在手机上确认登录",
+      };
     },
 
     "account.login.resend": async ({ accountId }) => {
@@ -319,6 +500,15 @@ function daemonHandlers(adapters, log) {
           open().prepare("UPDATE account SET credential_ref=? WHERE id=?").run(result.credentialRef, accountId);
         }
         return result;
+      }
+
+      // 扫码会话：读无头页面的状态；过期就地换新码，成功后确认持久 cookie 再收尾。
+      const qrSession = loginSessions.get(accountId);
+      if (qrSession?.mode === "qr") {
+        // 页面和 CLI 可能同时在问：串行化，免得两次轮询同时去点「刷新」或整页重开。
+        const run = (qrSession.chain ?? Promise.resolve()).then(() => qrStatus(accountId, account, qrSession));
+        qrSession.chain = run.catch(() => {});
+        return run;
       }
 
       // 只认页面：人在窗口里登录成功后，这里自然变成 ok，不依赖任何内存会话。
@@ -360,6 +550,12 @@ function daemonHandlers(adapters, log) {
     },
 
     "account.login.cancel": async ({ accountId }) => {
+      const session = loginSessions.get(accountId);
+      // 扫码会话只收自己开的东西，不碰用户可能正开着的登录窗口。
+      if (session?.mode === "qr") {
+        await endQrSession(accountId, session);
+        return { canceled: true };
+      }
       loginSessions.delete(accountId);
       await closeAccount(accountId).catch(() => {});
       return { canceled: true };
@@ -628,6 +824,63 @@ function cmdCommands() {
   return data;
 }
 
+/** data:image/png;base64,… → 写成本机文件（0600），返回路径。同一账号覆盖同一个文件，换码时路径不变。 */
+function writeQrImage(accountId, dataUrl) {
+  const m = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/.exec(String(dataUrl ?? ""));
+  if (!m) throw new Error("服务端返回的二维码不是图片");
+  const dir = join(tmpdir(), "versekit-login");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = join(dir, `${accountId.replace(/[^\w.-]/g, "_")}-qr.${m[1] === "jpeg" ? "jpg" : m[1]}`);
+  writeFileSync(file, Buffer.from(m[2], "base64"), { mode: 0o600 });
+  return file;
+}
+
+/**
+ * vk account login <id> --qr：取二维码 → 写成图片文件并打印路径 → 每 2 秒问一次状态，
+ * 直到成功、失败或整场会话过期。过程信息在 JSON 模式下走 stderr，stdout 只留最终结果。
+ */
+async function cmdLoginQr(accountId) {
+  const say = (m) => (human ? console.log(m) : process.stderr.write(m + "\n"));
+  const start = await send("account.login.qr", { accountId }, { timeout: 90e3 });
+  if (start.state === "failed") {
+    const tips = (start.fallback ?? []).map((f) => `  备用：${f.label} → ${f.cli}`).join("\n");
+    throw new Error(`${start.note}${tips ? "\n" + tips : ""}`);
+  }
+  let qrPath = null;
+  if (start.qr) {
+    qrPath = writeQrImage(accountId, start.qr);
+    say(`二维码图片：${qrPath}`);
+    say("用手机小红书扫一扫这张图，并在手机上确认登录（二维码过期会自动换新，路径不变）");
+  } else if (start.note) say(start.note);
+
+  const deadline = Date.now() + 10 * 60e3;
+  let lastNote = "";
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const status = await send("account.login.status", { accountId });
+    if (status.qr && status.refreshed) {
+      qrPath = writeQrImage(accountId, status.qr);
+      say(`二维码已过期，已换新：${qrPath}`);
+    }
+    if (status.state === "ok") {
+      const data = { accountId, state: "ok", mode: "qr", persisted: status.persisted === true, qrPath, next: status.next ?? "登录成功" };
+      if (human) console.log(data.next);
+      else out(data);
+      return data;
+    }
+    if (status.state === "failed" || status.state === "expired" || status.state === "idle") {
+      const tips = (status.fallback ?? []).map((f) => `  备用：${f.label} → ${f.cli}`).join("\n");
+      throw new Error(`${status.note ?? "扫码登录没有完成"}${tips ? "\n" + tips : ""}`);
+    }
+    if (status.note && status.note !== lastNote) {
+      lastNote = status.note;
+      say(status.note);
+    }
+  }
+  await send("account.login.cancel", { accountId }).catch(() => {});
+  throw new Error("10 分钟内没有完成扫码，已取消。重新运行 vk account login " + accountId + " --qr");
+}
+
 async function cmdAccount() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
@@ -690,14 +943,12 @@ async function cmdAccount() {
   }
   if (sub === "login") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account login <accountId> --phone 138... | --code 123456 | --cancel");
-    let data;
-    if (has("--cancel")) data = await send("account.login.cancel", { accountId });
-    else if (has("--status")) data = await send("account.login.status", { accountId });
-    else if (has("--resend")) data = await send("account.login.resend", { accountId });
-    else if (val("--code")) data = await send("account.login.verify", { accountId, code: val("--code") });
-    else if (val("--phone")) data = await send("account.login.start", { accountId, phone: val("--phone") });
-    else throw new Error("要指定 --phone 或 --code 或 --cancel");
+    const usage = "用法：vk account login <accountId> --qr | --phone <11 位手机号> | --code <验证码> | --resend | --open | --status | --cancel";
+    if (!accountId) throw new Error(usage);
+    const cmd = loginCommandOf(accountId, flags);
+    if (!cmd) throw new Error(`${usage}（--phone / --code 后面要跟值）`);
+    if (cmd.name === "account.login.qr") return cmdLoginQr(accountId);
+    const data = await send(cmd.name, cmd.args);
     if (human) console.log(data.next ?? JSON.stringify(data));
     else out(data);
     return data;

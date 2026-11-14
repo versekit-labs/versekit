@@ -61,6 +61,17 @@ function assertAssetSupported(asset, platforms, byPlatform) {
   fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或从 --to 里去掉 ${excluded}（这条没有创建）`);
 }
 
+/**
+ * 「下一步怎么登录」的统一说法。小红书默认扫码（后台无头取二维码，不弹窗口，#101）；
+ * 短信与登录窗口是备用入口。其他平台照旧走 reauth。
+ */
+export function loginHint(platform, accountId) {
+  if (platform === "xiaohongshu") {
+    return `下一步：vk account login ${accountId} --qr（手机小红书扫码，不弹窗口；遇到风控改用 --phone <手机号> 短信登录或 --open 打开登录窗口）`;
+  }
+  return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
+}
+
 export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
 
@@ -148,7 +159,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return {
         ...result,
         group: { id: g.id, name: g.name },
-        next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）`,
+        next: result.existed ? null : loginHint(platform, result.id),
       };
     },
 
@@ -167,6 +178,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!adapter) fail(`没有 ${account.platform} 适配器，先安装 packages/adapter-${account.platform}`);
       if (account.platform === "bilibili") {
         return { accountId, started: false, next: `在电脑上运行：biliup -u ${account.credential_ref ?? "<cookies.json>"} login，选「浏览器登录」` };
+      }
+      if (account.platform === "xiaohongshu") {
+        return { accountId, started: false, next: loginHint(account.platform, accountId) };
       }
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
     },
