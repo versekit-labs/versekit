@@ -53,11 +53,26 @@ cat ~/.orca/versekit-state/cycle-owner-alert.txt 2>/dev/null                # �
 所以你读收件箱本身，按类型落成 GitHub 上的状态，处理完再 ack：
 
 ```bash
+bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它退出时你会被叫醒
+```
+
+`bin/coordinator-loop.sh` 就是官方循环的脚本版，替你转这一圈，不用每次手动挂等待：
+
+| 它遇到 | 它做什么 | 退出码 |
+|---|---|---|
+| `worker_done` succeeded / `merge_ready` | 跑一轮 `bin/cycle.sh`（迁移、合并、release、派下一单），ack，继续等 | 不退出 |
+| 超时 / 空结果 | 也跑一轮 `cycle.sh`（门禁晚绿的 PR 靠它合并），继续等 | 不退出 |
+| `escalation` / `question` / `worker_done` failed | **不 ack**，把消息打印出来 | 10 |
+| 连续 3 次空等且 `worker-list` 说有 worker 需要处理 | 列出那几行 | 11 |
+| 等待被取消或 `check` 报错 | 说明原因 | 12 |
+| 没有在跑的 worker，也没有新单可派 | 结束 | 0 |
+
+退出码 10 时轮到你：按下表处理，`orca orchestration check --run "$RUN" --ack <deliveryId> --json`，再重新启动脚本。
+手动走这一圈时的等价命令：
+
+```bash
 RUN="$(cat ~/.orca/versekit-run-id)"
-# 等：有 worker 在跑就一直等，不要做完一轮就停。超时或空结果只是检查点，继续等。
 orca orchestration check --run "$RUN" --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
-# 逐条处理这一批（dispatch → issue 映射在 ~/.orca/versekit-state/dispatch-<dispatchId>.json）
-# 处理完再 ack，并接着等下一批；未 ack 的一批会原样重放
 orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
 ```
 
@@ -73,7 +88,9 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 | 你看到 | 落成什么 | 你要做什么 |
 |---|---|---|
 | `worker_done` outcome=failed | issue `s:blocked` + `hold:human` | 告诉人 worker 报告了什么，问怎么办 |
-| `escalation` / `question` | issue `s:blocked` + `hold:human`，一行写进 `escalations.log` | **当面转述**，拿到人的决定后把决定写成 issue 评论，再解除 hold，让下一轮重新派工 |
+| `question`（worker 用 `ask` 提的，它正卡着等回答） | 你自己能答的：`orca orchestration reply --id <msgId> --body "…"`，worker 收到后继续干 | 答案同时写成 issue 评论（下一个 worker 只看得到 issue） |
+| `question`，但要人拍板 | 先建决策门记下「在等谁决定什么」：`orca orchestration gate-create --task <taskId> --question "…" --options '["A","B"]' --json`；issue 加 `hold:human` | **当面转述**选项和你的建议；人定了以后 `gate-resolve --id <gateId> --resolution "…"`，再 `reply` 给 worker，决定写成 issue 评论，解除 hold |
+| `escalation`（worker 报告卡住，没有在等回答） | issue `s:blocked` + `hold:human`，一行写进 `escalations.log` | **当面转述**，拿到人的决定后把决定写成 issue 评论，再解除 hold，让下一轮重新派工 |
 | `merge_ready` | 跑 `node bin/agentctl.mjs merge --pending` | 汇报合并结果 |
 | 验收 FAIL，但原因与代码无关（账号掉线、外部服务不可用） | `node bin/agentctl.mjs void --issue N --reason "…"`：这条 FAIL 作废，不计轮次、不打回，issue 回 `s:review` 重新验收 | 先把环境修好再让它重验；被轮次上限冻结的加 `--unhold` |
 | `worker_done` outcome=succeeded | 无 | 不用打扰人 |
