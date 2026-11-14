@@ -197,3 +197,12 @@ a.hint{display:inline-flex;align-items:center;min-height:32px;text-underline-off
   .pagefoot{flex-direction:column;align-items:flex-start;gap:4px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* 交给手机：电脑端待办块（二维码 + 说明） */
+.handoff-box{display:flex;gap:14px;align-items:flex-start;margin:8px 0 4px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.handoff-qr{flex:none;width:132px;min-height:32px;color:var(--muted);font-size:12px}
+.handoff-qr svg{display:block;width:132px;height:132px;border:1px solid var(--line);border-radius:4px}
+.handoff-text{min-width:0;font-size:13px;line-height:1.7;color:var(--muted)}
+.handoff-text b{color:var(--ink);font-weight:600}
+.handoff-text p{margin:2px 0 6px}
+.handoff-link{display:inline-block;max-width:100%;font:12px var(--mono);color:var(--muted);word-break:break-all}
+@media (max-width:600px){.handoff-box{flex-direction:column}}

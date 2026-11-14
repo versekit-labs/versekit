@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
 import { eventForTransition, isKnownEvent } from "./events.mjs";
+import { migrateXiaohongshuToHandoff } from "./store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = join(HERE, "schema.sql");
@@ -99,6 +100,7 @@ export function migrate() {
   }
   addMissingColumns(conn);
   conn.exec(schema); // 幂等：补齐第一遍因缺列而没建成的索引
+  migrateXiaohongshuToHandoff(); // 小红书默认交给手机；只迁一次（#120）
   conn.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(SCHEMA_VERSION);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('installed_at', ?) ON CONFLICT(key) DO NOTHING").run(String(Date.now()));
   try {

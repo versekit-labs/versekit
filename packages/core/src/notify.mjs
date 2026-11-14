@@ -9,7 +9,7 @@ import { open, newId } from "./index.mjs";
 import { findCommand, parseArgs } from "./commands.mjs";
 import { buildEventCard, CARD_TTL_MS } from "./cards.mjs";
 import { getPublishRow } from "./publish-flow.mjs";
-import { approvalLink } from "./approval.mjs";
+import { approvalLink, handoffLink } from "./approval.mjs";
 
 const RETRY_AFTER_MS = 60e3;
 const MAX_ATTEMPTS = 3;
@@ -45,7 +45,10 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
     const publish = event.publish_id ? getPublishRow(event.publish_id) : null;
     const approvalUrl =
       publish && ["publish.failed", "publish.needs_human"].includes(event.type) ? approvalLink(publish.id) : null;
-    const card = buildEventCard(event, { publish, now, approvalUrl });
+    // 交给手机的发布到点转 notify_pending（fallback_reason=phone_handoff）：卡片带交接链接而不是审批链接。
+    const handoffUrl =
+      publish && event.type === "publish.needs_human" && publish.fallback_reason === "phone_handoff" ? handoffLink(publish.id) : null;
+    const card = buildEventCard(event, { publish, now, approvalUrl: handoffUrl ? null : approvalUrl, handoffUrl });
     if (!card) continue; // 内部 trace，不该打扰人
 
     try {

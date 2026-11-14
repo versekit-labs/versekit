@@ -7,6 +7,21 @@ import { open, newId } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
+/**
+ * 账号发布模式。不动 schema：沿用 account.is_manual 这一列，0 = auto、1 = manual、2 = handoff。
+ * handoff = 交给手机：电脑准备内容、生成交接页，人在手机 App 里点发布；程序不访问平台
+ * （docs/research/publish-risk.md）。scheduler 的 `is_manual = 0` 过滤天然把它排除在体检之外。
+ */
+export const ACCOUNT_MODES = ["auto", "manual", "handoff"];
+const MODE_CODE = { auto: 0, manual: 1, handoff: 2 };
+export const HANDOFF_CODE = MODE_CODE.handoff;
+
+export const accountModeOf = (account) => ACCOUNT_MODES[Number(account?.is_manual ?? 0)] ?? "auto";
+export const isHandoffAccount = (account) => accountModeOf(account) === "handoff";
+
+/** 这些平台新建账号时默认交给手机（小红书：自动化测试发布会被永久禁发）。 */
+export const HANDOFF_BY_DEFAULT = new Set(["xiaohongshu"]);
+
 export const PUBLISH_VISIBILITIES = ["public", "private", "friends", "private_then_public"];
 
 /**
@@ -46,9 +61,10 @@ const requireString = (value, field, { max = 500 } = {}) => {
 export function listAccounts({ groupId = null, includeRemoved = false } = {}) {
   const conn = open();
   const live = includeRemoved ? "" : " AND removed_at IS NULL";
-  return groupId
+  const rows = groupId
     ? conn.prepare(`SELECT * FROM account WHERE group_id = ?${live} ORDER BY platform, handle`).all(groupId)
     : conn.prepare(`SELECT * FROM account WHERE 1=1${live} ORDER BY platform, handle`).all();
+  return rows.map((row) => ({ ...row, mode: accountModeOf(row) }));
 }
 
 // ------------------------------------------------------------------ account groups
@@ -166,8 +182,8 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
 
   const id = newId("acc");
   open()
-    .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id) VALUES (?,?,?,?,?, 'ok', ?, ?)")
-    .run(id, p, h, displayName, credentialRef, Date.now(), groupId);
+    .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id, is_manual) VALUES (?,?,?,?,?, 'ok', ?, ?, ?)")
+    .run(id, p, h, displayName, credentialRef, Date.now(), groupId, HANDOFF_BY_DEFAULT.has(p) ? HANDOFF_CODE : 0);
   return { id, existed: false };
 }
 
@@ -203,10 +219,14 @@ export function removeAccount(accountId) {
 }
 
 export function setAccountMode(accountId, mode) {
-  if (!["auto", "manual"].includes(mode)) fail("模式只能是 auto 或 manual");
+  if (!ACCOUNT_MODES.includes(mode)) fail(`模式只能是 ${ACCOUNT_MODES.join(" / ")}`);
   const account = getAccount(accountId);
   if (!account) fail(`没有这个账号：${accountId}`);
-  open().prepare("UPDATE account SET is_manual = ? WHERE id = ?").run(mode === "manual" ? 1 : 0, accountId);
+  open().prepare("UPDATE account SET is_manual = ? WHERE id = ?").run(MODE_CODE[mode], accountId);
+  // handoff 不需要电脑登录：之前因登录失效标成 expired 的号，切过来后不该再显示「已过期」。
+  if (mode === "handoff" && ["expired", "expiring"].includes(account.state)) {
+    open().prepare("UPDATE account SET state = 'ok' WHERE id = ?").run(accountId);
+  }
   return { id: accountId, mode };
 }
 
@@ -281,7 +301,7 @@ export function createPublish({
 export function getPublish(publishId) {
   return open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.state AS account_state, w.title AS work_title, w.asset_path, w.meta_json
+      `SELECT p.*, a.platform, a.handle, a.state AS account_state, a.is_manual AS account_manual, w.title AS work_title, w.asset_path, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -506,4 +526,21 @@ export function bindChannel(channel, externalUserId) {
 /** Latest binding for a channel, or null. */
 export function getBinding(channel) {
   return open().prepare("SELECT * FROM channel_binding WHERE channel=? ORDER BY paired_at DESC LIMIT 1").get(channel) ?? null;
+}
+
+/**
+ * 一次性迁移：已有的小红书账号改为 handoff（交给手机）。
+ *
+ * 只跑一次（meta 里记标记）：之后用户用 `vk account mode <id> auto` 显式改回自动，
+ * 下次启动不能再被迁移改回去。登录失效的状态一并复位——交给手机不要求电脑登录。
+ */
+export function migrateXiaohongshuToHandoff() {
+  const conn = open();
+  const KEY = "migration:xiaohongshu_handoff";
+  if (conn.prepare("SELECT 1 FROM meta WHERE key = ?").get(KEY)) return { migrated: 0, already: true };
+  const info = conn
+    .prepare("UPDATE account SET is_manual = ?, state = CASE WHEN state IN ('expired','expiring') THEN 'ok' ELSE state END WHERE platform = 'xiaohongshu' AND is_manual != ?")
+    .run(HANDOFF_CODE, HANDOFF_CODE);
+  conn.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run(KEY, String(Date.now()));
+  return { migrated: Number(info.changes ?? 0), already: false };
 }

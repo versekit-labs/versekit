@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>交给手机 · versekit</title>
+<!-- 自包含：这个页面经 /h/<token> 在局域网打开，而 /app.css、/shell.js 只允许本机访问，所以样式与脚本全部内联。 -->
+<style>
+:root{
+  --navy:#16324f;--navy-deep:#0f2438;--ground:#f4f4f2;--paper:#fff;--paper-hover:#ececeb;
+  --ink:#17191c;--muted:#5f666d;--line:#d9dcdf;--line-soft:#e8eaec;
+  --amber:#a85c06;--amber-bg:#fff7e9;--amber-line:#e4c28e;
+  --green:#1f6b52;--green-bg:#eef7f2;--green-line:#b8d5c7;
+  --red:#a32b20;--red-bg:#fff2f0;--red-line:#e5b7b1;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--ground);color:var(--ink);font:400 14px/1.6 var(--sans);min-height:100svh}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+main{max-width:560px;margin:0 auto;padding:16px 16px 40px;display:flex;flex-direction:column;gap:14px}
+.who{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.who b{color:var(--ink);font-weight:600}
+h1{font-size:19px;line-height:1.4;font-weight:650;word-break:break-word}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:14px}
+.panel h2{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px}
+.text{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.7;user-select:text;-webkit-user-select:text}
+.text.sel{background:var(--amber-bg);outline:2px solid var(--amber-line)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.head h2{margin:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font:500 14px var(--sans);text-decoration:none;cursor:pointer;-webkit-appearance:none;appearance:none}
+.btn:active{background:var(--paper-hover)}
+.btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+.btn.danger{color:var(--red);border-color:var(--red-line)}
+.btn.block{width:100%}
+.btn:disabled{color:var(--muted);background:transparent;cursor:not-allowed}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.imgs{display:flex;flex-direction:column;gap:10px}
+.imgs figure{margin:0}
+.imgs img,.imgs video{display:block;width:100%;height:auto;border-radius:4px;border:1px solid var(--line-soft);background:var(--ground);-webkit-touch-callout:default}
+.imgs figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+.hint{font-size:13px;color:var(--muted);line-height:1.7}
+.note{padding:10px 12px;border-radius:6px;border:1px solid var(--line);background:var(--paper);font-size:14px;line-height:1.6}
+.note.ok{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+.note.bad{border-color:var(--red-line);background:var(--red-bg);color:var(--red)}
+.note.warn{border-color:var(--amber-line);background:var(--amber-bg);color:var(--amber)}
+input[type=url],input[type=text]{width:100%;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:6px;font:400 14px var(--sans);background:var(--paper);color:var(--ink)}
+.stack{display:flex;flex-direction:column;gap:10px}
+.steps{padding-left:20px;font-size:13px;color:var(--muted);line-height:1.8}
+</style>
+</head>
+<body>
+<main id="main" aria-live="polite">
+  <p class="hint" id="loading">正在读取交接内容…</p>
+  <div class="note bad" id="fatal" role="alert" hidden></div>
+
+  <div id="content" hidden>
+    <div class="stack">
+      <div class="who"><span id="platform">小红书</span> · <b id="account">—</b></div>
+      <h1 id="page-title">待在手机上发布</h1>
+      <div class="note" id="status" hidden></div>
+
+      <section class="panel" aria-labelledby="t-h">
+        <div class="head"><h2 id="t-h">标题</h2><button class="btn" id="copy-title" type="button">复制标题</button></div>
+        <div class="text" id="title-text"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="b-h">
+        <div class="head"><h2 id="b-h">正文（含话题）</h2><button class="btn" id="copy-body" type="button">复制正文</button></div>
+        <div class="text" id="body-text"></div>
+      </section>
+
+      <p class="note warn" id="copy-fallback" hidden>这个浏览器不允许自动复制：上面的文字已经选中，请长按选中的文字，点「拷贝」。</p>
+
+      <section class="panel" id="media-panel" aria-labelledby="m-h">
+        <div class="head"><h2 id="m-h">素材（<span id="media-count">0</span>）</h2><button class="btn" id="save-all" type="button" hidden>保存全部图片</button></div>
+        <div class="imgs" id="media"></div>
+        <p class="hint" id="save-hint">图片可以长按保存到相册。</p>
+      </section>
+
+      <section class="panel" id="actions" aria-labelledby="a-h">
+        <h2 id="a-h">到 App 里发布</h2>
+        <ol class="steps"><li>复制标题和正文，保存图片</li><li>打开小红书，选相册里的图片，粘贴文案，点发布</li><li>回到这里点「我已发布」</li></ol>
+        <div class="stack" style="margin-top:12px">
+          <a class="btn primary block" id="open-app" href="xhsdiscover://">打开小红书</a>
+          <button class="btn block" id="share" type="button" hidden>一键分享到小红书</button>
+          <p class="hint" id="open-hint" hidden>如果没有跳转：手动打开小红书 App，再回到这里。</p>
+        </div>
+      </section>
+
+      <section class="panel" id="receipt" aria-labelledby="r-h">
+        <h2 id="r-h">发完回来</h2>
+        <div class="stack">
+          <label class="hint" for="note-url">笔记链接（可不填；只认 xiaohongshu.com / xhslink.com）</label>
+          <input id="note-url" type="url" inputmode="url" autocomplete="off" placeholder="粘贴小红书分享链接">
+          <button class="btn primary block" id="done" type="button">我已发布</button>
+          <button class="btn danger block" id="skip" type="button">这次不发了</button>
+          <div class="note" id="result" role="status" hidden></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  // 链接形如 /h/<token>；所有数据、素材、回执都在这个 token 之下。
+  const base = location.pathname.replace(/\/+$/, "");
+  const TERMINAL = {
+    published: "这条已经记为已发布，不需要再操作了。",
+    published_limited: "这条已经记为已发布，不需要再操作了。",
+    canceled: "这条已经标成「不发了」，不需要再操作了。",
+    queued: "还没到发布时间。到点后飞书会再发一次链接，这时先不用发。",
+    failed: "这条出了问题，请回电脑上看一下。",
+  };
+
+  function say(el, text, kind){
+    el.textContent = text;
+    el.className = "note" + (kind ? " " + kind : "");
+    el.hidden = !text;
+  }
+
+  async function api(path, options){
+    const res = await fetch(base + path, options);
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || data.ok === false) throw new Error(data.error?.message ?? ("HTTP " + res.status));
+    return data;
+  }
+
+  /* 复制：http 局域网地址不是 secure context，navigator.clipboard 不存在，所以先试 execCommand。
+   * 两条路都失败时选中文字并提示手动复制——不允许点了没反应。 */
+  function selectNode(node){
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  async function copyText(text, node){
+    let ok = false;
+    if(window.isSecureContext && navigator.clipboard?.writeText){
+      try{ await navigator.clipboard.writeText(text); ok = true; }catch{ ok = false; }
+    }
+    if(!ok){
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0";
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      area.setSelectionRange(0, text.length);
+      try{ ok = document.execCommand("copy"); }catch{ ok = false; }
+      area.remove();
+    }
+    document.querySelectorAll(".text.sel").forEach((n) => n.classList.remove("sel"));
+    $("copy-fallback").hidden = ok;
+    if(!ok){
+      node.classList.add("sel");
+      selectNode(node);
+    }
+    return ok;
+  }
+  function wireCopy(buttonId, nodeId, getText, label){
+    const button = $(buttonId);
+    button.addEventListener("click", async () => {
+      const ok = await copyText(getText(), $(nodeId));
+      button.textContent = ok ? "已复制" : "请手动复制";
+      setTimeout(() => { button.textContent = label; }, 2200);
+    });
+  }
+
+  function mediaUrl(item){ return base + "/asset/" + item.index; }
+
+  async function filesOf(images){
+    const files = [];
+    for(const item of images){
+      const res = await fetch(mediaUrl(item));
+      const blob = await res.blob();
+      files.push(new File([blob], item.name, { type: blob.type || "image/jpeg" }));
+    }
+    return files;
+  }
+
+  async function saveAll(images){
+    const button = $("save-all");
+    button.disabled = true;
+    try{
+      const files = await filesOf(images);
+      if(window.isSecureContext && navigator.canShare?.({ files })){
+        await navigator.share({ files });
+        return;
+      }
+      // 非 secure context（http 局域网）：逐张触发下载；iOS 不支持时提示长按保存。
+      for(const file of files){
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(file);
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      $("save-hint").textContent = "已开始下载全部图片。如果手机没有保存，请逐张长按图片保存到相册。";
+    }catch(err){
+      if(err?.name !== "AbortError") $("save-hint").textContent = "批量保存没成功（" + err.message + "）：请逐张长按图片保存到相册。";
+    }finally{
+      button.disabled = false;
+    }
+  }
+
+  function render(data){
+    $("platform").textContent = data.platform === "xiaohongshu" ? "小红书" : data.platform;
+    $("account").textContent = data.account?.name ?? "";
+    $("title-text").textContent = data.title || "（没有标题）";
+    $("body-text").textContent = data.bodyText || "（没有正文）";
+
+    const images = data.assets.filter((a) => a.kind === "image");
+    const media = $("media");
+    media.textContent = "";
+    $("media-count").textContent = String(data.assets.length);
+    data.assets.forEach((item, i) => {
+      const fig = document.createElement("figure");
+      let el;
+      if(item.kind === "video"){
+        el = document.createElement("video");
+        el.controls = true;
+        el.playsInline = true;
+        el.preload = "metadata";
+      }else{
+        el = document.createElement("img");
+        el.loading = "lazy";
+        el.alt = "第 " + (i + 1) + " 张：" + item.name;
+      }
+      el.src = mediaUrl(item);
+      const cap = document.createElement("figcaption");
+      cap.textContent = (i + 1) + " / " + data.assets.length + " · " + item.name;
+      fig.append(el, cap);
+      media.appendChild(fig);
+    });
+    if(!data.assets.length){
+      media.innerHTML = '<p class="hint">这条作品没有素材文件。</p>';
+      $("save-hint").hidden = true;
+    }
+    if(!images.length) $("save-hint").textContent = "视频可以长按或点播放器的更多按钮保存。";
+    $("save-all").hidden = images.length < 1;
+    $("save-all").onclick = () => saveAll(images);
+
+    wireCopy("copy-title", "title-text", () => data.title, "复制标题");
+    wireCopy("copy-body", "body-text", () => data.bodyText, "复制正文");
+
+    $("open-app").addEventListener("click", () => { $("open-hint").hidden = false; });
+
+    // 一键分享：只有 secure context 且系统接受这批文件时才出现；否则不出现、也不报错。
+    if(window.isSecureContext && images.length && typeof navigator.canShare === "function" && typeof navigator.share === "function"){
+      filesOf(images).then((files) => {
+        if(!navigator.canShare({ files })) return;
+        $("share").hidden = false;
+        $("share").onclick = async () => {
+          try{ await navigator.share({ files, title: data.title, text: data.bodyText }); }
+          catch(err){ if(err?.name !== "AbortError") say($("result"), "分享没成功：" + err.message + "。请用上面的复制和保存。", "warn"); }
+        };
+      }).catch(() => {});
+    }
+
+    const acting = data.canAct === true;
+    $("receipt").hidden = !acting;
+    $("actions").hidden = !acting && data.state !== "queued";
+    const note = TERMINAL[data.state];
+    if(!acting && note) say($("status"), note + (data.externalUrl ? " 笔记链接：" + data.externalUrl : ""), data.state.startsWith("published") ? "ok" : "");
+
+    const send = async (kind, body) => {
+      const buttons = [$("done"), $("skip")];
+      buttons.forEach((b) => { b.disabled = true; });
+      try{
+        const result = await api("/" + kind, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        say($("result"), result.message + (result.duplicate ? "（之前已经记过）" : ""), "ok");
+        $("receipt").querySelectorAll("input,button").forEach((n) => { n.disabled = true; });
+        $("actions").hidden = true;
+      }catch(err){
+        say($("result"), err.message, "bad");
+        buttons.forEach((b) => { b.disabled = false; });
+      }
+    };
+    $("done").onclick = () => send("done", { url: $("note-url").value.trim() || undefined });
+    $("skip").onclick = () => {
+      if(!confirm("这次不发了？这条会标成已取消。")) return;
+      send("skip", { reason: "手机上选择不发" });
+    };
+  }
+
+  api("/data").then((data) => {
+    $("loading").hidden = true;
+    $("content").hidden = false;
+    render(data);
+  }).catch((err) => {
+    $("loading").hidden = true;
+    $("fatal").hidden = false;
+    $("fatal").textContent = err.message + "（链接 24 小时内有效，过期了请回电脑上重新生成。）";
+  });
+})();
+</script>
+</body>
+</html>
