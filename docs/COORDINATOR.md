@@ -68,7 +68,7 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 - **连续 3 次空等**就别再盲等：`orca orchestration worker-list --run "$RUN" --json`，看每行的 `projection.liveness` 和 `projection.nextAction`。`unverifiable` 是「不知道」，不是「死了」——没有正证据（`exited`）不 stop、不 abandon、不重派。
 - **等待期间不要在同一个终端再跑 `run-use`**，它会取消正在进行的等待。
 - **worker 由 Orca 原生启动**（`worker-start --agent claude --model …` / `--agent opencode`），终端归 Dispatch 所有。交活后 `bin/cycle.sh` 在你的终端里跑时会自动 `worker-release`；你也可以手动 `orca orchestration worker-release --dispatch <id>`。不要用 `terminal close` 代替。
-- **DeepSeek 走 opencode**：通道配置在 `~/.config/opencode/opencode.json`（`bin/opencode-model.sh` 维护，密钥只引用环境变量）。Orca 不能给 opencode 传 `--model`，所以用的是配置里的默认模型。
+- **DeepSeek 走 opencode**：通道配置在 `~/.config/opencode/opencode.json`（`bin/opencode-model.sh` 维护）。火山的密钥引用环境变量；千问备用通道用 opencode 内置的 `alibaba-token-plan-cn`，密钥在 opencode 凭据库（`opencode auth login`）。Orca 不能给 opencode 传 `--model`，所以用的是配置里的默认模型。
 
 | 你看到 | 落成什么 | 你要做什么 |
 |---|---|---|
