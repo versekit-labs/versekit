@@ -54,16 +54,26 @@ cat ~/.orca/versekit-state/cycle-owner-alert.txt 2>/dev/null                # �
 
 ```bash
 RUN="$(cat ~/.orca/versekit-run-id)"
-orca orchestration check --run "$RUN" --json          # 取最早一批；未 ack 会重放
-# 逐条处理；dispatch → issue 映射在 ~/.orca/versekit-state/dispatch-<dispatchId>.json
-orca orchestration check --run "$RUN" --ack <deliveryId> --peek --json
+# 等：有 worker 在跑就一直等，不要做完一轮就停。超时或空结果只是检查点，继续等。
+orca orchestration check --run "$RUN" --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
+# 逐条处理这一批（dispatch → issue 映射在 ~/.orca/versekit-state/dispatch-<dispatchId>.json）
+# 处理完再 ack，并接着等下一批；未 ack 的一批会原样重放
+orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
 ```
+
+这是 Orca 官方的协调器循环（`orca skills get orchestration --full`，以本机版本为准）。几条容易踩的：
+
+- **等待不要带 `--peek`。** `--peek` 只是只读查看，不推进收件箱，旧消息会一遍遍把你叫醒。
+- **每处理完一批就接着派。** worker 交活后跑一次 `bin/cycle.sh --no-consume`（它会迁移状态、合并、派下一单），再回到等待。流程停住几乎都是因为这里断了。
+- **连续 3 次空等**就别再盲等：`orca orchestration worker-list --run "$RUN" --json`，看每行的 `projection.liveness` 和 `projection.nextAction`。`unverifiable` 是「不知道」，不是「死了」——没有正证据（`exited`）不 stop、不 abandon、不重派。
+- **等待期间不要在同一个终端再跑 `run-use`**，它会取消正在进行的等待。
 
 | 你看到 | 落成什么 | 你要做什么 |
 |---|---|---|
 | `worker_done` outcome=failed | issue `s:blocked` + `hold:human` | 告诉人 worker 报告了什么，问怎么办 |
 | `escalation` / `question` | issue `s:blocked` + `hold:human`，一行写进 `escalations.log` | **当面转述**，拿到人的决定后把决定写成 issue 评论，再解除 hold，让下一轮重新派工 |
 | `merge_ready` | 跑 `node bin/agentctl.mjs merge --pending` | 汇报合并结果 |
+| 验收 FAIL，但原因与代码无关（账号掉线、外部服务不可用） | `node bin/agentctl.mjs void --issue N --reason "…"`：这条 FAIL 作废，不计轮次、不打回，issue 回 `s:review` 重新验收 | 先把环境修好再让它重验；被轮次上限冻结的加 `--unhold` |
 | `worker_done` outcome=succeeded | 无 | 不用打扰人 |
 
 人做的决定必须落成 issue 评论或口径修改——worker 重新派工时只看得到 issue，看不到聊天。

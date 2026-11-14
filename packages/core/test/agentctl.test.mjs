@@ -87,3 +87,27 @@ test("validateScope：引用不到的 ACC 条目不算口径齐", () => {
   assert.equal(empty.ok, false);
   assert.match(empty.why, /没有任何 ACC/);
 });
+test("作废的 FAIL：不再是最新判定，也不计返工轮次", async () => {
+  const { latestVerdict, latestFail, effectiveFailCount, voidedCommentIds } = await import("../../../bin/agentctl.mjs");
+  const fail = (id, round) => ({ id, body: "```yaml\nverdict: FAIL\nround: " + round + "\nhead_sha: abc1234\n```" });
+  const voidOf = (id, target) => ({ id, body: "<!-- agent-verdict-void -->\n原因：账号掉线\n\nvoids: " + target });
+  // listComments 的顺序：新的在前。
+  const comments = [voidOf(40, 30), fail(30, 3), fail(20, 2), { id: 15, body: "随便聊聊" }, fail(10, 1)];
+
+  assert.deepEqual([...voidedCommentIds(comments)], ["30"]);
+  assert.equal(latestVerdict(comments).commentId, 20, "被作废的那条不能再当最新判定");
+  assert.equal(latestFail(comments).commentId, 20);
+  assert.equal(effectiveFailCount(comments), 2, "环境原因的 FAIL 不计轮次");
+
+  // 没有作废评论时行为不变。
+  const plain = [fail(30, 3), fail(20, 2), fail(10, 1)];
+  assert.equal(latestVerdict(plain).commentId, 30);
+  assert.equal(effectiveFailCount(plain), 3);
+
+  // 只有带标记的评论才能作废：正文里随手写一行 voids: 不算。
+  const fake = [{ id: 41, body: "voids: 30" }, fail(30, 3)];
+  assert.equal(latestVerdict(fake).commentId, 30);
+
+  // 全部作废 = 没有判定（等重新验收），而不是回退到更早的结论之外的猜测。
+  assert.equal(latestVerdict([voidOf(11, 10), fail(10, 1)]), null);
+});
