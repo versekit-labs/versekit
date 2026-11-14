@@ -97,7 +97,7 @@
 
     <div class="toolbar">
       <div class="todo-links" id="todos" aria-label="待处理事项"></div>
-      <span>登录检查 19:26 · 每 15 分钟</span>
+      <span>超过 24 小时没检查登录的账号显示「待确认」，发布前会再检查一次</span>
     </div>
 
     <section class="slots" id="slots" aria-label="当前账号组的平台账号"></section>
@@ -135,7 +135,32 @@ const group = VK.current();
 const platforms = VK.platforms;
 let selected = null;
 
-const levelText = {bad:'登录已失效', warn:'登录将过期', '':'登录正常'};
+const levelText = {bad:'登录已失效', warn:'登录将过期', '':'登录正常', unknown:'待确认'};
+
+// 「正常」只是上次检查的结果，不是现在的事实：超过 24 小时没检查就显示「待确认」（ACC-account-09）。
+// 真实数据带 lastCheckedAt（毫秒时间戳，来自 account.list）；设计稿的演示数据没有，用下面的小时数代替。
+const STALE_MS = 24*3600e3;
+const MOCK_CHECKED_HOURS_AGO = {'ai-bili':30};
+function checkedAt(a){
+  if(a.lastCheckedAt !== undefined) return a.lastCheckedAt;
+  const h = MOCK_CHECKED_HOURS_AGO[a.id] ?? 0.25;
+  return Date.now() - h*3600e3;
+}
+function isStale(a){
+  if(a.level) return false;
+  const t = checkedAt(a);
+  return t==null || Date.now()-t > STALE_MS;
+}
+function lvl(a){ return a.level || (isStale(a) ? 'unknown' : ''); }
+function checkedText(a){
+  const t = checkedAt(a);
+  if(t==null) return '从未检查';
+  const m = Math.max(0, Math.round((Date.now()-t)/60000));
+  if(m < 1) return '刚刚检查';
+  if(m < 60) return '上次检查 '+m+' 分钟前';
+  if(m < 48*60) return '上次检查 '+Math.round(m/60)+' 小时前';
+  return '上次检查 '+Math.round(m/1440)+' 天前';
+}
 
 function accounts(){ return VK.accounts(group); }
 
@@ -143,15 +168,17 @@ function render(){
   const list = accounts();
   const bad = list.filter(a=>a.level==='bad').length;
   const warn = list.filter(a=>a.level==='warn').length;
+  const unk = list.filter(a=>lvl(a)==='unknown').length;
   const parts = [list.length + ' / 5 个平台已接入'];
   if(bad) parts.push(bad + ' 个登录异常');
   if(warn) parts.push(warn + ' 个将过期');
-  if(!bad && !warn) parts.push('登录正常');
+  if(unk) parts.push(unk + ' 个待确认');
+  if(!bad && !warn && !unk) parts.push('登录正常');
   document.getElementById('sub').textContent = parts.join(' · ');
 
   const todos = document.getElementById('todos');
   todos.innerHTML = '';
-  const need = list.filter(a=>a.level);
+  const need = list.filter(a=>lvl(a));
   if(need.length){
     const s = document.createElement('strong');
     s.textContent = '待处理';
@@ -160,7 +187,7 @@ function render(){
       const b = document.createElement('button');
       b.className = 'todo-link';
       b.type = 'button';
-      b.textContent = platforms[a.platform].name + (a.level==='bad' ? '重登' : '续期');
+      b.textContent = platforms[a.platform].name + (a.level==='bad' ? '重登' : a.level==='warn' ? '续期' : '检查');
       b.addEventListener('click', ()=>select(a.id));
       todos.appendChild(b);
     });
@@ -182,19 +209,22 @@ function render(){
       row.tabIndex = 0;
       row.setAttribute('role','button');
       row.dataset.account = a.id;
-      row.setAttribute('aria-label', p.name + ' · ' + a.handle + ' · ' + levelText[a.level]);
+      row.setAttribute('aria-label', p.name + ' · ' + a.handle + ' · ' + levelText[lvl(a)] + ' · ' + checkedText(a));
       row.innerHTML =
         '<div class="slot-who"><svg class="plogo" aria-hidden="true"><use href="#'+p.logo+'"/></svg>'+
           '<div><span class="slot-name"></span><span class="slot-sub"></span></div></div>'+
-        '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span></div>'+
+        '<div class="slot-col"><span class="slot-k">登录状态</span><span class="slot-status"></span><div class="slot-m checkm"></div></div>'+
         '<div class="slot-col"><span class="slot-k">最近发布</span><div class="slot-v pub"></div><div class="slot-m pubm"></div></div>'+
         '<div class="slot-col col-collect"><span class="slot-k">最近采集</span><div class="slot-v col"></div><div class="slot-m colm"></div></div>'+
         '<div class="slot-act"></div>';
       row.querySelector('.slot-name').textContent = a.handle;
-      row.querySelector('.slot-sub').textContent = p.name + (a.level==='bad'?' · 发布与采集已暂停':a.level==='warn'?' · 建议提前续期':' · 运行中');
+      row.querySelector('.slot-sub').textContent = p.name + (a.level==='bad'?' · 发布与采集已暂停':a.level==='warn'?' · 建议提前续期':isStale(a)?' · 登录状态待确认':' · 运行中');
       row.querySelector('.slot-status').innerHTML = a.level
         ? '<span class="badge '+(a.level==='bad'?'bad':'warn')+'">'+levelText[a.level]+'</span>'
-        : '<span class="status-ok"><i></i>登录正常</span>';
+        : isStale(a)
+          ? '<span class="badge mute">待确认</span>'
+          : '<span class="status-ok"><i></i>登录正常</span>';
+      row.querySelector('.checkm').textContent = checkedText(a);
       row.querySelector('.pub').textContent = a.publish;
       row.querySelector('.pubm').textContent = a.publishMeta;
       row.querySelector('.col').textContent = a.collect;
@@ -203,7 +233,7 @@ function render(){
       const act = row.querySelector('.slot-act');
       const btn = document.createElement('a');
       btn.className = 'btn sm' + (a.level ? ' primary' : '');
-      btn.textContent = a.action;
+      btn.textContent = isStale(a) ? '立即检查' : a.action;
       if(a.level==='bad'){
         btn.href = VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth';
       } else {
@@ -256,17 +286,18 @@ function select(id,scroll){
   document.getElementById('d-location').textContent = VK.group(a.group).label + ' · ' + VK.platforms[a.platform].name;
   document.getElementById('d-title').textContent = a.handle;
   const issue = document.getElementById('d-issue');
-  issue.textContent = a.issue;
+  const stale = isStale(a);
+  issue.textContent = stale ? '待确认 · ' + checkedText(a) + ' · 超过 24 小时没检查，发布前会自动再查一次' : a.issue + ' · ' + checkedText(a);
   issue.className = 'detail-issue' + (a.level ? ' ' + a.level : '');
   document.getElementById('d-publish').textContent = a.publish;
   document.getElementById('d-publish-meta').textContent = a.publishMeta;
   document.getElementById('d-collect').textContent = a.collect;
   document.getElementById('d-collect-meta').textContent = a.collectMeta;
-  document.getElementById('d-cmd').textContent = a.cmd;
+  document.getElementById('d-cmd').textContent = stale ? 'vk account check ' + a.id : a.cmd;
 
   const act = document.getElementById('d-action');
-  act.textContent = a.action;
-  act.classList.toggle('primary', !!a.primary);
+  act.textContent = stale ? '立即检查' : a.action;
+  act.classList.toggle('primary', !!a.primary || stale);
   act.href = a.level==='bad'
     ? VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth'
     : '#account/' + a.id;
