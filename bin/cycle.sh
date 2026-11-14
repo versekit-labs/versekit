@@ -985,7 +985,7 @@ engineer_spec() {
   local num="$1" title="$2" wt="$3" lane="$4" branch="$5" body="$6" channel="$7"
   local extra=""
   if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
-  printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+  printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$extra" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body"
 }
 
@@ -993,7 +993,7 @@ rework_spec() {
   local num="$1" title="$2" pull="$3" branch="$4" round="$5" comment_url="$6" comment_body="$7" rwt="$8" body="$9" channel="${10}"
   local extra=""
   if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
-  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
     "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
 }
@@ -1379,7 +1379,7 @@ for q in (json.load(sys.stdin).get("queue") or []):
   fi
 
   local spec
-  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 口径里写明要真机/真实账号执行的条目，必须自己实际执行并留下自己的证据；不得只读实现方证据包就下结论。因为账号未登录、外部服务不可用等环境原因做不了时，不要判 FAIL：发 escalation 说明卡在哪，由协调器处理\n9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 口径里写明要真机/真实账号执行的条目，必须自己实际执行并留下自己的证据；不得只读实现方证据包就下结论。因为账号未登录、外部服务不可用等环境原因做不了时，不要判 FAIL：发 escalation 说明卡在哪，由协调器处理\n9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid
