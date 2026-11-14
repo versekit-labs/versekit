@@ -46,8 +46,9 @@
 #                                 重启后已不存在的 handle 按已关处理，不占这个上限。
 #
 # 通道按角色选（issue #87 / ACC-harness-claude-02）：
-#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；issue 带 model:opus label 或返工
-#     round >= 3 时用 Opus；
+#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；Opus 只认 issue 的显式 model:opus label；
+#   - issue 带 model:deepseek label：实现与返工 round 1 走 DeepSeek（不探测、不调用 claude），
+#     返工 round >= 2 升 Sonnet；DeepSeek 不可用时本轮不派，不改用 claude；
 #   - 验收 worker 始终走 DeepSeek（bin/dsh-model.sh：volc 优先、qwen 兜底），绝不选 claude；
 #   - claude 不可用时实现 worker 自动降级 DeepSeek，日志写明原因。
 # 选路逻辑集中在 bin/worker-channel.sh；每次派工日志写「角色 → 通道 → 模型」。
@@ -316,7 +317,7 @@ role_label() {
   esac
 }
 
-# issue 的 label 列表，逗号连接。model:opus 决定实现 worker 是否升级 Opus。
+# issue 的 label 列表，逗号连接。model:deepseek / model:opus 决定实现 worker 的通道与模型。
 # 走 bin/ghx（与 agentctl 同一账号，不切换全局活跃账号）；gh 失败时当作没有 label，
 # 不阻断派工——最坏只是这一单用 Sonnet。
 issue_labels() {
@@ -338,7 +339,7 @@ choose_worker_channel() {
   if [ -n "$round" ]; then args+=(--round "$round"); fi
   if [ "$noprobe" = "1" ]; then args+=(--no-probe); fi
   # worker-channel 的失败原因走 stderr，直接落到本轮日志，不被 $(...) 吞掉。
-  out=$(bin/worker-channel.sh "${args[@]}" 2>/dev/null) || return 1
+  out=$(bin/worker-channel.sh "${args[@]}") || return 1
   IFS='|' read -r CHOSEN_CHANNEL CHOSEN_MODEL CHOSEN_REASON <<< "$out"
   case "${CHOSEN_CHANNEL}:${CHOSEN_MODEL}" in
     claude:sonnet|claude:opus|volc:deepseek-v4.1-flash|qwen:deepseek-v4.1-flash-1017) return 0 ;;
@@ -411,7 +412,7 @@ ensure_terminal() {
   # claude 不可用时实现 worker 自动降级，不让整轮停派。
   if [ -z "$WORKER_AGENT" ]; then
     choose_worker_channel "$role" "$labels" "$round" 0 || {
-      logerr "    ✗ ${role_zh} 没有可用通道（claude 与 DeepSeek 都不可用）"
+      logerr "    ✗ ${role_zh} 没有可用通道，本轮不派（原因见上方 worker-channel 输出；model:deepseek 与验收不会改用 claude）"
       return 1
     }
     channel="$CHOSEN_CHANNEL"; model="$CHOSEN_MODEL"; reason="$CHOSEN_REASON"
