@@ -93,6 +93,16 @@ export function rejectionSentenceOf(text) {
   return m ? m[0].trim() : "";
 }
 
+/** 页面文本 + 地址 → 结局；成功返回 "published"，平台拒绝直接抛，没结局返回 null。 */
+export function outcomeOf({ url = "", text = "" } = {}) {
+  if (PUBLISH_REJECT.test(text)) {
+    const said = rejectionSentenceOf(text);
+    throw new AdapterError("platform_reject", `小红书拒绝了这条图文：${said || "平台没有给出具体原因（页面显示禁止发笔记）"}`);
+  }
+  if (/\/publish\/success/.test(url) || PUBLISH_SUCCESS.test(text)) return "published";
+  return null;
+}
+
 /**
  * 等发布结局。成功不只看「/publish/success」：图文常常停在当页弹一句「已提交审核」。
  * 拒绝优先判断——它可能是一个几秒就消失的 toast，等超时再报就把原因弄丢了。
@@ -102,15 +112,194 @@ export async function waitPublishOutcome(tab, { timeout = 120e3, every = 500 } =
   for (;;) {
     const url = await tab.url().catch(() => "");
     const text = await tab.eval("document.body.innerText").catch(() => "");
-    if (PUBLISH_REJECT.test(text)) {
-      const said = rejectionSentenceOf(text);
-      throw new AdapterError("platform_reject", `小红书拒绝了这条图文：${said || "平台没有给出具体原因（页面显示禁止发笔记）"}`);
-    }
-    if (/\/publish\/success/.test(url) || PUBLISH_SUCCESS.test(text)) return { state: "published" };
+    if (outcomeOf({ url, text })) return { state: "published" };
     if (Date.now() > end) {
       throw new AdapterError("flaky_ui", "等不到发布结果：页面既没有成功提示，也没有显示平台拒绝的原因");
     }
     await sleep(every);
+  }
+}
+
+// ── 提交观察 ────────────────────────────────────────────────────────────────
+// 2026-11-14 验收实测：发布按钮 enabled、2/18 已显示、鼠标事件也确实落到了按钮上，平台却
+// 没有发出提交请求；约 10 分钟后对同一页面再点一次就成功。也就是说「按钮可点」不等于
+// 「平台可提交」，而「点了」也不等于「提交了」。所以点发布这一步必须看自己的效果：
+//   · 在页面里给 XHR / fetch 包一层只读的记录（不改请求、不读签名），只记两类请求：
+//     图片上传（ros-upload / spectrum 的非 GET）在途数，和笔记提交（POST …/web_api/sns/vN/note）；
+//   · 点之前等图片上传请求清零（服务端处理完才算图片就绪）；
+//   · 点之后看「有没有发出提交请求」：发出了就只等结局、绝不再点（避免重复发帖）；
+//     没发出且按钮仍可点，才按退避间隔再点，直到提交阶段的时间预算用完。
+// 提交接口的响应体是平台自己的话：失败时把它原样带给人，而不是「等不到结果」。
+const SUBMIT_URL = String.raw`/\/web_api\/sns\/v\d+\/note(?:[?#]|$)/`;
+const UPLOAD_URL = String.raw`/ros-upload|\/spectrum\//`;
+
+export const NET_HOOK = `(() => {
+  if (window.__vkNet) return true;
+  const net = (window.__vkNet = { seen: 0, uploads: 0, submits: [] });
+  const SUBMIT = ${SUBMIT_URL};
+  const UPLOAD = ${UPLOAD_URL};
+  const begin = (url, method) => {
+    net.seen++;
+    const m = String(method || 'GET').toUpperCase();
+    const u = String(url || '');
+    if (m === 'POST' && SUBMIT.test(u)) {
+      const rec = { at: Date.now(), status: 0, body: '', done: 0 };
+      net.submits.push(rec);
+      return (status, body) => { rec.status = status; rec.body = String(body == null ? '' : body).slice(0, 2000); rec.done = Date.now(); };
+    }
+    if (m !== 'GET' && m !== 'OPTIONS' && m !== 'HEAD' && UPLOAD.test(u)) {
+      net.uploads++;
+      return () => { net.uploads = Math.max(0, net.uploads - 1); };
+    }
+    return null;
+  };
+  const P = XMLHttpRequest.prototype, open = P.open, send = P.send;
+  P.open = function (method, url) { this.__vk = [method, url]; return open.apply(this, arguments); };
+  P.send = function () {
+    const end = this.__vk ? begin(this.__vk[1], this.__vk[0]) : null;
+    if (end) this.addEventListener('loadend', () => {
+      let b = '';
+      try { b = !this.responseType || this.responseType === 'text' ? this.responseText : JSON.stringify(this.response); } catch {}
+      end(this.status, b);
+    }, { once: true });
+    return send.apply(this, arguments);
+  };
+  const f = window.fetch;
+  if (typeof f === 'function') window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : input && input.url;
+    const end = begin(url, (init && init.method) || (input && input.method) || 'GET');
+    const p = f.apply(this, arguments);
+    if (end) p.then((r) => r.clone().text().then((t) => end(r.status, t), () => end(r.status, '')), () => end(0, ''));
+    return p;
+  };
+  return true;
+})()`;
+
+const SNAPSHOT = `(() => {
+  const b = document.querySelector('xhs-publish-btn');
+  const n = window.__vkNet;
+  return JSON.stringify({
+    url: location.href,
+    text: document.body ? document.body.innerText : '',
+    btn: b ? b.getAttribute('submit-loading') + '|' + b.getAttribute('submit-disabled') : 'gone',
+    hooked: !!n,
+    seen: n ? n.seen : 0,
+    uploads: n ? n.uploads : 0,
+    submits: n ? n.submits : [],
+  });
+})()`;
+
+async function snapshot(tab) {
+  try {
+    const raw = await tab.eval(SNAPSHOT);
+    const s = JSON.parse(raw || "{}");
+    return { url: "", text: "", btn: "gone", hooked: false, seen: 0, uploads: 0, submits: [], ...s };
+  } catch {
+    // 页面在跳转（成功页）时执行上下文会销毁：当作「这一拍没看到」，不当作失败。
+    return null;
+  }
+}
+
+/** 提交接口的回执 → ok / rejected / pending；读不懂的 2xx 回执按 ok 处理，等页面结局兜底。 */
+export function submitVerdict(rec) {
+  if (!rec || !rec.done) return { state: "pending" };
+  let body = null;
+  try {
+    body = JSON.parse(rec.body || "null");
+  } catch {
+    body = null;
+  }
+  const said = String(body?.msg ?? body?.message ?? body?.data?.msg ?? "").trim();
+  const failed =
+    !(rec.status >= 200 && rec.status < 300) ||
+    body?.success === false ||
+    (typeof body?.code === "number" && body.code !== 0) ||
+    (typeof body?.result === "number" && body.result !== 0);
+  if (failed) return { state: "rejected", message: said || `提交接口返回 ${rec.status || "网络错误"}` };
+  return { state: "ok", message: said };
+}
+
+export const SUBMIT_BUDGET_MS = 200e3; // 总时限 5 分钟（ACC-publish-05）里留给「点发布 → 结局」的部分
+export const UPLOAD_SETTLE_MS = 60e3; // 点之前最多等图片上传请求清零多久
+export const RETRY_GAPS_MS = [8e3, 15e3, 25e3, 40e3, 60e3]; // 没发出提交时，再点之前分别等多久
+
+/**
+ * 点「发布」并确认它真的提交了。返回 { state: "published", clicks, submitted }；
+ * 平台拒绝抛 platform_reject（带平台原话），一直提交不出去 / 提交后没结局抛 flaky_ui（说清停在哪）。
+ */
+export async function submitAndWait(
+  tab,
+  step = () => {},
+  { budgetMs = SUBMIT_BUDGET_MS, settleMs = UPLOAD_SETTLE_MS, gaps = RETRY_GAPS_MS, every = 500 } = {},
+) {
+  await tab.eval(NET_HOOK).catch(() => {});
+  const start = Date.now();
+  const deadline = start + budgetMs;
+
+  // 1) 图片在服务端处理完才算就绪：等上传请求清零（等不到也不卡死，照样去点，再看效果）。
+  step("等待图片上传请求完成");
+  for (const end = Math.min(deadline, start + settleMs); Date.now() < end; ) {
+    const s = await snapshot(tab);
+    if (s && s.uploads === 0) break;
+    await sleep(every);
+  }
+
+  let clicks = 0;
+  let observable = false; // 钩子确实看到过页面请求，才能把「没看到提交」当作「没提交」
+  let last = null;
+  for (;;) {
+    const before = (await snapshot(tab))?.submits?.length ?? 0;
+    clicks += 1;
+    step(clicks === 1 ? "点击发布" : `第 ${clicks} 次点击发布（上一次平台没有发出提交）`);
+    await tab.clickInShadow("xhs-publish-btn", "发布");
+
+    const gap = gaps[Math.min(clicks - 1, gaps.length - 1)];
+    const windowEnd = Math.min(deadline, Date.now() + gap);
+    let submitted = false;
+    while (Date.now() < (submitted ? deadline : windowEnd)) {
+      await sleep(every);
+      const s = await snapshot(tab);
+      if (!s) continue;
+      last = s;
+      if (s.seen > 0) observable = true;
+      if (outcomeOf(s)) return { state: "published", clicks, submitted: submitted || s.submits.length > before };
+      const mine = s.submits.slice(before);
+      if (mine.length) {
+        if (!submitted) step("平台已收到提交，等待结果");
+        submitted = true;
+        const verdict = submitVerdict(mine[mine.length - 1]);
+        if (verdict.state === "rejected") {
+          throw new AdapterError("platform_reject", `小红书拒绝了这条图文：${verdict.message}`);
+        }
+        // 接口已确认收下：给页面几秒跳成功页；不跳也算发出（平台回执比页面文案可靠）。
+        if (verdict.state === "ok" && Date.now() - mine[mine.length - 1].done > 15e3) {
+          return { state: "published", clicks, submitted: true };
+        }
+      } else if (s.btn.startsWith("true|")) {
+        // 按钮进入「提交中」：同样不能再点，延长等待到预算结束。
+        submitted = true;
+      }
+    }
+
+    if (submitted) {
+      throw new AdapterError(
+        "flaky_ui",
+        `已经点了发布、平台也开始处理了，但 ${Math.round((Date.now() - start) / 1000)} 秒内没有等到结果：先去小红书「笔记管理」看这条是否已发出，确认没有再重试，避免重复发帖`,
+      );
+    }
+    const remaining = deadline - Date.now();
+    const clickable = last?.btn === "false|false";
+    if (remaining < Math.min(3e3, gaps[0]) || !clickable || (!observable && clicks >= 2)) {
+      const why = !clickable
+        ? `发布按钮现在是「${last?.btn ?? "看不到"}」`
+        : !observable
+          ? "页面请求观察不到，为避免重复发帖不再连点"
+          : "按钮一直可点、图片上传已结束";
+      throw new AdapterError(
+        "flaky_ui",
+        `点了 ${clicks} 次「发布」，平台一直没有发出提交请求（${why}）：这条图文没有发出去，可以直接重试`,
+      );
+    }
   }
 }
 
@@ -141,32 +330,6 @@ async function dismissGuide(tab, clickOn) {
   } catch {
     // 引导关不掉不是失败：发布按钮的可用性会在下一步再校验一次。
   }
-}
-
-/**
- * 点「发布」并等结局。实测图文发布页的按钮偶尔第一次点击不生效（页面不报错、按钮也还是
- * enabled），所以先给 12 秒看结局；没反应且按钮仍可点才补一次，避免重复提交。
- */
-async function submitAndWait(tab, step) {
-  const FIRST_WINDOW = 12e3;
-  await sleep(1500); // 刚切换完可见性，给页面一点提交时间
-  step("点击发布");
-  await tab.clickInShadow("xhs-publish-btn", "发布");
-  const early = await waitPublishOutcome(tab, { timeout: FIRST_WINDOW }).catch((err) => {
-    if (err instanceof AdapterError && err.code === "flaky_ui") return null; // 没反应不等于失败：可能只是这页慢
-    throw err;
-  });
-  if (early) return early;
-
-  const state = await tab
-    .eval(`(() => { const b = document.querySelector('xhs-publish-btn'); return b ? b.getAttribute('submit-loading') + '|' + b.getAttribute('submit-disabled') : 'gone'; })()`)
-    .catch(() => "gone");
-  if (state === "false|false") {
-    step("重新点击发布（上一次没有反应）");
-    await tab.clickInShadow("xhs-publish-btn", "发布");
-  }
-  // 页面已经跳走（gone）或按钮进入处理中：这里只需要等结局，不再点。
-  return waitPublishOutcome(tab, { timeout: 108e3 });
 }
 
 /** 点开「谁可以看」并选中目标项；已经选好时不动它。 */
@@ -209,6 +372,8 @@ export async function publishImageNote(tab, { note, plan, step = () => {}, click
     await tab.waitFor(IMAGE_INPUT_READY, [], { timeout: 30e3, every: 500, what: "图文上传控件" });
   }
 
+  // 上传前就装好请求观察：图片上传请求的在途数要从第一张开始算。
+  await tab.eval(NET_HOOK).catch(() => {});
   step(`上传 ${plan.count} 张图片`);
   // 一次 setFileInputFiles 传完，顺序即数组顺序（core 已按文件名自然排序）。
   await tab.upload(IMAGE_INPUT, plan.files);
@@ -252,7 +417,6 @@ export async function publishImageNote(tab, { note, plan, step = () => {}, click
     [],
     { timeout: 20e3, what: "发布按钮可用" },
   );
-  step("等待发布结果");
   const outcome = await submitAndWait(tab, step);
 
   return { state: outcome.state, visibility: plan.visibility, missed };

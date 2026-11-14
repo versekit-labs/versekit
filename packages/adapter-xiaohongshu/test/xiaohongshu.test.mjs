@@ -14,7 +14,7 @@ process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-"));
 const core = await import("../../core/src/index.mjs");
 const { AdapterError } = await import("../../core/src/errors.mjs");
 const adapter = (await import("../src/index.mjs")).default;
-const { planImageNote, rejectionSentenceOf } = await import("../src/image-note.mjs");
+const { planImageNote, rejectionSentenceOf, submitAndWait, submitVerdict, NET_HOOK } = await import("../src/image-note.mjs");
 
 const db = () => core.open();
 let seq = 0;
@@ -144,4 +144,110 @@ test("平台拒绝文案：摘出平台自己的那句话，摘不到不编", ()
   assert.equal(rejectionSentenceOf("发布\n因违反社区规范禁止发笔记"), "因违反社区规范禁止发笔记");
   assert.equal(rejectionSentenceOf("发布成功"), "");
   assert.equal(rejectionSentenceOf(null), "");
+});
+
+// ── 点「发布」要看效果（ACC-publish-07 第 5 轮：按钮可点、事件也到了，平台却没发出提交）──
+//
+// 假页面：eval(NET_HOOK) 装钩子；eval(其他) 是快照；clickInShadow 由 onClick 决定这一下有没有效果。
+function fakePage({ onClick, uploads = 0 } = {}) {
+  const page = { url: "https://creator.xiaohongshu.com/publish/publish", text: "发布笔记 2/18", btn: "false|false", seen: 3, uploads, submits: [], clicks: 0, hooked: false };
+  const tab = {
+    async eval(expr) {
+      if (expr === NET_HOOK) {
+        page.hooked = true;
+        return true;
+      }
+      const { clicks, ...shot } = page;
+      return JSON.stringify(shot);
+    },
+    async clickInShadow(host, text) {
+      assert.equal(host, "xhs-publish-btn");
+      assert.equal(text, "发布");
+      page.clicks += 1;
+      onClick?.(page);
+    },
+  };
+  return { page, tab };
+}
+const fast = { budgetMs: 2000, settleMs: 300, gaps: [80, 120, 160], every: 10 };
+
+test("提交：点一次就发出提交且接口确认 → published，只点一次", async () => {
+  const { page, tab } = fakePage({
+    onClick: (p) => {
+      p.submits.push({ at: Date.now(), status: 200, body: JSON.stringify({ success: true, code: 0 }), done: Date.now() });
+      p.url = "https://creator.xiaohongshu.com/publish/success";
+    },
+  });
+  const r = await submitAndWait(tab, () => {}, fast);
+  assert.equal(r.state, "published");
+  assert.equal(page.clicks, 1);
+  assert.equal(page.hooked, true);
+});
+
+test("提交：前几次点击没发出提交请求 → 按退避再点，直到平台真的收下", async () => {
+  const steps = [];
+  const { page, tab } = fakePage({
+    onClick: (p) => {
+      if (p.clicks < 3) return; // 前两下：事件到了按钮，但平台没有发出提交（验收现场）
+      p.submits.push({ at: Date.now(), status: 200, body: "{}", done: Date.now() });
+      p.text = "发布成功";
+    },
+  });
+  const r = await submitAndWait(tab, (s) => steps.push(s), fast);
+  assert.equal(r.state, "published");
+  assert.equal(page.clicks, 3);
+  assert.ok(steps.some((s) => /第 2 次点击发布/.test(s)), steps.join(" / "));
+});
+
+test("提交：已发出提交就绝不再点（避免重复发帖），回执失败把平台原话带给人", async () => {
+  const { page, tab } = fakePage({
+    onClick: (p) => {
+      const rec = { at: Date.now(), status: 0, body: "", done: 0 };
+      p.submits.push(rec);
+      setTimeout(() => Object.assign(rec, { status: 200, body: JSON.stringify({ success: false, code: -9135, msg: "笔记包含敏感信息" }), done: Date.now() }), 300);
+    },
+  });
+  await assert.rejects(
+    submitAndWait(tab, () => {}, fast),
+    (err) => err instanceof AdapterError && err.code === "platform_reject" && /笔记包含敏感信息/.test(err.message),
+  );
+  assert.equal(page.clicks, 1);
+});
+
+test("提交：一直没发出提交 → 预算内停手，flaky_ui 说清点了几次、没发出去、可以重试", async () => {
+  const { page, tab } = fakePage({ onClick: () => {} });
+  await assert.rejects(
+    submitAndWait(tab, () => {}, { ...fast, budgetMs: 600 }),
+    (err) => err instanceof AdapterError && err.code === "flaky_ui" && /点了 \d+ 次「发布」/.test(err.message) && /没有发出去/.test(err.message),
+  );
+  assert.ok(page.clicks >= 2, `应当重试过，实际 ${page.clicks} 次`);
+});
+
+test("提交：图片上传请求还在途时先等，不在图片没就绪时点发布", async () => {
+  const { page, tab } = fakePage({
+    uploads: 2,
+    onClick: (p) => {
+      assert.equal(p.uploads, 0, "上传请求清零前不该点发布");
+      p.text = "发布成功";
+    },
+  });
+  setTimeout(() => (page.uploads = 0), 100);
+  const r = await submitAndWait(tab, () => {}, fast);
+  assert.equal(r.state, "published");
+});
+
+test("提交：看不到页面请求（钩子失效）时最多点两次，不盲目连点", async () => {
+  const { page, tab } = fakePage({ onClick: () => {} });
+  page.seen = 0;
+  await assert.rejects(submitAndWait(tab, () => {}, fast), (err) => err.code === "flaky_ui" && /观察不到/.test(err.message));
+  assert.equal(page.clicks, 2);
+});
+
+test("提交回执口径：success:false / code≠0 / 非 2xx 是拒绝，空 2xx 回执算收下", () => {
+  assert.equal(submitVerdict(null).state, "pending");
+  assert.equal(submitVerdict({ done: 0 }).state, "pending");
+  assert.equal(submitVerdict({ done: 1, status: 200, body: '{"success":true,"code":0}' }).state, "ok");
+  assert.equal(submitVerdict({ done: 1, status: 200, body: "" }).state, "ok");
+  assert.deepEqual(submitVerdict({ done: 1, status: 200, body: '{"success":false,"msg":"今日发布次数已达上限"}' }), { state: "rejected", message: "今日发布次数已达上限" });
+  assert.equal(submitVerdict({ done: 1, status: 500, body: "oops" }).state, "rejected");
 });
