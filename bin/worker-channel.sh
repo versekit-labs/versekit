@@ -2,14 +2,18 @@
 # 选 worker 的通道与模型（issue #87 / ACC-harness-claude-01..05）。
 #
 # 口径：
-#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）。难单升级 Opus：
-#       * issue 带 model:opus label
-#       * 返工 round >= 3
+#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）。
+#   - Opus **只认显式 model:opus label**（额度原因，2026-11-14）；返工轮次不再自动升 Opus。
+#   - issue 带 model:deepseek label（简单活）：实现与返工 round 1 直接走 DeepSeek 通道
+#     （bin/dsh-model.sh：volc 优先、qwen 兜底），**不探测、不调用 claude**；
+#     返工 round >= 2 仍未过 → 单升 Sonnet（claude 通道）；仍不自动升 Opus。
+#     DeepSeek 两个通道都不可用时退出码 1、本轮不派，**绝不自动改用 claude**。
+#   - 同时带 model:opus 与 model:deepseek 时，显式 Opus 优先。
 #   - 验收 worker **始终**走 DeepSeek 通道（bin/dsh-model.sh：volc 优先、qwen 兜底），
 #     绝不选 claude。实现与验收用不同模型，彼此独立，验收不看实现方的思考过程。
 #   - claude 不可用（命令不存在 / 额度用尽 / 限流 / 网络不通）时，实现 worker 自动降级到
 #     DeepSeek 通道照常派工；探测只做一次低成本请求，只输出判断结论，不打印任何凭据。
-#   - IMPL_CHANNEL / IMPL_MODEL 可覆盖，便于演练与紧急回退。
+#   - IMPL_CHANNEL / IMPL_MODEL 显式覆盖照旧生效（优先于 label），便于演练与紧急回退。
 #
 # 输出（stdout，单行）：<通道>|<模型>|<原因>
 #   通道：claude / volc / qwen
@@ -67,6 +71,13 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 labels_has_opus() {
   case ",${LABELS}," in
     *",model:opus,"*) return 0 ;;
+  esac
+  return 1
+}
+
+labels_has_deepseek() {
+  case ",${LABELS}," in
+    *",model:deepseek,"*) return 0 ;;
   esac
   return 1
 }
@@ -259,23 +270,28 @@ esac
 # ---------------------------------------------------------------- 实现/返工：模型
 MODEL="sonnet"
 MODEL_REASON="默认 Sonnet"
+DEEPSEEK_LABEL=0   # 1 = 按 model:deepseek label 走 DeepSeek 通道（不碰 claude）
+local_round=0
+case "$ROUND" in
+  ''|*[!0-9]*) ;;
+  *) local_round="$ROUND" ;;
+esac
 if [ -n "${IMPL_MODEL:-}" ]; then
   case "$IMPL_MODEL" in
     sonnet|opus) MODEL="$IMPL_MODEL"; MODEL_REASON="IMPL_MODEL=${IMPL_MODEL} 覆盖" ;;
     *) printf 'worker-channel: IMPL_MODEL 只支持 sonnet|opus\n' >&2; exit 1 ;;
   esac
 else
-  local_round=0
-  case "$ROUND" in
-    ''|*[!0-9]*) ;;
-    *) local_round="$ROUND" ;;
-  esac
-  if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 3 ]; then
-    MODEL="opus"
-    MODEL_REASON="返工第 ${local_round} 轮（≥3）"
-  elif labels_has_opus; then
+  if labels_has_opus; then
     MODEL="opus"
     MODEL_REASON="issue 带 model:opus label"
+  elif labels_has_deepseek; then
+    if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
+      MODEL="sonnet"
+      MODEL_REASON="DeepSeek 第 ${local_round} 轮仍未过 → 升 Sonnet"
+    else
+      DEEPSEEK_LABEL=1
+    fi
   fi
 fi
 
@@ -289,6 +305,10 @@ if [ -n "${IMPL_CHANNEL:-}" ]; then
     dsh|deepseek) CHANNEL="dsh"; CHANNEL_FORCED=1; FORCE_REASON="IMPL_CHANNEL=${IMPL_CHANNEL} 强制" ;;
     *) printf 'worker-channel: IMPL_CHANNEL 只支持 claude|dsh\n' >&2; exit 1 ;;
   esac
+elif [ "$DEEPSEEK_LABEL" = "1" ]; then
+  # 简单活直走 DeepSeek：不进入 claude 分支，所以不会探测、不会调用 claude。
+  CHANNEL="dsh"
+  FORCE_REASON="issue 带 model:deepseek label → DeepSeek"
 fi
 
 if [ "$CHANNEL" = "claude" ]; then
@@ -329,7 +349,11 @@ if [ "$CHANNEL" = "claude" ]; then
 fi
 
 if ! dsh_choice; then
-  printf 'worker-channel: claude 不可用（%s），DeepSeek 通道也不可用，本轮不派工\n' "$PROBE_REASON" >&2
+  if [ "$DEEPSEEK_LABEL" = "1" ] || [ "$CHANNEL_FORCED" = "1" ]; then
+    printf 'worker-channel: %s，但火山与千问都不可用，本轮不派工（不会改用 claude）\n' "$FORCE_REASON" >&2
+  else
+    printf 'worker-channel: claude 不可用（%s），DeepSeek 通道也不可用，本轮不派工\n' "$PROBE_REASON" >&2
+  fi
   exit 1
 fi
 
