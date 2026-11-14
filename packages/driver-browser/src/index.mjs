@@ -14,7 +14,7 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
@@ -290,7 +290,7 @@ async function pickPort(accountId, profile) {
       const marker = readMarker(profile);
       // 只接管「标记对得上」的实例；端口上如果住着别人，顺延，绝不借用。
       if (marker?.accountId === accountId && Number(marker.port) === port) {
-        return { port, adopted: true, pid: marker.pid ?? null };
+        return { port, adopted: true, pid: marker.pid ?? null, headless: marker.headless };
       }
       continue;
     }
@@ -312,9 +312,10 @@ async function startInstance(accountId, { headless = false } = {}) {
   const instance = { accountId, profile, port: null, pid: null, tabs: new Set(), slotHeld: true, headless };
 
   try {
-    const { port, adopted, pid } = await pickPort(accountId, profile);
+    const { port, adopted, pid, headless: adoptedHeadless } = await pickPort(accountId, profile);
     instance.port = port;
     instance.pid = pid;
+    if (adopted) instance.headless = adoptedHeadless === true;
 
     if (!adopted) {
       const chrome = process.env.VK_CHROME_BIN ?? findChrome();
@@ -329,7 +330,7 @@ async function startInstance(accountId, { headless = false } = {}) {
       child.unref();
       instance.pid = child.pid ?? null;
       // 先写标记再等端口：否则另一个进程可能在这段窗口里误以为 profile 空闲。
-      writeMarker(profile, { accountId, port, pid: instance.pid, startedAt: Date.now() });
+      writeMarker(profile, { accountId, port, pid: instance.pid, startedAt: Date.now(), headless });
 
       let spawnError = null;
       child.once("error", (err) => {
@@ -365,6 +366,7 @@ async function startInstance(accountId, { headless = false } = {}) {
 
     claimedPorts.set(port, accountId);
     instances.set(accountId, instance);
+    if (adopted) scheduleIdleClose(instance);
     return instance;
   } catch (err) {
     if (instance.slotHeld) {
@@ -487,15 +489,38 @@ function clearStaleSingleton(profile, pid) {
  * 没有标签页时不要立刻关浏览器：登录态要复用，适配器也可能马上再开一个 tab。
  * 空闲 10 分钟后再收，避免用户屏幕上堆一排空窗口。
  */
-const IDLE_CLOSE_MS = 10 * 60e3;
+const DEFAULT_IDLE_CLOSE_MS = 10 * 60e3;
+
+/** 空闲时限；VK_BROWSER_IDLE_MS 可缩短（测试用），非法值回落默认。每次现读，方便测试改环境变量。 */
+export function idleCloseMs(raw = process.env.VK_BROWSER_IDLE_MS) {
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_IDLE_CLOSE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 10 ? n : DEFAULT_IDLE_CLOSE_MS;
+}
+
+/** 浏览器里有没有「用户在用」的页面：非空白的 page 标签。读不到按「有」处理——宁可不关。 */
+async function hasUserPages(port) {
+  try {
+    const res = await fetch(`${base(port)}/json/list`, { signal: AbortSignal.timeout(3000) });
+    const targets = await res.json();
+    return targets.some((t) => t.type === "page" && !/^(about:blank|chrome:\/\/newtab\/?)?$/.test(t.url ?? ""));
+  } catch {
+    return true;
+  }
+}
+
 function scheduleIdleClose(instance) {
   if (instance.tabs.size > 0) return;
   clearTimeout(instance.idleTimer);
-  instance.idleTimer = setTimeout(() => {
-    if (instance.tabs.size === 0) {
-      closeAccount(instance.accountId).catch(() => {});
+  instance.idleTimer = setTimeout(async () => {
+    if (instance.tabs.size !== 0 || instances.get(instance.accountId) !== instance) return;
+    // 有头窗口里若还开着用户的页面（比如正在扫码的登录窗口），不强关，下个周期再看。
+    if (!instance.headless && (await hasUserPages(instance.port))) {
+      scheduleIdleClose(instance);
+      return;
     }
-  }, IDLE_CLOSE_MS);
+    if (instance.tabs.size === 0) closeAccount(instance.accountId).catch(() => {});
+  }, idleCloseMs());
   instance.idleTimer.unref?.();
 }
 
@@ -1092,6 +1117,84 @@ export async function closeAccount(accountId) {
   clearStaleSingleton(instance.profile, pid);
   forget(id);
   removeMarker(instance.profile);
+  return true;
+}
+
+/**
+ * 守护进程退出时调用：关掉本进程管着的所有账号 Chrome（含接管来的）。
+ * Chrome 是 detached 起的，守护进程一退它们就成孤儿，空闲定时器也随进程消失。
+ */
+export async function closeAllAccounts() {
+  await Promise.allSettled([...starting.values()]);
+  const ids = [...instances.keys()];
+  const results = await Promise.allSettled(ids.map((id) => closeAccount(id)));
+  return ids.filter((_, i) => results[i].status === "fulfilled").length;
+}
+
+/**
+ * 守护进程启动时接管上一任留下的账号 Chrome（kill -9 / 重启后的孤儿）：
+ * 扫 state/browser/acc_*，标记对得上且端口还活着的纳入实例表，并启动空闲回收；
+ * 有用户页面的有头窗口由 scheduleIdleClose 保护，不会被强关。
+ * 标记存在但进程已死的只清掉过期的锁与标记。返回接管的账号 id。
+ */
+export async function adoptOrphanAccounts() {
+  const root = browserRoot();
+  let names = [];
+  try {
+    names = readdirSync(root).filter((n) => n.startsWith("acc_"));
+  } catch {
+    return [];
+  }
+  const adopted = [];
+  for (const name of names) {
+    if (instances.has(name) || starting.has(name)) continue;
+    let profile;
+    try {
+      profile = accountProfile(name);
+    } catch {
+      continue;
+    }
+    const marker = readMarker(profile);
+    const port = Number(marker?.port);
+    if (!marker || marker.accountId !== name || !Number.isInteger(port)) continue;
+    if (claimedPorts.has(port)) continue;
+    if (!(await up(port))) {
+      clearStaleSingleton(profile, marker.pid);
+      removeMarker(profile);
+      continue;
+    }
+    const instance = { accountId: name, profile, port, pid: marker.pid ?? null, tabs: new Set(), slotHeld: false, headless: marker.headless === true };
+    if (activeInstances < POOL_LIMIT) {
+      activeInstances += 1;
+      instance.slotHeld = true;
+    }
+    claimedPorts.set(port, name);
+    instances.set(name, instance);
+    scheduleIdleClose(instance);
+    adopted.push(name);
+  }
+  return adopted;
+}
+
+/**
+ * 重新登录确认成功后收掉可见登录窗口（在 delayMs 后；默认 3 秒，给 cookie 落盘留时间，
+ * 关闭走 Browser.close 会刷盘，见 closeAccount）。只动有头实例；无头实例不管。
+ * cookieUrl：给了就要求该站点至少有一个持久 cookie（expires>0）才关——纯内存会话关掉就丢，
+ * 这种情况保持窗口并返回 false。
+ */
+export async function closeLoginWindow(accountId, { delayMs = 3000, cookieUrl = null } = {}) {
+  const id = requireAccountId(accountId);
+  const instance = instances.get(id);
+  if (!instance || instance.headless) return false;
+  if (cookieUrl) {
+    const tab = [...instance.tabs][0];
+    const cookies = tab ? await tab.cookies(cookieUrl).catch(() => []) : [];
+    if (!cookies.some((c) => c.value && c.expires > 0)) return false;
+  }
+  const timer = setTimeout(() => {
+    if (instances.get(id) === instance) closeAccount(id).catch(() => {});
+  }, delayMs);
+  timer.unref?.();
   return true;
 }
 
