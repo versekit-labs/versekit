@@ -19,8 +19,10 @@
 #
 # 终端防泄漏：已完成（worker_done 被协调器 ack）的 worker 终端不会自己消失，
 # 每个残留的 dsh 进程都是一份内存。派工前先回收「已结算 dispatch」的终端进程；
-# 仍在跑的 dispatch 只读不碰。回收只调用 `terminal close`，不做 orchestration release
-# ——Run 所有权、收件箱与 release 仍归协调器（ACC-harness-run-01）。
+# 仍在跑的 dispatch 只读不碰。回收分两条路：
+#   - Orca 原生启动的 worker（默认）：`worker-release`，只在 Run 所有者（协调器）的终端里执行；
+#   - 旧路径自建的终端（CYCLE_NATIVE_AGENTS=0 或历史遗留）：`terminal close` + 台账。
+# Run 所有权与收件箱仍归协调器（ACC-harness-run-01）。
 # 电脑重启后旧 handle 会回 `terminal_handle_stale`（或已不在 `terminal list`）：
 # 这种终端本来就不存在，按「已关」记账，不重复 close、不计入未关上限；
 # 只有真实存活却关不掉的才计数（ACC-harness-leak-05）。
@@ -77,6 +79,13 @@ WORKER_AGENT="${WORKER_AGENT:-}"
 # worker-start 首次失败后的自动重试次数（口径 ACC-harness-cycle-04：至多 2 次）。
 # 重试用**同一个 task**，不重建；等待时间可调，便于演练时缩短。
 WORKER_RETRIES="${CYCLE_WORKER_RETRIES:-2}"
+# 原生启动（默认开）：worker 由 Orca 自己启动（worker-start --agent），终端归 Dispatch 所有，
+# 交活后用 worker-release 回收——这是 Orca 官方的首选路径。
+#   claude 通道 → --agent claude --model sonnet|opus
+#   DeepSeek 通道（volc/qwen）→ --agent opencode（模型取 ~/.config/opencode/opencode.json 的 model，
+#   由 bin/opencode-model.sh 在派工前按探测结果写好；Orca 目前不能给 opencode 传 --model）
+# 设 CYCLE_NATIVE_AGENTS=0 回到旧路径（自建 dsh/claude 终端 + worker-start --terminal）。
+NATIVE_AGENTS="${CYCLE_NATIVE_AGENTS:-1}"
 case "$WORKER_RETRIES" in ''|*[!0-9]*) WORKER_RETRIES=2 ;; esac
 FAILED=0
 
@@ -407,6 +416,25 @@ ensure_terminal() {
     # 原生 agent 模式没有通道概念；清掉旧映射，避免调用方读到上一单的通道。
     rm -f "$cf" "$mf" "$rf"
   fi
+  if [ "$NATIVE_AGENTS" = "1" ] && [ -z "$WORKER_AGENT" ]; then
+    # 原生启动：不自建终端。返回一个 `native:<agent>:<model>` 记号，由 worker_start_with_retry 展开。
+    local agent="" nmodel=""
+    case "$channel" in
+      claude) agent="claude"; nmodel="$model" ;;
+      volc|qwen)
+        agent="opencode"
+        if ! bin/opencode-model.sh "$channel" "$model" >/dev/null; then
+          logerr "    ✗ ${role_zh} 无法把 opencode 切到 ${channel}/${model}（见 bin/opencode-model.sh）"
+          return 1
+        fi
+        ;;
+      *) logerr "    ✗ ${role_zh} 未知通道 ${channel}"; return 1 ;;
+    esac
+    rm -f "$f" "$bf"
+    printf '%s' "$channel" > "$cf"; printf '%s' "$model" > "$mf"; printf '%s' "$reason" > "$rf"
+    printf 'native:%s:%s\n' "$agent" "$nmodel"
+    return 0
+  fi
   if [ -s "$f" ]; then
     h=$(cat "$f")
     oldch=$(cat "$cf" 2>/dev/null || true)
@@ -548,6 +576,34 @@ terminal_budget_exceeded() {
 # 前两档都记台账并清映射；只有第三档计入未关上限。日志每轮至多一行汇总。
 RECLAIM_CANDIDATES=0
 RECLAIM_REMAINING=0
+# Orca 自己启动的 worker（原生路径）交活后是 `reclaimable`：用官方的 worker-release 回收，
+# 它会归档输出并只关那一个终端。release 只有 Run 所有者能做，所以只在协调器终端里跑。
+release_reclaimable_workers() {
+  [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "${ORCA_TERMINAL_HANDLE}" = "${RUN_OWNER:-}" ] || return 0
+  local out ids d n=0 failed=0 state
+  out=$(orca orchestration worker-list --run "$RUN_ID" --terminal-state reclaimable --json 2>/dev/null) || {
+    log "  ⚠ worker-list(reclaimable) 查询失败，跳过 release（不阻断本轮）"; return 0; }
+  ids=$(printf '%s' "$out" | python3 -c '
+import json,sys
+try: r=json.load(sys.stdin).get("result") or {}
+except Exception: raise SystemExit(0)
+for w in r.get("workers") or []:
+    d=w.get("dispatchId") or (w.get("dispatch") or {}).get("id")
+    if d: print(d)
+' 2>/dev/null || true)
+  [ -n "$ids" ] || return 0
+  for d in $ids; do
+    if [ "$DRY" = "1" ]; then n=$((n + 1)); continue; fi
+    state=$(orca orchestration worker-release --dispatch "$d" --json 2>/dev/null | jfind state)
+    case "$state" in
+      released|retained) n=$((n + 1)) ;;
+      # release_pending / release_unknown：按官方要求不改用 terminal close，留给下一轮再 release。
+      *) failed=$((failed + 1)); log "  ⚠ worker-release ${d} 返回 ${state:-无状态}，下一轮再试（不改用 terminal close）" ;;
+    esac
+  done
+  if [ "$DRY" = "1" ]; then log "  · [dry-run] 会 release 已交活的 worker ${n} 个"; else log "  · worker-release：已释放 ${n} 个，待重试 ${failed} 个"; fi
+}
+
 reclaim_settled_worker_terminals() {
   local rows handle dispatch
   local ledgered=0 candidates=0 closed_now=0 stale_now=0 still_open=0
@@ -857,8 +913,19 @@ worker_start_with_retry() {
     local errf
     errf=$(mktemp "${TMPDIR:-/tmp}/cycle-worker-start-err.XXXXXX")
     rc=0
+    local -a target
+    case "$handle" in
+      native:*)
+        local n_agent n_model
+        n_agent=${handle#native:}; n_model=${n_agent#*:}; n_agent=${n_agent%%:*}
+        target=(--agent "$n_agent")
+        # opencode 的模型由它自己的配置决定，不能传 --model。
+        if [ "$n_agent" != "opencode" ] && [ -n "$n_model" ]; then target+=(--model "$n_model"); fi
+        ;;
+      *) target=(--terminal "$handle") ;;
+    esac
     out=$(orca orchestration worker-start --run "$RUN_ID" --from "$SENDER" --task "$taskid" \
-      --terminal "$handle" --worktree "$wt" --json 2>"$errf") || rc=$?
+      "${target[@]}" --worktree "$wt" --json 2>"$errf") || rc=$?
     err=$(cat "$errf" 2>/dev/null || true)
     rm -f "$errf"
 
@@ -918,7 +985,7 @@ engineer_spec() {
   local num="$1" title="$2" wt="$3" lane="$4" branch="$5" body="$6" channel="$7"
   local extra=""
   if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
-  printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+  printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$extra" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body"
 }
 
@@ -926,7 +993,7 @@ rework_spec() {
   local num="$1" title="$2" pull="$3" branch="$4" round="$5" comment_url="$6" comment_body="$7" rwt="$8" body="$9" channel="${10}"
   local extra=""
   if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
-  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
     "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
 }
@@ -1065,6 +1132,7 @@ dispatch_engineer_lane() {
 log "== 3/6 派工 =="
 # 派工前先回收：已完成 worker 的终端没人关，dsh 会一直占内存（ACC-harness-leak-01/03）。
 # 放在 claim 之前：清理失败也不影响 claim/合并，且超限时 ensure_terminal 会拒绝开新终端。
+release_reclaimable_workers
 reclaim_settled_worker_terminals
 # BSD 的 seq 1 0 会倒着输出 "1 0"，--max 0 反而派两次。显式挡掉。
 LANES_THIS_RUN="$MAX"
@@ -1243,16 +1311,39 @@ dispatch_acceptance() {
   queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
     log "  ✗ acceptance: 取队列失败"; return 1
   }
-  local num pull head acc title
-  num=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin).get("queue") or [];print(q[0]["number"] if q else "")' 2>/dev/null || true)
+  # 队列里可能有多条。旧实现只看 queue[0]：队首有锁（已验过这个 head，或被协调器暂停）
+  # 就整队停派，后面的 PR 永远等不到验收。现在逐条找第一个没锁的。
+  local num="" pull="" head="" acc="" title="" total=0 skipped=0
+  while IFS=$'\t' read -r q_num q_pull q_head q_acc q_title; do
+    [ -n "$q_num" ] || continue
+    total=$((total + 1))
+    if [ -d "$LOCK_DIR/accept-$q_num-${q_head:0:8}.lock" ]; then
+      skipped=$((skipped + 1))
+      log "  · 验收 #$q_num @${q_head:0:7} 已派过（锁存在），看下一条"
+      continue
+    fi
+    num="$q_num"; pull="$q_pull"; head="$q_head"; acc="$q_acc"; title="$q_title"
+    break
+  done < <(printf '%s' "$queue" | python3 -c '
+import json,sys
+for q in (json.load(sys.stdin).get("queue") or []):
+    print("\t".join([str(q.get("number") or ""), str(q.get("pull") or ""), str(q.get("head") or ""), ", ".join(q.get("acc") or []), str(q.get("title") or "").replace("\t"," ")]))
+' 2>/dev/null || true)
   if [ -z "$num" ]; then
-    log "  · acceptance: 没有待验收的"
+    if [ "$total" -eq 0 ]; then log "  · acceptance: 没有待验收的"; else log "  · acceptance: 队列 ${total} 条都已派过，等结果"; fi
     return 0
   fi
-  pull=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["pull"] or "")' 2>/dev/null || true)
-  head=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0].get("head") or "")' 2>/dev/null || true)
-  acc=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(", ".join(q[0].get("acc") or []))' 2>/dev/null || true)
-  title=$(printf '%s' "$queue" | python3 -c 'import json,sys;q=json.load(sys.stdin)["queue"];print(q[0]["title"])' 2>/dev/null || true)
+
+  # 验收共用一个终端：上一单还没结算就不派下一单（否则 worker-start 会被拒）。
+  local prev rc_prev=0
+  prev=$(cat "$STATE_DIR/acceptance.dispatch" 2>/dev/null || true)
+  if [ -n "$prev" ]; then
+    worker_settled "$prev" || rc_prev=$?
+    if [ "$rc_prev" -eq 1 ]; then
+      log "  · 验收终端还在跑上一单（dispatch ${prev}），#$num 等下一轮"
+      return 0
+    fi
+  fi
 
   if [ "$DRY" = "1" ]; then
     if choose_worker_channel acceptance "" "" 1; then
@@ -1266,7 +1357,7 @@ dispatch_acceptance() {
   # 锁按 issue + head_sha：打回后同一 issue 的新 head 能立刻复审，不会被 TTL 误伤。
   local lock="$LOCK_DIR/accept-$num-${head:0:8}.lock"
   if ! mkdir "$lock" 2>/dev/null; then
-    log "  · 验收 #$num @${head:0:7} 已在跑（锁存在），跳过"
+    log "  · 验收 #$num @${head:0:7} 刚被别的进程派走，跳过"
     return 0
   fi
 
@@ -1288,7 +1379,7 @@ dispatch_acceptance() {
   fi
 
   local spec
-  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
+  spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 口径里写明要真机/真实账号执行的条目，必须自己实际执行并留下自己的证据；不得只读实现方证据包就下结论。因为账号未登录、外部服务不可用等环境原因做不了时，不要判 FAIL：发 escalation 说明卡在哪，由协调器处理\n9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
     "$num" "$pull" "$head" "$ACCEPTANCE_WT" "$acc")
 
   local task taskid
@@ -1307,6 +1398,7 @@ dispatch_acceptance() {
     return 1
   fi
   record_dispatch "$START_DISPATCH" "$num" "acceptance" "$pull"
+  printf '%s\n' "$START_DISPATCH" > "$STATE_DIR/acceptance.dispatch"
   log "    ✓ 已派验收 task=$taskid dispatch=$START_DISPATCH"
   return 0
 }

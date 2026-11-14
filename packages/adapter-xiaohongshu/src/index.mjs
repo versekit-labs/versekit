@@ -16,7 +16,7 @@ import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 import { assetSetOf } from "../../core/src/asset-kind.mjs";
 import { planImageNote, publishImageNote } from "./image-note.mjs";
-import { openAccount, closeAccount, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
+import { openAccount, closeAccount, closeLoginWindow, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
 const LOGIN = "https://creator.xiaohongshu.com/login";
@@ -429,8 +429,11 @@ async function check(ctx = {}) {
       ["web_session", "access-token", "customer-session", "customerClientId"].includes(c.name) && c.value,
     );
 
-    if (!onLogin && /creator\.xiaohongshu\.com/.test(here)) return { state: "ok" };
-    if (onLogin && sessionCookie) return { state: "ok" }; // 会话 cookie 在手，登录页只是引导
+    if ((!onLogin && /creator\.xiaohongshu\.com/.test(here)) || (onLogin && sessionCookie)) {
+      // 用户的登录窗口还开着、而登录已确认：收窗口（会话 cookie 已持久化才收，见 closeLoginWindow）。
+      if (reusedVisible) closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => {});
+      return { state: "ok" }; // onLogin 且有会话 cookie：登录页只是引导
+    }
     if (onLogin) return { state: "expired", detail: LOGIN_DETAIL };
 
     // 落在别处（网络错误 / 风控页）：不冒充成功，也不误判过期。

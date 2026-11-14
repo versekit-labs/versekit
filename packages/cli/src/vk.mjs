@@ -19,7 +19,7 @@ import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
-import { browserReady, openAccount, closeAccount, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
@@ -139,12 +139,19 @@ function cmdNow() {
 
 async function doctorReport() {
   const loaded = await loadAdapters();
-  return buildDoctorReport({
+  const report = buildDoctorReport({
     browserReady,
     browser: { profile: PROFILE, port: PORT },
     adapters: loaded.adapters,
     adapterErrors: loaded.errors,
   });
+  // #100：cookie 存不下来时不能静默——这一项红灯会让整体 ok=false。
+  const cookie = cookiePersistenceCheck();
+  report.checks.push({ id: "cookie_persist", ok: cookie.ok, detail: cookie.detail, ...(cookie.next ? { next: cookie.next } : {}) });
+  report.total = report.checks.length;
+  report.passed = report.checks.filter((c) => c.ok).length;
+  report.ok = report.ok && cookie.ok;
+  return report;
 }
 
 async function cmdDoctor() {
@@ -219,7 +226,12 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
-    "account.check": ({ accountId }) => checkAccount(adapters, accountId),
+    "account.check": async ({ accountId }) => {
+      const result = await checkAccount(adapters, accountId);
+      const cookie = cookiePersistenceCheck();
+      // 登录会掉线是环境问题，账号检查要把话说出来，而不是只报「已登录」。
+      return cookie.ok ? result : { ...result, cookie_persist: { ok: false, warning: cookie.detail, next: cookie.next } };
+    },
 
     /**
      * 小红书创作平台只有短信登录，没有扫码。把「填手机号 → 发验证码 → 填验证码」做进
@@ -313,6 +325,7 @@ function daemonHandlers(adapters, log) {
       if (await creatorLoggedIn(accountId)) {
         loginSessions.delete(accountId);
         if (account.state !== "ok") setAccountState(accountId, "ok");
+        closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => {});
         return { state: "ok", mode: "manual" };
       }
       if (!loginSessions.has(accountId)) {
@@ -334,9 +347,9 @@ function daemonHandlers(adapters, log) {
         await new Promise((r) => setTimeout(r, 1000));
         if (await creatorLoggedIn(accountId, tab)) {
           loginSessions.delete(accountId);
-          // 不关浏览器：小红书创作平台的会话可能是页面内存态，关掉就没了。
-          // 让它继续跑着，后续发布直接用这个实例。
-          return { ok: true, state: "ok", next: "登录成功（浏览器保持登录态，不用再点验证）" };
+          // 会话 cookie 已持久化才收登录窗口；小红书若只有内存态会话，closeLoginWindow 会保留窗口。
+          const closing = await closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => false);
+          return { ok: true, state: "ok", next: closing ? "登录成功（登录窗口几秒后自动关闭，登录态已保存）" : "登录成功（浏览器保持登录态，不用再点验证）" };
         }
         const bad = await tab
           .eval(`(() => [...document.querySelectorAll('*')].filter((e) => e.offsetParent && e.children.length === 0 && /错误|失败|不正确|过期|频繁|无效|上限/.test(e.innerText || '')).map((e) => e.innerText.trim()).slice(0, 2).join('；'))()`)
@@ -577,10 +590,21 @@ async function cmdServe() {
   log(`适配器 ${adapters.length} 个${adapters.length ? "：" + adapters.map((a) => a.platform).join(", ") : "（尚未安装）"}`);
   for (const e of errors) log(`适配器加载失败 ${e.dir}: ${e.message}`);
 
+  // 上一任守护进程（被 kill -9 / 重启）留下的账号 Chrome：接管并纳入空闲回收。
+  adoptOrphanAccounts()
+    .then((ids) => ids.length && log(`接管了 ${ids.length} 个遗留的账号浏览器：${ids.join(", ")}（空闲后自动回收）`))
+    .catch((err) => log(`接管遗留账号浏览器失败：${err.message}`));
+
+  let stopping = false;
   for (const sig of ["SIGINT", "SIGTERM"]) {
     process.on(sig, async () => {
+      if (stopping) return;
+      stopping = true;
       log(`\n收到 ${sig}，正在停止`);
-      await daemon.close();
+      await daemon.close().catch(() => {});
+      // Chrome 是 detached 起的，不在这里关就会变成孤儿（#91）。
+      const closed = await closeAllAccounts().catch(() => 0);
+      if (closed) log(`已关闭 ${closed} 个账号浏览器`);
       process.exit(0);
     });
   }

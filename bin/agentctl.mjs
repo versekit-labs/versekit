@@ -29,7 +29,8 @@
 // **不把"有活要干"当成失败**——那会让 cron/循环误判。
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -626,8 +627,9 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
       });
       continue;
     }
-    const failCount = comments.filter((c) => parseVerdict(c.body)?.verdict === "FAIL").length;
-    const round = Number(fail.round) || failCount || 1;
+    // 轮次只数仍然有效的 FAIL：被协调器作废的（环境原因）不算。验收人自报的 round
+    // 会把作废的那几轮也数进去，所以不采信它。
+    const round = effectiveFailCount(comments) || 1;
 
     if (round >= MAX_ROUNDS) {
       if (!dryRun) {
@@ -1034,6 +1036,32 @@ async function cmdSet(repo, { issue, to, json, force }) {
 const MAX_ROUNDS = 3;
 const HANDOVER_MARKER = "<!-- agent-handback -->";
 const MERGE_MARKER = "<!-- agent-merge -->";
+/** 协调器作废一条验收判定时留的评论标记（`agentctl void`）。 */
+const VOID_MARKER = "<!-- agent-verdict-void -->";
+
+/**
+ * 被作废的判定评论 id 集合。
+ *
+ * 为什么要有「作废」：验收 FAIL 有时与代码无关（账号掉线、外部服务挂了）。这种 FAIL
+ * 既不该让 `merge --pending` 把 issue 打回 s:changes，也不该计入返工轮次——否则环境
+ * 问题会把一个没毛病的 PR 顶到 hold:human（#93 就是这么被冻结的）。
+ * 作废只能由协调器显式留痕（评论里写 `voids: <评论 id>` 和原因），不靠猜。
+ */
+function voidedCommentIds(comments) {
+  const ids = new Set();
+  for (const c of comments ?? []) {
+    const body = String(c?.body ?? "");
+    if (!body.includes(VOID_MARKER)) continue;
+    for (const m of body.matchAll(/^voids:\s*(\d+)\s*$/gim)) ids.add(m[1]);
+  }
+  return ids;
+}
+
+/** 仍然有效的判定评论（保持传入顺序）。 */
+function effectiveVerdictComments(comments) {
+  const voided = voidedCommentIds(comments);
+  return (comments ?? []).filter((c) => parseVerdict(c?.body) && !voided.has(String(c.id)));
+}
 
 /** 五道门禁。与 .github/workflows/ci.yml 的 job name 逐字一致。 */
 const REQUIRED_GATES = [
@@ -1073,7 +1101,7 @@ function parseVerdict(body) {
 
 /** 最新一条带判定的评论。FAIL 之后又 PASS 是合法的，所以必须取最新。 */
 function latestVerdict(comments) {
-  for (const c of comments) {
+  for (const c of effectiveVerdictComments(comments)) {
     const v = parseVerdict(c.body);
     if (v) return { ...v, commentId: c.id, url: c.html_url, body: c.body ?? "", createdAt: c.created_at };
   }
@@ -1082,13 +1110,18 @@ function latestVerdict(comments) {
 
 /** 最新一条验收 FAIL 评论（返工任务书要引用的就是它）。comments 已按时间倒序。 */
 function latestFail(comments) {
-  for (const c of comments) {
+  for (const c of effectiveVerdictComments(comments)) {
     const v = parseVerdict(c.body);
     if (v?.verdict === "FAIL") {
       return { ...v, commentId: c.id, url: c.html_url, body: c.body ?? "", createdAt: c.created_at };
     }
   }
   return null;
+}
+
+/** 有效 FAIL 的条数 = 已经真正打回过几轮。 */
+function effectiveFailCount(comments) {
+  return effectiveVerdictComments(comments).filter((c) => parseVerdict(c.body)?.verdict === "FAIL").length;
 }
 
 async function listComments(repo, number) {
@@ -1179,7 +1212,7 @@ async function cmdReject(repo, opts) {
   if (reproList.length === 0) throw new Error("reject 需要至少一个 --repro：怎么复现");
 
   const comments = await listComments(repo, pull.number);
-  const round = comments.filter((c) => (c.body ?? "").includes(HANDOVER_MARKER)).length + 1;
+  const round = effectiveFailCount(comments) + 1;
   const q = (s) => JSON.stringify(String(s)); // YAML 接受 JSON 风格的带引号字符串
 
   const yaml = [
@@ -1257,6 +1290,71 @@ async function cmdReject(repo, opts) {
  * 顺序是刻意的：先证"该合"（状态、判定、覆盖、门禁），再做唯一一次写操作。
  * 任何一条不过都不合，并把原因逐条打出来——含混的拒绝等于没拒绝。
  */
+/**
+ * 作废最新一条验收 FAIL（环境原因，与代码无关）。
+ *
+ * 效果：留一条带 VOID_MARKER 的评论 → 这条 FAIL 不再被 `merge --pending` 执行、不计
+ * 返工轮次；issue 回到 s:review 等重新验收；该 issue 的验收锁清掉，下一轮 cycle 能重派。
+ * `--unhold` 同时解除因为轮次到顶而加的 hold:human（必须显式给，冻结默认不动）。
+ */
+async function cmdVoid(repo, { issue: number, reason, unhold, dryRun, json }) {
+  if (!reason) throw new Error("void 需要 --reason：为什么这条 FAIL 与代码无关");
+  const { data: issue } = await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}`);
+  const { state, hold } = readState(issue);
+  if (hold && !unhold) throw new Error(`#${number} 有 hold:human；确认要解冻请加 --unhold`);
+  const { data: allPulls } = await api(`/repos/${repo.owner}/${repo.repo}/pulls`, {
+    params: { state: "open", per_page: "100", sort: "updated", direction: "desc" },
+  });
+  const pull = findPull(allPulls, issue);
+  if (!pull) throw new Error(`#${number} 找不到打开的 PR，没有可作废的判定`);
+  const comments = await listComments(repo, pull.number);
+  const latest = latestVerdict(comments);
+  if (!latest) throw new Error(`PR #${pull.number} 没有仍然有效的验收判定`);
+  if (latest.verdict !== "FAIL") throw new Error(`PR #${pull.number} 最新有效判定是 ${latest.verdict}，只能作废 FAIL`);
+
+  const body = [
+    VOID_MARKER,
+    `## 协调器：作废验收 FAIL（round ${latest.round ?? "?"}，head \`${(latest.headSha ?? "").slice(0, 7)}\`）`,
+    "",
+    `原因（与代码无关）：${reason}`,
+    "",
+    "这条 FAIL 不计返工轮次，也不触发打回；issue 回到 s:review 等重新验收。",
+    "",
+    `voids: ${latest.commentId}`,
+  ].join("\n");
+
+  const locks = acceptanceLocks(number);
+  if (dryRun) {
+    const out = { dryRun: true, issue: Number(number), pull: pull.number, voids: latest.commentId, from: state, unhold: Boolean(hold && unhold), locks };
+    process.stdout.write(json ? JSON.stringify(out, null, 2) + "\n" : `[dry-run] 会作废 PR #${pull.number} 的 FAIL 评论 ${latest.commentId}，#${number} s:${state} → s:review${hold && unhold ? "，解除 hold:human" : ""}\n`);
+    return 0;
+  }
+
+  await api(`/repos/${repo.owner}/${repo.repo}/issues/${pull.number}/comments`, { method: "POST", body: { body } });
+  if (hold && unhold) {
+    try {
+      await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}/labels/${encodeURIComponent("hold:human")}`, { method: "DELETE" });
+    } catch (err) {
+      if (!/^404 /.test(err.message)) throw err;
+    }
+  }
+  if (state !== "review") await replaceState(repo, number, "review");
+  for (const dir of locks) rmSync(dir, { recursive: true, force: true });
+  process.stdout.write(
+    `#${number} 的 FAIL（评论 ${latest.commentId}）已作废 → s:review${hold && unhold ? "，已解除 hold:human" : ""}；清掉验收锁 ${locks.length} 个\n`,
+  );
+  return 0;
+}
+
+/** cycle.sh 的验收锁：<LOCK_DIR>/accept-<issue>-<sha8>.lock（目录）。 */
+function acceptanceLocks(number) {
+  const dir = process.env.LOCK_DIR || join(homedir(), ".orca", "versekit-locks");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((n) => n.startsWith(`accept-${Number(number)}-`) && n.endsWith(".lock"))
+    .map((n) => join(dir, n));
+}
+
 async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
   const board = await loadBoard(repo);
   let targets;
@@ -1441,6 +1539,13 @@ async function main(argv) {
             --round-limit 3              超过轮次强制 s:blocked + hold:human
             --dry-run
 
+  void      作废最新一条验收 FAIL（环境/账号/外部原因，与代码无关）：不计轮次、不打回，
+            issue 回 s:review 并清掉验收锁，下一轮重新验收。
+            --issue <n>
+            --reason "..."               必填：为什么与代码无关
+            --unhold                     同时解除 hold:human（轮次到顶被冻结时用）
+            --dry-run
+
   merge     脚本合并：verdict=PASS + head_sha 对齐 + ACC 逐条覆盖 + 五门禁全绿。
             --issue <n>                  合这一个
             --pending                    把所有 s:accept 的都过一遍（巡检用）
@@ -1503,6 +1608,17 @@ async function main(argv) {
     return res?.blocked ? 1 : 0;
   }
 
+  if (cmd === "void") {
+    const issue = arg("--issue");
+    if (!issue) {
+      process.stderr.write("void 需要 --issue <n>\n");
+      return 1;
+    }
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    return cmdVoid(repo, { issue, reason: arg("--reason"), unhold: argv.includes("--unhold"), dryRun, json });
+  }
+
   if (cmd === "merge") {
     const issue = arg("--issue");
     const pending = argv.includes("--pending");
@@ -1516,7 +1632,7 @@ async function main(argv) {
   }
 
   if (cmd !== "tick") {
-    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set / reject / merge）\n`);
+    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set / reject / void / merge）\n`);
     return 1;
   }
 
@@ -1585,4 +1701,9 @@ export {
   filesOverlap,
   parseVerdict,
   validateScope,
+  voidedCommentIds,
+  effectiveVerdictComments,
+  effectiveFailCount,
+  latestVerdict,
+  latestFail,
 };
