@@ -142,7 +142,7 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 
 ## 6. 模型与通道（供你解释给人听）
 
-- 实现 / 验收 worker 目前走 dsh：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。
+- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认 Claude Sonnet，带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude。
 - 你自己（协调器）用 Claude。验收是否也换 Claude 由人决定，目前未换。
 
 ## 7. 汇报格式
