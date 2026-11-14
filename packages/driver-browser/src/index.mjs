@@ -12,7 +12,7 @@
 // 驱动只保证「绝不为同一账号开第二个实例」，不做业务加锁。
 // 兼容壳 PROFILE / PORT / openTab() 固定走 default 账号，旧调用方一行都不用改。
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -127,6 +127,70 @@ export function browserReady() {
   if (!chrome) return "没有找到 Chrome/Chromium：装一个，或设置 VK_CHROME_BIN 指向它";
   if (process.env.VK_CHROME_BIN && !existsSync(process.env.VK_CHROME_BIN)) return `VK_CHROME_BIN 不存在：${process.env.VK_CHROME_BIN}`;
   return null;
+}
+
+/**
+ * 账号 Chrome 的启动参数。
+ *
+ * --use-mock-keychain：daemon 从后台会话（launchctl managername = Background）起来时，Chrome 读不到
+ * 钥匙串里的 "Chrome Safe Storage"，cookie 无法加密就完全不写盘——一重启就掉线（#100）。
+ * 用 mock keychain 让登录态不依赖钥匙串。VK_CHROME_MOCK_KEYCHAIN=0 可关掉（只用于验证自检）。
+ */
+export function mockKeychainEnabled(env = process.env) {
+  return env.VK_CHROME_MOCK_KEYCHAIN !== "0";
+}
+
+export function chromeArgs({ port, profile, headless = false }, env = process.env) {
+  return [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profile}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...(mockKeychainEnabled(env) ? ["--use-mock-keychain"] : []),
+    ...(headless
+      ? [
+          "--headless=new",
+          "--disable-gpu",
+          "--window-size=1600,1000",
+          // 小红书会拦 HeadlessChrome UA；伪装成同版本普通 Chrome。
+          "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "--disable-blink-features=AutomationControlled",
+        ]
+      : []),
+    // 后台窗口会被节流；不关掉这三个开关，上传到一半会停在原地。
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+  ];
+}
+
+/**
+ * 自检：这台机器上、按当前配置起的账号 Chrome，登录 cookie 存得下来吗？
+ * 返回 { ok, detail, next? }，detail 是人话。不起 Chrome，只看会不会踩 #100 的坑。
+ */
+export function cookiePersistenceCheck({ env = process.env, managername } = {}) {
+  let session = managername;
+  if (session === undefined) {
+    if (process.platform !== "darwin") session = null;
+    else {
+      try {
+        session = execFileSync("launchctl", ["managername"], { encoding: "utf8", timeout: 3000 }).trim();
+      } catch {
+        session = null;
+      }
+    }
+  }
+  if (mockKeychainEnabled(env)) {
+    return { ok: true, detail: "登录会被保存（账号 Chrome 以 --use-mock-keychain 启动，不依赖钥匙串）" };
+  }
+  if (session === "Background") {
+    return {
+      ok: false,
+      detail: "登录不会被保存：当前是后台会话，Chrome 读不到钥匙串里的 Chrome Safe Storage，cookie 无法加密就不写盘，Chrome 一重启就掉线",
+      next: "取消环境变量 VK_CHROME_MOCK_KEYCHAIN=0 后重启守护进程（vk serve）",
+    };
+  }
+  return { ok: true, detail: "登录会被保存（依赖系统钥匙串；已关闭 mock keychain）" };
 }
 
 const base = (port) => `http://127.0.0.1:${port}`;
@@ -259,26 +323,7 @@ async function startInstance(accountId, { headless = false } = {}) {
 
       const child = spawn(
         chrome,
-        [
-          `--remote-debugging-port=${port}`,
-          `--user-data-dir=${profile}`,
-          "--no-first-run",
-          "--no-default-browser-check",
-          ...(headless
-            ? [
-                "--headless=new",
-                "--disable-gpu",
-                "--window-size=1600,1000",
-                // 小红书会拦 HeadlessChrome UA；伪装成同版本普通 Chrome。
-                "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "--disable-blink-features=AutomationControlled",
-              ]
-            : []),
-          // 后台窗口会被节流；不关掉这三个开关，上传到一半会停在原地。
-          "--disable-backgrounding-occluded-windows",
-          "--disable-renderer-backgrounding",
-          "--disable-background-timer-throttling",
-        ],
+        chromeArgs({ port, profile, headless }),
         { detached: true, stdio: "ignore" },
       );
       child.unref();
@@ -358,6 +403,8 @@ async function closeBrowser(port) {
   const { webSocketDebuggerUrl } = await res.json();
   if (!webSocketDebuggerUrl) throw new Error("Chrome 没有返回浏览器级调试地址");
   const ws = new WebSocket(webSocketDebuggerUrl);
+  // Chrome 约 30 秒才批量把 cookie 写一次盘；Browser.close 走正常退出流程会把内存里的写完。
+  // 所以必须优先 Browser.close 并等它自己退，SIGTERM 只作最后兜底（见 closeAccount）。
   await new Promise((resolveOpen, rejectOpen) => {
     const timer = setTimeout(() => rejectOpen(new Error("连不上 Chrome 浏览器目标")), 5000);
     timer.unref?.();
@@ -374,7 +421,7 @@ async function closeBrowser(port) {
   // 等它真的退出：Chrome 是在退出流程里把 cookie 刷到磁盘的，
   // 400ms 就返回会让后面的读取（和下次启动）看不到刚登录的会话。
   await sleep(400);
-  await waitDown(port, 8e3);
+  await waitDown(port, 15e3);
   try {
     ws.close();
   } catch {
@@ -1019,7 +1066,7 @@ export async function closeAccount(accountId) {
     } catch {
       /* 下面用 pid 兜底 */
     }
-    if (!(await waitDown(port, 5e3))) killByPid(marker.pid);
+    if (!(await waitDown(port, 15e3))) killByPid(marker.pid);
     await waitPidGone(marker.pid, 2e3);
     clearStaleSingleton(profile, marker.pid);
     removeMarker(profile);
@@ -1034,7 +1081,7 @@ export async function closeAccount(accountId) {
   }
   const marker = readMarker(instance.profile);
   const pid = instance.pid ?? marker?.pid;
-  if (!(await waitDown(instance.port, 5e3))) {
+  if (!(await waitDown(instance.port, 15e3))) {
     killByPid(pid);
     await waitDown(instance.port, 2e3);
   }
