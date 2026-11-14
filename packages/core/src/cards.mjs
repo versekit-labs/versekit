@@ -21,10 +21,12 @@ function button(label, cmd, args, eventId, now, style = "default") {
 const line = (...parts) => parts.filter(Boolean).join("\n");
 
 /** 事件 → 卡片。返回 null 表示这类事件不发卡片（内部 trace 或还没有对应动作）。 */
-export function buildEventCard(event, { publish = null, account = null, now = Date.now(), approvalUrl = null } = {}) {
+export function buildEventCard(event, { publish = null, account = null, now = Date.now(), approvalUrl = null, handoffUrl = null } = {}) {
   const payload = event.payload ?? {};
-  const who = publish ? `${publish.platform} @${publish.handle}` : payload.platform ? `${payload.platform} @${payload.handle ?? ""}` : "";
-  const what = publish?.title ? `「${publish.title}」` : "";
+  const at = (h) => `@${String(h ?? "").replace(/^@/, "")}`;
+  const who = publish ? `${publish.platform} ${at(publish.handle)}` : payload.platform ? `${payload.platform} @${payload.handle ?? ""}` : "";
+  // getPublishRow 给的是 work_title；列表接口给的是 title——两种形状都认，别让卡片丢了标题。
+  const what = publish?.title || publish?.work_title ? `「${publish.title || publish.work_title}」` : "";
   const reason = payload.code ? ERROR_CODES[payload.code]?.human ?? payload.message ?? "" : payload.message ?? payload.reason ?? "";
 
   let title = null;
@@ -42,6 +44,14 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
       break;
 
     case "publish.needs_human":
+      // 交给手机（ACC-handoff-06）：不是「自动发布没走通」，而是按约定该人来发——卡片只带标题和交接链接。
+      if (handoffUrl) {
+        title = "待在手机上发布";
+        template = "blue";
+        body = line(`${who} ${what}已经准备好，等你在手机小红书里点发布。`, "点下面打开交接页：复制文案、保存图片，再到 App 里发布。");
+        buttons.push({ tag: "button", text: { tag: "plain_text", content: "打开交接页" }, type: "primary", url: handoffUrl });
+        break;
+      }
       title = "需要你处理";
       template = "orange";
       body = line(`${who} ${what}自动发布没走通。`, reason && `原因：${reason}`, "发完回来点「我已发布」，或者让系统再试一次。");

@@ -46,7 +46,7 @@ export function doctorReport({
     const conn = open({ readonly: true });
     counts.accounts = conn.prepare("SELECT COUNT(*) n FROM account WHERE removed_at IS NULL").get().n;
     counts.expiring = conn
-      .prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired') AND removed_at IS NULL")
+      .prepare("SELECT COUNT(*) n FROM account WHERE state IN ('expiring','expired') AND removed_at IS NULL AND is_manual != 2")
       .get().n;
     counts.stuck = conn.prepare("SELECT COUNT(*) n FROM run WHERE state='running' AND lease_until < ?").get(now).n;
   }

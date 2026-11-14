@@ -674,7 +674,7 @@ async function cmdAccount() {
   }
   if (sub === "mode") {
     const [, , accountId, mode] = pos;
-    if (!accountId || !mode) throw new Error("用法：vk account mode <accountId> auto|manual");
+    if (!accountId || !mode) throw new Error("用法：vk account mode <accountId> auto|manual|handoff");
     const data = await send("account.mode", { accountId, mode }, { log });
     if (human) console.log(`${accountId} → ${mode}`);
     else out(data);
@@ -711,7 +711,7 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
-  throw new Error("用法：vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
+  throw new Error("用法：vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual|handoff | reauth <accountId> | check <accountId> | login …");
 }
 
 async function cmdBootstrap() {
@@ -921,6 +921,30 @@ async function cmdApproval() {
   throw new Error("用法：vk approval list | link <publishId> | apply <token> retry|cancel");
 }
 
+/** 交给手机：vk handoff link|done|skip <publishId>。逻辑都在 core（commands.mjs → handlers.mjs）。 */
+async function cmdHandoff() {
+  const sub = pos[1];
+  const publishId = pos[2];
+  const log = (m) => human && console.log(m);
+  if (!["link", "done", "skip"].includes(sub) || !publishId) {
+    throw new Error("用法：vk handoff link <publishId> | done <publishId> [--url <笔记链接>] | skip <publishId> [--reason <原因>]");
+  }
+  if (sub === "link") {
+    const data = await send("handoff.link", { publishId });
+    if (human) console.log(data.url);
+    else {
+      const { qr, ...rest } = data; // SVG 太长，CLI 的 JSON 里只留链接；二维码在电脑端页面显示
+      out({ ...rest, qr: qr ? "svg" : null });
+    }
+    return data;
+  }
+  const args = sub === "done" ? { publishId, ...(val("--url") ? { url: val("--url") } : {}) } : { publishId, ...(val("--reason") ? { reason: val("--reason") } : {}) };
+  const data = await send(`handoff.${sub}`, args, { log });
+  if (human) console.log(data.message ?? data.state);
+  else out(data);
+  return data;
+}
+
 async function cmdChannel() {
   const sub = pos[1];
   const name = pos[2] ?? "feishu";
@@ -1093,10 +1117,11 @@ function usage() {
       "  vk group list | add <名字> | use <组 id 或名字>",
       // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
       // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
-      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
+      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual|handoff | reauth <id>",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
+      "  vk handoff link <publishId> | done <publishId> [--url <笔记链接>] | skip <publishId> [--reason <原因>]   # 交给手机",
       "  vk collect [--now] [--platform <p>]",
       "  vk stats works [--range 7d] [--group <组>] | series <publishId>",
       "  vk publish list [--state failed] [--platform tiktok]",
@@ -1135,6 +1160,7 @@ try {
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();
   else if (cmd === "approval") await cmdApproval();
+  else if (cmd === "handoff") await cmdHandoff();
   else {
     console.error(`未知命令：${cmd}\n`);
     usage();

@@ -216,8 +216,8 @@
     box.innerHTML = accounts.map(a => {
       const info = VK.platformOf(a);
       const level = levelOf(a);
-      const disabled = level === "bad";
-      const reason = disabled ? "登录已失效，先重新登录" : a.is_manual ? "仅手动发布" : "自动发布";
+      const disabled = level === "bad" && a.mode !== "handoff";
+      const reason = a.mode === "handoff" ? "交给手机发布" : disabled ? "登录已失效，先重新登录" : a.is_manual ? "仅手动发布" : "自动发布";
       return '<label class="acct'+(disabled?' off':'')+'">' +
         '<input type="checkbox" data-id="'+a.id+'" '+(disabled?'disabled':'')+' '+(selected.has(a.id)?'checked':'')+'>' +
         '<span class="acct-who"><svg class="plogo" aria-hidden="true"><use href="#'+(info?.logo ?? 'pl-generic')+'"/></svg>' +
@@ -270,16 +270,19 @@
     if(!rows.length){ box.innerHTML = '<p class="muted-note">还没有发布记录。</p>'; return; }
     box.innerHTML = '<div class="recent">' + rows.map(r => {
       const bad = r.state === "failed" || r.state === "blocked";
-      const why = r.error_message || r.fallback_reason || "";
-      const retry = RETRY_STATES.has(r.state);
+      const handoff = VK.isPhoneHandoff(r);
+      const why = handoff ? "" : (r.error_message || r.fallback_reason || "");
+      const retry = RETRY_STATES.has(r.state) && !handoff;
       return '<div class="recent-item">' +
         '<div class="recent-top"><b>' + esc(platformName(r.platform)) + '</b>' +
         '<span class="recent-name">' + esc(r.title || r.id) + '</span>' +
-        '<span class="recent-state' + (bad ? ' bad' : '') + '">' + esc(STATE_LABEL[r.state] ?? r.state) + '</span></div>' +
+        '<span class="recent-state' + (bad ? ' bad' : '') + '">' + esc(handoff ? "待在手机上发布" : (STATE_LABEL[r.state] ?? r.state)) + '</span></div>' +
+        VK.handoffMarkup(r) +
         (why ? '<p class="recent-why">' + esc(why) + '</p>' : '') +
         (retry ? '<button class="btn" type="button" data-retry="' + esc(r.id) + '">重试</button>' : '') +
         '</div>';
     }).join("") + '</div>';
+    VK.hydrateHandoff(box);
     box.querySelectorAll("[data-retry]").forEach(btn => {
       btn.addEventListener("click", async () => {
         btn.disabled = true; btn.textContent = "正在重试…";

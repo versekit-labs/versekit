@@ -15,6 +15,7 @@
  * 退出码：0 通过；1 有阻塞项。
  */
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { readFileSync, existsSync, readdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
@@ -47,6 +48,32 @@ for (const page of PAGES) {
   if (!existsSync(join(SURFACES, slug))) {
     add('brief-missing', `docs/design/${page} 没有 surface brief（应为 .impeccable/surfaces/${slug}）`);
   }
+}
+
+// 实现版里自包含、不在 docs/design 下的页面（手机交接页，经 /h/<token> 局域网打开）。
+// 同样要有任务书、过检测器、过运行时检查；运行时用一个内置的 fixture 服务器喂数据，不依赖守护进程。
+const IMPL_PAGES = ['packages/web/public/handoff.html'];
+for (const page of IMPL_PAGES) {
+  const slug = page.replace(/[\/.]/g, '-').replace(/-html$/, '-html') + '.md';
+  if (!existsSync(join(SURFACES, slug))) add('brief-missing', `${page} 没有 surface brief（应为 .impeccable/surfaces/${slug}）`);
+}
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64');
+const FIXTURE = {
+  ok: true, publishId: 'pub_demo', platform: 'xiaohongshu', account: { name: '示例号', handle: '@demo' }, state: 'notify_pending', canAct: true,
+  title: '周末徒步路线：三条不用爬太久的山', body: '正文第一段。\n第二段，很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长。',
+  tags: ['徒步', '周末去哪儿'], bodyText: '正文第一段。\n第二段。\n\n#徒步 #周末去哪儿',
+  assets: [0, 1, 2].map(i => ({ index: i, name: `0${i + 1}.png`, kind: 'image' })), externalUrl: null, scheduledAt: null
+};
+function startFixtureServer() {
+  const srv = createServer((req, res) => {
+    const json = (o) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (req.url === '/h/demo') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(readFileSync(join(ROOT, IMPL_PAGES[0]))); }
+    if (req.url === '/h/demo/data') return json(FIXTURE);
+    if (/^\/h\/demo\/asset\/\d+$/.test(req.url)) { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PIXEL); }
+    if (req.method === 'POST') return json({ ok: true, message: '已记为已发布。' });
+    res.writeHead(404); res.end();
+  });
+  return new Promise(r => srv.listen(0, '127.0.0.1', () => r(srv)));
 }
 
 // ── 3. 静态检查：死链接 / 导航一致性 / 资源存在 ────────
@@ -98,7 +125,8 @@ for (const page of PAGES) {
 // ── 4. 检测器（含共享样式表） ──────────────────────────
 function runDetect(page) {
   return new Promise(resolve => {
-    const p = spawn(IMPECCABLE, ['detect', '--json', join(DESIGN, page)], { cwd: ROOT });
+    const target = page.includes('/') ? join(ROOT, page) : join(DESIGN, page);
+    const p = spawn(IMPECCABLE, ['detect', '--json', target], { cwd: ROOT });
     let out = '';
     p.stdout.on('data', d => out += d);
     p.stderr.on('data', () => {});
@@ -172,6 +200,11 @@ async function runtimeChecks() {
       ? URL_ARG.replace(/\/$/, '') + '/' + p + (p === 'groups.html' ? '' : '?group=ai')
       : 'file://' + join(DESIGN, p) + (p === 'groups.html' ? '' : '?group=ai')
   }));
+  let fixture = null;
+  if (!URL_ARG) {
+    fixture = await startFixtureServer();
+    cases.push({ page: IMPL_PAGES[0], url: `http://127.0.0.1:${fixture.address().port}/h/demo`, extra: true });
+  }
   const STATES = [
     { name: 'default', run: '' },
     { name: 'expanded', run: "document.querySelector('.post')?.click()" },
@@ -180,7 +213,7 @@ async function runtimeChecks() {
   ];
 
   await withChrome(async (send, consoleErrors) => {
-    for (const { page, url } of cases) {
+    for (const { page, url, extra } of cases) {
       if (URL_ARG) {
         try {
           const r0 = await fetch(url);
@@ -189,7 +222,7 @@ async function runtimeChecks() {
           add('page-missing', `${page} 无法访问 ${URL_ARG}：${e.message}`); continue;
         }
       }
-      for (const width of [1440, 390]) {
+      for (const width of (extra ? [1440, 390, 375] : [1440, 390])) {
         const seenErrors = new Set();
         const reportConsoleErrors = tag => {
           const batch = consoleErrors.splice(0);
@@ -206,7 +239,7 @@ async function runtimeChecks() {
         });
         await send('Page.navigate', { url });
         await sleep(650);
-        for (const st of STATES) {
+        for (const st of (extra ? STATES.slice(0, 1) : STATES)) {
           if (st.run) {
             await send('Runtime.evaluate', { expression: st.run });
             await sleep(120);
@@ -251,10 +284,11 @@ async function runtimeChecks() {
       }
     }
   });
+  fixture?.close();
 }
 
 // ── 执行 ───────────────────────────────────────────────
-for (const page of PAGES) {
+for (const page of [...PAGES, ...IMPL_PAGES]) {
   const findings = await runDetect(page);
   if (findings.length) {
     add('detector', `${page} 检测器 ${findings.length} 条：${findings.slice(0,2).map(f => f.antipattern).join(', ')}`);

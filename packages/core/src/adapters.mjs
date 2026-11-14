@@ -10,7 +10,8 @@ import { join, dirname } from "node:path";
 import { open, transitionPublish, emit, enqueue } from "./index.mjs";
 import { validateAdapter } from "./contract.mjs";
 import { AdapterError, toAdapterError } from "./errors.mjs";
-import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow } from "./publish-flow.mjs";
+import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow, handoffPublish } from "./publish-flow.mjs";
+import { isHandoffAccount } from "./store.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
 
@@ -63,6 +64,8 @@ export async function checkAccount(adapters, accountId) {
     if (!account) throw new Error(`没有这个账号：${accountId}`);
     const adapter = byPlatform.get(account.platform);
     const at = Date.now();
+    // 交给手机的账号不在电脑登录、不体检：不启动浏览器、不访问平台（ACC-handoff-07）。
+    if (isHandoffAccount(account)) return { skipped: true, reason: "交给手机：无需在电脑登录，不体检", handoff: true };
     const mark = (patch) => {
       const sets = Object.keys(patch).map((k) => `${k}=?`).join(", ");
       open().prepare(`UPDATE account SET ${sets} WHERE id=?`).run(...Object.values(patch), accountId);
@@ -134,6 +137,9 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
   if (adapters.some((a) => a.publish !== "none")) {
     handlers.publish = async (run) => {
       const publishId = run.target_id;
+      // 交给手机必须排在 adapterFor 之前：到点只转 notify_pending，不碰适配器、不启动浏览器、
+      // 不访问平台域名（ACC-handoff-01）。
+      if (handoffPublish(publishId)) return { state: "notify_pending", fallback: "phone_handoff" };
       const adapter = adapterFor(publishId);
       const row = getPublishRow(publishId);
       if (!row) throw new Error(`找不到发布：${publishId}`);
@@ -213,6 +219,8 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
   if (adapters.some((a) => a.collect !== "none")) {
     handlers.collect = async (run) => {
       const publishId = run.target_id;
+      // 交给手机的账号不采集（不登录就没有数据来源，也不该为它启动浏览器）。
+      if (isHandoffAccount({ is_manual: getPublishRow(publishId)?.account_manual })) return { skipped: true, reason: "handoff" };
       const adapter = adapterFor(publishId);
       if (adapter.collect === "none") throw new Error(`${adapter.platform} 还没有指标采集`);
       try {

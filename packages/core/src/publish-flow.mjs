@@ -10,6 +10,7 @@ import { ERROR_CODES, toAdapterError } from "./errors.mjs";
 import { assertPublishResult } from "./contract.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { DEFAULT_PUBLISH_TIMEOUT_MS } from "./config.mjs";
+import { isHandoffAccount } from "./store.mjs";
 
 const SNAPSHOT_SOURCES = ["api", "intercept", "csv"];
 const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
@@ -17,7 +18,7 @@ const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
 export function getPublishRow(publishId) {
   return open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.state AS account_state, a.id AS account_id, w.title AS work_title
+      `SELECT p.*, a.platform, a.handle, a.state AS account_state, a.is_manual AS account_manual, a.id AS account_id, w.title AS work_title
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -97,6 +98,20 @@ export function applyPublishResult(publishId, result) {
   }
 
   return { state: result.state, id: result.id, url: result.url, followups };
+}
+
+/**
+ * 交给手机（ACC-handoff-01）：到点不启动浏览器、不调适配器，直接转 notify_pending，
+ * fallback_reason=phone_handoff——飞书卡片与电脑端的「待在手机上发布」都由这条状态长出来。
+ * 返回 true 表示这条发布已按 handoff 处理，调用方不得再碰适配器。
+ */
+export function handoffPublish(publishId) {
+  const row = getPublishRow(publishId);
+  if (!row || !isHandoffAccount({ is_manual: row.account_manual })) return false;
+  if (row.state === "queued") {
+    transitionPublish(publishId, "notify_pending", { reason: "phone_handoff", patch: { fallback_reason: "phone_handoff" } });
+  }
+  return true;
 }
 
 const ACCOUNT_EVENT = { auth: "account.expired" };

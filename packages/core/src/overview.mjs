@@ -135,7 +135,11 @@ export function listAccountViews({ groupId = null, now = Date.now() } = {}) {
   return listAccounts({ groupId }).map((row) => {
     const collection = latestCollection(row.id);
     const publish = latestPublish(row.id);
-    const freshness = freshnessOf({ state: row.state, lastCollectedAt: collection?.captured_at }, now);
+    // 交给手机的账号不采集：新鲜度不适用，别让它被算成「陈旧」。
+    const freshness =
+      row.mode === "handoff"
+        ? { level: "unknown", reason: "交给手机：不在电脑采集", lastCollectedAt: collection?.captured_at ?? null, freshAfterMs: FRESH_AFTER_MS, staleAfterMs: STALE_AFTER_MS }
+        : freshnessOf({ state: row.state, lastCollectedAt: collection?.captured_at }, now);
     return {
       ...row,
       groupId: row.group_id ?? null,

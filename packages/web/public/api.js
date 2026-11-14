@@ -191,7 +191,7 @@
 
   /** 自动 / 仅手动 = 命令 `account.mode`。 */
   async function setAccountMode(accountId, mode) {
-    if (mode !== "auto" && mode !== "manual") throw new Error("模式只能是 auto 或 manual");
+    if (mode !== "auto" && mode !== "manual" && mode !== "handoff") throw new Error("模式只能是 auto、manual 或 handoff");
     const result = await request(`/api/accounts/${encodeURIComponent(accountId)}/mode`, {
       method: "POST",
       body: { accountId, mode },
@@ -408,6 +408,37 @@
   VK.reauthAccount = reauthAccount;
   VK.removeAccount = removeAccount;
   VK.setAccountMode = setAccountMode;
+
+  /* 交给手机的待办（ACC-handoff-06）：publish 行上 fallback_reason=phone_handoff 且仍在 notify_pending，
+   * 就显示「待在手机上发布」+ 交接页二维码。链接与二维码由 core 的 handoff.link 生成（零依赖 SVG），
+   * 页面不自己拼 token。 */
+  const isPhoneHandoff = (row) => row?.state === "notify_pending" && row?.fallback_reason === "phone_handoff";
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  function handoffMarkup(row) {
+    if (!isPhoneHandoff(row)) return "";
+    return '<div class="handoff-box" data-handoff="' + esc(row.id ?? row.publishId) + '">' +
+      '<div class="handoff-qr" aria-live="polite">二维码生成中…</div>' +
+      '<div class="handoff-text"><b>待在手机上发布</b>' +
+      '<p>用手机扫码打开交接页（手机和电脑要在同一个 WiFi）：复制文案、保存图片，再到小红书 App 里点发布。</p>' +
+      '<a class="handoff-link" target="_blank" rel="noopener"></a></div></div>';
+  }
+  async function hydrateHandoff(root) {
+    const boxes = [...root.querySelectorAll("[data-handoff]")];
+    await Promise.all(boxes.map(async (box) => {
+      try {
+        const data = await request("/api/handoffs/link?publishId=" + encodeURIComponent(box.dataset.handoff));
+        box.querySelector(".handoff-qr").innerHTML = data.qr;
+        const link = box.querySelector(".handoff-link");
+        link.href = data.url;
+        link.textContent = data.url;
+      } catch (err) {
+        box.querySelector(".handoff-qr").textContent = "二维码生成失败：" + err.message;
+      }
+    }));
+  }
+  VK.isPhoneHandoff = isPhoneHandoff;
+  VK.handoffMarkup = handoffMarkup;
+  VK.hydrateHandoff = hydrateHandoff;
   VK.query = query;
   VK.requireGroup = requireGroup;
   VK.loadSchedule = loadSchedule;

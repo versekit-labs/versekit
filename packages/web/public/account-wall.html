@@ -224,12 +224,18 @@
   }
 
   // 登录异常只看账号状态：采集新鲜度是另一条口径，不能混成一个"坏"。
+  // 交给手机的账号不在电脑登录：不存在「未登录 / 已过期 / 重新登录」，任何旧状态都不显示（ACC-handoff-07）。
+  const isHandoff = (account) => account?.mode === "handoff";
+  const HANDOFF_TEXT = "交给手机 · 无需在电脑登录";
+
   function levelOf(account){
+    if(isHandoff(account)) return "";
     return account ? (STATE_LEVEL[account.state] ?? "") : "";
   }
 
   function statusText(account){
     if(!account) return "";
+    if(isHandoff(account)) return HANDOFF_TEXT;
     return STATE_TEXT[account.state] ?? String(account.state);
   }
 
@@ -237,12 +243,14 @@
   function statusHtml(account){
     const level = levelOf(account);
     const text = esc(statusText(account));
+    if(isHandoff(account)) return '<span class="badge mute">' + text + "</span>";
     if(level) return '<span class="badge ' + level + '">' + text + "</span>";
     if(account.state === "ok") return '<span class="status-ok"><i></i>' + text + "</span>";
     return '<span class="badge mute">' + text + "</span>";
   }
 
   function statusSub(account, level){
+    if(isHandoff(account)) return "发布时在手机上完成";
     if(level === "bad") return "发布与采集已暂停";
     if(level === "warn") return "建议提前续期";
     return account.is_manual || account.state === "manual" ? "仅手动发布" : "运行中";
@@ -251,6 +259,7 @@
   function issueOf(account){
     const level = levelOf(account);
     const text = statusText(account);
+    if(isHandoff(account)) return HANDOFF_TEXT + " · 到点生成交接页，在手机小红书里点发布 · 不体检、不采集";
     if(level === "bad"){
       const last = account.lastCollectedAt ? " · 最近成功采集 " + formatTime(account.lastCollectedAt) : "";
       return text + " · 发布与采集暂停" + last;
@@ -275,6 +284,7 @@
   }
 
   function collectCell(account){
+    if(isHandoff(account)) return { value: "不采集", meta: "交给手机：数据请在 App 里看" };
     const collection = account.collection;
     if(!collection) return { value: "还没有采集", meta: "发布成功后才有指标可采" };
     return {
@@ -299,6 +309,15 @@
         feedback: (result) => bilibili || platform === "xiaohongshu"
           ? "登录窗口已打开：完成登录后页面会自动确认；没确认成功不会显示「已完成」。"
           : (result?.next ?? "登录窗口已打开，按提示完成。")
+      };
+    }
+    if(isHandoff(account)){
+      return {
+        label: "改为自动发布",
+        primary: false,
+        cmd: "vk account mode " + account.id + " auto",
+        run: () => VK.setAccountMode(account.id, "auto"),
+        feedback: () => "已改为自动发布：之后需要在电脑上登录这个账号"
       };
     }
     const mode = account.is_manual ? "auto" : "manual";

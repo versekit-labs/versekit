@@ -88,8 +88,9 @@
       const plats = w.rows.map(r => {
         const info = VK.platformMap()[r.platform] ?? { name: r.platform };
         return '<span class="plat"><span class="dot ' + levelOf(r.state) + '"></span><b>' + info.name + '</b>' +
-          '<span class="st">' + (STATE[r.state] ?? r.state) + '</span></span>';
+          '<span class="st">' + (VK.isPhoneHandoff(r) ? "待在手机上发布" : (STATE[r.state] ?? r.state)) + '</span></span>';
       }).join("");
+      const handoffs = w.rows.filter(r => VK.isPhoneHandoff(r)).map(r => VK.handoffMarkup(r)).join("");
       const earliest = Math.min(...w.rows.map(r => r.created_at ?? Date.now()));
       return '<div class="work" data-i="' + i + '">' +
         '<div class="work-head" role="button" tabindex="0">' +
@@ -98,13 +99,14 @@
           '<span class="work-state">' + plats.length + ' 个平台</span>' +
           '<span class="work-state">' + (w.rows.some(r => levelOf(r.state) === "bad") ? "有失败" : "正常") + '</span>' +
         '</div>' +
-        '<div class="work-body" hidden><div class="plats">' + plats + '</div>' +
+        '<div class="work-body"' + (handoffs ? '' : ' hidden') + '><div class="plats">' + plats + '</div>' + handoffs +
           '<div class="gapbox">采集缺口：' + (w.rows.every(r => r.state !== "published" && r.state !== "published_limited")
             ? "还没有成功发布，发布成功后才有指标可采"
             : "指标按采集任务回填；缺数据时这里会写明来源与时间") + '</div>' +
         '</div></div>';
     }).join("");
 
+    VK.hydrateHandoff(box);
     box.querySelectorAll('.work-head').forEach(head => {
       const toggle = () => { head.nextElementSibling.hidden = !head.nextElementSibling.hidden; };
       head.addEventListener("click", toggle);

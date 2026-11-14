@@ -23,7 +23,7 @@ import { deliverPending, executeAction } from "./notify.mjs";
 import { resultCard } from "./cards.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
-import { verifyApproval, applyApproval } from "./approval.mjs";
+import { verifyApproval, applyApproval, verifyHandoff, handoffContent, handoffAssetPath, applyHandoff } from "./approval.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
@@ -217,6 +217,8 @@ async function approvalPage(req, res, { token }) {
     return sendHtml(400, page("链接不可用", `<h1>链接不可用</h1><p class="muted">${err.message}</p>`));
   }
 
+  if (data.d === "handoff") return sendHtml(400, page("链接不可用", `<h1>链接不可用</h1><p class="muted">这是交接链接，请打开 /h/ 开头的那个页面。</p>`));
+
   const row = getPublishRow(data.p);
   if (!row) return sendHtml(404, page("找不到发布", `<h1>找不到这条发布</h1>`));
 
@@ -363,6 +365,102 @@ function streamState(req, res, { log, doctor = null }) {
   });
 }
 
+const ASSET_MIME = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+  ".heic": "image/heic", ".bmp": "image/bmp", ".avif": "image/avif", ".tif": "image/tiff", ".tiff": "image/tiff",
+  ".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-m4v", ".webm": "video/webm", ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo", ".flv": "video/x-flv",
+};
+
+/** 素材流：支持 Range（iOS Safari 播视频必须有）。路径只来自数据库里的作品，不接受任何客户端路径。 */
+function streamAsset(req, res, file) {
+  const type = ASSET_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
+  const { size } = statSync(file);
+  const base = { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "accept-ranges": "bytes" };
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
+  if (m && (m[1] || m[2])) {
+    let start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+    let end = m[1] && m[2] ? Number(m[2]) : size - 1;
+    end = Math.min(end, size - 1);
+    if (start > end || start >= size) {
+      res.writeHead(416, { ...base, "content-range": `bytes */${size}` });
+      return res.end();
+    }
+    res.writeHead(206, { ...base, "content-range": `bytes ${start}-${end}/${size}`, "content-length": end - start + 1 });
+    return req.method === "HEAD" ? res.end() : createReadStream(file, { start, end }).pipe(res);
+  }
+  res.writeHead(200, { ...base, "content-length": size });
+  if (req.method === "HEAD") return res.end();
+  createReadStream(file).pipe(res);
+}
+
+/**
+ * 交接页 `/h/<token>`（ACC-handoff-02）：与 `/a/` 同一道安全边界——局域网可达的第二个路径，
+ * 其余接口仍只允许本机。页面本身是静态 handoff.html，数据、素材、回执都走 token 下的子路径，
+ * 每一条都先验签与有效期，素材只按序号取（路径来自数据库，不接受客户端路径）。
+ */
+async function handoffRoute(req, res, { pathname, webRoot }) {
+  const rest = pathname.slice(3);
+  const slash = rest.indexOf("/");
+  let token = "";
+  try {
+    token = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
+  } catch {
+    token = ""; // 坏的百分号编码：当作无效链接，下面验签会给出人话
+  }
+  const sub = slash === -1 ? "" : rest.slice(slash + 1);
+
+  const json = (status, payload) => {
+    res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" });
+    res.end(JSON.stringify(payload));
+  };
+
+  if (sub === "" && (req.method === "GET" || req.method === "HEAD")) {
+    // 页面壳不带数据：过期/坏链接也先把页面发出去，由页面向 /data 要「人话」错误。
+    const file = join(webRoot, "handoff.html");
+    if (!existsSync(file)) return json(404, { ok: false, error: { code: "not_found", message: "交接页文件不存在" } });
+    res.writeHead(200, { "content-type": MIME[".html"], "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" });
+    return req.method === "HEAD" ? res.end() : createReadStream(file).pipe(res);
+  }
+
+  let data;
+  try {
+    data = verifyHandoff(token);
+  } catch (err) {
+    return json(410, { ok: false, error: { code: "link_invalid", message: err.message } });
+  }
+
+  if (sub === "data" && req.method === "GET") {
+    const content = handoffContent(data.p);
+    if (!content) return json(404, { ok: false, error: { code: "not_found", message: "找不到这条发布" } });
+    return json(200, { ok: true, ...content, canAct: content.state === "notify_pending" });
+  }
+
+  const asset = /^asset\/(\d+)$/.exec(sub);
+  if (asset && (req.method === "GET" || req.method === "HEAD")) {
+    const file = handoffAssetPath(data.p, Number(asset[1]));
+    if (!file || !existsSync(file)) return json(404, { ok: false, error: { code: "not_found", message: "没有这个素材" } });
+    return streamAsset(req, res, file);
+  }
+
+  if ((sub === "done" || sub === "skip") && req.method === "POST") {
+    let body = {};
+    try {
+      body = await readBody(req);
+    } catch (err) {
+      return json(err.status ?? 400, { ok: false, error: { code: "bad_request", message: err.message } });
+    }
+    try {
+      const result = applyHandoff(token, sub, { url: body.url, reason: body.reason, actor: `link:${req.socket.remoteAddress ?? "phone"}` });
+      return json(200, result);
+    } catch (err) {
+      return json(400, { ok: false, error: { code: "handoff_failed", message: err.message } });
+    }
+  }
+
+  return json(404, { ok: false, error: { code: "not_found", message: `没有这个接口：${req.method} ${pathname}` } });
+}
+
 /** Path exists but with a different verb → 405, which is a different bug from 404. */
 function pathExists(pathname) {
   return ROUTES.some((route) => route.regex.test(pathname));
@@ -376,11 +474,14 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
 
     const remote = req.socket.remoteAddress ?? "";
     const loopback = remote === "" || remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-    if (!loopback && !pathname.startsWith("/a/")) {
+    if (!loopback && !pathname.startsWith("/a/") && !pathname.startsWith("/h/")) {
       return send(res, 403, { ok: false, error: { code: "forbidden", message: "这个接口只允许本机访问" } });
     }
 
-    // 手机审批页：唯一允许从局域网访问的页面（安全边界见 serve 的 host 设置）。
+    // 手机交接页：与 /a/ 同一安全边界（局域网第二个路径），其他接口仍只允许本机。
+    if (pathname.startsWith("/h/")) return handoffRoute(req, res, { pathname, webRoot });
+
+    // 手机审批页：允许从局域网访问的页面（安全边界见 serve 的 host 设置）。
     if (pathname.startsWith("/a/") && (req.method === "GET" || req.method === "POST")) {
       return approvalPage(req, res, { token: pathname.slice(3) });
     }

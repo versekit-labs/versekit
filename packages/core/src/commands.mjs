@@ -221,13 +221,13 @@ export const COMMANDS = [
   },
   {
     name: "account.mode",
-    summary: "把账号设为自动发布 / 仅手动",
+    summary: "把账号设为自动发布 / 仅手动 / 交给手机（handoff）",
     remote: true,
-    args: { accountId: "string", mode: "auto|manual" },
+    args: { accountId: "string", mode: "auto|manual|handoff" },
     idempotent: (a) => `mode:${a.accountId}:${a.mode}`,
     ttlMs: 24 * 3600e3,
     http: { method: "POST", path: "/api/accounts/:accountId/mode" },
-    cli: { usage: "vk account mode <accountId> auto|manual" },
+    cli: { usage: "vk account mode <accountId> auto|manual|handoff" },
     card: { label: "转手动跟踪", style: "default", confirm: false },
     audit: "always",
   },
@@ -319,6 +319,36 @@ export const COMMANDS = [
     args: { token: "string", decision: "string" },
     http: { method: "POST", path: "/api/approvals/apply" },
     cli: { usage: "vk approval apply <token> retry|cancel" },
+    card: null,
+    audit: "always",
+  },
+  {
+    name: "handoff.link",
+    summary: "给一条「交给手机」的发布生成交接页链接和二维码",
+    remote: false,
+    args: { publishId: "string" },
+    http: { method: "GET", path: "/api/handoffs/link" },
+    cli: { usage: "vk handoff link <publishId>" },
+    card: null,
+    audit: "never",
+  },
+  {
+    name: "handoff.done",
+    summary: "回执：已在手机 App 里发布（可带笔记链接，交接页的「我已发布」走它）",
+    remote: false,
+    args: { publishId: "string", url: "string?" },
+    http: { method: "POST", path: "/api/handoffs/done" },
+    cli: { usage: "vk handoff done <publishId> [--url <笔记链接>]" },
+    card: null,
+    audit: "always",
+  },
+  {
+    name: "handoff.skip",
+    summary: "回执：这次不发了（交接页的「这次不发了」走它）",
+    remote: false,
+    args: { publishId: "string", reason: "string?" },
+    http: { method: "POST", path: "/api/handoffs/skip" },
+    cli: { usage: "vk handoff skip <publishId> [--reason <原因>]" },
     card: null,
     audit: "always",
   },
@@ -569,7 +599,7 @@ export function parseArgs(command, input = {}) {
     if (type === "number" && typeof value !== "number") throw new Error(`参数 ${key} 必须是数字`);
     if (type === "boolean" && typeof value !== "boolean") throw new Error(`参数 ${key} 必须是布尔值`);
     if (type === "string[]" && !Array.isArray(value)) throw new Error(`参数 ${key} 必须是字符串数组`);
-    if (type === "auto|manual" && !["auto", "manual"].includes(value)) throw new Error(`参数 ${key} 只能是 auto 或 manual`);
+    if (type === "auto|manual|handoff" && !["auto", "manual", "handoff"].includes(value)) throw new Error(`参数 ${key} 只能是 auto、manual 或 handoff`);
     out[key] = value;
   }
   for (const key of Object.keys(input)) {

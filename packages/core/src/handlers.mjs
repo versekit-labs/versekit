@@ -15,6 +15,8 @@ import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
+import { handoffLink, handoffPath, applyHandoffDecision } from "./approval.mjs";
+import { qrSvg } from "./qr.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -168,7 +170,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return {
         ...result,
         group: { id: g.id, name: g.name },
-        next: result.existed ? null : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）`,
+        next: result.existed ? null : store.HANDOFF_BY_DEFAULT.has(platform) ? `${platform} 默认交给手机发布：无需在电脑登录，发布时用手机打开交接页` : `下一步：vk account reauth ${result.id}（在电脑前完成扫码）`,
       };
     },
 
@@ -183,6 +185,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "account.reauth": ({ accountId }) => {
       const account = store.getAccount(accountId);
       if (!account) fail(`没有这个账号：${accountId}`);
+      if (store.isHandoffAccount(account)) {
+        return { accountId, started: false, next: "这个账号是「交给手机」模式：不需要在电脑登录。要改回自动发布：vk account mode " + accountId + " auto" };
+      }
       const adapter = byPlatform.get(account.platform);
       if (!adapter) fail(`没有 ${account.platform} 适配器，先安装 packages/adapter-${account.platform}`);
       if (account.platform === "bilibili") {
@@ -258,6 +263,19 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "approval.apply": ({ token, decision }) => applyApproval(token, decision, { actor: "cli" }),
 
+    // 交给手机：链接、二维码、回执都在 core 里算，交接页与 CLI 是同一份逻辑。
+    "handoff.link": ({ publishId }) => {
+      const row = store.getPublish(publishId);
+      if (!row) fail(`没有这条发布：${publishId}`);
+      if (!store.isHandoffAccount({ is_manual: row.account_manual })) fail(`这条发布的账号不是「交给手机」模式（vk account mode <账号> handoff）`);
+      const url = handoffLink(publishId);
+      return { publishId, url, path: handoffPath(publishId), state: row.state, qr: qrSvg(url, { label: "手机扫码打开交接页" }) };
+    },
+
+    "handoff.done": ({ publishId, url }) => applyHandoffDecision(publishId, "done", { url, actor: "cli", origin: "cli" }),
+
+    "handoff.skip": ({ publishId, reason }) => applyHandoffDecision(publishId, "skip", { reason, actor: "cli", origin: "cli" }),
+
     "publish.retry": ({ publishId }) => {
       const row = store.getPublish(publishId);
       if (!row) fail(`没有这条发布：${publishId}`);
@@ -292,7 +310,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         patch: row.published_at ? {} : { published_at: publishedAt },
       });
       // 人工确认的发布也要进采集节奏，否则 notify 模式的作品永远没有数据。
-      const next = nextCollectAt(publishedAt);
+      // 交给手机的账号例外：不登录就没有采集来源，也不该为它启动浏览器（ACC-handoff-07）。
+      const next = store.isHandoffAccount({ is_manual: row.account_manual }) ? null : nextCollectAt(publishedAt);
       if (next) enqueue({ kind: "collect", targetType: "publish", targetId: publishId, lane: row.account_id, priority: 200, runAfter: next });
       return { publishId, state: "published" };
     },
@@ -300,11 +319,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "collect.now": ({ publishId = null, platform = null }) => {
       const conn = open();
       const rows = publishId
-        ? [conn.prepare("SELECT p.id, p.account_id, a.platform, p.state FROM publish p JOIN account a ON a.id=p.account_id WHERE p.id=?").get(publishId)]
+        ? [conn.prepare("SELECT p.id, p.account_id, a.platform, a.is_manual, p.state FROM publish p JOIN account a ON a.id=p.account_id WHERE p.id=?").get(publishId)]
         : conn
             .prepare(
-              `SELECT p.id, p.account_id, a.platform, p.state FROM publish p JOIN account a ON a.id=p.account_id
-                WHERE (? IS NULL OR a.platform = ?) AND p.state IN ('published','published_limited')
+              `SELECT p.id, p.account_id, a.platform, a.is_manual, p.state FROM publish p JOIN account a ON a.id=p.account_id
+                WHERE (? IS NULL OR a.platform = ?) AND a.is_manual != 2 AND p.state IN ('published','published_limited')
                 ORDER BY p.updated_at DESC LIMIT 200`,
             )
             .all(platform, platform);
@@ -313,6 +332,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!target.length) fail(publishId ? `没有这条发布：${publishId}` : "没有已发布的作品可以采集");
 
       const targets = target.map((r) => {
+        if (store.isHandoffAccount(r)) fail("这条是交给手机发布的：不登录电脑，没有采集来源（要看数据请在手机 App 里看）");
         if (!["published", "published_limited"].includes(r.state)) fail(`这条发布还没成功（${r.state}），没有指标可采`);
         return { publishId: r.id, runId: queueCollect(r.id, r.account_id) };
       });
