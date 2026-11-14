@@ -19,8 +19,10 @@
 #
 # 终端防泄漏：已完成（worker_done 被协调器 ack）的 worker 终端不会自己消失，
 # 每个残留的 dsh 进程都是一份内存。派工前先回收「已结算 dispatch」的终端进程；
-# 仍在跑的 dispatch 只读不碰。回收只调用 `terminal close`，不做 orchestration release
-# ——Run 所有权、收件箱与 release 仍归协调器（ACC-harness-run-01）。
+# 仍在跑的 dispatch 只读不碰。回收分两条路：
+#   - Orca 原生启动的 worker（默认）：`worker-release`，只在 Run 所有者（协调器）的终端里执行；
+#   - 旧路径自建的终端（CYCLE_NATIVE_AGENTS=0 或历史遗留）：`terminal close` + 台账。
+# Run 所有权与收件箱仍归协调器（ACC-harness-run-01）。
 # 电脑重启后旧 handle 会回 `terminal_handle_stale`（或已不在 `terminal list`）：
 # 这种终端本来就不存在，按「已关」记账，不重复 close、不计入未关上限；
 # 只有真实存活却关不掉的才计数（ACC-harness-leak-05）。
@@ -77,6 +79,13 @@ WORKER_AGENT="${WORKER_AGENT:-}"
 # worker-start 首次失败后的自动重试次数（口径 ACC-harness-cycle-04：至多 2 次）。
 # 重试用**同一个 task**，不重建；等待时间可调，便于演练时缩短。
 WORKER_RETRIES="${CYCLE_WORKER_RETRIES:-2}"
+# 原生启动（默认开）：worker 由 Orca 自己启动（worker-start --agent），终端归 Dispatch 所有，
+# 交活后用 worker-release 回收——这是 Orca 官方的首选路径。
+#   claude 通道 → --agent claude --model sonnet|opus
+#   DeepSeek 通道（volc/qwen）→ --agent opencode（模型取 ~/.config/opencode/opencode.json 的 model，
+#   由 bin/opencode-model.sh 在派工前按探测结果写好；Orca 目前不能给 opencode 传 --model）
+# 设 CYCLE_NATIVE_AGENTS=0 回到旧路径（自建 dsh/claude 终端 + worker-start --terminal）。
+NATIVE_AGENTS="${CYCLE_NATIVE_AGENTS:-1}"
 case "$WORKER_RETRIES" in ''|*[!0-9]*) WORKER_RETRIES=2 ;; esac
 FAILED=0
 
@@ -407,6 +416,25 @@ ensure_terminal() {
     # 原生 agent 模式没有通道概念；清掉旧映射，避免调用方读到上一单的通道。
     rm -f "$cf" "$mf" "$rf"
   fi
+  if [ "$NATIVE_AGENTS" = "1" ] && [ -z "$WORKER_AGENT" ]; then
+    # 原生启动：不自建终端。返回一个 `native:<agent>:<model>` 记号，由 worker_start_with_retry 展开。
+    local agent="" nmodel=""
+    case "$channel" in
+      claude) agent="claude"; nmodel="$model" ;;
+      volc|qwen)
+        agent="opencode"
+        if ! bin/opencode-model.sh "$channel" "$model" >/dev/null; then
+          logerr "    ✗ ${role_zh} 无法把 opencode 切到 ${channel}/${model}（见 bin/opencode-model.sh）"
+          return 1
+        fi
+        ;;
+      *) logerr "    ✗ ${role_zh} 未知通道 ${channel}"; return 1 ;;
+    esac
+    rm -f "$f" "$bf"
+    printf '%s' "$channel" > "$cf"; printf '%s' "$model" > "$mf"; printf '%s' "$reason" > "$rf"
+    printf 'native:%s:%s\n' "$agent" "$nmodel"
+    return 0
+  fi
   if [ -s "$f" ]; then
     h=$(cat "$f")
     oldch=$(cat "$cf" 2>/dev/null || true)
@@ -548,6 +576,34 @@ terminal_budget_exceeded() {
 # 前两档都记台账并清映射；只有第三档计入未关上限。日志每轮至多一行汇总。
 RECLAIM_CANDIDATES=0
 RECLAIM_REMAINING=0
+# Orca 自己启动的 worker（原生路径）交活后是 `reclaimable`：用官方的 worker-release 回收，
+# 它会归档输出并只关那一个终端。release 只有 Run 所有者能做，所以只在协调器终端里跑。
+release_reclaimable_workers() {
+  [ -n "${ORCA_TERMINAL_HANDLE:-}" ] && [ "${ORCA_TERMINAL_HANDLE}" = "${RUN_OWNER:-}" ] || return 0
+  local out ids d n=0 failed=0 state
+  out=$(orca orchestration worker-list --run "$RUN_ID" --terminal-state reclaimable --json 2>/dev/null) || {
+    log "  ⚠ worker-list(reclaimable) 查询失败，跳过 release（不阻断本轮）"; return 0; }
+  ids=$(printf '%s' "$out" | python3 -c '
+import json,sys
+try: r=json.load(sys.stdin).get("result") or {}
+except Exception: raise SystemExit(0)
+for w in r.get("workers") or []:
+    d=w.get("dispatchId") or (w.get("dispatch") or {}).get("id")
+    if d: print(d)
+' 2>/dev/null || true)
+  [ -n "$ids" ] || return 0
+  for d in $ids; do
+    if [ "$DRY" = "1" ]; then n=$((n + 1)); continue; fi
+    state=$(orca orchestration worker-release --dispatch "$d" --json 2>/dev/null | jfind state)
+    case "$state" in
+      released|retained) n=$((n + 1)) ;;
+      # release_pending / release_unknown：按官方要求不改用 terminal close，留给下一轮再 release。
+      *) failed=$((failed + 1)); log "  ⚠ worker-release ${d} 返回 ${state:-无状态}，下一轮再试（不改用 terminal close）" ;;
+    esac
+  done
+  if [ "$DRY" = "1" ]; then log "  · [dry-run] 会 release 已交活的 worker ${n} 个"; else log "  · worker-release：已释放 ${n} 个，待重试 ${failed} 个"; fi
+}
+
 reclaim_settled_worker_terminals() {
   local rows handle dispatch
   local ledgered=0 candidates=0 closed_now=0 stale_now=0 still_open=0
@@ -857,8 +913,19 @@ worker_start_with_retry() {
     local errf
     errf=$(mktemp "${TMPDIR:-/tmp}/cycle-worker-start-err.XXXXXX")
     rc=0
+    local -a target
+    case "$handle" in
+      native:*)
+        local n_agent n_model
+        n_agent=${handle#native:}; n_model=${n_agent#*:}; n_agent=${n_agent%%:*}
+        target=(--agent "$n_agent")
+        # opencode 的模型由它自己的配置决定，不能传 --model。
+        if [ "$n_agent" != "opencode" ] && [ -n "$n_model" ]; then target+=(--model "$n_model"); fi
+        ;;
+      *) target=(--terminal "$handle") ;;
+    esac
     out=$(orca orchestration worker-start --run "$RUN_ID" --from "$SENDER" --task "$taskid" \
-      --terminal "$handle" --worktree "$wt" --json 2>"$errf") || rc=$?
+      "${target[@]}" --worktree "$wt" --json 2>"$errf") || rc=$?
     err=$(cat "$errf" 2>/dev/null || true)
     rm -f "$errf"
 
@@ -1065,6 +1132,7 @@ dispatch_engineer_lane() {
 log "== 3/6 派工 =="
 # 派工前先回收：已完成 worker 的终端没人关，dsh 会一直占内存（ACC-harness-leak-01/03）。
 # 放在 claim 之前：清理失败也不影响 claim/合并，且超限时 ensure_terminal 会拒绝开新终端。
+release_reclaimable_workers
 reclaim_settled_worker_terminals
 # BSD 的 seq 1 0 会倒着输出 "1 0"，--max 0 反而派两次。显式挡掉。
 LANES_THIS_RUN="$MAX"
