@@ -14,6 +14,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
 import { assetSetOf } from "../../core/src/asset-kind.mjs";
 import { planImageNote, publishImageNote, noteIdFromPublishResponse } from "./image-note.mjs";
 
@@ -34,7 +35,7 @@ function load(publishId) {
   const row = open()
     .prepare(
       `SELECT p.*, a.platform, a.handle, a.id AS account_id,
-              w.title AS work_title, w.asset_path, w.meta_json
+              w.title AS work_title, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -231,7 +232,7 @@ async function fillBody(tab, body) {
   }
 }
 
-async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
+async function publish({ publishId, asset: given = null, dryRun = false, signal, onStep } = {}) {
   requireId(publishId);
   let tab = null;
   let accountId = null;
@@ -255,7 +256,9 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     const row = load(publishId);
     accountId = row.account_id;
     const note = planNote(row);
-    const asset = text(row.asset_path);
+    // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）；直接调用（dry-run、测试）时
+    // 也问 core，不自己读作品表的素材列——那一列只是第一支成片的第一个版本。
+    const asset = text(given ?? resolvePublishAsset(publishId).asset);
     if (!existsSync(asset)) throw new AdapterError("asset_invalid", `找不到素材：${asset}`);
 
     // 能力声明的本地兜底：内核已在创建前拦过（ACC-publish-04 / ACC-publish-06），但库里可能

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { attachVersion } from "./fixtures/attach-version.mjs";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-publish-safety-"));
 process.env.VK_HOME = HOME;
@@ -38,6 +39,7 @@ function seed({ state = "queued", platform = "xiaohongshu", asset = "/tmp/a.mp4"
   db().prepare("INSERT INTO work (id,title,asset_path,created_at) VALUES (?,?,?,?)").run(`w${k}`, `t${k}`, asset, now);
   db().prepare("INSERT INTO account (id,platform,handle,created_at) VALUES (?,?,?,?)").run(`a${k}`, platform, `@h${k}`, now);
   db().prepare("INSERT INTO publish (id,work_id,account_id,state,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(`p${k}`, `w${k}`, `a${k}`, state, now, now);
+  attachVersion(db(), `p${k}`);
   return { publishId: `p${k}`, accountId: `a${k}` };
 }
 

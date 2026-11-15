@@ -106,6 +106,23 @@ export function validateAdapter(adapter, where = "adapter") {
 }
 
 /**
+ * core 交给适配器 publish() 的入参（ACC-v2-confirm-07）。
+ *
+ *   { publishId, asset, dryRun?, signal?, onStep? }
+ *
+ * `asset` 是 core 按平台稿的 `version_id` 解析出的素材路径（视频文件或图文目录）。适配器
+ * 用它，不再自己去读 `work.asset_path`——那一列只代表第一支成片的第一个版本。
+ */
+export function assertPublishInput(input, where = "publish") {
+  if (!input || typeof input !== "object") fail(where, "适配器入参必须是对象");
+  if (typeof input.publishId !== "string" || !input.publishId.trim()) fail(where, "适配器入参缺少 publishId");
+  if (typeof input.asset !== "string" || !input.asset.trim()) {
+    fail(where, "适配器入参缺少 asset：素材路径必须由 core 按平台稿的语言版本解析后传入");
+  }
+  return input;
+}
+
+/**
  * The publish result the core is allowed to accept. Called at the adapter boundary, not deep in the
  * runner: a malformed result means the adapter is wrong, and saying so at the source is cheaper
  * than debugging a half-written publish row later.

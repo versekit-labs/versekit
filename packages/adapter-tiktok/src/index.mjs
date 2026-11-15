@@ -16,6 +16,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError, toAdapterError } from "../../core/src/errors.mjs";
+import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
 import { openAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en";
@@ -411,7 +412,7 @@ function load(publishId) {
   const row = db
     .prepare(
       `SELECT p.*, a.platform, a.handle, a.id AS account_id,
-              w.title AS work_title, w.asset_path, w.meta_json
+              w.title AS work_title, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -451,7 +452,7 @@ async function withEvidence(tab, accountId, tag, err) {
 
 // ------------------------------------------------------------------ 发布
 
-async function publish({ publishId, dryRun = false } = {}) {
+async function publish({ publishId, asset: given = null, dryRun = false } = {}) {
   requirePublishId(publishId);
   let tab = null;
   let accountId = null;
@@ -461,7 +462,9 @@ async function publish({ publishId, dryRun = false } = {}) {
     accountId = row.account_id;
     const plan = planPost(row);
     const policy = requestedVisibility(row);
-    const asset = requireFile(row.asset_path, "成片");
+    // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）；直接调用（dry-run、测试）时
+    // 也问 core，不自己读作品表的素材列——那一列只是第一支成片的第一个版本。
+    const asset = requireFile(given ?? resolvePublishAsset(publishId).asset, "成片");
     const cover = plan.cover ? requireFile(plan.cover, "封面") : null;
     const handle = normaliseHandle(row.handle);
     const steps = [];

@@ -33,6 +33,7 @@ function fixture(asset) {
   db()
     .prepare("INSERT INTO publish (id,work_id,account_id,mode,visibility,state,created_at,updated_at) VALUES (?,?,?, 'auto','public','auto_running',?,?)")
     .run(`p${k}`, `w${k}`, `a${k}`, now, now);
+  attachVersion(db(), `p${k}`);
   return `p${k}`;
 }
 
@@ -278,6 +279,7 @@ test("提交回执口径：success:false / code≠0 / 非 2xx 是拒绝，空 2x
 
 // ---- ACC-v2-confirm-04：确认前改过的标题（overrides_json.title）优先于作品标题
 import { planNote } from "../src/index.mjs";
+import { attachVersion } from "../../core/test/fixtures/attach-version.mjs";
 
 test("planNote uses the title edited before confirmation (overrides.title)", () => {
   const base = { work_title: "原标题", meta_json: JSON.stringify({ title: "作品元标题", body: "正文" }) };

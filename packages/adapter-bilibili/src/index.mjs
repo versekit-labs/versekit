@@ -13,6 +13,7 @@ import { readFileSync, existsSync, accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
 import { login, loginStatus } from "./login.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
@@ -63,7 +64,7 @@ function load(publishId) {
   const row = db
     .prepare(
       `SELECT p.*, a.platform, a.handle, a.credential_ref, a.id AS account_id,
-              w.title AS work_title, w.asset_path, w.meta_json
+              w.title AS work_title, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -90,14 +91,16 @@ function cookiesOf(credentialRef) {
 
 // ------------------------------------------------------------------ 发布
 
-async function publish({ publishId, dryRun = false }) {
+async function publish({ publishId, asset: given = null, dryRun = false }) {
   const { row, meta, overrides } = load(publishId);
   const title = String(overrides.title ?? meta.title ?? row.work_title).slice(0, 80);
   const desc = String(overrides.desc ?? meta.description ?? "").slice(0, 2000);
   const tags = (overrides.tags ?? meta.tags ?? []).map((t) => String(t).replace(/[,，]/g, " ").trim().slice(0, 20)).filter(Boolean).slice(0, 10);
   const tid = overrides.tid ?? meta.bilibili?.tid ?? 208; // 知识 · 职业职场
   const cover = overrides.cover ?? meta.bilibili?.cover ?? null;
-  const asset = row.asset_path;
+  // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）；直接调用（dry-run、测试）时
+  // 也问 core，不自己读作品表的素材列——那一列只是第一支成片的第一个版本。
+  const asset = given ?? resolvePublishAsset(publishId).asset;
 
   if (!asset || !existsSync(asset)) throw new AdapterError("asset_invalid", `找不到成片：${asset}`);
 

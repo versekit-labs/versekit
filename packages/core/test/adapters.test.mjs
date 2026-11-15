@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { attachVersion } from "./fixtures/attach-version.mjs";
 
 process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-adapter-"));
 
@@ -52,6 +53,7 @@ test("publish handler routes to the adapter of the publish's platform", async ()
   db.prepare("INSERT INTO account (id, platform, handle, created_at) VALUES ('a9','fake','@f',1)").run();
   db.prepare("INSERT INTO work (id, title, asset_path, created_at) VALUES ('w9','t','/tmp/a.mp4',1)").run();
   db.prepare("INSERT INTO publish (id, work_id, account_id, created_at, updated_at) VALUES ('p9','w9','a9',1,1)").run();
+  attachVersion(db, "p9");
 
   const root = mkdtempSync(join(tmpdir(), "vk-pkg-"));
   fakePackage(root, "adapter-fake", `
