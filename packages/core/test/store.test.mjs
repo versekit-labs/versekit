@@ -1,5 +1,6 @@
-// Store rules that the CLI relies on: one publish per work+account, creating a publish also queues
-// it, and a bad value fails with a sentence rather than a constraint error.
+// Store rules that the CLI relies on: one publish per work+account, a new publish waits for a
+// person's confirmation (#146) and confirming it queues it, and a bad value fails with a sentence
+// rather than a constraint error.
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -22,9 +23,13 @@ before(() => {
   store.addAccount({ platform: "bilibili", handle: "@b", groupId });
 });
 
-test("creating a publish also queues it, on the account's lane", () => {
+test("creating a publish waits for confirmation; confirming queues it on the account's lane", () => {
   const work = store.createWork({ title: "第一条", assetPath: "/tmp/a.mp4" });
-  const { id } = store.createPublish({ workId: work.id, accountId: store.listAccounts()[0].id });
+  const { id, state, queued } = store.createPublish({ workId: work.id, accountId: store.listAccounts()[0].id });
+  assert.equal(state, "pending_confirm");
+  assert.equal(queued, false);
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM run WHERE target_id=?").get(id).n, 0, "未确认不排 run");
+  store.approvePublishes({ publishId: id });
   const run = db().prepare("SELECT * FROM run WHERE target_id=?").get(id);
   assert.equal(run.kind, "publish");
   assert.equal(run.state, "queued");
@@ -45,10 +50,11 @@ test("mode and visibility are validated, not stored blindly", () => {
   assert.throws(() => store.createPublish({ workId: work.id, accountId: account.id, visibility: "unlisted" }), /可见性/);
 });
 
-test("a scheduled publish is queued but not runnable before its time", () => {
+test("a scheduled publish, once confirmed, is queued but not runnable before its time", () => {
   const work = store.createWork({ title: "定时", assetPath: "/tmp/a.mp4" });
   const at = Date.now() + 3600e3;
   const { id } = store.createPublish({ workId: work.id, accountId: store.listAccounts()[0].id, scheduledAt: at });
+  store.approvePublishes({ publishId: id });
   const run = db().prepare("SELECT run_after FROM run WHERE target_id=?").get(id);
   assert.equal(run.run_after, at);
 });
@@ -57,6 +63,10 @@ test("manual mode does not queue work — nobody asked the machine to do anythin
   const work = store.createWork({ title: "手动", assetPath: "/tmp/a.mp4" });
   const { id, queued } = store.createPublish({ workId: work.id, accountId: store.listAccounts()[0].id, mode: "manual" });
   assert.equal(queued, false);
+  assert.equal(db().prepare("SELECT COUNT(*) n FROM run WHERE target_id=?").get(id).n, 0);
+  // 人确认了也一样：manual 只记跟踪，不排 run。
+  const [approved] = store.approvePublishes({ publishId: id }).approved;
+  assert.equal(approved.runId, null);
   assert.equal(db().prepare("SELECT COUNT(*) n FROM run WHERE target_id=?").get(id).n, 0);
 });
 
@@ -70,6 +80,7 @@ test("stats returns the latest snapshot per publish, with source and status", ()
   const work = store.createWork({ title: "数据", assetPath: "/tmp/a.mp4" });
   const account = store.listAccounts()[0];
   const { id } = store.createPublish({ workId: work.id, accountId: account.id });
+  store.approvePublishes({ publishId: id });
   core.transitionPublish(id, "auto_running");
   core.transitionPublish(id, "published");
   db().prepare("INSERT INTO snapshot (id, publish_id, captured_at, source, status, metrics_json) VALUES ('s1',?,'1000','intercept','ok','{\"play\":1}')").run(id);

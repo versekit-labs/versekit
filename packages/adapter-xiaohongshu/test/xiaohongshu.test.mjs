@@ -275,3 +275,13 @@ test("提交回执口径：success:false / code≠0 / 非 2xx 是拒绝，空 2x
   assert.deepEqual(submitVerdict({ done: 1, status: 200, body: '{"success":false,"msg":"今日发布次数已达上限"}' }), { state: "rejected", message: "今日发布次数已达上限" });
   assert.equal(submitVerdict({ done: 1, status: 500, body: "oops" }).state, "rejected");
 });
+
+// ---- ACC-v2-confirm-04：确认前改过的标题（overrides_json.title）优先于作品标题
+import { planNote } from "../src/index.mjs";
+
+test("planNote uses the title edited before confirmation (overrides.title)", () => {
+  const base = { work_title: "原标题", meta_json: JSON.stringify({ title: "作品元标题", body: "正文" }) };
+  assert.equal(planNote(base).title, "作品元标题");
+  assert.equal(planNote({ ...base, overrides_json: JSON.stringify({ title: "改后的标题" }) }).title, "改后的标题");
+  assert.equal(planNote({ work_title: "原标题", overrides_json: "{bad json" }).title, "原标题");
+});

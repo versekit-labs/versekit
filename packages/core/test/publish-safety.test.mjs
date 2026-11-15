@@ -185,7 +185,8 @@ test("ACC-publish-04：图片素材发小红书在创建前被拒绝，且不留
 
   const ok = handlers["publish.create"]({ asset: mp4, to: ["xiaohongshu"], title: "视频照常" });
   assert.equal(ok.publishes.length, 1, "视频照常创建");
-  assert.equal(getPublishRow(ok.publishes[0].publishId).state, "queued");
+  // #146：创建成功的平台稿先停在待确认（以前是 queued），等人确认后才进队列。
+  assert.equal(getPublishRow(ok.publishes[0].publishId).state, "pending_confirm");
 });
 
 // ---------------------------------------------------------------- ACC-publish-06（多图口径）

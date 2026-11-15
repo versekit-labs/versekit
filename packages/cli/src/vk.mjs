@@ -1103,6 +1103,49 @@ async function cmdPublish() {
     return data;
   }
 
+  // 发布前人确认（#146）。
+  if (sub === "approve") {
+    const cutId = val("--cut");
+    const publishId = val("--publish") ?? pos[2];
+    if (!cutId && !publishId) throw new Error("用法：vk publish approve --cut <cutId> | --publish <publishId>");
+    const data = await send("publish.approve", { ...(cutId ? { cutId } : {}), ...(publishId && !cutId ? { publishId } : {}) }, { log });
+    if (human) {
+      for (const a of data.approved) console.log(`已确认 ${a.platform.padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}`);
+      for (const x of data.perItem ?? []) console.log(`待逐条决定 ${x.platform.padEnd(9)}${x.publishId}：vk publish approve --publish ${x.publishId} | now | manual`);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "skip") {
+    const cutId = val("--cut") ?? pos[2];
+    if (!cutId) throw new Error("用法：vk publish skip --cut <cutId>");
+    const data = await send("publish.skip", { cutId }, { log });
+    if (human) {
+      if (data.already) console.log(`「${data.title}」已经是先不发`);
+      else console.log(`先不发「${data.title}」：${data.skipped.map((x) => x.platform).join("、")}。${data.next}`);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "edit") {
+    const publishId = pos[2];
+    const at = val("--at") != null ? parseSchedule(val("--at")) : null;
+    if (!publishId || (val("--title") == null && at == null)) throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>]");
+    const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(at != null ? { at } : {}) }, { log });
+    if (human) console.log(`已改 ${data.platform} ${data.publishId}：${data.title ? `标题「${data.title}」 ` : ""}${data.scheduledAt ? fmtTime(data.scheduledAt) : ""}`);
+    else out(data);
+    return data;
+  }
+
+  if (["now", "manual"].includes(sub)) {
+    const publishId = pos[2];
+    if (!publishId) throw new Error(`用法：vk publish ${sub} <publishId>`);
+    const data = await send(`publish.${sub}`, { publishId }, { log });
+    if (human) console.log(`${publishId} → ${data.state}${data.next ? `。${data.next}` : ""}`);
+    else out(data);
+    return data;
+  }
+
   if (["retry", "release", "confirm"].includes(sub)) {
     const publishId = pos[2];
     if (!publishId) throw new Error(`用法：vk publish ${sub} <publishId>`);
@@ -1135,8 +1178,9 @@ async function cmdPublish() {
       console.log(`试运行：${data.work.title} → ${data.publishes.map((p) => p.platform).join("、")}`);
       console.log("没有写入任何行，也没有对外动作");
     } else {
-      console.log(`已创建 ${data.publishes.length} 条发布：`);
+      console.log(`已创建 ${data.publishes.length} 条发布，等你确认（确认前不会发）：`);
       for (const p of data.publishes) console.log(`  ${p.platform.padEnd(12)}${p.handle.padEnd(18)}${p.publishId}`);
+      if (data.next) console.log(data.next);
     }
   } else out(data);
   return data;
@@ -1411,6 +1455,10 @@ function usage() {
       "  vk work list | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
+      "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
+      "  vk publish now|manual <publishId>                          小红书逐条：现在发 / 我自己发",
+      "  vk publish skip --cut <cutId>                              这支先不发（以后还能再确认）",
+      "  vk publish edit <publishId> [--title <标题>] [--at <时间>]  确认前改标题或时间",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
       "  vk collect [--now] [--platform <p>]",
       "  vk stats works [--range 7d] [--group <组>] | series <publishId>",

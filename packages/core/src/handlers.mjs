@@ -166,16 +166,18 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const work = store.createWork({ title: workTitle, assetPath: asset, meta });
       const created = [];
       for (const account of accounts) {
-        const { id } = store.createPublish({
+        const { id, cutId, state } = store.createPublish({
           workId: work.id,
           accountId: account.id,
           visibility,
           scheduledAt: schedule ?? null,
         });
-        created.push({ publishId: id, platform: account.platform, handle: account.handle });
+        created.push({ publishId: id, cutId, platform: account.platform, handle: account.handle, state });
       }
-      log(`[handlers] 创建 ${created.length} 条发布：${created.map((c) => c.platform).join(", ")}`);
-      return { ...base, ...(extra ?? {}), workId: work.id, publishes: created };
+      log(`[handlers] 创建 ${created.length} 条发布（待确认）：${created.map((c) => c.platform).join(", ")}`);
+      // 平台稿先停在待确认（#146）：不经人确认不会发。回执里直接给出确认的下一步。
+      const cutId = created[0]?.cutId ?? null;
+      return { ...base, ...(extra ?? {}), workId: work.id, cutId, publishes: created, queued: false, next: cutId ? `确认后才会发：vk publish approve --cut ${cutId}（小红书逐条：vk publish approve --publish <id>）` : null };
     };
     return { accounts, commit };
   }
@@ -398,6 +400,17 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (next) enqueue({ kind: "collect", targetType: "publish", targetId: publishId, lane: row.account_id, priority: 200, runAfter: next });
       return { publishId, state: "published" };
     },
+
+    // 发布前人确认（#146）：写库都在 store.mjs，这里只是把命令接上。
+    "publish.approve": ({ cutId = null, publishId = null }) => store.approvePublishes({ cutId, publishId }),
+
+    "publish.now": ({ publishId }) => store.publishNow({ publishId }),
+
+    "publish.manual": ({ publishId }) => store.publishManual({ publishId }),
+
+    "publish.skip": ({ cutId }) => store.skipCut({ cutId }),
+
+    "publish.edit": ({ publishId, title = null, at = null }) => store.editPublish({ publishId, title, at }),
 
     "collect.now": ({ publishId = null, platform = null }) => {
       const conn = open();

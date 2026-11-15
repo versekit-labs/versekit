@@ -87,10 +87,21 @@ function metaOf(row) {
   }
 }
 
+function overridesOf(row) {
+  if (!row.overrides_json) return {};
+  try {
+    const parsed = JSON.parse(row.overrides_json);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /** 标题/正文/话题的纯逻辑：超限就明确失败，不做静默截断。 */
 export function planNote(row) {
   const meta = metaOf(row);
-  const title = text(meta.title ?? row.work_title);
+  // 确认前改过的标题（publish.edit，ACC-v2-confirm-04）存在这条平台稿的 overrides 里，优先于作品标题。
+  const title = text(overridesOf(row).title ?? meta.title ?? row.work_title);
   const body = text(meta.body) || title;
   const tags = Array.isArray(meta.tags) ? meta.tags.map(text).filter(Boolean) : [];
 

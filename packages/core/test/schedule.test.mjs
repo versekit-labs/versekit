@@ -36,9 +36,11 @@ function account(platform, groupId = null) {
   return id;
 }
 
+/** 排期 = 人已确认、等时间的平台稿（#146：新建先停在待确认，确认后才进队列）。 */
 function schedule(title, at, accountIds) {
   const work = store.createWork({ title, assetPath: "/tmp/a.mp4" });
   const pubs = accountIds.map((accountId) => store.createPublish({ workId: work.id, accountId, scheduledAt: at }).id);
+  for (const publishId of pubs) store.approvePublishes({ publishId });
   return { workId: work.id, pubs };
 }
 
