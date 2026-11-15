@@ -1,0 +1,30 @@
+{
+  "schema": "2.0",
+  "config": { "update_multi": true },
+  "header": {
+    "template": "yellow",
+    "title": { "tag": "plain_text", "content": "小红书，要你单独确认" },
+    "subtitle": { "tag": "plain_text", "content": "{{work_title}} · {{cut_name}}" }
+  },
+  "body": {
+    "elements": [
+      { "tag": "markdown", "content": "**{{title}}**\n<font color='grey'>{{asset_note}} · 建议 {{time}} 发 · 今天还能发 {{quota_left}} 条</font>" },
+      {
+        "tag": "button", "type": "primary", "width": "fill",
+        "text": { "tag": "plain_text", "content": "{{time}} 发" },
+        "behaviors": [{ "type": "callback", "value": { "cmd": "publish.approve", "publish": "{{publish_id}}" } }]
+      },
+      {
+        "tag": "column_set",
+        "columns": [
+          { "tag": "column", "width": "weighted", "weight": 1, "elements": [
+            { "tag": "button", "width": "fill", "text": { "tag": "plain_text", "content": "现在发" },
+              "behaviors": [{ "type": "callback", "value": { "cmd": "publish.now", "publish": "{{publish_id}}" } }] } ] },
+          { "tag": "column", "width": "weighted", "weight": 1, "elements": [
+            { "tag": "button", "width": "fill", "text": { "tag": "plain_text", "content": "我自己发" },
+              "behaviors": [{ "type": "callback", "value": { "cmd": "publish.manual", "publish": "{{publish_id}}" } }] } ] }
+        ]
+      }
+    ]
+  }
+}

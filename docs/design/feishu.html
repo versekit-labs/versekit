@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>飞书卡片 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+main{max-width:1320px;margin:0 auto}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;align-items:start}
+.chat{background:#eff0f2;border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 12px 18px;min-width:0}
+.chat>h2{margin:2px 4px 12px;color:var(--ink)}
+.chat>h2 span{font-weight:400;color:var(--ink2)}
+.msg{display:grid;grid-template-columns:28px minmax(0,1fr);gap:8px;margin-bottom:12px}
+.av{width:28px;height:28px;border-radius:50%;background:var(--ink);display:flex;align-items:center;justify-content:center}
+.av i{width:8px;height:8px;border-radius:50%;background:var(--mark)}
+.who{font-size:12px;color:var(--ink2);margin-bottom:3px}
+.c{background:var(--paper);border-radius:10px;overflow:hidden;border:1px solid #dcdee2}
+.h{padding:9px 12px;font-size:14px;font-weight:600;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.h.y{background:var(--mark)}.h.r{background:var(--bad);color:#fffffe}.h.n{background:#e4e6ea}.h.g{background:var(--good);color:#fffffe}
+.b{padding:11px 12px;font-size:14px;line-height:1.55}
+.b .t{font-weight:600;line-height:1.4}
+.b .d{font-size:13px;color:var(--ink2);margin-top:4px}
+.b .d b{color:var(--ink);font-weight:600}
+.w{display:flex;gap:10px;align-items:center}
+.ln{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line2);font-size:13px}
+.ln:first-of-type{border-top:0}
+.ln .ti{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln b{font-weight:600;white-space:nowrap}
+.ok{color:var(--good);font-weight:600}
+.acts{display:flex;gap:8px;padding:0 12px 12px;flex-wrap:wrap}
+.acts .btn{flex:1}
+.fm{display:grid;gap:8px;margin-top:4px}
+.fm label{font-size:12px;color:var(--ink2);display:grid;gap:3px}
+.fm input{width:100%}
+.vid{position:relative;border-radius:10px;overflow:hidden;background:#111214;width:210px}
+.vid img{display:block;width:100%;height:118px;object-fit:cover;opacity:.92}
+.vid span{position:absolute;right:8px;bottom:6px;color:#fffffe;font-size:12px;background:#111214;border-radius:4px;padding:0 5px}
+.vid::after{content:"";position:absolute;left:50%;top:50%;margin:-9px 0 0 -6px;border:9px solid transparent;border-left:14px solid #fffffe;border-right:0}
+.qr{width:76px;height:76px;border:1px dashed var(--ink3);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ink2);flex:none}
+.h{justify-content:flex-start}
+.gp{font-size:12px;font-weight:600;border:1px solid currentColor;border-radius:4px;padding:0 5px;flex:none}
+.x.big{font-size:24px;line-height:1.1}
+@media (max-width:1100px){.cols{grid-template-columns:minmax(0,1fr);max-width:420px}}
+</style></head>
+<body>
+<main>
+<a class="crumb" href="system.html">← 系统</a>
+<div class="hd"><h1>飞书卡片</h1><span class="sub">手机上只有飞书：通知、看片、确认、处理问题都在会话里完成</span><span class="demo r">演示数据 · 示意图，不是飞书截图</span></div>
+<div class="cols">
+
+<div class="chat"><h2>新作品 → 确认 <span>可以点</span></h2>
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 昨天 21:40</div>
+<div class="c"><div class="h y">新作品，等你确认</div><div class="b"><div class="w"><img class="cv" src="demo/covers/iso27001-machine-4x3.jpg" width="64" height="48" alt=""><div class="t">有 ISO 27001，为什么还被罚 1400 万英镑？</div></div><div class="d">入库了 <b>4 支成片</b>，按平台改写成 <b>22 条</b>。建议从明晚 20:00 起分 7 天发。<b>你不确认，一条都不会发。</b></div></div><div class="acts"><button class="btn" data-t="明早 9:00 再提醒你">晚点提醒我</button><button class="btn pri" data-t="下面开始一支一支发给你">开始确认</button></div></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 视频消息，点开直接看</div>
+<div class="vid"><img src="demo/covers/iso27001-machine-4x3.jpg" alt="长片预览"><span>3:04</span></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit</div><div class="c" id="cc"></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 小红书单独一张</div><div class="c" id="xc"></div></div></div>
+</div>
+
+<div class="chat"><h2>发出去了 · 出问题</h2>
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 今天 21:06</div>
+<div class="c"><div class="h n">今晚的 2 条发出去了</div><div class="b"><div class="t">ISO 42001 到底证明什么？</div><div style="margin-top:6px">
+<div class="ln"><span class="pf dy">抖</span><span>抖音 · 20:00</span><span class="ok">已发布，已核对</span></div>
+<div class="ln"><span class="pf sph">视</span><span>视频号 · 21:00</span><span class="ok">已发布，已核对</span></div>
+<div class="ln"><span class="pf xhs">小</span><span>小红书 · 20:00</span><span>你没确认，没有发</span></div></div></div>
+<div class="acts"><button class="btn" data-t="在电脑上打开 versekit 看这个作品">打开作品</button></div></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 11-12 12:04</div>
+<div class="c"><div class="h r">B站：视频上线了，没归入合集</div><div class="b"><div class="t">出海要设 DPO 吗？ · 长片</div><div class="d">归入合集「出海合规」时，合集列表没加载出来。视频本身正常，不用重发。当时的截图在下一条消息里。</div></div>
+<div class="acts"><button class="btn" data-t="好，你手动归入">我手动归入</button><button class="btn pri" data-t="正在重试">再试一次</button></div></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 今天 07:12</div>
+<div class="c"><div class="h y">抖音要重新登录</div><div class="b"><div class="w"><div class="qr">二维码</div><div><div class="t">用抖音 App 扫这个码</div><div class="d">登录在发布机上完成。今晚 21:00 那条要等登录后才能发。码 2 分钟后过期。</div></div></div></div>
+<div class="acts"><button class="btn" data-t="换了一个新的码">换一个码</button><button class="btn pri" data-t="登录正常，今晚照常发">我扫好了</button></div></div></div></div>
+</div>
+
+<div class="chat"><h2>结果 <span>有话说才发</span></h2>
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 11-07 20:05</div>
+<div class="c"><div class="h g">小红书这条比平时好</div><div class="b"><div class="w"><img class="cv" src="demo/covers/accreditation-machine-4x3.jpg" width="64" height="48" alt=""><div><div class="x up big">2.4 倍</div><div class="d" style="margin-top:0">24 小时 <b>31,200</b> 播放，平时 13,000</div></div></div><div class="d">出海做 ISO 27001，找谁来发？ · 长片。62% 的播放来自搜索，平时约 30%。</div></div>
+<div class="acts"><button class="btn" data-t="在电脑上打开 versekit 看这个作品">看为什么</button></div></div></div></div>
+
+<div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 周一 09:00</div>
+<div class="c"><div class="h n">上周：发了 3 个作品，29 条</div><div class="b">
+<div class="ln"><span class="pf xhs">小</span><span class="ti">找谁来发？ · 长片</span><b class="x up">2.4 倍</b></div>
+<div class="ln"><span class="pf dy">抖</span><span class="ti">找谁来发？ · 短片 1</span><b class="x up">2.1 倍</b></div>
+<div class="ln"><span class="pf dy">抖</span><span class="ti">DPO 能不能外包？ · 短片 2</span><b class="x dn">0.4 倍</b></div>
+<div class="d">其余 26 条和平时差不多。1 条出过问题，已处理。每个平台只和自己的平时比。</div></div>
+<div class="acts"><button class="btn" data-t="在电脑上打开 versekit 的数据页">看全部</button></div></div></div></div>
+</div>
+
+</div>
+<div class="cmd" style="margin-top:16px">卡片标题前的小标签是账号组的名字，多个组时靠它分清是哪个号的事。卡片上每个按钮都对应一条 <code>vk</code> 命令。卡片 JSON 在 <code>docs/design/feishu-cards/</code>。</div>
+</main>
+<script src="app.js"></script>
+<script>
+const cut = WORKS[0].cuts[0]; const rows = cut.pubs.filter((x) => !x.solo); const xhs = cut.pubs.find((x) => x.solo);
+let mode = 'sum', xs = null;
+function drawC() {
+  const el = document.getElementById('cc');
+  if (mode === 'done' || mode === 'skip') { el.innerHTML = `<div class="h n">长片 · ${mode === 'done' ? `已确认 ${rows.length} 条` : '先不发'}</div><div class="b"><div class="d" style="margin-top:0">${mode === 'done' ? `${when(rows.map((x) => x.at).sort()[0]).text} 起按时间发。发出去后会告诉你。` : '以后可以在电脑上的作品里再确认，或回复"重发确认"。'}</div></div>`; return; }
+  el.innerHTML = `<div class="h y">长片 · 第 1 支，共 4 支</div><div class="b">${mode === 'sum'
+    ? rows.map((x) => `<div class="ln">${pf(x.pf)}<span class="ti">${esc(x.title)}</span><b>${when(x.at).text}</b></div>`).join('') + '<div class="d">AI 生成的内容，每个平台都会按要求标注。</div>'
+    : `<div class="fm">${rows.map((x, i) => `<label>${PF[x.pf][1]}<input type="text" value="${esc(x.title)}" data-ti="${i}"><input type="datetime-local" value="${x.at}" data-at="${i}" aria-label="${PF[x.pf][1]} 发布时间"></label>`).join('')}</div>`}</div>
+    <div class="acts">${mode === 'sum' ? `<button class="btn" data-m="skip">这支先不发</button><button class="btn" data-m="edit">改标题或时间</button><button class="btn pri" data-m="done" style="flex-basis:100%">确认这 ${rows.length} 条，按时间发</button>` : '<button class="btn" data-m="sum">取消</button><button class="btn pri" data-m="save">改好了</button>'}</div>`;
+}
+function drawX() {
+  const el = document.getElementById('xc'); const w = when(xhs.at);
+  el.innerHTML = xs ? `<div class="h n">小红书 · ${{ t: `已确认，${w.text} 发`, now: '已确认，正在发', me: '你自己发' }[xs]}</div><div class="b"><div class="d" style="margin-top:0">${esc(xhs.title)}</div></div>`
+    : `<div class="h y">小红书，要你单独确认</div><div class="b"><div class="t">${esc(xhs.title)}</div><div class="d">长片 · 竖屏 · 封面 3:4 · 建议 <b>${w.text}</b> 发</div></div><div class="acts"><button class="btn" data-x="me">我自己发</button><button class="btn" data-x="now">现在发</button><button class="btn pri" data-x="t">${w.text} 发</button></div>`;
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const ds = b.dataset;
+  if (ds.t) toast(ds.t);
+  else if (ds.m === 'save') { document.querySelectorAll('[data-ti]').forEach((i) => (rows[+i.dataset.ti].title = i.value)); document.querySelectorAll('[data-at]').forEach((i) => (rows[+i.dataset.at].at = i.value || rows[+i.dataset.at].at)); mode = 'sum'; drawC(); }
+  else if (ds.m) { mode = ds.m; drawC(); }
+  else if (ds.x) { xs = ds.x; drawX(); } });
+const tag = () => document.querySelectorAll('.c .h').forEach((h) => { if (!h.querySelector('.gp')) h.insertAdjacentHTML('afterbegin', `<span class="gp">${GROUP.name}</span>`); });
+drawC(); drawX(); tag(); new MutationObserver(tag).observe(document.querySelector('.cols'), { childList: true, subtree: true });
+</script></body></html>

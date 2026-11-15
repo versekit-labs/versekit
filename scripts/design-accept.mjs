@@ -24,15 +24,11 @@ const BASE = (arg('--url') || 'http://127.0.0.1:8787').replace(/\/$/, '');
 
 // 设计页 → 线上路径。实现方若改了路径，改这里并在 PR 说明。
 const PAGES = [
-  ['groups.html',      '/groups'],
-  ['account-wall.html','/accounts'],
-  ['matrix.html',      '/matrix'],
-  ['publish.html',     '/publish'],
-  ['calendar.html',    '/plan'],
-  ['work.html',        '/works'],
-  ['overview.html',    '/overview'],
-  ['runs.html',        '/tasks'],
-  ['add.html',         '/accounts/add']
+  ['today.html',  '/today'],
+  ['works.html',  '/works'],
+  ['work.html',   '/work'],
+  ['data.html',   '/data'],
+  ['system.html', '/system']
 ];
 
 const fails = [];

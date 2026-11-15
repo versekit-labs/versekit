@@ -1,66 +1,85 @@
 ---
 name: versekit
-description: 本地优先的多平台发布控制面；每页只完成一个任务，状态永远带证据与下一步。
+description: 安静的工作台：把 Claude 做完的内容确认、发出去、看懂数据；黄色只叫你处理，红色只报出了问题，绿色只说比平时好。
 colors:
-  departure-navy: "#16324f"
-  hangar-navy: "#0f2438"
-  apron-ground: "#f4f4f2"
-  paper: "#ffffff"
-  paper-hover: "#ececeb"
-  paper-subtle: "#fafaf9"
-  ink: "#17191c"
-  slate: "#5f666d"
-  slate-faint: "#646b73"
-  hairline: "#d9dcdf"
-  hairline-soft: "#e8eaec"
-  changed-amber: "#a85c06"
-  changed-amber-bg: "#fff7e9"
-  changed-amber-line: "#e4c28e"
-  changed-amber-bright: "#ffc46b"
-  healthy-green: "#1f6b52"
-  healthy-green-bg: "#eef7f2"
-  healthy-green-line: "#b8d5c7"
-  expired-red: "#a32b20"
-  expired-red-bg: "#fff2f0"
-  expired-red-line: "#e5b7b1"
-  nav-text: "#c9d7e3"
-  nav-muted: "#a9bccc"
-  nav-hover: "#1d3d5c"
-  nav-line: "#2a4a68"
-  nav-paper-hover: "#eaf0f5"
-  local-green: "#7fd1b0"
+  ground: "#fafaf8"
+  paper: "#fffffe"
+  sidebar: "#f1f1ee"
+  hover: "#f3f3f0"
+  nav-hover: "#e8e8e4"
+  nav-current: "#e3e3df"
+  line: "#e5e6e3"
+  line-soft: "#eeefec"
+  control-line: "#d3d5d1"
+  ink: "#1a1c1f"
+  ink-hover: "#0b0c0e"
+  ink-secondary: "#5f656c"
+  ink-faint: "#8d9399"
+  on-ink: "#fffffe"
+  track: "#e7e8e5"
+  track-fill: "#a9aeb3"
+  attention: "#ffd84a"
+  attention-bg: "#fff8dc"
+  attention-line: "#e6c84f"
+  attention-edge: "#b99700"
+  attention-ink: "#6b5d1c"
+  problem: "#c4321c"
+  problem-bg: "#fdf3f0"
+  problem-line: "#edc3b9"
+  better: "#0f7a4a"
+  better-bg: "#edf7f1"
+  better-line: "#bfdccb"
+  video-ground: "#111214"
+  chat-ground: "#eff0f2"
+  chat-line: "#dcdee2"
+  chat-head-neutral: "#e4e6ea"
+  placeholder-ground: "#dcdcd8"
+  placeholder-glyph: "#9a9a95"
+  pf-xhs: "#e0213b"
+  pf-douyin: "#161823"
+  pf-shipinhao: "#9c5800"
+  pf-bilibili: "#0079a8"
+  pf-tiktok: "#25292e"
+  pf-youtube: "#d21a12"
+  pf-web: "#55606b"
+  pf-mp: "#04823f"
 typography:
   display:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
-    fontSize: "28px"
-    fontWeight: 650
-    lineHeight: 1.15
-    letterSpacing: "-0.025em"
-  title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
-    fontSize: "25px"
-    fontWeight: 650
-    lineHeight: 1.15
-    letterSpacing: "-0.025em"
-  brand:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
-    fontSize: "21px"
-    fontWeight: 650
+    fontSize: "24px"
+    fontWeight: 700
+    lineHeight: 1.3
     letterSpacing: "-0.02em"
-  brand-compact:
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
-    fontSize: "19px"
-    fontWeight: 650
-    letterSpacing: "-0.02em"
-  brand-small:
+  panel-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
     fontSize: "18px"
-    fontWeight: 650
-    letterSpacing: "-0.02em"
+    fontWeight: 700
+    letterSpacing: "-0.01em"
+  title:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "17px"
+    fontWeight: 700
+    lineHeight: 1.35
+    letterSpacing: "-0.01em"
+  brand:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "15px"
+    fontWeight: 700
+    letterSpacing: "-0.01em"
   body:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
     fontSize: "14px"
     fontWeight: 400
+    lineHeight: 1.5
+  body-strong:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "14px"
+    fontWeight: 600
+    lineHeight: 1.5
+  section:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "13px"
+    fontWeight: 600
     lineHeight: 1.5
   body-small:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
@@ -72,290 +91,420 @@ typography:
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.5
-  data:
-    fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace"
+  table-head:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "12px"
+    fontWeight: 600
+    lineHeight: 1.5
+  badge:
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', sans-serif"
+    fontSize: "11px"
+    fontWeight: 700
+  code:
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
     fontSize: "12px"
     fontWeight: 400
-    letterSpacing: "-0.01em"
+    lineHeight: 1.5
 rounded:
+  xs: "3px"
   sm: "4px"
+  pf: "5px"
   md: "6px"
-  lg: "8px"
+  control: "7px"
+  seg: "8px"
+  step: "9px"
+  panel-inner: "10px"
+  table: "12px"
+  panel: "14px"
+  full: "50%"
 spacing:
   x1: "4px"
   x2: "8px"
   x3: "12px"
   x4: "16px"
   x5: "20px"
-  x6: "24px"
-  x8: "32px"
+  x6: "28px"
+  x7: "40px"
+  gap-tight: "6px"
+  gap-row: "10px"
+  gap-card: "14px"
+  pad-panel: "22px"
+  gap-col: "28px"
 components:
-  button-publish:
+  nav:
+    backgroundColor: "{colors.sidebar}"
+    textColor: "{colors.ink-secondary}"
+    width: "208px"
+    padding: "18px 10px"
+  nav-item:
+    backgroundColor: "{colors.sidebar}"
+    textColor: "{colors.ink-secondary}"
+    rounded: "{rounded.control}"
+    height: "34px"
+    padding: "0 10px"
+  nav-item-hover:
+    backgroundColor: "{colors.nav-hover}"
+    textColor: "{colors.ink}"
+  nav-item-current:
+    backgroundColor: "{colors.nav-current}"
+    textColor: "{colors.ink}"
+  nav-count:
+    backgroundColor: "{colors.attention}"
+    textColor: "{colors.ink}"
+    rounded: "9px"
+    height: "18px"
+    typography: "{typography.badge}"
+  panel:
     backgroundColor: "{colors.paper}"
-    textColor: "{colors.departure-navy}"
-    rounded: "{rounded.md}"
-    height: "42px"
-    padding: "0 14px"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.panel}"
+    padding: "22px"
+  table-wrap:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.table}"
+  table-head-cell:
+    textColor: "{colors.ink-secondary}"
+    typography: "{typography.table-head}"
+    padding: "10px 14px"
+  table-cell:
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    padding: "10px 14px"
+  button:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: "34px"
+    padding: "0 12px"
+    typography: "{typography.body-small}"
+  button-hover:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.ink}"
   button-primary:
-    backgroundColor: "{colors.departure-navy}"
-    textColor: "{colors.paper}"
-    rounded: "{rounded.md}"
-    height: "36px"
-    padding: "0 13px"
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.on-ink}"
+    rounded: "{rounded.control}"
+    height: "34px"
+    padding: "0 12px"
   button-primary-hover:
-    backgroundColor: "{colors.hangar-navy}"
-    textColor: "{colors.paper}"
-  button-secondary:
+    backgroundColor: "{colors.ink-hover}"
+    textColor: "{colors.on-ink}"
+  button-primary-large:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.on-ink}"
+    rounded: "{rounded.control}"
+    height: "42px"
+    padding: "0 18px"
+    typography: "{typography.body-strong}"
+  link:
+    textColor: "{colors.ink-secondary}"
+    typography: "{typography.body-small}"
+    height: "32px"
+  segmented:
     backgroundColor: "{colors.paper}"
-    textColor: "{colors.ink}"
+    rounded: "{rounded.seg}"
+    padding: "2px"
+  segmented-item:
+    textColor: "{colors.ink-secondary}"
     rounded: "{rounded.md}"
-    height: "36px"
-    padding: "0 13px"
-  button-secondary-hover:
-    backgroundColor: "{colors.paper-hover}"
-    textColor: "{colors.ink}"
-  status-ok:
-    backgroundColor: "{colors.healthy-green-bg}"
-    textColor: "{colors.healthy-green}"
-    rounded: "{rounded.sm}"
-    padding: "2px 8px"
-  status-warning:
-    backgroundColor: "{colors.changed-amber-bg}"
-    textColor: "{colors.changed-amber}"
-    rounded: "{rounded.sm}"
-    padding: "2px 8px"
-  status-expired:
-    backgroundColor: "{colors.expired-red-bg}"
-    textColor: "{colors.expired-red}"
-    rounded: "{rounded.sm}"
-    padding: "2px 8px"
-  matrix-cell:
+    height: "32px"
+    padding: "0 12px"
+  segmented-item-pressed:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.on-ink}"
+  field:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    padding: "12px 13px"
-  matrix-cell-selected:
-    backgroundColor: "{colors.apron-ground}"
+    rounded: "{rounded.control}"
+    height: "34px"
+    padding: "0 9px"
+  state-wait:
     textColor: "{colors.ink}"
-    padding: "12px 13px"
-  account-detail:
+    typography: "{typography.body-small}"
+  state-done:
+    textColor: "{colors.better}"
+    typography: "{typography.body-small}"
+  state-bad:
+    textColor: "{colors.problem}"
+    typography: "{typography.body-small}"
+  platform-badge:
+    textColor: "{colors.on-ink}"
+    rounded: "{rounded.pf}"
+    size: "20px"
+    typography: "{typography.badge}"
+  confirm-video:
+    backgroundColor: "{colors.video-ground}"
+    rounded: "{rounded.panel-inner}"
+    height: "300px"
+  platform-rows:
+    backgroundColor: "{colors.paper}"
+    rounded: "{rounded.panel-inner}"
+  platform-row:
+    textColor: "{colors.ink}"
+    height: "44px"
+    padding: "5px 12px"
+  platform-row-problem:
+    backgroundColor: "{colors.problem-bg}"
+    textColor: "{colors.ink}"
+  solo-block:
+    backgroundColor: "{colors.attention-bg}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.panel-inner}"
+    padding: "12px"
+  confirm-footer:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink-secondary}"
+    padding: "12px 0"
+  done-note:
+    backgroundColor: "{colors.better-bg}"
+    textColor: "{colors.better}"
+    rounded: "{rounded.panel-inner}"
+    padding: "12px 14px"
+  cut-step:
+    backgroundColor: "{colors.ground}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.step}"
+    padding: "8px"
+  cut-step-current:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.lg}"
-    padding: "18px 20px"
+  cut-thumb:
+    backgroundColor: "{colors.nav-current}"
+    rounded: "{rounded.md}"
+    size: "44px"
+  typical-bar:
+    backgroundColor: "{colors.track}"
+    rounded: "{rounded.xs}"
+    height: "6px"
+    width: "120px"
+  typical-bar-fill:
+    backgroundColor: "{colors.track-fill}"
+    rounded: "{rounded.xs}"
+  typical-bar-marker:
+    backgroundColor: "{colors.ink}"
+    width: "2px"
+  strip-dot:
+    backgroundColor: "{colors.ink-faint}"
+    rounded: "{rounded.full}"
+    size: "11px"
+  note:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.panel-inner}"
+    padding: "12px 14px"
+  note-problem:
+    backgroundColor: "{colors.problem-bg}"
+    textColor: "{colors.ink}"
+  other-item:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.table}"
+    padding: "12px 14px"
+  toast:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.on-ink}"
+    rounded: "{rounded.step}"
+    padding: "10px 16px"
+  code-chip:
+    backgroundColor: "{colors.sidebar}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.sm}"
+    typography: "{typography.code}"
+    padding: "1px 5px"
+  chat-pane:
+    backgroundColor: "{colors.chat-ground}"
+    rounded: "{rounded.panel}"
+    padding: "14px 12px 18px"
+  chat-card:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.panel-inner}"
+  chat-head-wait:
+    backgroundColor: "{colors.attention}"
+    textColor: "{colors.ink}"
+  chat-head-problem:
+    backgroundColor: "{colors.problem}"
+    textColor: "{colors.on-ink}"
+  chat-head-neutral:
+    backgroundColor: "{colors.chat-head-neutral}"
+    textColor: "{colors.ink}"
+  chat-head-good:
+    backgroundColor: "{colors.better}"
+    textColor: "{colors.on-ink}"
+  video-card:
+    backgroundColor: "{colors.video-ground}"
+    textColor: "{colors.on-ink}"
+    rounded: "{rounded.panel-inner}"
+    width: "210px"
+  video-placeholder:
+    backgroundColor: "{colors.placeholder-ground}"
+    textColor: "{colors.placeholder-glyph}"
 ---
 
 # Design System: versekit
 
 ## Overview
 
-**Creative North Star: 「出港牌」 The Departure Board**
+**Creative North Star: 「安静的工作台」 The Quiet Workbench**
 
-保留这个已确认的命名，但只保留它的一条产品原则：**时间、目的地、状态和下一步要一瞥可读。** 不把机票、航班、登机口、PNR 或翻牌造型带进界面。用户不应该先学习品牌隐喻，才能管理自己的账号。
+versekit 是作者一个人每天打开的工具：Claude 做完内容，入库，这里确认、发出去、看懂数据。界面的全部工作是把「现在轮到你做什么」放在第一眼，其余一律退后。没有品牌色，没有插画，没有隐喻造型；亮色只出现在需要人看一眼的地方，所以它们才有意义。
 
-versekit 是操作型产品，不是展示型官网。信息架构先于视觉：账号墙只回答“我的号都还好吗”，发布台只负责发布，作品详情只解释一条作品，任务与日志只呈现队列和失败现场。任何页面出现第二类对象前，先问它是否属于另一页。
+参考的是三个同类工具的克制，而不是它们的外观：**Things 3** 的「今天」只放一件要紧事，做完才露出下一件；**Linear** 的密度与表格节奏，状态是一个小点加一个词，而不是彩色徽章墙；**YouTube Studio** 的作品为中心、数字总是对照这个频道自己的常态。三者共同点是：它们都相信用户是来办事的，不是来看界面的。
 
-已确认的视觉拒绝：Postiz 的紫色强调 + 近黑底、玻璃拟态与霓虹渐变、游戏化动效、监控大屏、海报式巨字排版。可以学习 Postiz 的清晰分工，不能复制它的外观。
+已确认的视觉拒绝：旧版「出港牌」深蓝导航与航班隐喻（业主已否决）、监控大屏、卡片墙、渐变与玻璃、装饰性比喻。
 
 **Key Characteristics:**
-- 一页一个主任务；全局只有“发布内容”一个主动作。
-- 首页以账号组为行、平台为列，直接呈现二维矩阵。
-- 冷灰白场地、深蓝导航、白色工作区，零阴影。
-- 异常在矩阵中直接可见；正常态退为灰绿文字，异常才有彩色签。
-- 每个详情只有一个主动作，且指向具体对象（重登/续期/放行/详情）。
-- 手机展示同一批数据，不通过隐藏正常账号换取简短。
+- 暖灰白底（#fafaf8）+ 近白纸面（#fffffe）+ 墨色（#1a1c1f）；零阴影，层次只靠 1px 线与底色差。
+- 一页一个任务；「今天」页一次只展开一条等你确认的作品。
+- 三种信号色各管一件事：黄 = 等你处理，红 = 出了问题，绿 = 比平时好 / 正常。
+- 主按钮只有一种颜色：墨色。
+- 数字永远与同一账号的平时对照，从不跨平台求和。
+- 只为桌面设计；窄屏只保证不坏。
 
 ## Colors
 
+墨色为主，三种信号色各有专责，其余都是中性灰。信号色一旦被用作装饰，整套系统就失效。
+
 ### Primary
-- **离港深蓝 Departure Navy** (#16324f)：导航、主按钮。它是稳定的壳，不是信息状态。
-- **机库深蓝 Hangar Navy** (#0f2438)：主按钮 hover。
+- **墨 Ink** (#1a1c1f)：正文、主按钮底、选中的分段控件、toast 底、当前步骤描边、平时刻度线。它是唯一的主按钮颜色。
+- **墨 hover Ink Hover** (#0b0c0e)：主按钮 hover。
+- **纸上白 On Ink** (#fffffe)：墨色、平台色、红 / 绿卡片头上的文字；也是纸面本身（`paper`）。
 
-### Secondary
-- **改口琥珀 Changed Amber** (#a85c06)：需要留意但尚未失败的状态，如“71 小时后失效”“待放行”。
-- **改口亮琥珀 Changed Amber Bright** (#ffc46b)：深色导航中的焦点环与文字选中底。
-- 状态底色使用 #fff7e9，边线使用 #e4c28e；不大面积铺琥珀。
-
-### Tertiary
-- **健康绿 Healthy Green** (#1f6b52)：仅用于“登录正常”的文字与小圆点，**不做填充徽章**；正常是默认态，不抢占注意力。
-- **失效红 Expired Red** (#a32b20)：已失效、明确失败；浅底 #fff2f0，边线 #e5b7b1。
+### Signal
+- **等你处理黄 Attention** (#ffd84a)：只表示「等你处理」。导航里的待办数、`.st.wait` 的点、飞书待确认卡片头、`::selection`。配套：淡黄底 (#fff8dc)、黄线 (#e6c84f)、黄点描边 (#b99700)、黄底上的次要字 (#6b5d1c)。
+- **出了问题红 Problem** (#c4321c)：只表示「出了问题」。`.st.bad`、失败行底 (#fdf3f0)、线 (#edc3b9)、`.x.dn`（比平时差）、健康点异常。
+- **比平时好绿 Better** (#0f7a4a)：只表示「比平时好」或「正常」。`.st.done`、`.x.up`、健康点、完成提示。配套：底 (#edf7f1)、线 (#bfdccb)。
 
 ### Neutral
-- **场地灰 Apron Ground** (#f4f4f2)：页面场。
-- **纸白 Paper** (#ffffff)：工作区与按钮。
-- **油墨 Ink** (#17191c)：正文。
-- **石板 Slate** (#5f666d)：次级说明。
-- **浅石板 Slate Faint** (#646b73)：字段名与辅助事实。
-- **发丝线 Hairline** (#d9dcdf) / **柔发丝线 Hairline Soft** (#e8eaec)：分隔。
-- 异常行只允许极浅底色：失效 #fffafa、将失效 #fffdf8；不使用粗色条。
+- **底 Ground** (#fafaf8)：页面底色。
+- **纸 Paper** (#fffffe)：面板、表格、控件底。
+- **侧栏 Sidebar** (#f1f1ee)：导航底、行内 `code` 底。
+- **hover 灰** (#f3f3f0)：按钮、步骤行 hover。导航项 hover 为 (#e8e8e4)，当前项与封面占位底为 (#e3e3df)。
+- **线 Line** (#e5e6e3)：面板、表格外框、导航分隔。**软线** (#eeefec)：行与行之间。**控件线** (#d3d5d1)：按钮、输入框、分段控件边框。
+- **次要字 Ink Secondary** (#5f656c)：说明、表头、导航默认字。**弱字 Ink Faint** (#8d9399)：未选中的圆点描边、关闭态、示意图的点。
+- **常态刻度** 轨道 (#e7e8e5)、填充 (#a9aeb3)：`.typ` 对比条的灰。
 
+### Platform badges
+`.pf` 是 20px 方块，一个字：小红书 (#e0213b)、抖音 (#161823)、视频号 (#9c5800)、B站 (#0079a8)、TikTok (#25292e)、YouTube (#d21a12)、官网 (#55606b)、公众号 (#04823f)。这是平台自己的识别色，仅用于这个徽章；不得借用于其他元素，也不表示状态。
+
+### Surfaces for media
+- **视频底 Video Ground** (#111214)：视频播放框与飞书视频缩略图的黑底。
+- **占位 Placeholder** (#dcdcd8 底、#9a9a95 播放三角)：`app.js` 内联 SVG 的空封面。
+- **飞书会话** 底 (#eff0f2)、卡片线 (#dcdee2)、中性卡片头 (#e4e6ea)。
 
 ### Named Rules
-**The One-Ambient-Color Rule.** 深蓝是唯一大面积彩色区域；状态色只出现在小签、短句和极浅行底中。
+**The One Meaning Rule.** 黄只说「等你处理」，红只说「出了问题」，绿只说「比平时好 / 正常」。一个颜色不得承担第二种意思；需要强调但不属于这三类时用墨色加粗。
 
-**The No-Purple-No-Glow Rule.** 不使用紫色强调、近黑页面、霓虹渐变、玻璃或发光边缘。
+**The Ink Button Rule.** 主按钮只有墨色这一种。一屏至多一个主按钮；它的文字说明点下去会发生什么。
+
+**The Quiet Normal Rule.** 正常、已发布、已核对都退为灰或墨，不上彩色底。异常才配得上颜色。
 
 ## Typography
 
-**Display / Body:** 系统无衬线（-apple-system / PingFang SC / Noto Sans SC）
-**Data:** 系统等宽（SF Mono / Menlo）
+**Font:** 系统无衬线栈 -apple-system、BlinkMacSystemFont、"PingFang SC"、"Noto Sans SC"，不加载网络字体。数字一律 `tabular-nums`。**Mono:** ui-monospace，只用于行内命令与路径。
 
-**Character:** 名字和动作说人话；只有时间、编号和需要对齐的数据使用等宽。中文界面不夹 BOARDING PASS、GATE 等装饰性英文。
+**Character:** 中文为主、数字对齐、层级靠字重与灰度而不是字号跳跃。
 
 ### Hierarchy
-- **Display** (650, 28px)：桌面页面标题。
-- **Title** (650, 25px)：手机页面标题。
-- **Brand** (650, 21px；紧凑 19px；手机 18px)：产品名。
-- **Body** (400, 14px)：账号名与导航。
-- **Body Small** (400, 13px)：按钮、摘要、筛选。
-- **Meta** (400, 12px)：证据、来源、字段名。
-- **Data** (400, 12px, tabular-nums)：时间与编号。
+- **Display** (700, 24px, 1.3, -0.02em)：页面 `h1`、飞书卡片里的大数字 `.x.big`。
+- **Panel title** (700, 18px, -0.01em)：「今天」展开区的作品名。
+- **Title** (700, 17px, 1.35)：`h3`，空状态与面板标题。
+- **Brand** (700, 15px)：导航里的 versekit 字标。
+- **Body** (400 / 600, 14px, 1.5)：正文、表格、输入框、飞书卡片正文。
+- **Section / Body small** (600 / 400, 13px)：`h2` 分区标题（次要字色）、按钮、状态词、次要说明。
+- **Meta** (400 / 600, 12px)：表头、图例、提示、示意标注。
+- **Badge** (700, 11px)：平台徽章字、导航计数用 12px/700。
+- 字重只用 400、600、700。
 
 ### Named Rules
-**The Twelve-Pixel Floor Rule.** 所有功能文字至少 12px；正文默认 14px，不用微缩字制造密度。
-
-**The Chinese-First Rule.** 状态与动作先写中文，等宽字体不承担句子。
+**The Number Is Bold Rule.** 比较结果（如 `.x` 的「×1.8」）用 700 且带色，其余数字与正文同重。
 
 ## Layout
 
-- **桌面**：224px 深蓝侧栏 + 弹性主区；主区最大 1240px，1440 下留 32px 边距。
-- **账号矩阵**：行是账号组，列是平台；每组每平台最多一个账号，因此一格唯一对应一个平台账号。
-- **矩阵不是表格，是瓷贴阵**：内容仍是二维矩阵，但呈现方式是灰底上间距 6px 对齐的白瓷贴，不画连续网格线、不加整块外框。行列坐标由对齐和排版承担，不靠边框。
-- **单元格自证身份**：每格首行是平台标识 + 账号名（handle）。宽屏下不能只靠列头猜平台——用户不该为了确认“这是哪个平台的哪个号”再抬头找表头。平台名文字不再重复进格，由平台标识和列头共同承担。
-- **单元格**：首行身份，第二行登录状态，第三、四行是最近发布与最近采集，时间必须绑定结果（“失败 · 10-31”而非裸时间）。
-- **详情跟随账号组**：选中某格后，详情在该账号组那一行下方原位展开（桌面跨列一行，手机在该组段内），不沉到整张矩阵末尾；一次只展开一个详情。
-- **未接入**：保留空格，显示“未接入”和预填了组与平台的添加入口，不计入异常。
-- **断点**：≤1240 侧栏收窄到 200px；**≤1180 改为顶部导航**——侧栏与五列同时存在会把账号名挤到省略号，宁可让出侧栏宽度。
-- **手机**：≤900 每个账号组变成一段，平台逐行排列；保留相同字段，不强行压缩五列，不隐藏正常账号。
-- **节奏**：标题、待处理条、矩阵、组内详情；不叠加 KPI 卡、作品卡或队列表。
+桌面优先：`.app` 为两栏网格，左侧 208px 粘性导航，右侧 `main`（内边距 28px 40px，最大宽 1240px；飞书页 1320px 居中）。页面内部用 14px 的间距排列面板，双栏页（今天、作品详情）用「主区 + 300px 侧栏」，间隙 28px，面板内边距 22px。表格行高由 10px 纵向内边距撑起，行内最小触控高度 32px。
+
+**窄屏不专门设计，只保证不坏。** 860px 以下导航变成顶部横排、`main` 内边距收为 20px 16px、平台行折为三列；1040px 以下双栏页堆叠为单栏。不做手机版的二次构图，不隐藏数据换取简短。`npm run design:check` 在窄屏检查横向溢出与触控目标。
 
 ## Elevation & Depth
 
-**零阴影。** 层级由场地灰、白瓷贴、深蓝导航和 1px 发丝线承担。矩阵的二维关系靠间距与对齐表达，不靠连续网格线或外框——一旦画出整块表格框，页面就从“控制台”退回“电子表格”。边框与底色只在同一层级使用一次，不叠加“边框 + 大投影”的幽灵卡片。
+扁平。没有 `box-shadow`。层次由底色（ground → paper）、1px 线、与墨色选中态承担。唯一浮起的元素是 toast（固定于底部，墨底白字，`opacity` 0.2s `cubic-bezier(.16,1,.3,1)` 渐显）。确认面板的底栏用 `position: sticky` 贴在面板底，靠上边线分隔而非阴影。焦点环：2px 墨色实线，偏移 2px。
+
+### Named Rules
+**The Flat Rule.** 不加阴影、不加渐变、不加毛玻璃。需要分层时加一条线。
 
 ## Shapes
 
-- 4px：状态签。
-- 6px：按钮、导航项。
-- 8px：矩阵瓷贴、账号详情、手机分组卡。
-- 不做胶囊按钮、撕口、票根、假条码或装饰性缺口。
+圆角随元素大小递进，没有胶囊：徽章与小方块 3–5px，按钮与输入框 7px，分段控件 8px（内项 6px），内嵌面板与提示 10px，表格 12px，大面板与飞书会话窗 14px，圆点 50%。边框一律 1px，虚线只用于二维码占位。所有圆角已在 frontmatter 的 `rounded` 中列出，新增圆角先加到那里。
 
 ## Components
 
-### Workspace（账号组）
-- 账号组是工作区，不是筛选标签：进入先选组，之后所有日常页面只服务这一组。
-- 侧栏切换器常驻：一个原生 `<select>`，含「全部账号组 · 矩阵总览」与「全部账号组 · 数据汇总」两个只读入口，下面是「管理账号组」文字链接。
-- 切换立即生效并记住（localStorage）；回访直接回到上次的组。
-- 跨组视图必须显式标注「只读」，不能让人误以为在里面能改数据。
+### Shell nav
+208px 粘性侧栏，字标 + 4 项（今天、作品、数据、系统）。项高 34px，圆角 7px；默认次要字，hover (#e8e8e4)，当前页 (#e3e3df) 加 600 字重。「今天」旁的黄色计数是唯一的彩色。底部 `.health` 用 6px 小点：绿 = 正常，红 = 有问题。
 
-### Shared Shell（页面共用）
-- 五页共用 `docs/design/app.css`：token、外壳、按钮、状态、面板、列表、字段、命令块。
-- 页面只写自己独有的样式；不复制 token，不另起一套色板。
-- 侧栏在长页面上 sticky（发布台、总览、任务日志都要滚），短页面同样适用。
+### Panel / Table
+`.panel` 纸底 + 1px 线 + 14px 圆角；表格包在 `.tblwrap`（12px）内，表头 12px/600 次要字，行间软线，数字列右对齐。作品行点进详情，整行 `.wcell` 是链接。
 
-### Buttons
-- **全局发布按钮**：深蓝侧栏里的白底按钮，高 42px；它是页面唯一持续存在的主动作。
-- **详情主按钮**：深蓝底白字，高 36px；只给当前最需要处理的账号。
-- **次按钮**：白底墨字、1px 发丝边；详情、续期等。
-- **焦点**：浅底 #a85c06，深底 #ffc46b，2px 外环。
+### Segmented control `.seg`
+筛选与版本切换。纸底、控件线、8px 圆角；选中项墨底白字 600。用 `aria-pressed` 表达状态。
 
-### Todo Strip（待处理条）
-- 标题下一行紧凑文字链：按严重度列出当前待办（如“小红书重登 · 抖音续期 · TikTok 放行”）。
-- 点击直达对应格：选中、展开组内详情、滚动到可见。
-- 按所需动作去重：同一登录失效引发的发布、采集失败不重复计数。
+### Buttons and links
+`.btn` 34px 高、7px 圆角、控件线边框、hover 变 (#f3f3f0)。`.btn.pri` 墨底白字；`.btn.lg` 42px 用于「确认」这一个动作。`.link` 为无框下划线次要字，用于「先不发」「晚点」类次要选择。禁用态 45% 不透明度。
 
-### Matrix Cell（瓷贴）
-- 形态：8px 圆角、1px 发丝边、白底，贴在灰底上，彼此留 8px 间距；不参与连续网格线。选中时是这块瓷贴自身被描边，不是整格被填色。
-- **身份自证**：首行 = 18px 平台标识 + 账号名（12px/650，超长省略）。平台标识是自绘 SVG（品牌色圆角方块 + 白色标记），不是外部图片，也不依赖网络。
-- 账号组名不重复进格（由行头承担）；平台名文字不重复进格（由标识 + 列头承担）。
-- 平台标识同时通过 `aria-label`（“平台 · handle · 登录状态”）提供给读屏。
-- 首行登录状态：正常态只用绿点 + 灰绿文字，**无底色无边框**；只有异常（将过期 / 已失效）才用琥珀或红的浅底小签。
-- 第二行登录状态（正常态仅绿点 + 灰绿字，无填充）。
-- 第三、四行固定为“发 结果 · 时间”“采 结果 · 时间”，用单字标签节省宽度；所有瓷贴顶对齐、共用基线；标签用无衬线，时间与数字用等宽。
-- 选中态只有一种信号：2px 深蓝内框（贴在内边）；同时对应账号组名下方出现短墨线、平台表头加重，帮助定位，不给整行整列铺色。
-- 异常瓷贴整体换浅底（失效 #fff2f0、将失效 #fff7e9）+ 对应色边，让异常在灰底上整块跳出，而不是靠一枚小签硬撑。
-- 未接入格是虚线幽灵贴：无填充、1px 虚线边，只写“未接入”和安静的文字型“添加”；它表达矩阵缺口，不伪装成账号。
-- 手机上瓷贴退回到组卡内的一行行条目：去掉每格的边与圆角，只留行分隔线，避免卡中卡。
+### Confirm panel `.cp`
+一支成片 = 视频（#111214 底，300px 高，竖版 360px）+ 版本切换 + 每个平台一行 + 小红书单独一块 + 一个确认按钮。
+- **`.prow`**：平台徽章、名称、标题、时间、动作；44px 最小高；失败行淡红底；被关闭的行标题与时间划线并转弱字。
+- **`.solo`**：淡黄底黄线，专给必须单独处理的平台（小红书），因为它需要人工点击；里面有自己的标题与动作。
+- **`.cfoot`**：粘底操作栏，左侧小字提示，右侧唯一的大墨色按钮。
+- 确认完成后换为 `.done-note`（淡绿底绿字 600）。
 
-### Account Detail
-- 以 handle 为主标题，“账号组 · 平台”降为上方定位小字；右侧只有一个下一步动作。
-- 标题下一句话说清异常结论、影响与最近成功时间；正常账号写事实（“登录正常 · 发布与采集运行中”），不写“没有需要处理的事项”这类空话。
-- 下方两列证据：最近发布、最近采集（含来源与失败原因）；不重复矩阵里已有的状态签。
-- 主按钮进入具体对象：失效→该账号重新登录；将到期→续期；待放行→该条发布；正常→账号详情。链接各不相同，不只换文案。
+### Cut steps `.step`
+右栏的成片列表：44px 缩略图 + 标题，9px 圆角；当前项墨色描边 + 纸底。`.sidebox` 用上线分块，`.nx` 为「接下来」三列行。
 
-### Panel（工作面板）
-- 白底、1px 发丝边、8px 圆角；标题行 14px/650，右侧 hint 12px。
-- 面板内用 `.row` 列表：12px/16px 内边距、柔发丝线分隔，不用表格框。
-- 面板是「一块工作区」，不是卡片墙；一页最多三到四块。
+### Typical bar `.typ`
+120px × 6px 的对比条：轨道灰，填充为本条的值，2px 墨色竖线标记「这个账号的平时」（40% 处）。高于平时填充为绿，低于为红，接近为灰；旁边总有 `.x` 倍数。
 
-### Plan（发布计划）
-- 发布台有两种模式：**写一条**（组合内容与账号）与**发布计划**（排期）。同一页切换，URL 记住模式（`?view=plan`）。
-- **单位不能两义**：摘要写「N 个作品 · M 条平台发布」，不写含糊的「N 条」。
-- **平台状态必须逐平台记录**：`platforms: [{id, state}]`，卡片聚合状态取其中最差的一个；一张卡写「仅自见」而其中某平台其实已发布，是错的。
-- **一天 = 一个作品的卡片，不是一个平台一条。** 一个作品发四个平台仍是一张卡，卡上并排四个平台标识；把工作拆成四块是错的。
-- 卡片信息固定四件：时间、状态、标题（最多两行）、平台标识。标题必须是内容，不能只显示时间。
-- 三种视图，各司其职：
-  - **周**（默认，桌面）：7 列，每列真实卡片，能直接看出这周发什么。
-  - **月**：只做导航，格子里是状态点与条数，点一天切到那一周；month 里不放卡片，塞不下也读不懂。
-  - **列表**：按天分组的议程，手机默认用它。
-- 顶部摘要回答排期真正的问题：本周几条、几个空白天、几处同平台撞车；撞车项可点，点了跳到那一周。
-- **改期要快、要有反馈、要不设防**：卡片展开先给「明天 / 下周同日」快捷项，一步完成；保存后 toast 并给「撤销」；过去时间要拦，撞车要在保存前提示；空值不能静默。
-- **撞车必须落在卡片上，不能只在摘要里报数。** 同组同平台、时间相差 ≤30 分钟即算撞车；相关卡片加红边与「撞车」签，否则用户知道有问题却找不到在哪。
-- 列表视图把空白日也画出来：连续空白折叠成一行「11/13 – 11/16 · 4 天没有安排 + 排一条」，保证摘要里的空白天数与眼睛看到的一致。
-- 月视图只统计本月的条目与撞车，不把相邻月份的格子算进"本月"。
-- 卡片默认收起动作，点一下才展开「改期 / 取消 / 看作品」；改期就地展开时间选择器，不弹窗。
-- 空白日有「+ 排一条」，点它带着日期回到写作模式并把定时填好。
-- 手机：七列会压成字，所以默认列表；周视图改成纵向堆叠也仍可用。
-- 命令区随账号组与月份变化：`vk schedule list --group <组> --from <月首> --to <月末>`。
+### Strip plot（数据页）
+每个平台一行：96px 平台名 + 横向一维点图 + 150px 说明。细线为轴，墨色竖线为平时 (50%)，浅竖线为刻度，11px 圆点是每支作品，绿 / 红 / 灰按相对平时好 / 差 / 持平。点图只比较同一账号，行与行之间不共用刻度含义。
 
-### Stats（总览数字）
-- 数字用等宽、25px、tabular-nums；标签 12px 灰；变化量用绿/红文字，不用箭头图标。
-- 关键规则：数字必须带口径（覆盖几个平台、与上周比、几个账号数据过期）。孤立的大数字不算结论。
+### State vocabulary `.st`
+8px 圆点 + 13px 词。点与词合起来才是状态，颜色只是附加：
+- **wait 等你确认**：黄点（描边 #b99700），墨字。
+- **sched 已确认，等时间**：空心墨圈，墨字。
+- **pub 已发布**：灰实点，次要字。
+- **done 已发布，已核对 / 正常**：绿点绿字。
+- **bad 出了问题**：红点红字 600。
+- 未命名的空心灰圈是「未编排 / 先不发」。
 
-### Chart（趋势）
-- 真实坐标轴与刻度，不用装饰性 sparkline。
-- 数据缺口画成浅红区间并在曲线上打点标记，配一句“这一段是插值，不是真实数据”。
-- 图例区分「数据」与「缺口」，两者颜色不同。
+### Note `.note`
+10px 圆角的说明块，纸底；`.note.bad` 为淡红底红线，写清「怎么了、影响什么、你现在能做什么」，下方动作按钮。失败现场的截图框 `.shot` 同用红线。
 
-### Command Block（命令对照）
-- 深灰底（--ground）、1px 柔边、6px 圆角、等宽 12px，行首一个小号说明词。
-- 每个主页面至少一处：它把「CLI 完整律」变成看得见的东西——界面上能做的，CLI 里有同一条。
-- 命令允许换行，不允许横向被裁掉。
+### Toast
+墨底白字，9px 圆角，居中固定于底部 28px，点击动作后的一句确认，如「已确认 6 条，按时间发」。
 
-### Tabs（分段选择）
-- 36px 高的分段控件，选中项深蓝底白字；用真实 radio + label，不用假按钮。
-- 用于时间范围（7/30/90 天）与任务状态筛选。
-
-### Scene（失败现场）
-- 浅红底、上方红边，直接展开在失败条目下方，不弹窗。
-- 左列结构化现场：错误码、HTTP、平台原文、尝试次数、任务号。
-- 右列人话：发生了什么、下一步做什么。
-- 底部一排动作（转手动、重试、去重登）+ 等价命令。
-
-### Local Status
-- 侧栏底部只写“本地运行中”“凭证与数据只在这台电脑”“最近检查时间”。
-- 它是信任承诺，不放版本号、营销语或多余设置入口。
+### Feishu card mock
+三列手机会话示意（#eff0f2 底，14px 圆角）：头像是墨色圆里一个黄点；卡片 10px 圆角，线 (#dcdee2)。卡片头颜色与主系统同义：黄 = 待确认，红 = 出了问题，灰 (#e4e6ea) = 通知，绿 = 已完成。卡片带 210px 视频缩略图（#111214 底，白色播放三角）、`.ln` 行列表、整行平分的按钮、76px 虚线二维码占位。卡片上能点的动作与 Web 完全一致，复杂编辑留给 Web。
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** 让每页只回答一个问题。
-- **Do** 把待办放在首屏顶部，点击直达对应格；矩阵继续承担全局定位。
-- **Do** 让每个时间绑定结果：发布成功/失败、采集成功/失败，不让用户点进去才知道。
-- **Do** 区分口径：登录状态、发布事项、采集新鲜度分开命名，汇总与详情一致。
-- **Do** 详情跟随账号组原位展开，切换时让标题和主按钮进入视口。
-- **Do** 手机保留同一批账号与字段。
-- **Do** 时间使用等宽 + tabular-nums。
-- **Do** 定时发布必须能在日历上看见，并支持改期与取消；只有时间输入框不算排期。
-- **Do** 让每个主页面露出对应的 `vk` 命令：CLI 完整律要看得见，不只写在文档里。
-- **Do** 数字必须带口径：覆盖几个平台、与什么比、几个账号数据过期。
+- **Do** 让按钮说清点下去会发生什么：「确认这 6 条，按时间发」，而不是「确认」「提交」。
+- **Do** 每个数字都带同一账号的平时：用 `.x` 倍数与 `.typ` 对比条，title 里给出绝对值与基线。
+- **Do** 把所有新颜色、字号、圆角先加进本文件 frontmatter，再写进样式。
+- **Do** 状态永远是「点 + 词」，色盲用户靠词也读得懂。
+- **Do** 一页只有一个主任务和至多一个墨色主按钮。
+- **Do** 窄屏只做「不溢出、触控目标 ≥ 32px」。
 
 ### Don't:
-- **Don't** 用航班、登机口、乘客等隐喻替代产品术语。
-- **Don't** 在账号墙里塞作品详情、发布队列或数据看板。
-- **Don't** 给正常账号做彩色填充徽章——正常是默认态，异常才有视觉优先权。
-- **Don't** 在详情里重播矩阵已有的状态签，或写“没有需要处理的事项”这类空话。
-- **Don't** 用弹窗装失败现场：现场要留在任务旁边，跟着队列一起读。
-- **Don't** 画没有坐标轴的装饰性 sparkline。
-- **Don't** 用阴影、玻璃、渐变或大圆角卡片制造层次。
-- **Don't** 为了手机简短而隐藏正常账号。
-- **Don't** 抄 Postiz 的紫色、近黑底或视觉识别。
+- **Don't** 用装饰性隐喻（航班、仪表、船舶、游戏化）；界面不需要先学一个比喻。
+- **Don't** 做卡片墙：同级内容用表格或行列表，面板不套面板。
+- **Don't** 跨平台求和或排名。播放、点赞在不同平台含义不同，只与自己的平时比。
+- **Don't** 加 eyebrow 小标签、大写字距小标题；分区标题就是 13px/600 的 `h2`。
+- **Don't** 给黄、红、绿第二种用途，也不要把平台品牌色拿去做状态或装饰。
+- **Don't** 加阴影、渐变、毛玻璃、图标字形；平台徽章用单字，不用 emoji 或字形图标。
+- **Don't** 把正常状态做成彩色徽章。
+- **Don't** 为手机重新构图；手机上拍板走飞书卡片。
+
+### 账号组切换（`.grp`）
+
+侧栏顶部、品牌名下面的一个 `<details>`：收起时显示当前账号组的名字和一行说明；展开是组列表（当前组标"当前"，别的组有待办时带黄色数字）和"新建账号组"按钮。只用已有的颜色和圆角（8px 外框、10px 菜单、6px 菜单项），没有阴影。每一页的副标题带上当前组的名字；飞书卡片标题前用一个描边小标签写组名。

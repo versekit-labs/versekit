@@ -1,0 +1,104 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true
+  },
+  "header": {
+    "template": "yellow",
+    "title": {
+      "tag": "plain_text",
+      "content": "{{cut_name}} · 改标题或时间"
+    }
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "form",
+        "name": "edit_{{cut_id}}",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**抖音**"
+          },
+          {
+            "tag": "input",
+            "name": "title_douyin",
+            "default_value": "{{dy_title}}",
+            "max_length": 55
+          },
+          {
+            "tag": "picker_datetime",
+            "name": "at_douyin",
+            "initial_datetime": "{{dy_at}}"
+          },
+          {
+            "tag": "markdown",
+            "content": "**视频号**"
+          },
+          {
+            "tag": "input",
+            "name": "title_shipinhao",
+            "default_value": "{{sph_title}}"
+          },
+          {
+            "tag": "picker_datetime",
+            "name": "at_shipinhao",
+            "initial_datetime": "{{sph_at}}"
+          },
+          {
+            "tag": "markdown",
+            "content": "**B站**"
+          },
+          {
+            "tag": "input",
+            "name": "title_bilibili",
+            "default_value": "{{bili_title}}",
+            "max_length": 80
+          },
+          {
+            "tag": "picker_datetime",
+            "name": "at_bilibili",
+            "initial_datetime": "{{bili_at}}"
+          },
+          {
+            "tag": "button",
+            "type": "primary",
+            "width": "fill",
+            "name": "save",
+            "text": {
+              "tag": "plain_text",
+              "content": "改好了"
+            },
+            "form_action_type": "submit",
+            "behaviors": [
+              {
+                "type": "callback",
+                "value": {
+                  "cmd": "publish.edit",
+                  "cut": "{{cut_id}}"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tag": "button",
+        "width": "fill",
+        "text": {
+          "tag": "plain_text",
+          "content": "取消"
+        },
+        "behaviors": [
+          {
+            "type": "callback",
+            "value": {
+              "cmd": "card.show",
+              "cut": "{{cut_id}}"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
