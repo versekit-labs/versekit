@@ -129,3 +129,28 @@ test("snapshots refuse an unknown source and a duplicate capture is reported, no
   assert.equal(second.duplicate, true);
   assert.equal(db().prepare("SELECT COUNT(*) n FROM snapshot WHERE publish_id=?").get(id).n, 1);
 });
+
+test("result_unconfirmed 落结果待确认，不重试、不转草稿（ACC-publish-09）", () => {
+  const id = seed("auto_running");
+  const d = applyPublishError(id, new AdapterError("result_unconfirmed", "已点击发布、未确认结果，请到笔记管理核对：超时"));
+  assert.equal(d.retryable, false);
+  const row = getPublishRow(id);
+  assert.equal(row.state, "notify_pending");
+  assert.equal(row.error_code, "result_unconfirmed");
+  assert.match(row.error_message, /笔记管理核对/);
+});
+
+test("点击发布之前的 flaky_ui 仍按原规则重试", () => {
+  const id = seed("auto_running");
+  const d = applyPublishError(id, new AdapterError("flaky_ui", "找不到发布按钮"));
+  assert.equal(d.retryable, true);
+  assert.equal(getPublishRow(id).state, "auto_running");
+});
+
+test("小红书成功返回值过发布结果契约（ACC-publish-08）", () => {
+  const id = seed("auto_running");
+  applyPublishResult(id, { id: "note_1", url: "https://www.xiaohongshu.com/explore/note_1", visibility: "public", state: "published", followups: [], notes: null });
+  const row = getPublishRow(id);
+  assert.equal(row.state, "published");
+  assert.equal(row.external_id, "note_1");
+});

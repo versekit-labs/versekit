@@ -144,6 +144,18 @@ export function applyPublishError(publishId, err) {
     return { terminal: true, retryable: false, code: error.code };
   }
 
+  // 点了「发布」却判不出结果（ACC-publish-09）：帖子可能已发出，重试 / 转草稿都会重复发帖。
+  // 落「结果待确认」终态，保留 error_code + 人话，由人去平台核对。
+  if (error.code === "result_unconfirmed") {
+    if (["queued", "auto_running", "draft_running", "draft_pending"].includes(row.state)) {
+      transitionPublish(publishId, spec.publishState ?? "notify_pending", {
+        reason: "result_unconfirmed",
+        patch: { error_code: error.code, error_message: String(error.message).slice(0, 500) },
+      });
+    }
+    return { terminal: false, retryable: false, code: error.code };
+  }
+
   // 超时必须有终点（ACC-publish-05）：停在 auto_running 的发布既不是成功也不是失败，
   // 人看不到原因，也没法重试。转 failed 并保留 error_code=timeout + 人话（停在哪一步）。
   if (error.code === "timeout") {
@@ -165,6 +177,7 @@ const FALLBACK_OF = {
   asset_invalid: "asset_invalid",
   platform_reject: "app_only_feature",
   timeout: "flaky_automation",
+  result_unconfirmed: "flaky_automation",
 };
 
 /**

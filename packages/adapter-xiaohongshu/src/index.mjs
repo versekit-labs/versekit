@@ -349,7 +349,8 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
     return {
       id: noteId ?? note.title,
       url: noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : NOTE_MANAGER,
-      visibility: "公开",
+      visibility: "public",
+      state: "published",
       followups: [],
       notes: missed.length ? `没有话题结果、已跳过：${missed.map((t) => `#${t}`).join(" ")}` : null,
     };
