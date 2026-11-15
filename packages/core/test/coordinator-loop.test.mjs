@@ -24,13 +24,14 @@ case "$2" in
   worker-list)
     echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_fake","terminalState":"active","resource":{"worktreeId":"x::/w/cycle-issue-132-1"},"projection":{}}]}}' ;;
   worker-read)
+    META='"cursor":"c1","status":"active","projection":{"a":"agent_status","b":"fresh","c":"owned","d":"wtr_x","e":"ctx_x","f":"not_requested","g":"active","h":"none","i":"released","j":"root_completion","k":"unavailable","l":"x1","m":"x2","n":"x3","o":"x4","p":"x5","q":"x6","r":"x7","s":"x8","t":"x9","u":"y1","v":"y2","w":"y3"}'
     if [ "${readMode}" = quota ]; then
-      echo '{"ok":true,"result":{"text":"working...\\nError: exceeded the weekly usage quota\\n"}}'
+      echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"handle\\":\\"t\\",\\"tail\\":[\\"working...\\",\\"Error: exceeded the weekly usage quota\\"]},$META}}"
     elif [ "${readMode}" = same ]; then
-      echo '{"ok":true,"result":{"text":"thinking...\\n"}}'
+      echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"tail\\":[\\"thinking...\\"]},$META}}"
     else
       n=$(cat "$D/reads" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/reads"
-      echo "{\\"ok\\":true,\\"result\\":{\\"text\\":\\"step $n sk-abcdef123456\\"}}"
+      echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"tail\\":[\\"step $n sk-abcdef123456\\"]},$META}}"
     fi ;;
 esac
 `);
@@ -54,6 +55,8 @@ test('worker-read 末尾含 exceeded quota → 退出码 11，日志含 issue / 
   assert.match(r.stdout, /dispatch=ctx_fake/);
   assert.match(r.stdout, /额度用尽/);
   assert.match(r.stdout, /exceeded the weekly usage quota/);
+  assert.doesNotMatch(r.stdout, /agent_status|root_completion/); // 末尾是终端输出，不是投影元数据
+  assert.doesNotMatch(r.stdout, /无需处理/); // 默认阈值 1800s 下也在下一次检查就停
 });
 
 test('输出超过阈值不变 → 退出码 11（疑似卡住）', () => {

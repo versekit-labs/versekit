@@ -151,7 +151,14 @@ for w in ws:
     issue="#"+m.group(1) if m else "#?"
     r=run(["worker-read","--dispatch",did,"--source","terminal","--limit","60","--json"])
     if not r.get("ok",True): continue
-    text="\n".join(strings(r.get("result"),[]))
+    # 真实 worker-read：终端输出在 result.terminal.tail，其后跟着 cursor/status/projection 等元数据，
+    # 只取 terminal.tail，避免额度检测/末尾打印/摘要被元数据挤掉；没有 terminal 键时才退回 result.text 或全部字符串。
+    res=r.get("result")
+    term=res.get("terminal") if isinstance(res,dict) else None
+    if isinstance(term,dict) and "tail" in term: src=term.get("tail")
+    elif isinstance(res,dict) and isinstance(res.get("text"),str): src=res.get("text")
+    else: src=res
+    text="\n".join(strings(src,[]))
     lines=[l for l in text.splitlines() if l.strip()]
     tail=lines[-8:]
     h=hashlib.sha256("\n".join(lines[-40:]).encode()).hexdigest()
