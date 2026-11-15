@@ -22,11 +22,15 @@
 #   COORD_WAIT_MS        单次等待毫秒数（默认 300000）
 #   COORD_IDLE_ROUNDS    连续空转几轮后退出（默认 2）
 #   CYCLE_LANES          并行 lane 数（默认 2）
+#   COORD_STALL_SECS     终端输出多久没变化就判疑似卡住（默认 1800）
+#   COORD_STATE_DIR      停摆检测的状态目录（默认 ~/.orca/versekit-state，不进仓库）
+#   CYCLE_BIN            cycle 脚本路径（默认 bin/cycle.sh；测试用）
 # 退出码：
 #   0   没活可等了（全部结算，没有新单可派，s:triage 里也没有待整理的 issue）
 #   13  没活可派，但 s:triage 里还有 issue：要协调器补验收口径、转 s:ready（流程「停住」最常见的原因）
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
-#   11  worker-list 报告有 worker 需要处理（requiresAction 或已退出）
+#   11  有 worker 需要处理：worker-list 报 requiresAction/已退出；或 worker-read 末尾出现额度/限流错误；
+#       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定
 #   12  等待被取消（多半是同一终端跑了 run-use）或 check 报错
 
 set -uo pipefail
@@ -113,9 +117,69 @@ for w in ws:
 ' 2>/dev/null
 }
 
+# 停摆检测：lastHeartbeatAt 不可靠，改看终端输出。
+# 对每个在跑的 worker 读 worker-read 的终端输出：
+#   - 末尾出现额度/限流错误 → 立刻判「额度用尽」
+#   - 输出摘要超过 COORD_STALL_SECS 没变化 → 判「疑似卡住」
+# 命中的行（制表符分隔）打印到 stdout；上次摘要与时间存在 COORD_STATE_DIR，不进仓库。
+stall_rows() {
+  COORD_STATE_DIR="${COORD_STATE_DIR:-$HOME/.orca/versekit-state}" \
+  COORD_STALL_SECS="${COORD_STALL_SECS:-1800}" RUN_ID="$RUN_ID" python3 -c '
+import json,os,re,subprocess,sys,time,hashlib
+d=os.path.join(os.environ["COORD_STATE_DIR"],"worker-watch"); os.makedirs(d,exist_ok=True)
+limit=int(os.environ["COORD_STALL_SECS"]); now=time.time()
+def run(args):
+    try: return json.loads(subprocess.run(["orca","orchestration"]+args,capture_output=True,text=True,timeout=60).stdout or "{}")
+    except Exception: return {}
+def strings(o,acc):
+    if isinstance(o,str): acc.append(o)
+    elif isinstance(o,dict):
+        for v in o.values(): strings(v,acc)
+    elif isinstance(o,list):
+        for v in o: strings(v,acc)
+    return acc
+QUOTA=re.compile(r"exceeded.{0,60}quota|usage limit|HTTP 429|rate.?limit(ed)?|too many requests",re.I)
+SECRET=re.compile(r"(sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+|(?:token|key|secret|password)\s*[=:]\s*\S+)",re.I)
+ws=(run(["worker-list","--run",os.environ["RUN_ID"],"--json"]).get("result") or {}).get("workers") or []
+live=set()
+for w in ws:
+    if w.get("terminalState")!="active": continue
+    did=w.get("dispatchId") or ""
+    if not did: continue
+    live.add(did)
+    m=re.search(r"cycle-issue-(\d+)",json.dumps(w))
+    issue="#"+m.group(1) if m else "#?"
+    r=run(["worker-read","--dispatch",did,"--source","terminal","--limit","60","--json"])
+    if not r.get("ok",True): continue
+    # 真实 worker-read：终端输出在 result.terminal.tail，其后跟着 cursor/status/projection 等元数据，
+    # 只取 terminal.tail，避免额度检测/末尾打印/摘要被元数据挤掉；没有 terminal 键时才退回 result.text 或全部字符串。
+    res=r.get("result")
+    term=res.get("terminal") if isinstance(res,dict) else None
+    if isinstance(term,dict) and "tail" in term: src=term.get("tail")
+    elif isinstance(res,dict) and isinstance(res.get("text"),str): src=res.get("text")
+    else: src=res
+    text="\n".join(strings(src,[]))
+    lines=[l for l in text.splitlines() if l.strip()]
+    tail=lines[-8:]
+    h=hashlib.sha256("\n".join(lines[-40:]).encode()).hexdigest()
+    sf=os.path.join(d,did+".json")
+    try: st=json.load(open(sf))
+    except Exception: st={}
+    if st.get("hash")!=h: st={"hash":h,"since":now}
+    json.dump(st,open(sf,"w"))
+    reason=None
+    if QUOTA.search("\n".join(lines[-15:])): reason="额度用尽"
+    elif now-st["since"]>=limit: reason="疑似卡住（终端输出 %d 秒没变化）" % int(now-st["since"])
+    if reason:
+        print("%s\t%s\t%s\t%s" % (issue,did,reason," ⏎ ".join(SECRET.sub("***",l)[:200] for l in tail)))
+for f in os.listdir(d):
+    if f.endswith(".json") and f[:-5] not in live: os.remove(os.path.join(d,f))
+' 2>/dev/null
+}
+
 run_cycle() {
   local out
-  out=$(bin/cycle.sh --max "$MAX" --no-consume 2>&1) || true
+  out=$("${CYCLE_BIN:-bin/cycle.sh}" --max "$MAX" --no-consume 2>&1) || true
   # 完整输出留一份：屏幕上只摘 ✓✗ 行，出错时要能看到 stderr 和失败阶段。
   { printf '===== %s\n' "$(date '+%F %T')"; printf '%s\n' "$out"; } >> "${CYCLE_LOG:-$HOME/.orca/versekit-state/cycle-rounds.log}"
   printf '%s\n' "$out" | grep -E '✓|✗|↩|→ |worker-release|⚠' | sed 's/^/    /' || true
@@ -194,6 +258,16 @@ print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage"
     fi
   else
     idle=0
+  fi
+
+  stalled=$(stall_rows)
+  if [ -n "$stalled" ]; then
+    [ -n "$ack" ] && orca orchestration check --run "$RUN_ID" --ack "$ack" --json >/dev/null 2>&1
+    say "✗ 有 worker 停摆，需要协调器处理（不自动 stop/kill；确认后 worker-stop 再重派）："
+    printf '%s\n' "$stalled" | while IFS=$'\t' read -r issue did reason tail; do
+      printf '  - issue=%s dispatch=%s 原因=%s\n    worker-read 末尾：%s\n' "$issue" "$did" "$reason" "$tail"
+    done
+    exit 11
   fi
 
   if [ "$empties" -ge 3 ]; then
