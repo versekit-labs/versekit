@@ -203,3 +203,11 @@ test("页面改版（没有切换图标）：switchToQr 抛出人话，不静默
     await closeAccount(ACCOUNT);
   }
 });
+
+// 回归：qrStatus 是模块级函数，`log` 不在作用域里时成功/风控分支会抛 ReferenceError（验收第 1 轮 ACC-account-06/07/08）。
+test("qrStatus 显式接收 log，且调用处把 daemon 的 log 传进去", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/vk.mjs", import.meta.url), "utf8");
+  assert.match(src, /async function qrStatus\(accountId, account, session, log\b/);
+  assert.match(src, /qrStatus\(accountId, account, qrSession, log\)/);
+});

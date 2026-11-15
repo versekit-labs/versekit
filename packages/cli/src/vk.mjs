@@ -255,7 +255,7 @@ function qrFailed(accountId, reason, note) {
 }
 
 /** account.login.status 的扫码分支。拆出来是为了让 status 主体保持「窗口登录」那条原样。 */
-async function qrStatus(accountId, account, session) {
+async function qrStatus(accountId, account, session, log = () => {}) {
   // 排队期间会话已被前一次轮询收尾（成功/失败）或被新会话替换：按库里的结果回答，不再碰旧标签页。
   if (loginSessions.get(accountId) !== session) {
     return getAccount(accountId)?.state === "ok"
@@ -506,7 +506,7 @@ function daemonHandlers(adapters, log) {
       const qrSession = loginSessions.get(accountId);
       if (qrSession?.mode === "qr") {
         // 页面和 CLI 可能同时在问：串行化，免得两次轮询同时去点「刷新」或整页重开。
-        const run = (qrSession.chain ?? Promise.resolve()).then(() => qrStatus(accountId, account, qrSession));
+        const run = (qrSession.chain ?? Promise.resolve()).then(() => qrStatus(accountId, account, qrSession, log));
         qrSession.chain = run.catch(() => {});
         return run;
       }
