@@ -200,9 +200,10 @@ test("stats.works --group 只返回该组数据；不存在的组给人话", () 
   assert.equal(onlyA.rows[0].publishId, pa);
   assert.equal(onlyA.rows[0].latest.metrics.play, 11);
 
-  const all = handlers["stats.works"]({});
-  assert.ok(all.rows.some((r) => r.publishId === pa));
-  assert.ok(all.rows.some((r) => r.publishId === pb));
+  // ACC-v2-group-01：不带 --group 默认只看当前组（B 是刚建的，也就是当前组），不再串出 A 组。
+  const dflt = handlers["stats.works"]({});
+  assert.ok(dflt.rows.some((r) => r.publishId === pb));
+  assert.ok(!dflt.rows.some((r) => r.publishId === pa));
 
   assert.throws(() => handlers["stats.works"]({ group: "没有这个组" }), /没有这个账号组/);
 });

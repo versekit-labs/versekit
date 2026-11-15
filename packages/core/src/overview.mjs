@@ -10,7 +10,8 @@
 // 一个作品发三端 = 1 个作品 + 3 条平台发布，这两个数不能互相替代。
 
 import { open } from "./index.mjs";
-import { currentGroup, listAccounts, listGroups } from "./store.mjs";
+import { currentGroup, listAccounts, listGroups, deriveStatus, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
+import { withBaselines } from "./baseline.mjs";
 
 /** 1 小时内采集算「新鲜」；超过 24 小时仍未采集算「坏掉」。与总览页的 5/8 口径一致。 */
 export const FRESH_AFTER_MS = 3600e3;
@@ -319,5 +320,180 @@ export function buildBootstrap({ now = Date.now() } = {}) {
       freshness: freshnessSummary(accounts),
     },
     matrix: buildMatrix(groups, accounts),
+  };
+}
+
+// ------------------------------------------------------------------ 账号组作用域（ACC-v2-group-01）
+
+/**
+ * work / today / stats 类命令的默认作用域：显式 --group 优先，否则是 group.use 记录的当前组；
+ * 一个组都没选（首次使用、旧库）才是 null = 全部，与引入账号组之前一致。
+ * 所有这些命令走这一个函数，「默认只看当前组」就不会各写各的。
+ */
+export function resolveScope(groupRef = null) {
+  const group = groupRef ? (listGroups().find((g) => g.id === groupRef || g.name === groupRef) ?? null) : currentGroup();
+  if (groupRef && !group) throw new Error(`没有这个账号组：${groupRef}（先 vk group list 看看有哪些）`);
+  return group ? { id: group.id, name: group.name } : null;
+}
+
+/** 作品列表，限定在一个账号组：状态只由这个组的平台稿推出；还没有任何平台稿的新作品不属于任何组，各组都看得到。 */
+export function listWorksInScope(works, groupId) {
+  if (!groupId) return works;
+  const rows = open()
+    .prepare(
+      `SELECT p.work_id AS workId, p.state, a.group_id AS groupId
+         FROM publish p JOIN account a ON a.id = p.account_id`,
+    )
+    .all();
+  const mine = new Map();
+  const everWithPublishes = new Set();
+  for (const r of rows) {
+    everWithPublishes.add(r.workId);
+    if (r.groupId !== groupId) continue;
+    if (!mine.has(r.workId)) mine.set(r.workId, []);
+    mine.get(r.workId).push(r.state);
+  }
+  return works
+    .filter((w) => mine.has(w.id) || !everWithPublishes.has(w.id))
+    .map((w) => (mine.has(w.id) ? { ...w, publishes: mine.get(w.id).length, status: deriveStatus(mine.get(w.id)) } : w));
+}
+
+/** 单个作品只留这个组账号的平台稿；成片与版本照旧（它们不属于账号），状态按留下的重算。 */
+export function showWorkInScope(workId, groupId) {
+  const work = showWork(workId);
+  if (!groupId) return work;
+  const ids = new Set(
+    open()
+      .prepare("SELECT p.id FROM publish p JOIN account a ON a.id = p.account_id WHERE p.work_id = ? AND a.group_id = ?")
+      .all(workId, groupId)
+      .map((r) => r.id),
+  );
+  const cuts = work.cuts.map((c) => {
+    const publishes = c.publishes.filter((p) => ids.has(p.id));
+    return { ...c, publishes, status: deriveStatus(publishes.map((p) => p.state)) };
+  });
+  return { ...work, cuts, status: deriveStatus(cuts.flatMap((c) => c.publishes.map((p) => p.state))) };
+}
+
+/** stats 行补上 24 小时播放与倍数；行里没有 accountId / publishedAt，这里按 publishId 查回来。 */
+export function statsWithBaseline(rows) {
+  if (!rows.length) return rows;
+  const conn = open();
+  const get = conn.prepare("SELECT account_id AS accountId, published_at AS publishedAt FROM publish WHERE id = ?");
+  const enriched = withBaselines(
+    rows.map((r) => ({ ...r, publishId: r.publishId, ...(get.get(r.publishId) ?? { accountId: null, publishedAt: null }) })),
+  );
+  return enriched.map(({ accountId, publishedAt, ...row }) => ({ ...row, publishedAt })); // accountId 是内部键，不外泄
+}
+
+// ------------------------------------------------------------------ vk today（ACC-v2-today-01）
+
+export const TODAY_DEFINITIONS = {
+  awaiting: "等确认的作品：有平台稿停在待确认的作品，按成片分；「这支先不发」的不催",
+  problems: "出了问题的平台稿：failed / blocked / expired",
+  scheduled: "已确认等时间的队列：按计划时间从早到晚，没有时间的排最后",
+  results: "最近发布满 24 小时的结果：发布已满 24 小时，最近的在前；倍数见 baseline",
+  others: "其他每个账号组各有几件事等处理：待确认的成片数 + 出了问题的平台稿数",
+};
+const RESULTS_LIMIT = 20;
+const AWAITING = new Set(["pending_confirm", "notify_pending", "draft_pending"]);
+const PROBLEM = new Set(["failed", "blocked", "expired"]);
+const SCHEDULED = new Set(["queued", "auto_running", "draft_running"]);
+
+function todayRows(conn, groupId) {
+  return conn
+    .prepare(
+      `SELECT p.id, p.state, p.mode, p.scheduled_at AS scheduledAt, p.published_at AS publishedAt,
+              p.error_code, p.error_message, p.external_url AS url, p.work_id AS workId, p.cut_id AS cutId,
+              p.account_id AS accountId, a.platform, a.handle, a.group_id AS groupId,
+              w.title AS workTitle, c.title AS cutTitle, v.language
+         FROM publish p
+         JOIN account a ON a.id = p.account_id
+         JOIN work w ON w.id = p.work_id
+         LEFT JOIN cut c ON c.id = p.cut_id
+         LEFT JOIN cut_version v ON v.id = p.version_id
+        WHERE (? IS NULL OR a.group_id = ?)
+        ORDER BY p.created_at, p.id`,
+    )
+    .all(groupId, groupId);
+}
+
+const item = (r) => ({
+  publishId: r.id,
+  workId: r.workId,
+  workTitle: r.workTitle,
+  cutId: r.cutId,
+  cutTitle: r.cutTitle,
+  platform: r.platform,
+  handle: r.handle,
+  language: r.language ?? null,
+  state: r.state,
+  scheduledAt: r.scheduledAt,
+});
+
+/**
+ * 「现在要我做什么」：四块 + 其他组的待办数。只读，不改任何状态；数字在这里算好，Web 和卡片只渲染。
+ * 平台数字不跨平台相加：results 每行是一条平台稿自己的 24 小时播放，倍数只和同一账号比。
+ */
+export function buildToday({ groupId = null, now = Date.now() } = {}) {
+  const conn = open();
+  const scope = groupId ? listGroups().find((g) => g.id === groupId) : null;
+  const rows = todayRows(conn, groupId);
+
+  // 等确认：作品 → 成片 → 平台稿。小红书标 perItem：按成片确认不会带上它。
+  const works = new Map();
+  for (const r of rows.filter((x) => AWAITING.has(x.state))) {
+    if (!works.has(r.workId)) works.set(r.workId, { workId: r.workId, title: r.workTitle, cuts: new Map() });
+    const w = works.get(r.workId);
+    const key = r.cutId ?? `none:${r.id}`;
+    if (!w.cuts.has(key)) w.cuts.set(key, { cutId: r.cutId, title: r.cutTitle ?? r.workTitle, publishes: [] });
+    w.cuts.get(key).publishes.push({ ...item(r), perItem: PER_ITEM_PLATFORMS.includes(r.platform) });
+  }
+  const awaiting = [...works.values()].map((w) => ({ ...w, cuts: [...w.cuts.values()] }));
+
+  const problems = rows
+    .filter((r) => PROBLEM.has(r.state))
+    .map((r) => ({ ...item(r), error: r.error_code ? { code: r.error_code, message: r.error_message } : null }));
+
+  const byTime = (a, b) => (a.scheduledAt ?? Infinity) - (b.scheduledAt ?? Infinity) || a.publishId.localeCompare(b.publishId);
+  const scheduled = rows.filter((r) => SCHEDULED.has(r.state)).map(item).sort(byTime);
+
+  const matured = rows
+    .filter((r) => ["published", "published_limited"].includes(r.state) && r.publishedAt != null && now - r.publishedAt >= 24 * 3600e3)
+    .sort((a, b) => b.publishedAt - a.publishedAt || a.id.localeCompare(b.id))
+    .slice(0, RESULTS_LIMIT);
+  const results = withBaselines(matured.map((r) => ({ ...r, publishId: r.id }))).map((r) => ({
+    publishId: r.id,
+    workId: r.workId,
+    workTitle: r.workTitle,
+    cutTitle: r.cutTitle,
+    platform: r.platform,
+    handle: r.handle,
+    state: r.state,
+    publishedAt: r.publishedAt,
+    url: r.url,
+    ...r.baseline,
+  }));
+
+  // 其他组：只在「看某一个组」时有意义；看全部时没有「其他」。
+  const others = groupId
+    ? listGroups()
+        .filter((g) => g.id !== groupId)
+        .map((g) => {
+          const theirs = todayRows(conn, g.id);
+          const cuts = new Set(theirs.filter((r) => AWAITING.has(r.state)).map((r) => r.cutId ?? `none:${r.id}`));
+          const problemCount = theirs.filter((r) => PROBLEM.has(r.state)).length;
+          return { group: { id: g.id, name: g.name }, awaiting: cuts.size, problems: problemCount, total: cuts.size + problemCount };
+        })
+    : [];
+
+  return {
+    group: scope ? { id: scope.id, name: scope.name } : null,
+    awaiting,
+    problems,
+    scheduled,
+    results,
+    others,
+    definitions: TODAY_DEFINITIONS,
   };
 }

@@ -982,13 +982,37 @@ async function cmdBootstrap() {
   return data;
 }
 
+const clock = (ms) => (ms == null ? "没定时间" : new Date(ms).toLocaleString());
+const ratio = (r) => (r.multiple == null ? `不比（${r.reason}）` : `${r.multiple} 倍 · ${r.verdictLabel}`);
+
+async function cmdToday() {
+  const data = await send("today", { ...(val("--group") ? { group: val("--group") } : {}) });
+  if (!human) return out(data), data;
+  console.log(`账号组：${data.group?.name ?? "全部"}`);
+  console.log(`\n等确认（${data.awaiting.length} 个作品）`);
+  for (const w of data.awaiting) {
+    for (const c of w.cuts) {
+      console.log(`  ${w.title} / ${c.title}：${c.publishes.map((p) => `${p.platform}${p.perItem ? "（逐条）" : ""}`).join("、")}`);
+    }
+  }
+  console.log(`\n出了问题（${data.problems.length}）`);
+  for (const p of data.problems) console.log(`  ${p.workTitle} → ${p.platform} ${p.handle}：${p.error?.message ?? p.state}`);
+  console.log(`\n已确认等时间（${data.scheduled.length}）`);
+  for (const p of data.scheduled) console.log(`  ${clock(p.scheduledAt)}  ${p.workTitle} → ${p.platform} ${p.handle}`);
+  console.log(`\n满 24 小时的结果（${data.results.length}）`);
+  for (const r of data.results) console.log(`  ${r.workTitle} → ${r.platform} ${r.handle}：${r.play24h ?? "没数据"} 播放 · ${ratio(r)}`);
+  if (data.others.length) console.log(`\n其他组：${data.others.map((o) => `${o.group.name} ${o.total} 件`).join("、")}`);
+  return data;
+}
+
 async function cmdWork() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk work list | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>";
+  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>";
   if (sub === "list" || !sub) {
-    const data = await send("work.list", {}, { log });
+    const data = await send("work.list", { ...(val("--group") ? { group: val("--group") } : {}) }, { log });
     if (human) {
+      if (data.group) console.log(`账号组：${data.group.name}`);
       if (!data.works.length) console.log("还没有作品：vk work add <视频文件>");
       for (const w of data.works) {
         console.log(`${w.id.padEnd(18)}${String(w.title).padEnd(24)}${w.status.label.padEnd(12)}${w.cuts} 支成片 · ${w.versions} 个版本 · ${w.publishes} 条平台稿`);
@@ -999,7 +1023,7 @@ async function cmdWork() {
   if (sub === "show") {
     const workId = pos[2];
     if (!workId) throw new Error(usage);
-    const data = await send("work.show", { workId }, { log });
+    const data = await send("work.show", { workId, ...(val("--group") ? { group: val("--group") } : {}) }, { log });
     if (human) {
       const w = data.work;
       console.log(`${w.title}（${w.id}）  ${w.status.label}`);
@@ -1452,7 +1476,8 @@ function usage() {
       // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
       // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
-      "  vk work list | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
+      "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
+      "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
@@ -1487,6 +1512,7 @@ try {
   else if (cmd === "bootstrap") await cmdBootstrap();
   else if (cmd === "serve") await cmdServe();
   else if (cmd === "group") await cmdGroup();
+  else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
