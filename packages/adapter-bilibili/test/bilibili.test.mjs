@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { attachVersion } from "../../core/test/fixtures/attach-version.mjs";
 
 process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-bili-"));
 
@@ -57,6 +58,7 @@ function seed({ state = "queued", credential = true, scheduledAt = null, title =
   db()
     .prepare("INSERT INTO publish (id, work_id, account_id, state, scheduled_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?)")
     .run(`p${n}`, `w${n}`, `a${n}`, state, scheduledAt, Date.now(), Date.now());
+  attachVersion(db(), `p${n}`);
   return { publishId: `p${n}`, accountId: `a${n}`, credPath };
 }
 
@@ -118,6 +120,25 @@ test("dry-run 不触碰平台状态，也不调用 biliup", async () => {
   const res = await adapter.publish({ publishId, dryRun: true });
   assert.equal(res.dryRun, true);
   assert.equal(db().prepare("SELECT state FROM publish WHERE id=?").get(publishId).state, "queued");
+});
+
+test("ACC-v2-confirm-07：上传的是平台稿自己那个语言版本的文件，不是作品表里的第一支成片", async () => {
+  const { publishId } = seed();
+  // 平台稿改挂到另一支成片（短片）上：作品表素材列仍是长片。
+  const short = `${process.env.VK_HOME}/short-${publishId}.mp4`;
+  writeFileSync(short, "fake short");
+  const workId = db().prepare("SELECT work_id FROM publish WHERE id=?").get(publishId).work_id;
+  db().prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,1,?)").run(`cut_short_${publishId}`, workId, "短片", Date.now());
+  db().prepare("INSERT INTO cut_version (id, cut_id, language, asset_path, created_at) VALUES (?,?, 'default', ?, ?)").run(`ver_short_${publishId}`, `cut_short_${publishId}`, short, Date.now());
+  db().prepare("UPDATE publish SET cut_id=?, version_id=? WHERE id=?").run(`cut_short_${publishId}`, `ver_short_${publishId}`, publishId);
+
+  // 直接调用：适配器问 core 解析素材。
+  const direct = await adapter.publish({ publishId, dryRun: true });
+  assert.equal(direct.args[1], short);
+  // 经 core 组装入参：用传进来的 asset。
+  const viaCore = await adapter.publish({ publishId, asset: short, dryRun: true });
+  assert.equal(viaCore.args[1], short);
+  assert.notEqual(db().prepare("SELECT asset_path FROM work WHERE id=?").get(workId).asset_path, short);
 });
 
 test("输出里没有 BV 号时回退到 biliup list 找", async () => {

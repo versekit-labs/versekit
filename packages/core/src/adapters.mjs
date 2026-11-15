@@ -10,7 +10,7 @@ import { join, dirname } from "node:path";
 import { open, transitionPublish, emit, enqueue } from "./index.mjs";
 import { validateAdapter } from "./contract.mjs";
 import { AdapterError, toAdapterError } from "./errors.mjs";
-import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow } from "./publish-flow.mjs";
+import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow, publishInputFor } from "./publish-flow.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
 
@@ -183,14 +183,16 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       const controller = new AbortController();
       let timer = null;
       const runAdapter = Promise.resolve().then(() =>
-        adapter.adapter.publish({
-          publishId,
-          signal: controller.signal,
-          // 适配器边跑边报「现在停在哪一步」，超时文案才能说人话，而不是一句「出错了」。
-          onStep: (step) => {
-            if (step) progress.step = String(step).slice(0, 80);
-          },
-        }),
+        adapter.adapter.publish(
+          // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）。
+          publishInputFor(publishId, {
+            signal: controller.signal,
+            // 适配器边跑边报「现在停在哪一步」，超时文案才能说人话，而不是一句「出错了」。
+            onStep: (step) => {
+              if (step) progress.step = String(step).slice(0, 80);
+            },
+          }),
+        ),
       );
       const deadline = new Promise((_, reject) => {
         timer = setTimeout(() => {

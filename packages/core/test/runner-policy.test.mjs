@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { attachVersion } from "./fixtures/attach-version.mjs";
 
 process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-policy-"));
 
@@ -25,6 +26,7 @@ const seed = () => {
   db()
     .prepare("INSERT INTO publish (id, work_id, account_id, state, created_at, updated_at) VALUES (?,?,?,'queued',?,?)")
     .run(`p${k}`, `w${k}`, `a${k}`, Date.now(), Date.now());
+  attachVersion(db(), `p${k}`);
   core.enqueue({ kind: "publish", targetType: "publish", targetId: `p${k}`, lane: `a${k}` });
   return { publishId: `p${k}`, accountId: `a${k}` };
 };

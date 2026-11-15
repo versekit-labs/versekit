@@ -7,7 +7,7 @@
 //   2. ready() 只回答 null（可用）或非空字符串（人能看懂的缺失原因）。
 //      ready() 抛错、返回 ""、返回 false 都是产品缺陷——账号墙会显示一片空白。
 //   3. ready() 为 null 时，在一个全新的 VK_HOME（mkdtempSync）里造 account / work / publish
-//      + 真实的临时素材文件，调 publish({ publishId, dryRun: true })。
+//      + 真实的临时素材文件，调 publish({ publishId, asset, dryRun: true })（入参由 core 的 publishInputFor 组装）。
 //      dry-run 是「发布前彩排」：必须返回 { dryRun: true }，且不产生任何副作用。
 //   4. 副作用断言：publish 状态不变、external_id 不变、不新增 snapshot、不联网。
 //      联网用 fetch 断言桩拦截——dry-run 里出现任何一次 fetch，门禁就红。
@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { close, migrate, open } from "../../packages/core/src/index.mjs";
 import { loadAdapters } from "../../packages/core/src/adapters.mjs";
 import { validateAdapter } from "../../packages/core/src/contract.mjs";
+import { publishInputFor } from "../../packages/core/src/publish-flow.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const NAME = "适配器契约门禁 adapter-contract";
@@ -149,9 +150,17 @@ for (const info of loaded.adapters) {
     // 种子状态用 auto_running：契约把 dry-run 定义成「发布前彩排」，此时发布已经被认领。
     // 用 queued 会让部分适配器（如 B站）在 dry-run 之前先做 queued → auto_running 迁移，
     // 那测到的就不是 dry-run 的无副作用，而是状态机本身。
+    // 平台稿挂在成片的语言版本下（ACC-v2-confirm-07）：素材由 core 按 version_id 解析后传给适配器。
+    db.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,0,?)").run("cut_contract", "work_contract", "契约成片", now);
+    db.prepare("INSERT INTO cut_version (id, cut_id, language, asset_path, created_at) VALUES (?,?, 'default', ?, ?)").run(
+      "ver_contract",
+      "cut_contract",
+      asset,
+      now,
+    );
     db.prepare(
-      "INSERT INTO publish (id, work_id, account_id, mode, visibility, state, scheduled_at, created_at, updated_at) VALUES (?,?,?, 'auto', 'public', 'auto_running', ?, ?, ?)",
-    ).run("pub_contract", "work_contract", "acc_contract", now + 3600e3, now, now);
+      "INSERT INTO publish (id, work_id, cut_id, version_id, account_id, mode, visibility, state, scheduled_at, created_at, updated_at) VALUES (?,?,?,?,?, 'auto', 'public', 'auto_running', ?, ?, ?)",
+    ).run("pub_contract", "work_contract", "cut_contract", "ver_contract", "acc_contract", now + 3600e3, now, now);
 
     const before = snapshotOf(db, "pub_contract");
 
@@ -165,7 +174,8 @@ for (const info of loaded.adapters) {
     let result = null;
     let thrown = null;
     try {
-      result = await info.adapter.publish({ publishId: "pub_contract", dryRun: true });
+      // 和 handler 一样走 core 组装的入参：素材路径由 core 解析后传入。
+      result = await info.adapter.publish(publishInputFor("pub_contract", { dryRun: true }));
     } catch (err) {
       thrown = err;
     } finally {

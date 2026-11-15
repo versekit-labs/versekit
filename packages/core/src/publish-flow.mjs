@@ -6,8 +6,8 @@
 // "never silently fail" guarantee becomes five different guarantees.
 
 import { open, transitionPublish, emit, enqueue, newId } from "./index.mjs";
-import { ERROR_CODES, toAdapterError } from "./errors.mjs";
-import { assertPublishResult } from "./contract.mjs";
+import { AdapterError, ERROR_CODES, toAdapterError } from "./errors.mjs";
+import { assertPublishResult, assertPublishInput } from "./contract.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { DEFAULT_PUBLISH_TIMEOUT_MS } from "./config.mjs";
 
@@ -24,6 +24,50 @@ export function getPublishRow(publishId) {
         WHERE p.id = ?`,
     )
     .get(publishId);
+}
+
+/**
+ * 这条平台稿该发哪个文件（ACC-v2-confirm-07）。
+ *
+ * 平台稿挂在某支成片的某个语言版本下，素材以 `version_id` 指向的 cut_version 为准。
+ * `work.asset_path` 只跟着第一支成片的第一个版本走——适配器要是读它，确认一支短片，
+ * 发出去的会是长片。所以素材路径由 core 解析好再交给适配器，适配器不自己读 work 表。
+ *
+ * 不兜底：旧库迁移后每条平台稿都有 version_id，解析不到就是真正的数据错误，退回
+ * work.asset_path 只会把「发错片」变成静默的。抛 asset_invalid，带人话。
+ */
+export function resolvePublishAsset(publishId) {
+  const row = open()
+    .prepare(
+      `SELECT p.id, p.cut_id, p.version_id, v.asset_path AS asset, v.language, v.cut_id AS version_cut
+         FROM publish p
+         LEFT JOIN cut_version v ON v.id = p.version_id
+        WHERE p.id = ?`,
+    )
+    .get(publishId);
+  if (!row) throw new AdapterError("unknown", `没有这条发布：${publishId}`);
+  if (!row.version_id) {
+    throw new AdapterError("asset_invalid", `平台稿 ${publishId} 没有挂语言版本（version_id 为空），不知道该发哪个文件；没有调用平台，请在作品里重新生成这条平台稿`);
+  }
+  if (!row.version_cut) {
+    throw new AdapterError("asset_invalid", `平台稿 ${publishId} 指向的语言版本 ${row.version_id} 不存在，不知道该发哪个文件；没有调用平台`);
+  }
+  if (row.cut_id && row.version_cut !== row.cut_id) {
+    throw new AdapterError("asset_invalid", `平台稿 ${publishId} 的语言版本 ${row.version_id} 不属于它的成片 ${row.cut_id}，没有调用平台`);
+  }
+  if (typeof row.asset !== "string" || !row.asset.trim()) {
+    throw new AdapterError("asset_invalid", `平台稿 ${publishId} 的语言版本 ${row.version_id}（${row.language}）没有素材路径；没有调用平台`);
+  }
+  return { asset: row.asset, versionId: row.version_id, language: row.language, cutId: row.version_cut };
+}
+
+/**
+ * 交给适配器 publish() 的入参。只有这里组装，handler 与任何直接调适配器的地方都走它，
+ * 入参形状才不会在几处各写一份。
+ */
+export function publishInputFor(publishId, extra = {}) {
+  const { asset } = resolvePublishAsset(publishId);
+  return assertPublishInput({ ...extra, publishId, asset }, `publish ${publishId}`);
 }
 
 /** One row per capture; the caller supplies what it knows and `status` says how complete it is. */
