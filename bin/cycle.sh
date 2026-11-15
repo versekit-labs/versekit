@@ -1179,23 +1179,28 @@ worktree_for_branch() {
 # 仓库同级目录（各 lane / 验收 / 返工 worktree 都放在这里）。
 wt_parent() { dirname "$(git rev-parse --show-toplevel)"; }
 
+# 下面两个函数被 $(...) 捕获，stdout 只能是最后那行 `path:`：git 的提示
+# （`branch '…' set up to track '…'`、`HEAD is now at …`）一旦混进来就变成坏 selector，
+# worker-start 报 selector_not_found（2026-11-15 #101 返工三连败，ACC-harness-cycle-11）。
+# 所以函数里所有 git 命令的 stdout 一律丢弃（或改走 stderr）；stderr 留给日志。
+#
 # 返工找不到已检出该分支的 worktree 时，就在同级建一个 rework-<issue>，而不是退回协调器 worktree。
 # 本地同名分支一律对齐 origin（本地可能残留协调器早先的 merge 提交）。
 ensure_rework_worktree() {
   local num="$1" branch="$2" dir
   dir="$(wt_parent)/rework-$num"
-  git fetch -q origin "$branch" 2>/dev/null || return 1
+  git fetch -q origin "$branch" >/dev/null 2>&1 || return 1
   if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
     git -C "$dir" status --porcelain 2>/dev/null | grep -q . && { logerr "    ✗ $dir 有未提交改动，不动它"; return 1; }
-    git -C "$dir" switch -q "$branch" 2>/dev/null || git -C "$dir" switch -q -c "$branch" "origin/$branch" || return 1
-    git -C "$dir" reset -q --hard "origin/$branch" || return 1
+    git -C "$dir" switch -q "$branch" >/dev/null 2>&1 || git -C "$dir" switch -q -c "$branch" "origin/$branch" >/dev/null 2>&1 || return 1
+    git -C "$dir" reset -q --hard "origin/$branch" >/dev/null || return 1
   else
-    git worktree prune
-    if git show-ref -q --verify "refs/heads/$branch"; then
-      git branch -f "$branch" "origin/$branch" 2>/dev/null || return 1
-      git worktree add -q "$dir" "$branch" || return 1
+    git worktree prune >/dev/null 2>&1
+    if git show-ref -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+      git branch -f "$branch" "origin/$branch" >/dev/null 2>&1 || return 1
+      git worktree add -q "$dir" "$branch" >/dev/null || return 1
     else
-      git worktree add -q -b "$branch" "$dir" "origin/$branch" || return 1
+      git worktree add -q -b "$branch" "$dir" "origin/$branch" >/dev/null || return 1
     fi
   fi
   printf 'path:%s' "$dir"
@@ -1206,8 +1211,8 @@ ensure_acceptance_worktree() {
   local dir
   dir="$(wt_parent)/acceptance"
   if [ ! -e "$dir/.git" ]; then
-    git worktree prune
-    git worktree add -q --detach "$dir" origin/main || return 1
+    git worktree prune >/dev/null 2>&1
+    git worktree add -q --detach "$dir" origin/main >/dev/null || return 1
   fi
   printf 'path:%s' "$dir"
 }
