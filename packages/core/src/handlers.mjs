@@ -6,8 +6,9 @@
 // minutes for an upload is a timeout, not a feature.
 
 import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { basename, extname } from "node:path";
-import { open, transitionPublish, enqueue, emit } from "./index.mjs";
+import { open, transitionPublish, enqueue, emit, DEFAULT_LANGUAGE } from "./index.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
@@ -221,6 +222,30 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       );
       return { group: { id: g.id, name: g.name }, accounts, occupants };
     },
+
+    "work.add": ({ asset, title, source, cuts }) => {
+      // 两种形式：<一个文件> = 1 作品 1 成片 1 版本；cuts 数组 = 多支成片、多语言。
+      let plan;
+      if (cuts) {
+        if (asset) fail("work.add：给了 cuts 就不要再给单个素材路径");
+        if (!title) fail("work.add：多支成片的作品必须有标题（--title 或清单里的 title）");
+        plan = { title, source, cuts };
+      } else {
+        if (!asset) fail("work.add 要么给一个素材路径，要么给 cuts 清单");
+        plan = { title: title ?? titleOf(asset), source, cuts: [{ title: title ?? titleOf(asset), versions: [{ language: DEFAULT_LANGUAGE, asset }] }] };
+      }
+      // 素材必须真在本机：入库一个不存在的路径，到发布那天才报错就晚了。
+      const assets = plan.cuts.flatMap((c) => (c?.versions ?? []).map((v) => v?.asset).filter(Boolean));
+      const missing = assets.filter((a) => !existsSync(a));
+      if (missing.length) fail(`找不到素材：${missing.join("、")}（路径要在本机，可以是视频文件或图片目录）`);
+      plan.cuts = plan.cuts.map((c) => ({ ...c, versions: (c?.versions ?? []).map((v) => ({ ...v, asset: resolvePath(v.asset) })) }));
+      const result = store.upsertWork(plan);
+      return { ...result, work: store.showWork(result.id) };
+    },
+
+    "work.list": () => ({ works: store.listWorks() }),
+
+    "work.show": ({ workId }) => ({ work: store.showWork(workId) }),
 
     "group.list": () => {
       const current = store.currentGroup();
