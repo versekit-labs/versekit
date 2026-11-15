@@ -49,6 +49,39 @@ const requireId = (publishId) => {
   return publishId;
 };
 
+// 发布接口（笔记提交）与笔记管理列表接口。平台改版时只需要改这两个正则。
+const PUBLISH_API = /\/web_api\/sns\/v\d+\/note(\?|$)|\/api\/galaxy\/[^?]*note\/(post|publish)/;
+const NOTE_LIST_API = /\/api\/galaxy\/[^?]*note\/user\/posted/;
+const NOTE_MANAGER = "https://creator.xiaohongshu.com/new/note-manager";
+
+/** 发布接口响应 → 笔记 id；响应不是成功或没有 id 返回 null。 */
+export function noteIdFromPublishResponse(body) {
+  if (!body || typeof body !== "object") return null;
+  if (!(body.success === true || body.code === 0)) return null;
+  const d = body.data ?? {};
+  const id = d.id ?? d.note_id ?? d.noteId ?? (Array.isArray(d.note_ids) ? d.note_ids[0] : null) ?? d.note?.id;
+  return id ? String(id) : null;
+}
+
+/** 笔记管理列表里按标题 + 时间找刚发的那条（早于点击时间的同名旧笔记不算）。 */
+export function findPostedNote(bodies, title, sinceMs) {
+  for (const body of bodies) {
+    const notes = body?.data?.notes ?? body?.data?.note_infos ?? [];
+    for (const n of notes) {
+      if (text(n.display_title ?? n.title) !== title) continue;
+      const raw = n.post_time ?? n.time ?? n.create_time ?? n.publish_time;
+      if (raw != null) {
+        const t = Number(raw);
+        const ms = t < 1e12 ? t * 1000 : t;
+        if (Number.isFinite(ms) && ms < sinceMs - 5 * 60e3) continue;
+      }
+      const id = n.id ?? n.note_id;
+      if (id) return String(id);
+    }
+  }
+  return null;
+}
+
 const text = (v) => (v == null ? "" : String(v).trim());
 
 function metaOf(row) {
@@ -157,6 +190,19 @@ function wrap(tab, accountId, tag) {
   };
 }
 
+/** 去笔记管理按标题 + 时间核对一次；拿不到（页面/接口异常）当作没核对到，不抛错。 */
+async function verifyInNoteManager(tab, title, sinceMs) {
+  try {
+    const found = await tab.collectJson(NOTE_LIST_API, () => tab.goto(NOTE_MANAGER, { waitUntil: "domcontentloaded" }), {
+      timeout: 20e3,
+      until: (f) => !!findPostedNote(f.map((x) => x.body), title, sinceMs),
+    });
+    return findPostedNote(found.map((x) => x.body), title, sinceMs);
+  } catch {
+    return null;
+  }
+}
+
 /** 标题/正文的编辑器动作由视频与图文两条路径共用，避免「话题面板」「tiptap 焦点」两套实现。 */
 async function fillTitle(tab, title) {
   await clickOn(tab, `(R) => R.querySelector('input[placeholder*="标题"]')`, "标题");
@@ -186,6 +232,7 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
   let tab = null;
   let accountId = null;
   let aborted = false;
+  let clicked = false;
   // 内核到总时限会 abort（ACC-publish-05）。适配器这边只做一件事：把为这个账号打开的
   // 浏览器关掉——否则「超时」只是数据库里的一行，Chrome 还停在半截的上传页。
   const onAbort = () => {
@@ -308,21 +355,63 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
       { timeout: 20e3, what: "发布按钮可用" },
     );
     step("等待发布成功");
-    await tab.clickInShadow("xhs-publish-btn", "发布");
-    await tab.waitFor(`location.pathname.includes('/publish/success') || /发布成功/.test(document.body.innerText)`, [], { timeout: 120e3, what: "发布成功" });
+    // 点击之后的任何失败都不再是 flaky_ui（可重试 / 转草稿会重复发帖）：见 ACC-publish-09。
+    const clickedAt = Date.now();
+    clicked = true;
+    let noteId = null;
+    try {
+      let pageOk = false;
+      const found = await tab.collectJson(
+        PUBLISH_API,
+        async () => {
+          await tab.clickInShadow("xhs-publish-btn", "发布");
+          // 页面信号（URL / 文字）作为补充，后台轮询，接口先到就提前结束。
+          (async () => {
+            const end = Date.now() + 120e3;
+            while (!pageOk && !aborted && Date.now() < end) {
+              pageOk = !!(await tab.eval(`location.pathname.includes('/publish/success') || /发布成功/.test(document.body.innerText)`).catch(() => false));
+              if (!pageOk) await sleep(1000);
+            }
+          })();
+        },
+        { timeout: 120e3, until: (f) => pageOk || f.some((x) => noteIdFromPublishResponse(x.body)) },
+      );
+      noteId = found.map((x) => noteIdFromPublishResponse(x.body)).find(Boolean) ?? null;
+      if (!noteId) {
+        // 页面信号（URL / 文字）只是补充，不能单独当成功：没有接口里的笔记 id，就去笔记管理核对一次；
+        // 仍核对不到则一律「结果待确认」，不拿标题冒充笔记 id（ACC-publish-08 / 09）。
+        step("核对笔记管理");
+        noteId = await verifyInNoteManager(tab, note.title, clickedAt);
+        if (!noteId) {
+          throw new Error(
+            pageOk
+              ? "页面出现成功提示，但发布接口无成功响应、笔记管理里也没查到笔记"
+              : "发布接口无成功响应、页面无成功标志、笔记管理里也没查到",
+          );
+        }
+      }
+    } catch (err) {
+      if (aborted) throw err; // 总时限中止由内核按 timeout 处理，不改写
+      throw new AdapterError(
+        "result_unconfirmed",
+        `已点击发布、未确认结果，请到笔记管理核对（${NOTE_MANAGER}）：${err.message}`,
+        { cause: err },
+      );
+    }
 
     // 视频路径行为不变（流程与超时都和以前一样）；只把返回的 visibility/state 修正成契约值：
     // 旧值是 "公开" 且没有 state，applyPublishResult 会直接打回，等于平台发完了、库里却记失败。
     return {
-      id: note.title,
-      url: "https://creator.xiaohongshu.com/new/note-manager",
+      id: noteId,
+      url: `https://www.xiaohongshu.com/explore/${noteId}`,
       visibility: "public",
       state: "published",
       followups: [],
       notes: missed.length ? `没有话题结果、已跳过：${missed.map((t) => `#${t}`).join(" ")}` : null,
     };
   } catch (err) {
-    throw await wrap(tab, accountId, "publish")(err);
+    const out = clicked && !(err instanceof AdapterError) ? new AdapterError("result_unconfirmed", `已点击发布、未确认结果，请到笔记管理核对：${err.message}`, { cause: err }) : err;
+    throw await wrap(tab, accountId, "publish")(out);
   } finally {
     signal?.removeEventListener("abort", onAbort);
     // 超时中止时关掉整个浏览器（不只是 tab）：发布页不会有后台任务在跑；
