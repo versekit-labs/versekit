@@ -93,8 +93,22 @@ function receiveAsset(req, res, { assetsDir, log }) {
     /* 头部坏了就用默认名，下面的清洗会兜住 */
   }
   const safe = basename(name).replace(/[^\p{L}\p{N}._-]+/gu, "-").slice(-120) || "asset.bin";
-  mkdirSync(assetsDir, { recursive: true, mode: 0o700 });
-  const target = join(assetsDir, `${Date.now()}-${safe}`);
+  // 目录语义（ACC-publish-06）：带 x-vk-batch 的上传属于同一个「图集目录」，文件按 x-vk-index 前缀
+  // 落进 assets/<batch>/，返回的 path 是目录而不是文件（字段与返回结构不变）。不带就是老的单文件。
+  const batch = String(req.headers["x-vk-batch"] ?? "").replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 64);
+  const index = Math.max(0, Math.min(9999, Number.parseInt(String(req.headers["x-vk-index"] ?? "0"), 10) || 0));
+  let target;
+  let reportPath;
+  if (batch) {
+    const dir = join(assetsDir, `album-${batch}`);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    target = join(dir, `${String(index).padStart(4, "0")}-${safe}`);
+    reportPath = dir;
+  } else {
+    mkdirSync(assetsDir, { recursive: true, mode: 0o700 });
+    target = join(assetsDir, `${Date.now()}-${safe}`);
+    reportPath = target;
+  }
 
   let bytes = 0;
   let failed = null;
@@ -128,7 +142,7 @@ function receiveAsset(req, res, { assetsDir, log }) {
       return send(res, 400, { ok: false, error: { code: "empty_asset", message: "上传的是空文件" } });
     }
     log(`[daemon] 收到素材 ${safe}（${bytes} 字节）`);
-    send(res, 200, { ok: true, path: target, bytes });
+    send(res, 200, { ok: true, path: reportPath, bytes });
   });
   req.pipe(out);
 }

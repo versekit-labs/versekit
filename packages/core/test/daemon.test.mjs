@@ -2,7 +2,7 @@
 // bad args are 400 not 500, and the unix socket behaves exactly like the loopback port.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
