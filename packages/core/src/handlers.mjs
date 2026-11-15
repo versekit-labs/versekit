@@ -245,9 +245,18 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return { ...result, work: store.showWork(result.id) };
     },
 
-    "work.list": () => ({ works: store.listWorks() }),
+    // work / today / stats 默认只看当前账号组，--group 指定别的组（ACC-v2-group-01）。
+    "work.list": ({ group = null } = {}) => {
+      const scope = overview.resolveScope(group);
+      return { group: scope, works: overview.listWorksInScope(store.listWorks(), scope?.id ?? null) };
+    },
 
-    "work.show": ({ workId }) => ({ work: store.showWork(workId) }),
+    "work.show": ({ workId, group = null }) => {
+      const scope = overview.resolveScope(group);
+      return { group: scope, work: overview.showWorkInScope(workId, scope?.id ?? null) };
+    },
+
+    "today": ({ group = null } = {}) => overview.buildToday({ groupId: overview.resolveScope(group)?.id ?? null }),
 
     "group.list": () => {
       const current = store.currentGroup();
@@ -435,10 +444,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     "stats.works": ({ range = "all", publishId = null, group = null }) => {
-      const g = group ? requireGroup(group) : null;
+      const g = overview.resolveScope(group);
       return {
-        group: g ? { id: g.id, name: g.name } : null,
-        rows: store.listStats({ range, publishId, groupId: g?.id ?? null }),
+        group: g,
+        rows: overview.statsWithBaseline(store.listStats({ range, publishId, groupId: g?.id ?? null })),
       };
     },
 

@@ -234,8 +234,9 @@ test("ACC-v2-work-01 作品状态只取最要紧的一个：出了问题 > 等�
 
 test("work.list / work.show：JSON 里有作品、成片、每条平台稿的状态；未知作品给带下一步的错", () => {
   const handlers = createCoreHandlers({ adapters: [], log: () => {} });
-  const { works } = handlers["work.list"]();
-  assert.ok(works.length >= 3);
+  // ACC-v2-group-01：默认只看当前组。「v2 组」里的作品要显式 --group，或先切过去。
+  const { works } = handlers["work.list"]({ group: "v2 组" });
+  assert.ok(works.length >= 1);
   for (const w of works) {
     assert.ok(w.id && w.title && w.status.key && Number.isInteger(w.cuts) && Number.isInteger(w.versions) && Number.isInteger(w.publishes));
   }
@@ -244,8 +245,8 @@ test("work.list / work.show：JSON 里有作品、成片、每条平台稿的状
   assert.equal(series.publishes, 4);
   // #146：新建平台稿先停在待确认 → 等确认；人确认每支成片后，manual 模式的平台稿在 queued → 已确认等时间。
   assert.equal(series.status.key, "awaiting_confirm", "未确认的平台稿 → 等确认");
-  for (const c of handlers["work.show"]({ workId: series.id }).work.cuts) handlers["publish.approve"]({ cutId: c.id });
-  const confirmed = handlers["work.list"]().works.find((w) => w.title === "同号多条");
+  for (const c of handlers["work.show"]({ workId: series.id, group: "v2 组" }).work.cuts) handlers["publish.approve"]({ cutId: c.id });
+  const confirmed = handlers["work.list"]({ group: "v2 组" }).works.find((w) => w.title === "同号多条");
   assert.equal(confirmed.status.key, "scheduled", "manual 模式的平台稿在 queued 状态 → 已确认等时间");
   assert.throws(() => handlers["work.show"]({ workId: "work_nope" }), /vk work list/);
 });
