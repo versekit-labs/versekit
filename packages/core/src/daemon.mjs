@@ -19,8 +19,7 @@ import { createRunner } from "./runner.mjs";
 import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publish-flow.mjs";
 import { publishTimeoutMs } from "./config.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
-import { deliverPending, executeAction } from "./notify.mjs";
-import { resultCard } from "./cards.mjs";
+import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
 import { verifyApproval, applyApproval } from "./approval.mjs";
@@ -550,21 +549,8 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
       try {
         const stop = channel.start({
           log,
-          onAction: async (evt) => {
-            const current = getBinding(channel.channel);
-            const res = await executeAction({
-              action: evt.action_value,
-              operator: evt.operator_id,
-              binding: current,
-              handlers,
-            });
-            log(`[channel] ${res.ok ? "✓" : "✗"} ${res.message}`);
-            if (evt.message_id) {
-              await channel
-                .updateCard({ messageId: evt.message_id, card: resultCard(res.ok ? "已处理" : "没有执行", res.message, { ok: res.ok }) })
-                .catch((err) => log(`[channel] 更新卡片失败：${err.message}`));
-            }
-          },
+          // 新作品确认流程与旧按钮的分流都在 notify.mjs 的 handleCardEvent 里。
+          onAction: (evt) => handleCardEvent({ evt, channel, binding: getBinding(channel.channel), handlers, log }),
         });
         startedChannels.set(channel.channel, stop);
         log(`[channel] ${channel.channel} 事件监听已启动`);

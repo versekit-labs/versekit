@@ -43,6 +43,20 @@ function profileInfo() {
   }
 }
 
+/** 表单回传的值：对象原样用，字符串就当 JSON 解；解不开或没有就是 undefined（不是表单提交）。 */
+export function normalizeFormValue(value) {
+  if (value == null) return undefined;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return typeof value === "object" ? value : undefined;
+}
+
 const profileExists = () => profileInfo().exists;
 
 async function lark(args, { timeout = 25e3 } = {}) {
@@ -373,8 +387,11 @@ export default {
           }
           // lark-cli 可能把事件放在顶层、data 或 event 里；三种都认，避免因为一层包装
           // 就让「点了没反应」重演。
-          const evt = [obj, obj?.data, obj?.event, obj?.data?.event].find((c) => c && c.action_value !== undefined);
-          if (!evt) continue;
+          const found = [obj, obj?.data, obj?.event, obj?.data?.event].find((c) => c && c.action_value !== undefined);
+          if (!found) continue;
+          // 表单提交（「改好了」）会带每个输入框与时间选择器的值；字段名要在真实飞书里核对，
+          // 这里兼容几处常见位置，并把可能是字符串的 JSON 展开，core 只认 { 控件名: 值 }。
+          const evt = { ...found, form_value: normalizeFormValue(found.form_value ?? found.action?.form_value ?? found.form) };
           backoff = 1000;
           Promise.resolve(onAction(evt)).catch((err) => log(`[feishu] 处理按钮失败：${err.message}`));
         }

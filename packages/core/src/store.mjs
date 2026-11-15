@@ -515,6 +515,15 @@ export function createPublish({
     throw err;
   }
 
+  // 新作品等确认（#150）：一个作品只发一次（dedupe_key），之后再建的平台稿不会重复打扰。
+  emit({
+    type: "work.awaiting_confirm",
+    severity: "info",
+    publishId: id,
+    payload: { workId },
+    dedupeKey: `work:${workId}:awaiting_confirm`,
+  });
+
   return { id, workId, cutId: cut, versionId: version, accountId, mode, visibility, state: "pending_confirm", queued: false };
 }
 
