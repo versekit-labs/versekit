@@ -166,7 +166,9 @@ async function withChrome(fn) {
 }
 
 async function runtimeChecks() {
-  const cases = PAGES.map(p => ({
+  // 入口页（飞书卡片示意页）不是应用页面，只在静态文件模式下跑：真实服务上没有这条路径，
+  // 要求它 200 等于要求实现方把设计参考页搬进产品。
+  const cases = PAGES.filter(p => !(URL_ARG && ENTRY.has(p))).map(p => ({
     page: p,
     url: URL_ARG
       ? URL_ARG.replace(/\/$/, '') + '/' + p

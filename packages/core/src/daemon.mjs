@@ -38,19 +38,27 @@ const MIME = {
 };
 
 /**
- * 干净 URL 的显式别名：账号页沿用设计稿文件名 `account-wall.html`，但导航路径是 `/accounts`。
+ * 干净 URL 的显式别名：页面文件用设计稿的文件名，导航路径是 `/today` 这类干净地址。
  * 只映射静态页，不碰 `/api/*`——命令路由仍由 `routes.mjs` 从命令表派生，这里不写第二套。
+ *
+ * v2 外壳（#148）：四个页面——今天、作品（含详情）、数据、系统。旧的账号墙、总览、矩阵、
+ * 日历不再有页面；账号管理并入系统页，发布计划按 PRD 不再单独成页（在「今天」里看接下来要发的）。
+ * 登录 / 添加账号 / 发布台 / 任务日志这几条旧流程这一轮先留着，从系统页进。
  */
 const PAGE_ALIASES = new Map([
-  ["/", "overview.html"],
-  ["/accounts", "account-wall.html"],
+  ["/", "today.html"],
+  ["/today", "today.html"],
+  ["/works", "works.html"],
+  ["/work", "work.html"],
+  ["/data", "data.html"],
+  ["/system", "system.html"],
+  // 旧流程：文件仍在，路径不变，从系统页给入口。
+  ["/accounts", "system.html"],
   ["/accounts/add", "add.html"],
-  ["/plan", "calendar.html"],
+  ["/plan", "today.html"],
   ["/publish", "publish.html"],
-  ["/works", "work.html"],
   ["/runs", "runs.html"],
   ["/tasks", "runs.html"],
-  ["/matrix", "matrix.html"],
 ]);
 
 /** 静态页只服务 web/public 里的文件；任何越界路径都当 404，不做「聪明」的路径修正。 */
@@ -78,6 +86,110 @@ function serveStatic(res, file) {
     "x-content-type-options": "nosniff",
   });
   createReadStream(file).pipe(res);
+}
+
+/* ---------------------------------------------------------------- 素材文件（/media）
+ *
+ * 今天页要看片：浏览器没法读本机绝对路径，所以 core 把它交出来。安全边界与 /api 完全一样——
+ * 先过 dispatcher 顶部的「只允许本机」判断，非本机请求拿不到任何字节。
+ *
+ * URL 只收一个 id，路径由 core 按 version_id 查库得到，不接受任何来自 URL 的路径片段，
+ * 所以既没有 `..` 穿越，也不会把 state/assets 以外的随手文件发出去。
+ */
+const MEDIA_TYPES = new Map([
+  [".mp4", "video/mp4"],
+  [".m4v", "video/x-m4v"],
+  [".mov", "video/quicktime"],
+  [".webm", "video/webm"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+  [".gif", "image/gif"],
+]);
+
+/** versionId → 素材绝对路径。只认 cut_version 表里的行；不认识的一律 null。 */
+function resolveMediaPath(versionId) {
+  if (typeof versionId !== "string" || !versionId.trim()) return null;
+  try {
+    return open().prepare("SELECT asset_path FROM cut_version WHERE id = ?").get(versionId)?.asset_path ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** `bytes=0-1023` → { start, end }；不合法返回 null（调用方回 416）。 */
+function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header ?? "").trim());
+  if (!m) return null;
+  const [, rawStart, rawEnd] = m;
+  if (rawStart === "" && rawEnd === "") return null;
+  let start;
+  let end;
+  if (rawStart === "") {
+    // 尾巴：bytes=-500 = 最后 500 字节
+    const tail = Number(rawEnd);
+    if (!Number.isFinite(tail) || tail <= 0) return null;
+    start = Math.max(0, size - tail);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Number(rawEnd);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return null;
+  return { start, end: Math.min(end, size - 1) };
+}
+
+function serveMedia(req, res, { versionId }) {
+  const asset = resolveMediaPath(versionId);
+  if (!asset) {
+    return send(res, 404, {
+      ok: false,
+      error: { code: "not_found", message: `没有这个版本：${versionId}（vk work list 看看有哪些作品）` },
+    });
+  }
+  let stat = null;
+  try {
+    stat = statSync(asset);
+  } catch {
+    stat = null;
+  }
+  // 文件被移走 / 删掉了：说人话，别让页面卡在转圈上。
+  if (!stat || !stat.isFile()) {
+    return send(res, 404, {
+      ok: false,
+      error: { code: "media_missing", message: "这个版本的素材文件不在这台电脑上了（可能被移动或删除）" },
+    });
+  }
+  const type = MEDIA_TYPES.get(extname(asset).toLowerCase());
+  if (!type) {
+    return send(res, 415, {
+      ok: false,
+      error: { code: "media_unsupported", message: `这个文件不能在这里播放：${basename(asset)}` },
+    });
+  }
+
+  const size = stat.size;
+  const base = {
+    "content-type": type,
+    "accept-ranges": "bytes",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  };
+  const rangeHeader = req.headers?.range;
+  if (rangeHeader) {
+    const range = parseRange(rangeHeader, size);
+    if (!range) {
+      res.writeHead(416, { ...base, "content-range": `bytes */${size}` });
+      return res.end();
+    }
+    res.writeHead(206, { ...base, "content-range": `bytes ${range.start}-${range.end}/${size}`, "content-length": range.end - range.start + 1 });
+    if (req.method === "HEAD") return res.end();
+    return createReadStream(asset, { start: range.start, end: range.end }).pipe(res);
+  }
+  res.writeHead(200, { ...base, "content-length": size });
+  if (req.method === "HEAD") return res.end();
+  return createReadStream(asset).pipe(res);
 }
 
 /**
@@ -382,6 +494,17 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
     // 手机审批页：唯一允许从局域网访问的页面（安全边界见 serve 的 host 设置）。
     if (pathname.startsWith("/a/") && (req.method === "GET" || req.method === "POST")) {
       return approvalPage(req, res, { token: pathname.slice(3) });
+    }
+
+    // 素材文件（今天页看片）。只在这里按 id 查库，URL 里的任何路径片段都不会被当成路径用。
+    if ((req.method === "GET" || req.method === "HEAD") && pathname.startsWith("/media/")) {
+      let versionId = "";
+      try {
+        versionId = decodeURIComponent(pathname.slice("/media/".length)).replace(/\/+$/, "");
+      } catch {
+        versionId = "";
+      }
+      return serveMedia(req, res, { versionId });
     }
 
     // 浏览器打开的是本地控制台；/api/* 之外只有静态页。

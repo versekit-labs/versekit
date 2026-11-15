@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>系统 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.legacy{display:flex;flex-direction:column;gap:0;margin-top:14px;max-width:720px}
+.legacy a{display:flex;align-items:center;gap:12px;min-height:52px;padding:10px 16px;border-bottom:1px solid var(--line2);text-decoration:none;color:var(--ink)}
+.legacy a:last-child{border-bottom:0}
+.legacy a:hover{background:var(--hover)}
+.legacy b{font-weight:600;display:block}
+.legacy .sub{display:block}
+.legacy .go{margin-left:auto;color:var(--ink2);font-size:13px;flex:none}
+</style>
+</head>
+<body data-page="system">
+<div class="app">
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+    <a class="nv" href="today.html" data-key="today">今天<b data-todo hidden></b></a>
+    <a class="nv" href="works.html" data-key="works">作品</a>
+    <a class="nv" href="data.html" data-key="data">数据</a>
+    <a class="nv" href="system.html" data-key="system" aria-current="page">系统</a></nav>
+  <main id="main">
+    <div class="hd"><h1>系统</h1><span class="sub" id="sub">账号组、账号登录、发布机、平台规则。</span></div>
+    <section class="wip" aria-label="还没做">
+      <h3>这一页还没做</h3>
+      <p>系统页要把账号组、每个组的账号与登录状态、今天还能发几条、平台规则和发布方案放在一起；
+        这些读的是 <code>vk group list</code> / <code>vk account list</code> / <code>vk doctor --human</code> 的同一份结果。</p>
+      <div class="cmd">对应命令：<code>vk group list</code>　<code>vk account list</code>　<code>vk doctor --human</code></div>
+    </section>
+
+    <h2 class="sec">现在还能用的旧流程</h2>
+    <div class="panel legacy" aria-label="旧流程入口">
+      <a href="/groups.html"><span><b>账号组</b><span class="sub">新建组、切换当前组</span></span><span class="go">打开 →</span></a>
+      <a href="/accounts/add"><span><b>添加账号与登录</b><span class="sub">选平台、扫码或授权登录、重新登录</span></span><span class="go">打开 →</span></a>
+      <a href="/publish"><span><b>发布台</b><span class="sub">上传素材、选平台、预演一次发布</span></span><span class="go">打开 →</span></a>
+      <a href="/runs"><span><b>任务与日志</b><span class="sub">失败的发布在哪里、为什么失败、重试</span></span><span class="go">打开 →</span></a>
+    </div>
+    <div class="cmd">这几页还是旧外壳，这一轮先留着；系统页做完后它们会并进来。</div>
+  </main>
+</div>
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(async function () {
+  const sub = document.getElementById("sub");
+  try {
+    await window.VK.ready();
+    const current = window.VK.current();
+    if (current) sub.textContent = `${current.name} · 账号组、账号登录、发布机、平台规则。`;
+  } catch (err) {
+    sub.textContent = `读不到账号组：${err.message}`;
+  }
+})();
+</script>
+</body>
+</html>
