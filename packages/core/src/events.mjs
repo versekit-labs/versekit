@@ -25,6 +25,11 @@ export const EVENTS = {
   // 改期不是状态迁移（状态不变，只动时间），但必须留痕：谁把哪个作品从几点挪到了几点。
   "schedule.moved": { severity: "info", required: false, internal: true },
 
+  // 确认前改标题 / 时间（#146）：状态不变，只动这条平台稿的 overrides 与建议时间，同样要留痕。
+  "publish.edited": { severity: "info", required: false, internal: true },
+  // 红线第二道防线（#146）：队列领到一条不在可发状态的平台稿（例如待确认），没有调用适配器。
+  "publish.not_runnable": { severity: "warn", required: false, internal: true },
+
   // 改组名只影响显示名，不影响任何发布；留痕是为了以后能解释「这组以前叫什么」。
   "group.renamed": { severity: "info", required: false, internal: true },
 

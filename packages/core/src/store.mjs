@@ -4,7 +4,7 @@
 // same five things everywhere (work row, publish row, queue entry, validation, readable error).
 
 import { resolve } from "node:path";
-import { open, newId, DEFAULT_LANGUAGE } from "./index.mjs";
+import { open, newId, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
@@ -361,19 +361,23 @@ export const PUBLISH_STATE_GROUP = {
   expired: "problem",
   notify_pending: "awaiting_confirm",
   draft_pending: "awaiting_confirm",
+  pending_confirm: "awaiting_confirm",
+  // 「这支先不发」：不催人（不算等确认），但也不是取消——以后还能在作品里再确认。
+  skipped: "skipped",
   queued: "scheduled",
   auto_running: "scheduled",
   draft_running: "scheduled",
   published: "done",
   published_limited: "done",
 };
-export const WORK_STATUS_ORDER = ["problem", "awaiting_confirm", "scheduled", "done"];
+export const WORK_STATUS_ORDER = ["problem", "awaiting_confirm", "scheduled", "skipped", "done"];
 export const WORK_STATUS_LABEL = {
   problem: "出了问题",
   awaiting_confirm: "等确认",
   scheduled: "已确认等时间",
   done: "都发完了",
   none: "还没有平台稿",
+  skipped: "先不发",
   canceled: "已取消",
 };
 
@@ -458,8 +462,9 @@ export function showWork(workId) {
 }
 
 /**
- * One publish row per (cut, account). Creating it also queues it — a row nobody queued is a
- * publish that silently never happens, which is the exact failure mode this product forbids.
+ * One publish row per (cut, account). 平台稿生成后先停在「待确认」（pending_confirm，#146）：
+ * 不排队、不发——到了建议时间也一样。只有人确认（publish.approve / now / manual）才进队列，
+ * 见 handlers.mjs 的确认命令。所有者定的口径是「不能不经过人同意就发了」。
  *
  * 不给 cutId/versionId 就是 publish.create 的快捷方式：挂在作品唯一（或第一支）成片的默认版本上。
  */
@@ -472,7 +477,6 @@ export function createPublish({
   visibility = "public",
   scheduledAt = null,
   overrides = null,
-  enqueue = true,
 }) {
   if (!getWork(workId)) fail(`没有这条内容：${workId}`);
   const account = getAccount(accountId);
@@ -501,7 +505,7 @@ export function createPublish({
     open()
       .prepare(
         `INSERT INTO publish (id, work_id, cut_id, version_id, account_id, mode, visibility, state, scheduled_at, overrides_json, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?, 'queued', ?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?, 'pending_confirm', ?,?,?,?)`,
       )
       .run(id, workId, cut, version, accountId, mode, visibility, scheduledAt, overrides ? JSON.stringify(overrides) : null, now, now);
   } catch (err) {
@@ -511,13 +515,7 @@ export function createPublish({
     throw err;
   }
 
-  // manual means "track it, do not act on it", so it is never queued.
-  const queued = enqueue && mode !== "manual";
-  if (queued) {
-    const runAfter = scheduledAt && scheduledAt > now ? scheduledAt : null;
-    queuePublish({ id, account_id: accountId }, { runAfter });
-  }
-  return { id, workId, cutId: cut, versionId: version, accountId, mode, visibility, queued };
+  return { id, workId, cutId: cut, versionId: version, accountId, mode, visibility, state: "pending_confirm", queued: false };
 }
 
 export function getPublish(publishId) {
@@ -748,4 +746,175 @@ export function bindChannel(channel, externalUserId) {
 /** Latest binding for a channel, or null. */
 export function getBinding(channel) {
   return open().prepare("SELECT * FROM channel_binding WHERE channel=? ORDER BY paired_at DESC LIMIT 1").get(channel) ?? null;
+}
+
+// ------------------------------------------------------------------ 发布前人确认（#146）
+//
+// 平台稿生成后停在 pending_confirm。下面这几个函数是**唯一**能把它推进队列的地方，而且都只由
+// 人发起的命令调用（publish.approve / now / manual / skip / edit，见 commands.mjs）。
+// 调度、队列、重试路径都不会碰 pending_confirm / skipped。
+//
+// 与 approval.mjs 的区别：那是「签名审批链接」，处理的是已经失败 / 阻塞的平台稿要不要重试；
+// 这里是「还没发过的平台稿要不要发」。两者不共用状态集合，命令名也不重叠。
+
+/** 等人拍板的状态：待确认，以及「这支先不发」之后还能再确认的。 */
+export const CONFIRMABLE_STATES = ["pending_confirm", "skipped"];
+
+/**
+ * 逐条决定的平台：按成片确认时**不会**被带上（ACC-v2-confirm-02），每条由人单独选
+ * 按建议时间发 / 现在发 / 我自己发（ACC-v2-confirm-03）。
+ */
+export const PER_ITEM_PLATFORMS = ["xiaohongshu"];
+
+const confirmRows = (where, ...params) =>
+  open()
+    .prepare(
+      `SELECT p.id, p.state, p.mode, p.scheduled_at, p.account_id, p.cut_id, p.overrides_json, a.platform, a.handle, a.removed_at
+         FROM publish p JOIN account a ON a.id = p.account_id
+        WHERE ${where}
+        ORDER BY p.created_at, p.id`,
+    )
+    .all(...params);
+
+function requireCut(cutId) {
+  const cut = open().prepare("SELECT id, work_id, title FROM cut WHERE id = ?").get(cutId);
+  if (!cut) fail(`没有这支成片：${cutId}（vk work show <作品 id> 能看到成片 id）`);
+  return cut;
+}
+
+function requireConfirmable(publishId) {
+  const row = confirmRows("p.id = ?", publishId)[0];
+  if (!row) fail(`没有这条平台稿：${publishId}`);
+  if (!CONFIRMABLE_STATES.includes(row.state)) {
+    fail(`这条平台稿现在是 ${row.state}，不在等确认：只有待确认或先不发的平台稿能确认、改或跳过`);
+  }
+  return row;
+}
+
+const label = (r) => `${r.platform} ${handleLabel(r.handle)}`;
+
+/** 人确认了：进队列，按建议时间（或现在）发。mode=manual 的只记跟踪，不排 run。 */
+function admit(row, { reason, now, at = null }) {
+  // 账号已从组里移除：确认了也发不出去，而且会从一个已让出的槽位发帖。说清楚，不进队列。
+  if (row.removed_at) fail(`${label(row)} 已从账号组移除，这条平台稿不能再确认（${row.id}）`);
+  const patch = at != null ? { scheduled_at: at } : {};
+  transitionPublish(row.id, "queued", { reason, patch });
+  const when = at ?? row.scheduled_at;
+  const runAfter = when && when > now ? when : null;
+  const runId = row.mode === "manual" ? null : queuePublish({ id: row.id, account_id: row.account_id }, { runAfter });
+  return { publishId: row.id, platform: row.platform, handle: row.handle, state: "queued", scheduledAt: when ?? null, runAfter, runId };
+}
+
+function inTransaction(fn) {
+  const conn = open();
+  conn.exec("BEGIN");
+  try {
+    const out = fn();
+    conn.exec("COMMIT");
+    return out;
+  } catch (err) {
+    conn.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * publish.approve。
+ *  · 给 cutId：确认这支成片下**所有非小红书**的待确认（含先不发）平台稿，按建议时间发；
+ *    小红书的不带上，原样留在待确认，回执里列出来让人逐条决定。
+ *  · 给 publishId：只确认这一条（小红书「按建议时间发」走这里）。
+ */
+export function approvePublishes({ cutId = null, publishId = null, now = Date.now() } = {}) {
+  if (Boolean(cutId) === Boolean(publishId)) fail("确认要指定一支成片（--cut）或一条平台稿（--publish），二选一");
+  if (publishId) {
+    const row = requireConfirmable(publishId);
+    return inTransaction(() => ({ approved: [admit(row, { reason: "approved_by_operator", now })], perItem: [] }));
+  }
+  const cut = requireCut(cutId);
+  const rows = confirmRows(`p.cut_id = ? AND p.state IN (${CONFIRMABLE_STATES.map(() => "?").join(",")})`, cutId, ...CONFIRMABLE_STATES);
+  // 账号已移除的不带上，回执里单独列出（不静默跳过）。
+  const removed = rows.filter((r) => r.removed_at).map((r) => ({ publishId: r.id, platform: r.platform, handle: r.handle, reason: `${label(r)} 已从账号组移除` }));
+  const batch = rows.filter((r) => !r.removed_at && !PER_ITEM_PLATFORMS.includes(r.platform));
+  const perItem = rows
+    .filter((r) => !r.removed_at && PER_ITEM_PLATFORMS.includes(r.platform))
+    .map((r) => ({ publishId: r.id, platform: r.platform, handle: r.handle, state: r.state, scheduledAt: r.scheduled_at }));
+  if (!batch.length) {
+    if (perItem.length) {
+      fail(`成片「${cut.title}」只剩 ${perItem.map(label).join("、")} 要逐条决定：vk publish approve --publish ${perItem[0].publishId}（或 now / manual）`);
+    }
+    fail(`成片「${cut.title}」没有等确认的平台稿`);
+  }
+  const approved = inTransaction(() => batch.map((r) => admit(r, { reason: "approved_by_operator", now })));
+  return { cutId, title: cut.title, approved, perItem, ...(removed.length ? { removed } : {}) };
+}
+
+/** publish.now：这一条现在就发（建议时间改成现在）。 */
+export function publishNow({ publishId, now = Date.now() }) {
+  const row = requireConfirmable(publishId);
+  return inTransaction(() => admit(row, { reason: "approved_now_by_operator", now, at: now }));
+}
+
+/**
+ * publish.manual：「我自己发」。不进队列、不碰平台；转成 notify_pending 等人在 App 里发完，
+ * 发完用现有的 publish.confirm（含义不变）记成已发布。
+ */
+export function publishManual({ publishId }) {
+  const row = requireConfirmable(publishId);
+  transitionPublish(row.id, "notify_pending", { reason: "self_publish_by_operator", patch: { fallback_reason: "self_publish" } });
+  return { publishId: row.id, platform: row.platform, handle: row.handle, state: "notify_pending", next: `在 App 里发完后：vk publish confirm ${row.id}` };
+}
+
+/** publish.skip：「这支先不发」——整支成片的待确认平台稿都跳过，**包括小红书**。以后还能再确认。 */
+export function skipCut({ cutId }) {
+  const cut = requireCut(cutId);
+  const all = confirmRows("p.cut_id = ?", cutId);
+  const rows = all.filter((r) => r.state === "pending_confirm");
+  if (!rows.length) {
+    if (all.some((r) => r.state === "skipped")) return { cutId, title: cut.title, skipped: [], already: true };
+    fail(`成片「${cut.title}」没有等确认的平台稿可以跳过（已确认的请用 vk schedule cancel）`);
+  }
+  const skipped = inTransaction(() =>
+    rows.map((r) => {
+      transitionPublish(r.id, "skipped", { reason: "skipped_by_operator" });
+      return { publishId: r.id, platform: r.platform, handle: r.handle, state: "skipped" };
+    }),
+  );
+  return { cutId, title: cut.title, skipped, next: `以后想发：vk publish approve --cut ${cutId}` };
+}
+
+/**
+ * publish.edit：确认前改这一条的标题和建议时间（ACC-v2-confirm-04 前半）。
+ * 标题写进这条平台稿的 overrides_json.title（适配器优先读它），不改作品标题——
+ * 改一个平台的标题不该波及同一支成片的其他平台。时间只拦过去；平台的每日上限、
+ * 最小间隔不在这里判（#151）。状态不变，所以不走 transitionPublish，但留 publish.edited 事件。
+ */
+export function editPublish({ publishId, title = null, at = null, now = Date.now() }) {
+  const row = requireConfirmable(publishId);
+  if (title == null && at == null) fail("要改什么？给 --title 或 --at（至少一个）");
+  const changes = {};
+  const overrides = row.overrides_json ? JSON.parse(row.overrides_json) : {};
+  if (title != null) {
+    changes.title = { from: overrides.title ?? null, to: requireString(title, "标题", { max: 200 }) };
+    overrides.title = changes.title.to;
+  }
+  if (at != null) {
+    if (!Number.isInteger(at) || at < 0) fail("时间必须是毫秒时间戳");
+    if (at <= now) fail(`不能改到过去的时间：${new Date(at).toISOString()}`);
+    changes.at = { from: row.scheduled_at ?? null, to: at };
+  }
+  return inTransaction(() => {
+    open()
+      .prepare("UPDATE publish SET overrides_json = ?, scheduled_at = ?, updated_at = ? WHERE id = ?")
+      .run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, changes.at ? at : row.scheduled_at, Date.now(), row.id);
+    emit({ type: "publish.edited", severity: "info", publishId: row.id, payload: { state: row.state, changes } });
+    return {
+      publishId: row.id,
+      platform: row.platform,
+      handle: row.handle,
+      state: row.state,
+      title: overrides.title ?? null,
+      scheduledAt: changes.at ? at : row.scheduled_at,
+      changes,
+    };
+  });
 }

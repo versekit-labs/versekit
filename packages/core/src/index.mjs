@@ -289,6 +289,11 @@ export const PUBLISH_TRANSITIONS = {
   blocked: ["queued", "canceled"],
   expired: ["queued", "canceled"],
   canceled: [],
+  // 发布前人确认（#146，ACC-v2-confirm-*）。平台稿生成后先停在 pending_confirm；只有人确认的命令
+  // （publish.approve / now / manual）能把它推进去，任何调度或队列代码都不会。
+  pending_confirm: ["queued", "notify_pending", "skipped", "canceled"],
+  // 「这支先不发」：以后还能再确认（直接确认、我自己发，或回到待确认）。
+  skipped: ["pending_confirm", "queued", "notify_pending", "canceled"],
 };
 
 export function transitionPublish(publishId, to, { reason = null, patch = {} } = {}) {

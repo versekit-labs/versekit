@@ -242,6 +242,10 @@ test("work.list / work.show：JSON 里有作品、成片、每条平台稿的状
   const series = works.find((w) => w.title === "同号多条");
   assert.equal(series.cuts, 4);
   assert.equal(series.publishes, 4);
-  assert.equal(series.status.key, "scheduled", "manual 模式的平台稿在 queued 状态 → 已确认等时间");
+  // #146：新建平台稿先停在待确认 → 等确认；人确认每支成片后，manual 模式的平台稿在 queued → 已确认等时间。
+  assert.equal(series.status.key, "awaiting_confirm", "未确认的平台稿 → 等确认");
+  for (const c of handlers["work.show"]({ workId: series.id }).work.cuts) handlers["publish.approve"]({ cutId: c.id });
+  const confirmed = handlers["work.list"]().works.find((w) => w.title === "同号多条");
+  assert.equal(confirmed.status.key, "scheduled", "manual 模式的平台稿在 queued 状态 → 已确认等时间");
   assert.throws(() => handlers["work.show"]({ workId: "work_nope" }), /vk work list/);
 });

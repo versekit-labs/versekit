@@ -101,6 +101,7 @@ test("同组同平台唯一约束有数据库层兜底；移除后槽位空出�
   // 先留下一条已发布历史：移除账号不能把这条数据删掉。
   const work = store.createWork({ title: "换号前的作品", assetPath: "/tmp/a.mp4" });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId: old.id });
+  store.approvePublishes({ publishId });
   core.transitionPublish(publishId, "auto_running");
   core.transitionPublish(publishId, "published");
 
@@ -156,6 +157,7 @@ test("账号还有排队/在跑的发布时拒绝移除，避免移除后仍在�
   const account = h["account.add"]({ platform: "tiktok", name: "@排队", group: g });
   const work = store.createWork({ title: "还没发的作品", assetPath: "/tmp/a.mp4" });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId: account.id });
+  store.approvePublishes({ publishId }); // 人确认后才进队列（#146）；待确认的不会在后台发出去
 
   assert.throws(() => h["account.remove"]({ accountId: account.id }), /在队列里或正在跑/);
 

@@ -126,7 +126,12 @@ test("ACC-publish-03：发布后生成 work + 多条 publish，状态可查", ()
   const rows = db().prepare("SELECT id, state, work_id FROM publish WHERE work_id = ? ORDER BY account_id").all(created.workId);
   assert.equal(rows.length, 2);
   assert.ok(rows.every((r) => r.work_id === created.workId));
-  assert.ok(rows.every((r) => r.state === "queued"), "新建发布从 queued 开始");
+  // #146：新建平台稿先停在待确认，不排 run；人确认这支成片后才进 queued。
+  assert.ok(rows.every((r) => r.state === "pending_confirm"), "新建发布从待确认开始");
+  assert.equal(count(`SELECT COUNT(*) n FROM run WHERE kind='publish' AND target_id IN (${rows.map((r) => `'${r.id}'`).join(",")})`), 0, "未确认不排 run");
+  handlers["publish.approve"]({ cutId: created.cutId });
+  const confirmed = db().prepare("SELECT state FROM publish WHERE work_id = ?").all(created.workId);
+  assert.ok(confirmed.every((r) => r.state === "queued"), "确认后从 queued 开始");
   assert.deepEqual(new Set(rows.map((r) => r.id)), new Set(created.publishes.map((p) => p.publishId)));
 
   // 每条 publish 都有对应的队列任务，lane 指向账号：发布不是「写一行就算完」。
@@ -164,6 +169,7 @@ test("ACC-publish-03：定时发布写 scheduled_at，队列任务也等这个�
   handlers["account.add"]({ platform: "bilibili", name: "@acc03-sched", group: g.name });
   const at = Date.now() + 3600e3;
   const created = handlers["publish.create"]({ asset, to: ["bilibili"], title: "定时一条", schedule: at });
+  handlers["publish.approve"]({ cutId: created.cutId }); // 人确认后才排 run（#146）
 
   const pub = store.getPublish(created.publishes[0].publishId);
   assert.equal(pub.scheduled_at, at);
@@ -176,6 +182,7 @@ test("stats.works --group 只返回该组数据；不存在的组给人话", () 
   const a = handlers["group.add"]({ name: "ACC-stats A" });
   handlers["account.add"]({ platform: "tiktok", name: "@acc-stats-a", group: a.name });
   const pa = handlers["publish.create"]({ asset, to: ["tiktok"], title: "A 组作品" }).publishes[0].publishId;
+  handlers["publish.approve"]({ publishId: pa });
   core.transitionPublish(pa, "auto_running");
   core.transitionPublish(pa, "published");
   recordSnapshot({ publishId: pa, source: "api", status: "ok", metrics: { play: 11 }, capturedAt: 1 });
@@ -183,6 +190,7 @@ test("stats.works --group 只返回该组数据；不存在的组给人话", () 
   const b = handlers["group.add"]({ name: "ACC-stats B" });
   handlers["account.add"]({ platform: "tiktok", name: "@acc-stats-b", group: b.name });
   const pb = handlers["publish.create"]({ asset, to: ["tiktok"], title: "B 组作品" }).publishes[0].publishId;
+  handlers["publish.approve"]({ publishId: pb });
   core.transitionPublish(pb, "auto_running");
   core.transitionPublish(pb, "published");
   recordSnapshot({ publishId: pb, source: "api", status: "ok", metrics: { play: 22 }, capturedAt: 2 });
@@ -205,11 +213,13 @@ test("run.list --group 按账号组过滤，publish 与 check 任务都能归组
   const a = handlers["group.add"]({ name: "ACC-runs-list A" });
   const accA = handlers["account.add"]({ platform: "bilibili", name: "@acc-runs-list-a", group: a.name }).id;
   const pa = handlers["publish.create"]({ asset, to: ["bilibili"], title: "A 组队列" }).publishes[0].publishId;
+  handlers["publish.approve"]({ publishId: pa });
   const checkA = core.enqueue({ kind: "check", targetType: "account", targetId: accA, lane: accA });
 
   const b = handlers["group.add"]({ name: "ACC-runs-list B" });
   handlers["account.add"]({ platform: "bilibili", name: "@acc-runs-list-b", group: b.name });
   const pb = handlers["publish.create"]({ asset, to: ["bilibili"], title: "B 组队列" }).publishes[0].publishId;
+  handlers["publish.approve"]({ publishId: pb });
 
   const onlyA = handlers["run.list"]({ group: a.name });
   assert.deepEqual(onlyA.group, { id: a.id, name: a.name });
@@ -236,6 +246,7 @@ test("ACC-runs-02：自动重试到上限就失败，转 notify 并留事件，�
   const g = handlers["group.add"]({ name: "ACC-runs-retry" });
   const accountId = handlers["account.add"]({ platform: "tiktok", name: "@acc-runs-retry", group: g.name }).id;
   const publishId = handlers["publish.create"]({ asset, to: ["tiktok"], title: "会失败的一条" }).publishes[0].publishId;
+  handlers["publish.approve"]({ publishId }); // 人确认后才进队列（#146）
 
   // 把其他测试留下的队列清掉，保证 runner 只处理这一条；重排本条的 run。
   db().prepare("DELETE FROM run").run();
@@ -303,6 +314,9 @@ test("HTTP：publish.create / stats.works / run.list 的 --group 来自同一条
     assert.equal(body.group.id, g.id);
     assert.equal(body.publishes.length, 1);
     const publishId = body.publishes[0].publishId;
+    // 小红书逐条确认（#146），走同一张命令表派生的 HTTP 路由。
+    const approved = await post("/api/publishes/approve", { publishId });
+    assert.equal(approved.status, 200);
 
     const stats = await (await fetch(`${base}/api/stats/works?group=${encodeURIComponent(g.name)}`)).json();
     assert.equal(stats.group.id, g.id);

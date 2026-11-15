@@ -112,6 +112,9 @@ export async function checkAccount(adapters, accountId) {
   }
 }
 
+/** 队列可以拿去调适配器的平台稿状态（白名单）。running 是租约过期后重领的情形。 */
+export const RUNNABLE_PUBLISH_STATES = ["queued", "auto_running", "draft_running"];
+
 export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = configuredPublishTimeoutMs() } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   const handlers = {};
@@ -137,6 +140,22 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       const adapter = adapterFor(publishId);
       const row = getPublishRow(publishId);
       if (!row) throw new Error(`找不到发布：${publishId}`);
+
+      // 红线第二道防线（#146）：白名单，不是黑名单。只有已经被人确认、在队列里（或租约过期重领时
+      // 还停在 running）的平台稿才往下走；待确认、先不发、已取消以及以后新增的任何状态都不调适配器。
+      // 第一道防线是「待确认的平台稿根本不排 run」；这里兜住遗留的或误排的 run。不静默：留事件。
+      if (!RUNNABLE_PUBLISH_STATES.includes(row.state)) {
+        const message = `平台稿 ${publishId} 现在是 ${row.state}，不在可发状态（${RUNNABLE_PUBLISH_STATES.join(" / ")}）：没有调用适配器${row.state === "pending_confirm" ? "，等人确认后才会发" : ""}`;
+        emit({
+          type: "publish.not_runnable",
+          severity: "warn",
+          publishId,
+          payload: { error_code: "not_runnable", state: row.state, runId: run.id, message },
+          dedupeKey: `run:${run.id}:not_runnable`,
+        });
+        log(`[publish] ${message}`);
+        return { skipped: true, state: row.state, error_code: "not_runnable" };
+      }
 
       // notify / manual are choices, not failures: the person asked to be told, so tell them.
       if (row.mode === "notify") {

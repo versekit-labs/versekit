@@ -69,6 +69,7 @@ test("一条素材从 CLI 到 B站适配器：published + BV 号 + followup + �
   const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@e2e", credentialRef: cred, groupId: newGroup() });
   const work = store.createWork({ title: "端到端第一条", assetPath: asset, meta: { description: "描述", tags: ["AI"] } });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
+  store.approvePublishes({ publishId }); // 人确认后才进队列（#146）
 
   const { daemon } = await boot();
   try {
@@ -106,6 +107,7 @@ test("登录失效时：publish 进 blocked，账号置 expired，事件只发�
   const { id: accountId } = store.addAccount({ platform: "bilibili", handle: "@dead", credentialRef: cred, groupId: newGroup() });
   const work = store.createWork({ title: "会失效的一条", assetPath: asset });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
+  store.approvePublishes({ publishId }); // 人确认后才进队列（#146）
 
   try {
     await drain(daemon.runner, () => store.getPublish(publishId).state === "blocked");
@@ -126,6 +128,7 @@ test("没有适配器的平台会在第一条发布时明确报错，而不是�
   const { id: accountId } = store.addAccount({ platform: "youtube", handle: "@yt", groupId: newGroup() });
   const work = store.createWork({ title: "没有适配器", assetPath: asset });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
+  store.approvePublishes({ publishId }); // 人确认后才进队列（#146）
   try {
     await drain(daemon.runner, () => db().prepare("SELECT state FROM run WHERE target_id=?").get(publishId)?.state === "queued");
     const run = db().prepare("SELECT state, last_error, attempts FROM run WHERE target_id=?").get(publishId);
