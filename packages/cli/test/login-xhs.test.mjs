@@ -85,15 +85,25 @@ before(async () => {
 });
 after(() => server.close());
 
+// 账号 id 决定 Chrome 的调试端口（SHA-256 摘要）。固定 id 会让同时跑这条测试的多个进程
+// （多个 worktree 各自 npm run ci、或并行的 node --test）算出同一个端口：后起的 Chrome 绑不上
+// 端口，却因端口那头有人应答被当成「就绪」，于是 tab 开在别人的 Chrome 里，对方一
+// closeAccount 我们就报「tab 已关闭 / 连接已断开」（#136）。按 pid 分开，每个进程独占端口与 profile。
+const ACCOUNT = `xhs-fixture-${process.pid}`;
+
 async function open() {
-  const tab = await openAccount({ accountId: "xhs-fixture", url: base, headless: true });
+  const tab = await openAccount({ accountId: ACCOUNT, url: base, headless: true });
   await tab.waitFor(`!!document.querySelector('.phone')`, [], { timeout: 15e3, what: "假登录页" });
   return tab;
 }
 
 async function shut(tab) {
-  await tab.close();
-  await closeAccount("xhs-fixture");
+  // tab.close() 抛错也必须关浏览器，否则这个无头 Chrome 会泄漏到测试结束之后。
+  try {
+    await tab.close();
+  } finally {
+    await closeAccount(ACCOUNT);
+  }
 }
 
 test("setInputValue：受控输入框要收到 input 事件，页面状态才认", { skip: skipNoChrome }, async () => {
