@@ -15,7 +15,9 @@ import { basename } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 import { assetSetOf } from "../../core/src/asset-kind.mjs";
-import { planImageNote, publishImageNote } from "./image-note.mjs";
+import { planImageNote, publishImageNote, noteIdFromPublishResponse } from "./image-note.mjs";
+
+export { noteIdFromPublishResponse };
 import { openAccount, closeAccount, closeLoginWindow, hasLiveBrowser, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const CREATE = "https://creator.xiaohongshu.com/publish/publish?source=official";
@@ -53,15 +55,6 @@ const requireId = (publishId) => {
 const PUBLISH_API = /\/web_api\/sns\/v\d+\/note(\?|$)|\/api\/galaxy\/[^?]*note\/(post|publish)/;
 const NOTE_LIST_API = /\/api\/galaxy\/[^?]*note\/user\/posted/;
 const NOTE_MANAGER = "https://creator.xiaohongshu.com/new/note-manager";
-
-/** 发布接口响应 → 笔记 id；响应不是成功或没有 id 返回 null。 */
-export function noteIdFromPublishResponse(body) {
-  if (!body || typeof body !== "object") return null;
-  if (!(body.success === true || body.code === 0)) return null;
-  const d = body.data ?? {};
-  const id = d.id ?? d.note_id ?? d.noteId ?? (Array.isArray(d.note_ids) ? d.note_ids[0] : null) ?? d.note?.id;
-  return id ? String(id) : null;
-}
 
 /** 笔记管理列表里按标题 + 时间找刚发的那条（早于点击时间的同名旧笔记不算）。 */
 export function findPostedNote(bodies, title, sinceMs) {
@@ -304,10 +297,24 @@ async function publish({ publishId, dryRun = false, signal, onStep } = {}) {
 
     if (imagePlan) {
       // 图文路径：切页签、按顺序传图、标题/正文/话题、谁可以看、发布。细节见 image-note.mjs。
-      const published = await publishImageNote(tab, { note, plan: imagePlan, step, clickOn, addTag, fillTitle, fillBody });
+      // 点击之后的任何失败都不再是 flaky_ui（会重试 / 转草稿而重复发帖）：见 ACC-publish-09。
+      const published = await publishImageNote(tab, {
+        note,
+        plan: imagePlan,
+        step,
+        clickOn,
+        addTag,
+        fillTitle,
+        fillBody,
+        verify: (sinceMs) => verifyInNoteManager(tab, note.title, sinceMs),
+        onClicked: () => {
+          clicked = true;
+        },
+      });
+      // id / 链接以接口回执（或笔记管理核对）里的真实笔记 id 为准，不拿标题冒充（ACC-publish-08）。
       return {
-        id: note.title,
-        url: "https://creator.xiaohongshu.com/new/note-manager",
+        id: published.noteId,
+        url: `https://www.xiaohongshu.com/explore/${published.noteId}`,
         visibility: published.visibility,
         state: published.state,
         // private_then_public：「先发仅自己可见，确认后再放公开」是人的决定、系统执行（ARCHITECTURE §4.1）。
