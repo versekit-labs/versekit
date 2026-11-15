@@ -12,6 +12,7 @@ import { open, transitionPublish, enqueue, emit, DEFAULT_LANGUAGE } from "./inde
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
+import { assertPlanSlot } from "./plan-rules.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
@@ -419,7 +420,14 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "publish.skip": ({ cutId }) => store.skipCut({ cutId }),
 
-    "publish.edit": ({ publishId, title = null, at = null }) => store.editPublish({ publishId, title, at }),
+    "publish.edit": ({ publishId, title = null, at = null }) => {
+      // 时间要先过平台规则（每日上限、最小间隔）。状态不对、过去的时间等错误仍由 store 报，保持原来的措辞。
+      if (at != null && Number.isInteger(at) && at > Date.now()) {
+        const row = store.getPublish(publishId);
+        if (row && store.CONFIRMABLE_STATES.includes(row.state)) assertPlanSlot(row, at);
+      }
+      return store.editPublish({ publishId, title, at });
+    },
 
     "collect.now": ({ publishId = null, platform = null }) => {
       const conn = open();
