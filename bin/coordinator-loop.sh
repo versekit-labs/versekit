@@ -116,7 +116,10 @@ for w in ws:
 run_cycle() {
   local out
   out=$(bin/cycle.sh --max "$MAX" --no-consume 2>&1) || true
+  # 完整输出留一份：屏幕上只摘 ✓✗ 行，出错时要能看到 stderr 和失败阶段。
+  { printf '===== %s\n' "$(date '+%F %T')"; printf '%s\n' "$out"; } >> "${CYCLE_LOG:-$HOME/.orca/versekit-state/cycle-rounds.log}"
   printf '%s\n' "$out" | grep -E '✓|✗|↩|→ |worker-release|⚠' | sed 's/^/    /' || true
+  printf '%s\n' "$out" | grep -qE '✗' && printf '    （完整输出：%s）\n' "${CYCLE_LOG:-$HOME/.orca/versekit-state/cycle-rounds.log}"
   if printf '%s' "$out" | grep -qE '✓ 已派|✓ 合并|↩ '; then return 0; fi
   return 1
 }
@@ -156,6 +159,7 @@ while :; do
       empties=0
       printf '%s\n' "$info" | sed -n 's/^MSG=//p' | while IFS=$'\t' read -r id type outcome subject body; do
         [ "$outcome" = "-" ] && outcome=""
+        [ "$type" = "heartbeat" ] && continue
         say "收到 [${type}${outcome:+/$outcome}] ${subject}"
       done
       # 官方顺序：先决定终端去向（cycle 里的 worker-release）并处理完，再 ack。

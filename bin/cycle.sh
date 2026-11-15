@@ -31,7 +31,8 @@
 #   bin/cycle.sh [--max N] [--dry-run] [--no-consume]
 #
 # 环境变量：
-#   ENGINEER_WT / ACCEPTANCE_WT   worktree selector（默认 current；仅返工兜底与验收用）
+#   ENGINEER_WT                   返工兜底 worktree（默认 current；正常情况下返工用分支所在 worktree 或新建 rework-<issue>）
+#   ACCEPTANCE_WT                 验收 worktree（默认仓库同级的 acceptance/，不存在就建；不在协调器 worktree 里跑）
 #   CYCLE_LANES                   并行 lane 上限（默认 3；--max 超过时按此封顶）
 #   CYCLE_LANE_IDLE_TTL_MIN       观测不到 lane 的 dispatch 状态时，多久视为空闲（默认 90）
 #   WORKER_AGENT                  指定则用 worker-start --agent，否则走 worker-up.sh
@@ -45,8 +46,9 @@
 #                                 重启后已不存在的 handle 按已关处理，不占这个上限。
 #
 # 通道按角色选（issue #87 / ACC-harness-claude-02）：
-#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；issue 带 model:opus label 或返工
-#     round >= 3 时用 Opus；
+#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；Opus 只认 issue 的显式 model:opus label；
+#   - issue 带 model:deepseek label：实现与返工 round 1 走 DeepSeek（不探测、不调用 claude），
+#     返工 round >= 2 升 Sonnet；DeepSeek 不可用时本轮不派，不改用 claude；
 #   - 验收 worker 始终走 DeepSeek（bin/dsh-model.sh：volc 优先、qwen 兜底），绝不选 claude；
 #   - claude 不可用时实现 worker 自动降级 DeepSeek，日志写明原因。
 # 选路逻辑集中在 bin/worker-channel.sh；每次派工日志写「角色 → 通道 → 模型」。
@@ -74,7 +76,9 @@ while [ $# -gt 0 ]; do
 done
 
 ENGINEER_WT="${ENGINEER_WT:-current}"
-ACCEPTANCE_WT="${ACCEPTANCE_WT:-current}"
+# 验收不在协调器 worktree 里跑：协调器自己的工作区要保持干净（2026-11-14 用户发现协调器
+# worktree 里同时挂着验收、返工几个 session）。默认用仓库旁边的 acceptance worktree，不存在就建。
+ACCEPTANCE_WT="${ACCEPTANCE_WT:-}"
 WORKER_AGENT="${WORKER_AGENT:-}"
 # worker-start 首次失败后的自动重试次数（口径 ACC-harness-cycle-04：至多 2 次）。
 # 重试用**同一个 task**，不重建；等待时间可调，便于演练时缩短。
@@ -313,7 +317,7 @@ role_label() {
   esac
 }
 
-# issue 的 label 列表，逗号连接。model:opus 决定实现 worker 是否升级 Opus。
+# issue 的 label 列表，逗号连接。model:deepseek / model:opus 决定实现 worker 的通道与模型。
 # 走 bin/ghx（与 agentctl 同一账号，不切换全局活跃账号）；gh 失败时当作没有 label，
 # 不阻断派工——最坏只是这一单用 Sonnet。
 issue_labels() {
@@ -335,7 +339,7 @@ choose_worker_channel() {
   if [ -n "$round" ]; then args+=(--round "$round"); fi
   if [ "$noprobe" = "1" ]; then args+=(--no-probe); fi
   # worker-channel 的失败原因走 stderr，直接落到本轮日志，不被 $(...) 吞掉。
-  out=$(bin/worker-channel.sh "${args[@]}" 2>/dev/null) || return 1
+  out=$(bin/worker-channel.sh "${args[@]}") || return 1
   IFS='|' read -r CHOSEN_CHANNEL CHOSEN_MODEL CHOSEN_REASON <<< "$out"
   case "${CHOSEN_CHANNEL}:${CHOSEN_MODEL}" in
     claude:sonnet|claude:opus|volc:deepseek-v4.1-flash|qwen:deepseek-v4.1-flash-1017) return 0 ;;
@@ -408,7 +412,7 @@ ensure_terminal() {
   # claude 不可用时实现 worker 自动降级，不让整轮停派。
   if [ -z "$WORKER_AGENT" ]; then
     choose_worker_channel "$role" "$labels" "$round" 0 || {
-      logerr "    ✗ ${role_zh} 没有可用通道（claude 与 DeepSeek 都不可用）"
+      logerr "    ✗ ${role_zh} 没有可用通道，本轮不派（原因见上方 worker-channel 输出；model:deepseek 与验收不会改用 claude）"
       return 1
     }
     channel="$CHOSEN_CHANNEL"; model="$CHOSEN_MODEL"; reason="$CHOSEN_REASON"
@@ -1172,6 +1176,42 @@ worktree_for_branch() {
   printf 'branch:%s' "$branch"
 }
 
+# 仓库同级目录（各 lane / 验收 / 返工 worktree 都放在这里）。
+wt_parent() { dirname "$(git rev-parse --show-toplevel)"; }
+
+# 返工找不到已检出该分支的 worktree 时，就在同级建一个 rework-<issue>，而不是退回协调器 worktree。
+# 本地同名分支一律对齐 origin（本地可能残留协调器早先的 merge 提交）。
+ensure_rework_worktree() {
+  local num="$1" branch="$2" dir
+  dir="$(wt_parent)/rework-$num"
+  git fetch -q origin "$branch" 2>/dev/null || return 1
+  if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+    git -C "$dir" status --porcelain 2>/dev/null | grep -q . && { logerr "    ✗ $dir 有未提交改动，不动它"; return 1; }
+    git -C "$dir" switch -q "$branch" 2>/dev/null || git -C "$dir" switch -q -c "$branch" "origin/$branch" || return 1
+    git -C "$dir" reset -q --hard "origin/$branch" || return 1
+  else
+    git worktree prune
+    if git show-ref -q --verify "refs/heads/$branch"; then
+      git branch -f "$branch" "origin/$branch" 2>/dev/null || return 1
+      git worktree add -q "$dir" "$branch" || return 1
+    else
+      git worktree add -q -b "$branch" "$dir" "origin/$branch" || return 1
+    fi
+  fi
+  printf 'path:%s' "$dir"
+}
+
+# 验收专用 worktree：detached 在 origin/main，验收 worker 在里面再建自己的临时 worktree。
+ensure_acceptance_worktree() {
+  local dir
+  dir="$(wt_parent)/acceptance"
+  if [ ! -e "$dir/.git" ]; then
+    git worktree prune
+    git worktree add -q --detach "$dir" origin/main || return 1
+  fi
+  printf 'path:%s' "$dir"
+}
+
 dispatch_rework() {
   local claimed rc
   rc=0
@@ -1243,6 +1283,8 @@ print(",".join(d.get("files") or []))
 
   local rwt="$ENGINEER_WT" resolved
   if resolved=$(worktree_for_branch "$branch"); then
+    rwt="$resolved"
+  elif [ "$DRY" != "1" ] && resolved=$(ensure_rework_worktree "$num" "$branch"); then
     rwt="$resolved"
   else
     log "    · 没找到分支 ${branch} 的 worktree，仍在 ${ENGINEER_WT} 里派工（任务书要求先切到该分支）"
@@ -1363,6 +1405,9 @@ for q in (json.load(sys.stdin).get("queue") or []):
 
   log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
   local handle
+  if [ -z "$ACCEPTANCE_WT" ]; then
+    ACCEPTANCE_WT=$(ensure_acceptance_worktree) || { log "    ✗ 建验收 worktree 失败"; rm -rf "$lock"; return 1; }
+  fi
   if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
     log "    ✗ 起验收终端失败"
     rm -rf "$lock"
