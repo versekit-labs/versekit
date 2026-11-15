@@ -43,7 +43,32 @@ CREATE TABLE IF NOT EXISTS work (
   asset_path TEXT NOT NULL,
   asset_sha  TEXT,
   meta_json  TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  source     TEXT                -- 入库来源（素材的绝对路径）；与 title 一起认「同一个作品」，重复入库是更新。publish.create 建的作品为 null
+);
+-- 同一来源、同一标题只有一个作品（ACC-v2-cut-01）。source 为空的不参与。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_source_title ON work(source, title) WHERE source IS NOT NULL;
+
+-- 成片：一个作品有 1 到多支（docs/design/HANDOFF.md v2）。平台稿挂在成片下。
+CREATE TABLE IF NOT EXISTS cut (
+  id         TEXT PRIMARY KEY,
+  work_id    TEXT NOT NULL REFERENCES work(id) ON DELETE CASCADE,  -- 成片不比作品活得久；挂着平台稿的成片仍删不掉
+  title      TEXT NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE (work_id, title)
+);
+
+-- 语言版本：一支成片有 1 到多个，每个版本有自己的素材。
+CREATE TABLE IF NOT EXISTS cut_version (
+  id         TEXT PRIMARY KEY,
+  cut_id     TEXT NOT NULL REFERENCES cut(id) ON DELETE CASCADE,
+  language   TEXT NOT NULL,
+  asset_path TEXT NOT NULL,
+  asset_sha  TEXT,
+  meta_json  TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE (cut_id, language)
 );
 
 CREATE TABLE IF NOT EXISTS publish (
@@ -64,8 +89,11 @@ CREATE TABLE IF NOT EXISTS publish (
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
   published_at    INTEGER,           -- 首次进入 published/published_limited；采集节奏从它起算
-  UNIQUE (work_id, account_id)
+  cut_id          TEXT REFERENCES cut(id),          -- 平台稿挂在哪支成片下
+  version_id      TEXT REFERENCES cut_version(id)   -- 用的是哪个语言版本
 );
+-- 每支成片在每个账号上最多一条平台稿（ACC-v2-cut-02）。旧库的 UNIQUE(work_id, account_id) 由 migrate() 重建表去掉。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_cut_account ON publish(cut_id, account_id) WHERE cut_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at);
 
 CREATE TABLE IF NOT EXISTS snapshot (

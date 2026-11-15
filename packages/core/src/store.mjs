@@ -3,7 +3,8 @@
 // Nothing above the core touches SQL directly: this module is where "create a publish" means the
 // same five things everywhere (work row, publish row, queue entry, validation, readable error).
 
-import { open, newId } from "./index.mjs";
+import { resolve } from "node:path";
+import { open, newId, DEFAULT_LANGUAGE } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
@@ -219,13 +220,31 @@ export function setAccountState(accountId, state) {
 
 // ------------------------------------------------------------------ work / publish
 
+/**
+ * publish.create 的快捷方式：1 作品 + 1 成片 + 1 语言版本。
+ * 每次都新建（不按来源去重）——重复入库是 `work.add` 的语义，不改 publish.create 对外的行为。
+ */
 export function createWork({ title, assetPath, meta = null }) {
   const t = requireString(title, "标题", { max: 200 });
   const a = requireString(assetPath, "素材路径", { max: 4096 });
   const id = newId("work");
-  open()
-    .prepare("INSERT INTO work (id, title, asset_path, meta_json, created_at) VALUES (?,?,?,?,?)")
-    .run(id, t, a, meta ? JSON.stringify(meta) : null, Date.now());
+  const now = Date.now();
+  const conn = open();
+  conn.exec("BEGIN");
+  try {
+    conn
+      .prepare("INSERT INTO work (id, title, asset_path, meta_json, created_at) VALUES (?,?,?,?,?)")
+      .run(id, t, a, meta ? JSON.stringify(meta) : null, now);
+    const cutId = newId("cut");
+    conn.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,0,?)").run(cutId, id, t, now);
+    conn
+      .prepare("INSERT INTO cut_version (id, cut_id, language, asset_path, meta_json, created_at) VALUES (?,?,?,?,?,?)")
+      .run(newId("ver"), cutId, DEFAULT_LANGUAGE, a, meta ? JSON.stringify(meta) : null, now);
+    conn.exec("COMMIT");
+  } catch (err) {
+    conn.exec("ROLLBACK");
+    throw err;
+  }
   return { id, title: t, assetPath: a };
 }
 
@@ -234,12 +253,221 @@ export function getWork(workId) {
 }
 
 /**
- * One publish row per (work, account). Creating it also queues it — a row nobody queued is a
+ * 入库一个作品（`vk work add`）：作品 → 成片 → 语言版本。
+ *
+ * 「同一来源、同一标题」是同一个作品：重复入库只更新（成片按标题认、版本按语言认，素材路径换成新的），
+ * 不新建，也不删掉这次没提到的成片/版本——入库是追加与更新，不是整体替换，
+ * 已经挂在成片下的平台稿因此不会被悄悄丢掉。
+ *
+ * cuts: [{ title, versions: [{ language, asset, meta? }] }]。校验在写任何行之前做完。
+ */
+export function upsertWork({ title, source = null, cuts, meta = null }) {
+  const t = requireString(title, "作品标题", { max: 200 });
+  if (!Array.isArray(cuts) || !cuts.length) fail("至少要有一支成片");
+  const seenCuts = new Set();
+  const plan = cuts.map((c, i) => {
+    const cutTitle = requireString(c?.title ?? (cuts.length === 1 ? t : ""), `第 ${i + 1} 支成片的标题`, { max: 200 });
+    if (seenCuts.has(cutTitle)) fail(`成片标题重复：${cutTitle}（同一个作品里成片标题不能重名）`);
+    seenCuts.add(cutTitle);
+    const versions = Array.isArray(c?.versions) ? c.versions : [];
+    if (!versions.length) fail(`成片「${cutTitle}」至少要有一个语言版本`);
+    const seenLang = new Set();
+    return {
+      title: cutTitle,
+      versions: versions.map((v) => {
+        const language = requireString(v?.language ?? "", `成片「${cutTitle}」的语言`, { max: 32 });
+        if (seenLang.has(language)) fail(`成片「${cutTitle}」的语言重复：${language}`);
+        seenLang.add(language);
+        return { language, asset: requireString(v?.asset ?? "", `成片「${cutTitle}」${language} 版本的素材路径`, { max: 4096 }), meta: v?.meta ?? null };
+      }),
+    };
+  });
+  const src = source == null ? plan[0].versions[0].asset : requireString(source, "来源", { max: 4096 });
+  const sourceKey = resolve(src);
+
+  const conn = open();
+  const now = Date.now();
+  const stats = { cuts: { created: 0, updated: 0 }, versions: { created: 0, updated: 0 } };
+  conn.exec("BEGIN");
+  try {
+    let work = conn.prepare("SELECT * FROM work WHERE source = ? AND title = ?").get(sourceKey, t);
+    const existed = Boolean(work);
+    const primary = plan[0].versions[0];
+    if (work) {
+      conn.prepare("UPDATE work SET meta_json = COALESCE(?, meta_json) WHERE id = ?").run(meta ? JSON.stringify(meta) : null, work.id);
+    } else {
+      const id = newId("work");
+      conn
+        .prepare("INSERT INTO work (id, title, asset_path, meta_json, created_at, source) VALUES (?,?,?,?,?,?)")
+        .run(id, t, primary.asset, meta ? JSON.stringify(meta) : null, now, sourceKey);
+      work = { id };
+    }
+    let position = (conn.prepare("SELECT COALESCE(MAX(position), -1) m FROM cut WHERE work_id = ?").get(work.id).m ?? -1) + 1;
+    for (const c of plan) {
+      let cut = conn.prepare("SELECT id FROM cut WHERE work_id = ? AND title = ?").get(work.id, c.title);
+      if (cut) stats.cuts.updated++;
+      else {
+        cut = { id: newId("cut") };
+        conn.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,?,?)").run(cut.id, work.id, c.title, position++, now);
+        stats.cuts.created++;
+      }
+      for (const v of c.versions) {
+        const have = conn.prepare("SELECT id FROM cut_version WHERE cut_id = ? AND language = ?").get(cut.id, v.language);
+        const metaJson = v.meta ? JSON.stringify(v.meta) : null;
+        if (have) {
+          conn.prepare("UPDATE cut_version SET asset_path = ?, meta_json = COALESCE(?, meta_json) WHERE id = ?").run(v.asset, metaJson, have.id);
+          stats.versions.updated++;
+        } else {
+          conn
+            .prepare("INSERT INTO cut_version (id, cut_id, language, asset_path, meta_json, created_at) VALUES (?,?,?,?,?,?)")
+            .run(newId("ver"), cut.id, v.language, v.asset, metaJson, now);
+          stats.versions.created++;
+        }
+      }
+    }
+    // work.asset_path 跟着第一支成片的第一个版本走：适配器至今仍直接读这一列。
+    const first = conn
+      .prepare(
+        `SELECT v.asset_path FROM cut c JOIN cut_version v ON v.cut_id = c.id
+          WHERE c.work_id = ? ORDER BY c.position, v.rowid LIMIT 1`,
+      )
+      .get(work.id);
+    if (first) conn.prepare("UPDATE work SET asset_path = ? WHERE id = ?").run(first.asset_path, work.id);
+    conn.exec("COMMIT");
+    return { id: work.id, existed, updated: existed, ...stats };
+  } catch (err) {
+    conn.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** 一支成片的默认语言版本：最早建的那个。publish.create 的快捷方式靠它挂版本。 */
+function defaultCutOf(workId) {
+  const conn = open();
+  const cut = conn.prepare("SELECT id FROM cut WHERE work_id = ? ORDER BY position, created_at LIMIT 1").get(workId);
+  if (!cut) return null;
+  const version = conn.prepare("SELECT id FROM cut_version WHERE cut_id = ? ORDER BY rowid LIMIT 1").get(cut.id);
+  return { cutId: cut.id, versionId: version?.id ?? null };
+}
+
+/**
+ * 作品状态由平台稿推出，只取最要紧的一个（ACC-v2-work-01）：
+ * 出了问题 > 等确认 > 已确认等时间 > 都发完了。
+ * 已取消的不参与；没有平台稿（或全取消）不假装「都发完了」。
+ */
+export const PUBLISH_STATE_GROUP = {
+  failed: "problem",
+  blocked: "problem",
+  expired: "problem",
+  notify_pending: "awaiting_confirm",
+  draft_pending: "awaiting_confirm",
+  queued: "scheduled",
+  auto_running: "scheduled",
+  draft_running: "scheduled",
+  published: "done",
+  published_limited: "done",
+};
+export const WORK_STATUS_ORDER = ["problem", "awaiting_confirm", "scheduled", "done"];
+export const WORK_STATUS_LABEL = {
+  problem: "出了问题",
+  awaiting_confirm: "等确认",
+  scheduled: "已确认等时间",
+  done: "都发完了",
+  none: "还没有平台稿",
+  canceled: "已取消",
+};
+
+export function deriveStatus(publishStates) {
+  const groups = new Set();
+  let any = false;
+  for (const state of publishStates) {
+    any = true;
+    const g = PUBLISH_STATE_GROUP[state];
+    if (g) groups.add(g);
+  }
+  const key = WORK_STATUS_ORDER.find((g) => groups.has(g)) ?? (any ? "canceled" : "none");
+  return { key, label: WORK_STATUS_LABEL[key] };
+}
+
+function workView(work) {
+  const conn = open();
+  const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c) => {
+    const versions = conn
+      .prepare("SELECT id, language, asset_path, created_at FROM cut_version WHERE cut_id = ? ORDER BY rowid")
+      .all(c.id)
+      .map((v) => ({ id: v.id, language: v.language, asset: v.asset_path }));
+    const publishes = conn
+      .prepare(
+        `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
+                a.platform, a.handle, v.language
+           FROM publish p
+           JOIN account a ON a.id = p.account_id
+           LEFT JOIN cut_version v ON v.id = p.version_id
+          WHERE p.cut_id = ? ORDER BY p.created_at, p.id`,
+      )
+      .all(c.id)
+      .map((p) => ({
+        id: p.id,
+        platform: p.platform,
+        handle: p.handle,
+        state: p.state,
+        mode: p.mode,
+        versionId: p.version_id,
+        language: p.language ?? null,
+        scheduledAt: p.scheduled_at,
+        url: p.external_url,
+        error: p.error_code ? { code: p.error_code, message: p.error_message } : null,
+      }));
+    return { id: c.id, title: c.title, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
+  });
+  const allStates = cuts.flatMap((c) => c.publishes.map((p) => p.state));
+  return {
+    id: work.id,
+    title: work.title,
+    source: work.source ?? null,
+    asset: work.asset_path,
+    createdAt: work.created_at,
+    status: deriveStatus(allStates),
+    cuts,
+  };
+}
+
+export function listWorks({ limit = 100 } = {}) {
+  return open()
+    .prepare("SELECT * FROM work ORDER BY created_at DESC, id LIMIT ?")
+    .all(boundedLimit(limit))
+    .map((w) => {
+      const v = workView(w);
+      return {
+        id: v.id,
+        title: v.title,
+        status: v.status,
+        cuts: v.cuts.length,
+        versions: v.cuts.reduce((n, c) => n + c.versions.length, 0),
+        publishes: v.cuts.reduce((n, c) => n + c.publishes.length, 0),
+        createdAt: v.createdAt,
+      };
+    });
+}
+
+/** 按 id 找作品；找不到时抛带下一步的错。 */
+export function showWork(workId) {
+  const work = getWork(workId);
+  if (!work) fail(`没有这个作品：${workId}（先 vk work list 看看有哪些）`);
+  return workView(work);
+}
+
+/**
+ * One publish row per (cut, account). Creating it also queues it — a row nobody queued is a
  * publish that silently never happens, which is the exact failure mode this product forbids.
+ *
+ * 不给 cutId/versionId 就是 publish.create 的快捷方式：挂在作品唯一（或第一支）成片的默认版本上。
  */
 export function createPublish({
   workId,
   accountId,
+  cutId = null,
+  versionId = null,
   mode = "auto",
   visibility = "public",
   scheduledAt = null,
@@ -253,18 +481,32 @@ export function createPublish({
   if (!PUBLISH_VISIBILITIES.includes(visibility)) fail(`可见性只能是 ${PUBLISH_VISIBILITIES.join(" / ")}`);
   if (scheduledAt != null && (!Number.isInteger(scheduledAt) || scheduledAt < 0)) fail("定时时间必须是毫秒时间戳");
 
+  let cut = cutId, version = versionId;
+  if (cut) {
+    const row = open().prepare("SELECT id FROM cut WHERE id = ? AND work_id = ?").get(cut, workId);
+    if (!row) fail(`成片 ${cut} 不属于作品 ${workId}`);
+  } else {
+    const d = defaultCutOf(workId);
+    cut = d?.cutId ?? null;
+    version = version ?? d?.versionId ?? null;
+  }
+  if (cut && !version) version = open().prepare("SELECT id FROM cut_version WHERE cut_id = ? ORDER BY rowid LIMIT 1").get(cut)?.id ?? null;
+  if (version && !open().prepare("SELECT 1 FROM cut_version WHERE id = ? AND cut_id = ?").get(version, cut)) {
+    fail(`语言版本 ${version} 不属于成片 ${cut}`);
+  }
+
   const id = newId("pub");
   const now = Date.now();
   try {
     open()
       .prepare(
-        `INSERT INTO publish (id, work_id, account_id, mode, visibility, state, scheduled_at, overrides_json, created_at, updated_at)
-         VALUES (?,?,?,?,?, 'queued', ?,?,?,?)`,
+        `INSERT INTO publish (id, work_id, cut_id, version_id, account_id, mode, visibility, state, scheduled_at, overrides_json, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?, 'queued', ?,?,?,?)`,
       )
-      .run(id, workId, accountId, mode, visibility, scheduledAt, overrides ? JSON.stringify(overrides) : null, now, now);
+      .run(id, workId, cut, version, accountId, mode, visibility, scheduledAt, overrides ? JSON.stringify(overrides) : null, now, now);
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      fail(`这条内容已经发过 ${account.platform} @${account.handle}：同一内容对同一账号只能有一条发布`);
+      fail(`这支成片已经发过 ${account.platform} @${account.handle}：同一支成片对同一账号只能有一条发布`);
     }
     throw err;
   }
@@ -275,7 +517,7 @@ export function createPublish({
     const runAfter = scheduledAt && scheduledAt > now ? scheduledAt : null;
     queuePublish({ id, account_id: accountId }, { runAfter });
   }
-  return { id, workId, accountId, mode, visibility, queued };
+  return { id, workId, cutId: cut, versionId: version, accountId, mode, visibility, queued };
 }
 
 export function getPublish(publishId) {

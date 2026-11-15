@@ -116,6 +116,37 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "work.add",
+    summary: "入库作品：一个视频文件 = 1 作品 1 成片 1 版本；多支成片、多语言用 cuts 完整形式。同一来源同一标题重复入库是更新",
+    remote: false,
+    localOnly: true,
+    args: { asset: "string?", title: "string?", source: "string?", cuts: "array?" },
+    http: { method: "POST", path: "/api/works" },
+    cli: { usage: "vk work add <视频文件或图片目录> [--title <标题>] | vk work add <清单.json>" },
+    card: null,
+    audit: "never",
+  },
+  {
+    name: "work.list",
+    summary: "列出作品（含成片数、语言版本数、平台稿数；状态由平台稿推出）",
+    remote: false,
+    args: {},
+    http: { method: "GET", path: "/api/works" },
+    cli: { usage: "vk work list" },
+    card: null,
+    audit: "never",
+  },
+  {
+    name: "work.show",
+    summary: "看一个作品：成片、语言版本、每条平台稿的状态",
+    remote: false,
+    args: { workId: "string" },
+    http: { method: "GET", path: "/api/works/:workId" },
+    cli: { usage: "vk work show <workId>" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "account.add",
     summary: "加一个账号（必须在账号组里；一个平台一个槽位）",
     remote: false,
@@ -578,6 +609,7 @@ export function parseArgs(command, input = {}) {
     if (type === "string" && typeof value !== "string") throw new Error(`参数 ${key} 必须是字符串`);
     if (type === "number" && typeof value !== "number") throw new Error(`参数 ${key} 必须是数字`);
     if (type === "boolean" && typeof value !== "boolean") throw new Error(`参数 ${key} 必须是布尔值`);
+    if (type === "array" && !Array.isArray(value)) throw new Error(`参数 ${key} 必须是数组`);
     if (type === "string[]" && !Array.isArray(value)) throw new Error(`参数 ${key} 必须是字符串数组`);
     if (type === "auto|manual" && !["auto", "manual"].includes(value)) throw new Error(`参数 ${key} 只能是 auto 或 manual`);
     out[key] = value;

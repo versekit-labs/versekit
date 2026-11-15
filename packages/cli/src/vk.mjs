@@ -9,7 +9,7 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
@@ -982,6 +982,69 @@ async function cmdBootstrap() {
   return data;
 }
 
+async function cmdWork() {
+  const sub = pos[1];
+  const log = (m) => human && console.log(m);
+  const usage = "用法：vk work list | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>";
+  if (sub === "list" || !sub) {
+    const data = await send("work.list", {}, { log });
+    if (human) {
+      if (!data.works.length) console.log("还没有作品：vk work add <视频文件>");
+      for (const w of data.works) {
+        console.log(`${w.id.padEnd(18)}${String(w.title).padEnd(24)}${w.status.label.padEnd(12)}${w.cuts} 支成片 · ${w.versions} 个版本 · ${w.publishes} 条平台稿`);
+      }
+    } else out(data);
+    return data;
+  }
+  if (sub === "show") {
+    const workId = pos[2];
+    if (!workId) throw new Error(usage);
+    const data = await send("work.show", { workId }, { log });
+    if (human) {
+      const w = data.work;
+      console.log(`${w.title}（${w.id}）  ${w.status.label}`);
+      for (const c of w.cuts) {
+        console.log(`  成片 ${c.title}  ${c.status.label}`);
+        for (const v of c.versions) console.log(`    版本 ${v.language.padEnd(10)}${v.asset}`);
+        for (const p of c.publishes) console.log(`    平台稿 ${p.platform.padEnd(12)}${p.handle.padEnd(16)}${p.state}${p.language ? `（${p.language}）` : ""}`);
+      }
+    } else out(data);
+    return data;
+  }
+  if (sub === "add") {
+    const target = pos[2];
+    if (!target) throw new Error(usage);
+    // 路径在这里就解析成绝对的：守护进程的工作目录不是你敲命令的目录。
+    let args;
+    if (extname(target).toLowerCase() === ".json") {
+      if (!existsSync(target)) throw new Error(`找不到清单：${target}`);
+      let manifest;
+      try {
+        manifest = JSON.parse(readFileSync(target, "utf8"));
+      } catch (err) {
+        throw new Error(`清单不是合法的 JSON：${target}（${err.message}）`);
+      }
+      const base = dirname(resolve(target));
+      args = {
+        title: val("--title") ?? manifest.title,
+        ...(manifest.source ? { source: resolve(base, manifest.source) } : {}),
+        cuts: (manifest.cuts ?? []).map((c) => ({
+          title: c.title,
+          versions: (c.versions ?? []).map((v) => ({ language: v.language, asset: v.asset ? resolve(base, v.asset) : v.asset, ...(v.meta ? { meta: v.meta } : {}) })),
+        })),
+      };
+    } else {
+      args = { asset: resolve(target), ...(val("--title") ? { title: val("--title") } : {}) };
+    }
+    const data = await send("work.add", args, { log });
+    if (human) {
+      console.log(`${data.updated ? "已更新" : "已入库"}作品「${data.work.title}」（${data.id}）：成片 新建 ${data.cuts.created}/更新 ${data.cuts.updated}，版本 新建 ${data.versions.created}/更新 ${data.versions.updated}`);
+    } else out(data);
+    return data;
+  }
+  throw new Error(usage);
+}
+
 async function cmdGroup() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
@@ -1345,6 +1408,7 @@ function usage() {
       // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
       // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
+      "  vk work list | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
@@ -1375,6 +1439,7 @@ try {
   else if (cmd === "bootstrap") await cmdBootstrap();
   else if (cmd === "serve") await cmdServe();
   else if (cmd === "group") await cmdGroup();
+  else if (cmd === "work") await cmdWork();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();

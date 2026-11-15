@@ -14,6 +14,9 @@ const SCHEMA = join(HERE, "schema.sql");
 
 export const SCHEMA_VERSION = "1";
 
+/** 旧作品补成片时的语言标记：升级前没有语言这个概念，不替人猜。 */
+export const DEFAULT_LANGUAGE = "default";
+
 /** All state lives under one root so a test can point it elsewhere. */
 export function paths() {
   const home = process.env.VK_HOME ?? homedir();
@@ -99,6 +102,8 @@ export function migrate() {
   }
   addMissingColumns(conn);
   conn.exec(schema); // 幂等：补齐第一遍因缺列而没建成的索引
+  backfillCuts(conn);
+  dropLegacyPublishUnique(conn);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(SCHEMA_VERSION);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('installed_at', ?) ON CONFLICT(key) DO NOTHING").run(String(Date.now()));
   try {
@@ -112,7 +117,8 @@ export function migrate() {
 /** SQLite has no "ADD COLUMN IF NOT EXISTS"; keep re-runs cheap and idempotent. */
 const COLUMNS = {
   run: { lane: "TEXT" },
-  publish: { published_at: "INTEGER" },
+  publish: { published_at: "INTEGER", cut_id: "TEXT REFERENCES cut(id)", version_id: "TEXT REFERENCES cut_version(id)" },
+  work: { source: "TEXT" },
   account: { last_checked_at: "INTEGER", group_id: "TEXT REFERENCES account_group(id)", removed_at: "INTEGER" },
   command_audit: { idempotency_key: "TEXT" },
 };
@@ -127,6 +133,84 @@ function addMissingColumns(conn) {
       if (!have.has(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
   }
+}
+
+/**
+ * 旧库升级：每个还没有成片的作品补一支成片 + 一个语言版本（素材取作品原来的那个文件），
+ * 并把还没挂成片的平台稿挂上去。只处理「缺」的行，所以重复运行不会重复建成片。
+ */
+function backfillCuts(conn) {
+  const now = Date.now();
+  conn.exec("BEGIN");
+  try {
+    const orphans = conn.prepare("SELECT * FROM work w WHERE NOT EXISTS (SELECT 1 FROM cut c WHERE c.work_id = w.id)").all();
+    for (const w of orphans) {
+      const cutId = newId("cut");
+      conn.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,0,?)").run(cutId, w.id, w.title, w.created_at ?? now);
+      conn
+        .prepare("INSERT INTO cut_version (id, cut_id, language, asset_path, asset_sha, meta_json, created_at) VALUES (?,?,?,?,?,?,?)")
+        .run(newId("ver"), cutId, DEFAULT_LANGUAGE, w.asset_path, w.asset_sha ?? null, w.meta_json ?? null, w.created_at ?? now);
+    }
+    conn.exec(`UPDATE publish
+                  SET cut_id = (SELECT c.id FROM cut c WHERE c.work_id = publish.work_id ORDER BY c.position, c.created_at LIMIT 1)
+                WHERE cut_id IS NULL`);
+    conn.exec(`UPDATE publish
+                  SET version_id = (SELECT v.id FROM cut_version v WHERE v.cut_id = publish.cut_id ORDER BY v.rowid LIMIT 1)
+                WHERE version_id IS NULL AND cut_id IS NOT NULL`);
+    conn.exec("COMMIT");
+  } catch (err) {
+    conn.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * 旧库的 publish 表带 UNIQUE(work_id, account_id)，装不下「同一个账号发一支长片和三支短片」。
+ * SQLite 不能 DROP CONSTRAINT，只能重建：新表 → 拷数据 → 删旧表 → 改名，一个事务。
+ *
+ * 要点（SQLite 官方的 12 步法）：
+ *  - foreign_keys 必须在事务外关掉，否则 DROP TABLE 会因 snapshot/followup 仍引用而失败；
+ *  - 行原样拷贝（id 不变），snapshot / followup / run 引用的 publish id 因此不变；
+ *  - 索引随表一起删，必须重建；
+ *  - 提交前 foreign_key_check，有违规就回滚，不留半成品。
+ * 已经去掉约束的库直接返回，所以幂等。
+ */
+function dropLegacyPublishUnique(conn) {
+  if (!hasLegacyPublishUnique(conn)) return;
+  const create = readFileSync(SCHEMA, "utf8").match(/CREATE TABLE IF NOT EXISTS publish \([\s\S]*?\n\);/)?.[0];
+  if (!create) throw new Error("schema.sql 里找不到 publish 表定义，无法迁移");
+  const cols = conn.prepare("PRAGMA table_info(publish)").all().map((c) => c.name).join(", ");
+
+  conn.exec("PRAGMA foreign_keys = OFF");
+  try {
+    conn.exec("BEGIN");
+    try {
+      conn.exec("DROP TABLE IF EXISTS publish_new");
+      conn.exec(create.replace("CREATE TABLE IF NOT EXISTS publish (", "CREATE TABLE publish_new ("));
+      conn.exec(`INSERT INTO publish_new (${cols}) SELECT ${cols} FROM publish`);
+      conn.exec("DROP TABLE publish");
+      conn.exec("ALTER TABLE publish_new RENAME TO publish");
+      conn.exec("CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at)");
+      conn.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_cut_account ON publish(cut_id, account_id) WHERE cut_id IS NOT NULL");
+      const bad = conn.prepare("PRAGMA foreign_key_check").all();
+      if (bad.length) throw new Error(`迁移 publish 表后外键检查失败（${bad.length} 处），已回滚`);
+      conn.exec("COMMIT");
+    } catch (err) {
+      conn.exec("ROLLBACK");
+      throw err;
+    }
+  } finally {
+    conn.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function hasLegacyPublishUnique(conn) {
+  for (const idx of conn.prepare("PRAGMA index_list(publish)").all()) {
+    if (!idx.unique || idx.origin !== "u") continue; // origin 'u' = 表内 UNIQUE 约束；'c' 是我们自己建的索引
+    const columns = conn.prepare(`PRAGMA index_info(${JSON.stringify(idx.name)})`).all().map((c) => c.name);
+    if (columns.join(",") === "work_id,account_id") return true;
+  }
+  return false;
 }
 
 export function getMeta(key) {
