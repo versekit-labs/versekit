@@ -6,5 +6,7 @@ node_modules/
 *.db-shm
 coverage/
 
-# 设计原型的本地演示视频（太大，不入库；缺了页面只显示封面）。封面在 docs/design/demo/covers/，已入库
+# 设计原型的本地演示素材不入库：视频太大；封面是所有者的作品，不公开。
+# 缺了页面照样能点，只是图位空着。所有者本机备份在 ~/.orca/versekit-state/design-covers-backup/
 docs/design/demo/videos
+docs/design/demo/covers
