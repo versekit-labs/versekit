@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>今天 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.focus{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;padding:22px}
+.fh{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line2);flex-wrap:wrap}
+.fh .t{display:inline-flex;align-items:center;min-height:32px;font-size:18px;font-weight:700;letter-spacing:-.01em;color:inherit;text-decoration:none;min-width:0;overflow-wrap:anywhere}
+.fh .t:hover{text-decoration:underline}
+.prog{margin-left:auto;font-size:13px;color:var(--ink2)}
+.others{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.oth{display:flex;gap:12px;align-items:center;padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px;min-width:0}
+.oth.bad{background:var(--bad-bg);border-color:var(--bad-line)}
+.oth .t{font-weight:600}
+.oth .bd{min-width:0}
+.oth .bd .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oth .a{margin-left:auto;display:flex;gap:8px;flex:none}
+.oth .why{color:var(--bad);overflow-wrap:anywhere}
+.calm{padding:36px 28px}
+.calm h3{margin-bottom:4px}
+.side h2{margin-bottom:6px}
+@media (max-width:1040px){.focus{grid-template-columns:minmax(0,1fr)}.others{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.oth{flex-wrap:wrap}.oth .a{margin-left:0}}
+</style>
+</head>
+<body data-page="today">
+<div class="app">
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+    <a class="nv" href="today.html" data-key="today" aria-current="page">今天<b data-todo hidden></b></a>
+    <a class="nv" href="works.html" data-key="works">作品</a>
+    <a class="nv" href="data.html" data-key="data">数据</a>
+    <a class="nv" href="system.html" data-key="system">系统</a></nav>
+  <main id="main"><div class="panel empty">正在读今天的待办…</div></main>
+</div>
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(async function () {
+  const VK = window.VK;
+  const main = document.getElementById("main");
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // 封面不入库，占位图与设计稿一致（docs/design/app.js 的 BLANK）：页面不因为缺图坏掉。
+  const BLANK = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#dcdcd8"/><path d="M290 200l80 40-80 40z" fill="#9a9a95"/></svg>');
+  const PF = {
+    xiaohongshu: ["小", "小红书", "xhs"], douyin: ["抖", "抖音", "dy"], shipinhao: ["视", "视频号", "sph"],
+    bilibili: ["B", "B站", "bili"], tiktok: ["T", "TikTok", "tk"], youtube: ["Y", "YouTube", "yt"],
+    web: ["官", "官网", "web"], gongzhonghao: ["公", "公众号", "mp"],
+  };
+  const pfOf = (key) => PF[key] ?? [String(key ?? "?").slice(0, 1), String(key ?? ""), "web"];
+  const pfBadge = (key) => { const [ch, name, cls] = pfOf(key); return `<span class="pf ${cls}" title="${esc(name)}">${esc(ch)}</span>`; };
+  const pfName = (key) => pfOf(key)[1];
+  const PER_ITEM = new Set(["xiaohongshu"]);
+  // 平台行的顺序与设计稿一致；不在表里的平台排在后面。
+  const ORDER = ["xiaohongshu", "douyin", "shipinhao", "bilibili", "tiktok", "youtube", "web", "gongzhonghao"];
+  const orderOf = (platform) => {
+    const i = ORDER.indexOf(platform);
+    return i === -1 ? ORDER.length : i;
+  };
+
+  const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+  /** 时间只说人话：今天 / 明天 / 昨天 / 11-17 周二，再带时分。 */
+  function when(ms) {
+    if (ms == null) return { day: "—", t: "", text: "没有建议时间" };
+    const d = new Date(Number(ms));
+    const today0 = new Date();
+    const days = Math.round((new Date(dayKey(d)) - new Date(dayKey(today0))) / 864e5);
+    const t = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const day = days === 0 ? "今天" : days === 1 ? "明天" : days === -1 ? "昨天"
+      : `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${WD[d.getDay()]}`;
+    return { day, t, text: `${day} ${t}` };
+  }
+
+  const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+  const ratioText = (x) => (x == null ? "—" : `${x >= 10 ? Number(x).toFixed(0) : Number(x).toFixed(1)} 倍`);
+  const ratioCls = (x) => (x == null ? "" : x >= 2 ? "up" : x <= 0.5 ? "dn" : "");
+
+  const state = { data: null, focusId: null, cutId: null, cache: new Map(), editing: new Set(), ver: new Map() };
+
+  const pending = (cut) => (cut?.publishes ?? []).filter((p) => p.state === "pending_confirm");
+  const batchOf = (cut) => pending(cut).filter((p) => !PER_ITEM.has(p.platform));
+  const soloOf = (cut) => (cut?.publishes ?? []).filter((p) => PER_ITEM.has(p.platform) && !["published", "published_limited"].includes(p.state));
+  const cutHasPending = (cut) => pending(cut).length > 0;
+
+  async function loadWork(id) {
+    if (!id) return null;
+    if (!state.cache.has(id)) state.cache.set(id, (await VK.work(id)).work);
+    return state.cache.get(id);
+  }
+
+  function pickCut(work, prefer = null) {
+    if (!work) return null;
+    if (prefer && work.cuts.some((c) => c.id === prefer && cutHasPending(c))) return prefer;
+    return (work.cuts.find(cutHasPending) ?? work.cuts[0])?.id ?? null;
+  }
+
+  async function refresh({ advance = false } = {}) {
+    state.data = await VK.today();
+    state.cache.clear();
+    state.editing.clear();
+    const awaiting = state.data.awaiting ?? [];
+    if (!awaiting.some((w) => w.workId === state.focusId)) state.focusId = awaiting[0]?.workId ?? null;
+    const work = await loadWork(state.focusId);
+    // 确认完一支就自动跳到这一支里下一支还没处理的；这支都处理完了就停在它上面（还有小红书要单独点）。
+    state.cutId = pickCut(work, advance ? null : state.cutId);
+    render();
+  }
+
+  function mediaBox(cut) {
+    const versions = cut.versions ?? [];
+    const chosen = versions.find((v) => v.id === state.ver.get(cut.id)) ?? versions[0] ?? null;
+    if (!chosen) return fallback(cut.title, "这支成片还没有可播放的语言版本");
+    // #t=0.1：先解出一帧当封面用，否则 video 在用户点播放前是一块黑。
+    const src = `${VK.media(chosen.id)}#t=0.1`;
+    return `<video controls preload="metadata" src="${src}" data-media="1" data-label="${esc(cut.title)}"></video>`;
+  }
+
+  function fallback(label, why) {
+    return `<div class="media-fallback"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><div class="m1">${esc(label)}</div><div class="m2">${esc(why)}</div></div>`;
+  }
+
+  function rowState(p) {
+    if (p.state === "pending_confirm") return `<button class="link" type="button" data-edit="${esc(p.id)}" aria-label="改${esc(pfName(p.platform))}的标题或时间">改</button>`;
+    if (p.state === "queued") return '<span class="st sched">已确认</span>';
+    if (p.state === "auto_running" || p.state === "draft_running") return '<span class="st sched">发布中</span>';
+    if (p.state === "notify_pending") return '<span class="st wait">待人工确认</span>';
+    if (p.state === "draft_pending") return '<span class="st wait">待确认草稿</span>';
+    if (p.state === "skipped") return '<span class="st">不发</span>';
+    if (["failed", "blocked", "expired"].includes(p.state)) return '<span class="st bad">出了问题</span>';
+    return '<span class="st pub">已发布</span>';
+  }
+
+  function confirmPanel(work, cut) {
+    if (!cut) return "";
+    const versions = cut.versions ?? [];
+    const showVers = versions.length > 1;
+    const solo = soloOf(cut).sort((a, b) => orderOf(a.platform) - orderOf(b.platform));
+    const rest = cut.publishes.filter((p) => !solo.includes(p)).sort((a, b) => orderOf(a.platform) - orderOf(b.platform));
+    const batch = batchOf(cut);
+    const one = work.cuts.length === 1;
+    const allSkipped = rest.filter((p) => p.state === "skipped").length > 0 && pending(cut).length === 0;
+    const confirmed = cut.publishes.filter((p) => p.state === "queued").length;
+    const anyOpen = pending(cut).length > 0;
+
+    const rows = rest.map((p) => {
+      const w = when(p.scheduledAt);
+      const name = pfName(p.platform);
+      const bad = ["failed", "blocked", "expired"].includes(p.state);
+      if (state.editing.has(p.id)) {
+        const local = p.scheduledAt == null ? "" : VK.toLocalStamp(p.scheduledAt);
+        return `<div class="prow ed">${pfBadge(p.platform)}<span class="nm">${esc(name)}</span>` +
+          `<input type="text" value="${esc(p.title)}" data-title="${esc(p.id)}" aria-label="${esc(name)} 标题">` +
+          `<input type="datetime-local" value="${esc(local)}" data-at="${esc(p.id)}" aria-label="${esc(name)} 发布时间">` +
+          `<button class="btn" type="button" data-save="${esc(p.id)}">好了</button></div>`;
+      }
+      return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform)}` +
+        `<span class="nm">${esc(name)}</span>` +
+        `<span class="ti" title="${esc(p.title)}">${esc(p.title)}</span>` +
+        `<span class="tm">${esc(w.text)}</span>${rowState(p)}</div>`;
+    }).join("");
+
+    const soloBlocks = solo.map((p) => {
+      const w = when(p.scheduledAt);
+      const acts = p.state === "pending_confirm"
+        ? `<div class="acts"><button class="btn pri" type="button" data-solo="approve" data-pub="${esc(p.id)}">${esc(w.text)} 发</button>` +
+          `<button class="btn" type="button" data-solo="now" data-pub="${esc(p.id)}">现在发</button>` +
+          `<button class="btn" type="button" data-solo="manual" data-pub="${esc(p.id)}">我自己发</button></div>`
+        : `<div class="acts"><span class="st ${p.state === "skipped" ? "" : "done"}">${
+            { queued: `已确认，${w.text} 发`, notify_pending: "你自己发，发完告诉我", skipped: "先不发" }[p.state] ?? "已处理"
+          }</span></div>`;
+      return `<div class="solo"><div class="sh">${pfBadge("xiaohongshu")}小红书 · 每条都要你单独确认</div>` +
+        `<div class="ti">${esc(p.title)}</div><div class="sub">${esc(w.text)} 发</div>${acts}</div>`;
+    }).join("");
+
+    const foot = batch.length
+      ? `<div class="cfoot"><span class="hint">确认之后才会排进发布；没确认的到时间也不会发。</span>` +
+        `<button class="link" type="button" data-skip="${esc(cut.id)}">${one ? "先不发" : "这支先不发"}</button>` +
+        `<button class="btn pri lg" type="button" data-confirm="${esc(cut.id)}">确认这 ${batch.length} 条，按时间发</button></div>`
+      : allSkipped
+        ? `<div class="cfoot"><div class="done-note">这支先不发。以后可以在作品里再确认。</div></div>`
+        : confirmed
+          ? `<div class="cfoot"><div class="done-note">${one ? "" : esc(cut.title) + "的 "}${confirmed} 条已确认，会按时间发。</div></div>`
+          : "";
+
+    return `<section class="cp" aria-label="${esc(cut.title)}">` +
+      `<div class="cph"><h3>${esc(cut.title)}</h3>` +
+      `<span class="vers">${showVers ? versions.map((v) => `<button class="btn" type="button" data-ver="${esc(cut.id)}:${esc(v.id)}" aria-pressed="${(state.ver.get(cut.id) ?? versions[0].id) === v.id}">${esc(v.language)}</button>`).join("") : ""}</span></div>` +
+      mediaBox(cut) +
+      `<div class="ai">${anyOpen ? "AI 生成的内容，每个平台都会按它的要求标注。标题和时间是建议，想改再改。" : "AI 生成的内容，每个平台都按它的要求标注了。"}</div>` +
+      `<div class="rows">${rows}</div>${soloBlocks}${foot}</section>`;
+  }
+
+  function cutSteps(work, curId) {
+    if (work.cuts.length < 2) return "";
+    return `<div class="steps">${work.cuts.map((c) => {
+      const n = pending(c).length;
+      const conf = c.publishes.filter((p) => p.state === "queued").length;
+      const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
+      const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
+      const [cls, txt] = bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
+      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}"><img src="${BLANK}" alt=""><span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
+    }).join("")}</div>`;
+  }
+
+  function upcomingBox(scheduled) {
+    const list = scheduled.slice(0, 7).map((r) => `<div class="nx"><b>${esc(when(r.scheduledAt).text)}</b>${pfBadge(r.platform)}` +
+      `<span class="ti" title="${esc(r.workTitle)}">${esc(r.workTitle)}</span></div>`).join("");
+    return `<div class="sidebox"><h2>接下来要发 · 你确认过的</h2>${scheduled.length ? "" : '<div class="sub">还没有确认过的。</div>'}${list}` +
+      `${scheduled.length > 7 ? `<div class="sub" style="padding-top:4px">还有 ${scheduled.length - 7} 条在后面</div>` : ""}</div>`;
+  }
+
+  function render() {
+    const data = state.data;
+    const current = VK.current();
+    if (!data) return;
+    const scheduled = data.scheduled ?? [];
+    const awaiting = data.awaiting ?? [];
+    const problems = data.problems ?? [];
+    const work = state.focusId ? state.cache.get(state.focusId) : null;
+    const cut = work?.cuts.find((c) => c.id === state.cutId) ?? work?.cuts[0] ?? null;
+    const left = work ? work.cuts.filter(cutHasPending) : [];
+    const heading = `${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日 ${WD[new Date().getDay()]}`;
+
+    let focus = "";
+    if (work && cut) {
+      const multi = work.cuts.length > 1;
+      const done = work.cuts.length - left.length;
+      const total = work.cuts.reduce((n, c) => n + pending(c).length, 0);
+      focus = `<div class="panel focus"><div class="fh"><span class="st ${left.length ? "wait" : "done"}"></span>` +
+        `<a class="t" href="/work?id=${encodeURIComponent(work.id)}">${esc(work.title)}</a>` +
+        `<span class="sub">${esc(when(work.createdAt).day)} 入库</span>` +
+        `<span class="prog">${left.length ? (multi ? `${done} / ${work.cuts.length} 支成片已处理，还有 ${total} 条等你` : `${total} 条等你确认`) : "都处理完了"}</span></div>` +
+        confirmPanel(work, cut) +
+        `<div>${cutSteps(work, cut.id)}${upcomingBox(scheduled)}</div></div>`;
+    } else if (awaiting.length) {
+      focus = `<div class="panel calm"><h3>正在读这条作品的成片…</h3></div>`;
+    } else {
+      focus = `<div class="panel calm"><h3>今天没有要你处理的</h3><div class="sub">${
+        scheduled.length
+          ? `接下来 ${scheduled.length} 条已经确认过，会按时间发。最近一条：${esc(when(scheduled[0].scheduledAt).text)}，${esc(pfName(scheduled[0].platform))}。`
+          : "没有等确认的，也没有排着要发的。新作品入库后会出现在这里。"
+      }</div></div>`;
+    }
+
+    const others = awaiting.filter((w) => w.workId !== state.focusId);
+    const more = others.map((w) => {
+      const n = w.cuts.reduce((sum, c) => sum + pending(c).length, 0);
+      return `<div class="oth"><span class="st wait"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+        `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div>` +
+        `<div class="a"><a class="btn pri" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
+    }).join("");
+    const badOnes = problems.map((p) => `<div class="oth bad"><span class="st bad"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+      `<div class="bd"><div class="t">${esc(p.workTitle)}</div><div class="sub why">${esc(pfName(p.platform))}：${esc(p.error?.message ?? "没有发出去，原因还没记下来")}</div></div>` +
+      `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(p.workId)}${p.cutId ? "&cut=" + encodeURIComponent(p.cutId) : ""}">看经过</a>` +
+      `<button class="btn pri" type="button" data-retry="${esc(p.publishId)}">再试一次</button></div></div>`).join("");
+    const groupRows = (data.others ?? []).map((o) => `<div class="oth" style="margin-top:14px"><span class="st wait"></span>` +
+      `<div class="bd"><div class="t">账号组「${esc(o.group.name)}」里还有 ${o.total} 件事等你</div>` +
+      `<div class="sub">这一页只显示当前账号组${current ? "「" + esc(current.name) + "」" : ""}的内容</div></div>` +
+      `<div class="a"><button class="btn" type="button" data-group="${esc(o.group.id)}">切过去</button></div></div>`).join("");
+
+    const results = (data.results ?? []).map((r) => {
+      const q = r.multiple;
+      const width = q == null ? 0 : Math.min(100, q * 40);
+      const verdict = q == null ? "还没法比" : esc(r.verdictLabel ?? "");
+      const verdictTitle = q == null ? ` title="${esc(r.reason ?? "")}"` : "";
+      const typ = q == null ? '<span class="sub">—</span>'
+        : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${verdict}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${width}%"></i><u></u></div>`;
+      return `<tr><td><a class="wcell" href="/work?id=${encodeURIComponent(r.workId)}${r.cutId ? "&cut=" + encodeURIComponent(r.cutId) : ""}">` +
+        `<img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(r.workTitle)}</b>` +
+        `<span class="sub">${esc(r.cutTitle ?? "")}${r.cutTitle ? " · " : ""}${esc(when(r.publishedAt).day)} 发</span></span></a></td>` +
+        `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span></td>` +
+        `<td class="n">${fmt(r.play24h)}</td><td class="n sub">${fmt(r.baselineMedian)}</td><td>${typ}</td>` +
+        `<td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span><div class="sub"${verdictTitle}>${verdict}</div></td></tr>`;
+    }).join("");
+
+    main.innerHTML =
+      `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
+      (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/groups.html">先建一个账号组 →</a></div>`) +
+      focus +
+      `<div class="others" ${more || badOnes ? "" : "hidden"}>${more}${badOnes}</div>` +
+      groupRows +
+      `<h2 class="sec">最近结果 · 发布 24 小时的播放，和这个账号最近 20 条的中位数比</h2>` +
+      (results
+        ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${results}</tbody></table></div>`
+        : '<div class="panel empty">发布满 24 小时后，这里会出现每条和平时的对比。</div>') +
+      `<div class="cmd">对应命令：<code>vk today</code>　没确认的到时间也不会发；小红书每条单独确认。</div>`;
+
+    for (const video of main.querySelectorAll("video[data-media]")) {
+      video.addEventListener("error", () => {
+        video.outerHTML = fallback(video.dataset.label || "这支成片", "这个文件在这台电脑上读不到，或浏览器不能播放它");
+      }, { once: true });
+    }
+  }
+
+  let busy = false;
+  async function act(fn, okMessage, { advance = false } = {}) {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+      if (okMessage) window.VKShell?.toast(okMessage);
+      await refresh({ advance });
+    } catch (err) {
+      window.VKShell?.toast(err.message || "没成功");
+    } finally {
+      busy = false;
+    }
+  }
+
+  main.addEventListener("click", (event) => {
+    const el = event.target.closest("[data-cut],[data-edit],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver],[data-group]");
+    if (!el) return;
+    const d = el.dataset;
+
+    if (d.cut) { state.cutId = d.cut; render(); return; }
+
+    if (d.edit) { state.editing.add(d.edit); render(); return; }
+
+    if (d.save) {
+      const pub = d.save;
+      const title = main.querySelector(`[data-title="${pub}"]`)?.value ?? null;
+      const at = main.querySelector(`[data-at="${pub}"]`)?.value ?? null;
+      act(async () => {
+        await VK.editPublish(pub, { title, at: at || null });
+        state.editing.delete(pub);
+      }, "改好了，确认时按新的发");
+      return;
+    }
+
+    if (d.ver) {
+      const [cutId, versionId] = d.ver.split(":");
+      state.ver.set(cutId, versionId);
+      render();
+      return;
+    }
+
+    if (d.confirm) { act(() => VK.approveCut(d.confirm), "已确认，会按时间发", { advance: true }); return; }
+    if (d.skip) { act(() => VK.skipCut(d.skip), "好，这支先不发", { advance: true }); return; }
+    if (d.retry) { act(() => VK.retryPublish(d.retry), "正在重试"); return; }
+    if (d.solo && d.pub) {
+      const map = { approve: VK.approvePublish, now: VK.publishNow, manual: VK.publishManual };
+      const done = { approve: "小红书这条已确认", now: "好，现在就发这一条", manual: "好，这条你自己发" };
+      act(() => map[d.solo](d.pub), done[d.solo], { advance: true });
+      return;
+    }
+    if (d.group) {
+      act(async () => { await VK.useGroup(d.group); location.reload(); });
+    }
+  });
+
+  try {
+    await VK.ready();
+    await refresh();
+  } catch (err) {
+    main.innerHTML = `<div class="hd"><h1>今天</h1></div><div class="panel empty">读不到今天的待办：${esc(err.message)}</div>` +
+      `<div class="cmd">守护进程没起？在电脑上运行 <code>vk serve --open</code>。</div>`;
+  }
+})();
+</script>
+</body>
+</html>

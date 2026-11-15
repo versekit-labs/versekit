@@ -250,3 +250,40 @@ test("work.list / work.show：JSON 里有作品、成片、每条平台稿的状
   assert.equal(confirmed.status.key, "scheduled", "manual 模式的平台稿在 queued 状态 → 已确认等时间");
   assert.throws(() => handlers["work.show"]({ workId: "work_nope" }), /vk work list/);
 });
+
+test("ACC-v2-confirm-04 平台稿标题：work.show 给的就是「现在点确认会发出去」的那一个", async () => {
+  // #148：今天页要显示并能预填每条平台稿的标题。回退链只有 core 一份（effectiveTitle），
+  // 页面和卡片都读它；这里把它和适配器真正用的取值对上。
+  const handlers = createCoreHandlers({ adapters: [], log: () => {} });
+  const g = handlers["group.add"]({ name: "标题组" });
+  const acc = handlers["account.add"]({ platform: "xiaohongshu", name: "@标题", group: g.name }).id;
+  const w = store.upsertWork({
+    title: "作品标题",
+    cuts: [{ title: "长片", versions: [{ language: "中文", asset: file("title.mp4") }] }],
+    // 改写结果落在作品 meta 上；确认前改的标题落在平台稿上。
+    meta: { title: "改写后的标题" },
+  });
+  const pub = store.createPublish({ workId: w.id, accountId: acc, cutId: store.showWork(w.id).cuts[0].id });
+  const adapterRow = () =>
+    core
+      .open()
+      .prepare(
+        `SELECT p.*, a.platform, a.handle, a.id AS account_id, w.title AS work_title, w.meta_json
+           FROM publish p JOIN account a ON a.id = p.account_id JOIN work w ON w.id = p.work_id
+          WHERE p.id = ?`,
+      )
+      .get(pub.id);
+  const { planNote } = await import("../../adapter-xiaohongshu/src/index.mjs");
+
+  const before = store.showWork(w.id).cuts[0].publishes[0];
+  assert.equal(before.title, "改写后的标题", "没改过时用作品 meta 里的改写结果");
+  assert.equal(before.titleEdited, false);
+  assert.equal(before.title, planNote(adapterRow()).title, "work.show 的值必须和适配器拿到的一致");
+
+  store.editPublish({ publishId: pub.id, title: "确认前改的标题" });
+  const after = store.showWork(w.id).cuts[0].publishes[0];
+  assert.equal(after.title, "确认前改的标题", "改过之后 work.show 立刻给新标题");
+  assert.equal(after.titleEdited, true);
+  assert.equal(after.title, planNote(adapterRow()).title, "改过之后也和适配器拿到的一致");
+  assert.equal(after.scheduledAt, store.getPublish(pub.id).scheduled_at, "时间是改后的那一份");
+});

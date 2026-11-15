@@ -393,6 +393,37 @@ export function deriveStatus(publishStates) {
   return { key, label: WORK_STATUS_LABEL[key] };
 }
 
+const asObject = (json) => {
+  if (!json) return {};
+  try {
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const nonEmpty = (value) => (typeof value === "string" && value.trim() ? value : null);
+
+/**
+ * 一条平台稿「现在点确认，实际会发出去」的标题（ACC-v2-confirm-04 / ACC-v2-web-02）。
+ *
+ * 与适配器的取值链一致：确认前改过的 overrides.title 优先，其次是作品 meta 里的改写结果，
+ * 最后才是作品标题。平台自己的限制（如小红书 20 字、B 站 80 字截断）仍在适配器里判——
+ * 这里给的是人看到的、也是发给平台的那个值，页面和卡片都读它，不再各写一份回退链。
+ */
+export function effectiveTitle(row) {
+  const overrides = asObject(row?.overrides_json ?? row?.overrides);
+  const meta = asObject(row?.meta_json);
+  return (
+    nonEmpty(overrides.title) ??
+    nonEmpty(meta.title) ??
+    nonEmpty(row?.work_title) ??
+    nonEmpty(row?.title) ??
+    ""
+  );
+}
+
 function workView(work) {
   const conn = open();
   const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c) => {
@@ -403,7 +434,7 @@ function workView(work) {
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
-                a.platform, a.handle, v.language
+                p.overrides_json, a.platform, a.handle, v.language
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
@@ -416,6 +447,8 @@ function workView(work) {
         handle: p.handle,
         state: p.state,
         mode: p.mode,
+        title: effectiveTitle({ ...p, work_title: work.title, meta_json: work.meta_json }),
+        titleEdited: Boolean(nonEmpty(asObject(p.overrides_json).title)),
         versionId: p.version_id,
         language: p.language ?? null,
         scheduledAt: p.scheduled_at,

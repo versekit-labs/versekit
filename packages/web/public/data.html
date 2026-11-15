@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>数据 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-page="data">
+<div class="app">
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+    <a class="nv" href="today.html" data-key="today">今天<b data-todo hidden></b></a>
+    <a class="nv" href="works.html" data-key="works">作品</a>
+    <a class="nv" href="data.html" data-key="data" aria-current="page">数据</a>
+    <a class="nv" href="system.html" data-key="system">系统</a></nav>
+  <main id="main">
+    <div class="hd"><h1>数据</h1><span class="sub" id="sub">每个平台只和自己比：一条发布 24 小时的播放，是这个账号平时的几倍。</span></div>
+    <section class="wip" aria-label="还没做">
+      <h3>这一页还没做</h3>
+      <p>数据页要给每个平台画一条点图（一个点是一条发布，位置是它相当于平时的几倍），并列出这段时间值得说的一条好和一条差。
+        倍数与「平时」的口径在内核里算好，页面只渲染。</p>
+      <div class="cmd">对应命令：<code>vk stats --since 30d</code>　不同平台的播放数不相加，也不互相比较。</div>
+    </section>
+  </main>
+</div>
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(async function () {
+  const sub = document.getElementById("sub");
+  try {
+    await window.VK.ready();
+    const current = window.VK.current();
+    if (current) sub.textContent = `${current.name} · 每个平台只和自己比：一条发布 24 小时的播放，是这个账号平时的几倍。`;
+  } catch (err) {
+    sub.textContent = `读不到账号组：${err.message}`;
+  }
+})();
+</script>
+</body>
+</html>

@@ -384,6 +384,65 @@
     return id ? `${page}${page.includes("?") ? "&" : "?"}group=${encodeURIComponent(id)}` : page;
   }
 
+  /* ---------------------------------------------------------------- v2 页面数据
+   *
+   * 今天、作品、作品详情都只读 core 算好的结果（overview.buildToday / store.workView），
+   * 页面不自己聚合、不自己推导状态：口径改一处就够。
+   */
+  const media = (versionId) => `/media/${encodeURIComponent(String(versionId ?? ""))}`;
+
+  const today = () => request("/api/today");
+  const works = () => request("/api/works");
+  const work = (workId) => {
+    if (!workId) throw new Error("先指定一个作品");
+    return request(`/api/works/${encodeURIComponent(workId)}`);
+  };
+
+  /* 确认、改、跳过、重试：每一个都对应 commands.mjs 里的命令，页面不自己拼状态。
+   * 成功后由页面重新拉一次 today / work——数字只认服务端那一份。 */
+  async function approveCut(cutId) {
+    if (!cutId) throw new Error("先指定一支成片");
+    return request("/api/publishes/approve", { method: "POST", body: { cutId } });
+  }
+
+  async function approvePublish(publishId) {
+    if (!publishId) throw new Error("先指定一条平台稿");
+    return request("/api/publishes/approve", { method: "POST", body: { publishId } });
+  }
+
+  async function publishNow(publishId) {
+    if (!publishId) throw new Error("先指定一条平台稿");
+    return request(`/api/publishes/${encodeURIComponent(publishId)}/now`, { method: "POST", body: { publishId } });
+  }
+
+  async function publishManual(publishId) {
+    if (!publishId) throw new Error("先指定一条平台稿");
+    return request(`/api/publishes/${encodeURIComponent(publishId)}/manual`, { method: "POST", body: { publishId } });
+  }
+
+  async function skipCut(cutId) {
+    if (!cutId) throw new Error("先指定一支成片");
+    return request(`/api/cuts/${encodeURIComponent(cutId)}/skip`, { method: "POST", body: { cutId } });
+  }
+
+  /** 改标题 / 改时间 = 命令 publish.edit；时间是毫秒，页面传本地时间字符串。 */
+  async function editPublish(publishId, { title = null, at = null } = {}) {
+    if (!publishId) throw new Error("先指定一条平台稿");
+    const body = { publishId };
+    if (title != null) body.title = String(title).trim();
+    if (at != null) {
+      const ms = typeof at === "number" ? at : fromLocalStamp(at);
+      if (!Number.isFinite(ms)) throw new Error("时间格式不对：" + at);
+      body.at = ms;
+    }
+    return request(`/api/publishes/${encodeURIComponent(publishId)}/edit`, { method: "POST", body });
+  }
+
+  async function retryPublish(publishId) {
+    if (!publishId) throw new Error("先指定一条平台稿");
+    return request(`/api/publishes/${encodeURIComponent(publishId)}/retry`, { method: "POST", body: { publishId } });
+  }
+
   VK.request = request;
   VK.bootstrap = bootstrap;
   VK.ready = ready;
@@ -428,4 +487,15 @@
     works: list.length,
     publishes: list.reduce((n, item) => n + (item.platforms?.length ?? 0), 0),
   });
+  VK.media = media;
+  VK.today = today;
+  VK.works = works;
+  VK.work = work;
+  VK.approveCut = approveCut;
+  VK.approvePublish = approvePublish;
+  VK.publishNow = publishNow;
+  VK.publishManual = publishManual;
+  VK.skipCut = skipCut;
+  VK.editPublish = editPublish;
+  VK.retryPublish = retryPublish;
 })();

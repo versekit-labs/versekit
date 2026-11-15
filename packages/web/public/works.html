@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作品 · versekit</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-page="works">
+<div class="app">
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+    <a class="nv" href="today.html" data-key="today">今天<b data-todo hidden></b></a>
+    <a class="nv" href="works.html" data-key="works" aria-current="page">作品</a>
+    <a class="nv" href="data.html" data-key="data">数据</a>
+    <a class="nv" href="system.html" data-key="system">系统</a></nav>
+  <main id="main">
+    <div class="hd"><h1>作品</h1><span class="sub" id="sub">一个作品有几支成片、发到哪些平台，都在这一页。</span></div>
+    <section class="wip" aria-label="还没做">
+      <h3>这一页还没做</h3>
+      <p>作品列表要按状态筛选、按标题搜，平台图标要分已发、未发、出问题三种；点进一条作品看详情。这些接的是
+        <code>vk work list</code> 与 <code>vk work show</code> 的同一份数据，等这一轮做完就能用。</p>
+      <p>现在要确认的内容都在「今天」；要看已经发出去的结果也在「今天」的最近结果里。</p>
+      <a class="btn" href="/today">回今天 →</a>
+      <div class="cmd">对应命令：<code>vk work list</code>　入库：<code>vk work add 视频.mp4</code></div>
+    </section>
+  </main>
+</div>
+<script src="/api.js"></script>
+<script src="/shell.js"></script>
+<script>
+(async function () {
+  const sub = document.getElementById("sub");
+  try {
+    await window.VK.ready();
+    const current = window.VK.current();
+    if (current) sub.textContent = `${current.name} · 一个作品有几支成片、发到哪些平台，都在这一页。`;
+  } catch (err) {
+    sub.textContent = `读不到账号组：${err.message}`;
+  }
+})();
+</script>
+</body>
+</html>
