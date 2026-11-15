@@ -39,6 +39,16 @@
 .fact-value.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
 .fact-meta{margin-top:3px;color:var(--muted);font-size:12px;line-height:1.45}
 
+/* 小红书扫码登录（#101）：二维码在详情里就地显示，不弹浏览器窗口；短信与登录窗口是备用入口 */
+.login-box{display:flex;gap:18px;align-items:flex-start;margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper-subtle)}
+.login-box[hidden]{display:none}
+.qr-frame{flex:none;width:176px;height:176px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--line);border-radius:6px;background:var(--paper);color:var(--muted);font-size:12px;line-height:1.5;text-align:center;padding:0 14px}
+.login-side{flex:1;min-width:0}
+.login-title{font-size:14px;font-weight:650}
+.login-state{margin-top:4px;color:var(--muted);font-size:13px;line-height:1.5}
+.login-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.login-alt{margin-top:14px;padding-top:10px;border-top:1px solid var(--line-soft);color:var(--muted);font-size:12px}
+
 @media (max-width:1100px){
   .slot{grid-template-columns:minmax(150px,1fr) minmax(110px,.7fr) minmax(140px,.9fr) auto}
   .col-collect{display:none}
@@ -54,6 +64,9 @@
   .detail-grid{grid-template-columns:1fr;gap:12px}
   .fact{padding-bottom:10px;border-bottom:1px solid var(--line-soft)}.fact:last-child{border-bottom:0;padding-bottom:0}
   .detail-actions{width:100%}.detail-actions .btn{flex:1;min-height:40px}
+  .login-box{flex-direction:column;align-items:stretch}
+  .qr-frame{align-self:center}
+  .login-actions .btn{flex:1;min-height:40px}
 }
 </style>
 </head>
@@ -118,6 +131,24 @@
         <div class="fact"><div class="fact-label">最近发布</div><div class="fact-value mono" id="d-publish"></div><div class="fact-meta" id="d-publish-meta"></div></div>
         <div class="fact"><div class="fact-label">最近采集</div><div class="fact-value mono" id="d-collect"></div><div class="fact-meta" id="d-collect-meta"></div></div>
         <div class="fact"><div class="fact-label">等价命令</div><div class="fact-value mono" id="d-cmd"></div><div class="fact-meta">界面上能做的，CLI 里都有同一条</div></div>
+      </div>
+      <div class="login-box" id="d-login" aria-label="小红书扫码登录" hidden>
+        <div class="qr-frame">二维码由本机守护进程从小红书创作平台登录页取回（后台无头，不弹窗口）</div>
+        <div class="login-side">
+          <p class="login-title">用手机小红书扫码登录</p>
+          <p class="login-state" role="status">等待扫码…扫完在手机上确认；二维码约 1–2 分钟过期，会自动换新。</p>
+          <div class="login-actions">
+            <button class="btn" id="d-qr-refresh" type="button">刷新二维码</button>
+            <button class="btn" id="d-qr-cancel" type="button">取消登录</button>
+          </div>
+          <div class="login-alt">
+            扫不了，或被小红书风控拦下？换一种方式：
+            <div class="login-actions">
+              <a class="btn" id="d-alt-sms" href="add.html" data-no-group>短信验证码登录</a>
+              <a class="btn" id="d-alt-window" href="add.html" data-no-group>打开登录窗口</a>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -267,9 +298,16 @@ function select(id,scroll){
   const act = document.getElementById('d-action');
   act.textContent = a.action;
   act.classList.toggle('primary', !!a.primary);
-  act.href = a.level==='bad'
-    ? VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth'
-    : '#account/' + a.id;
+  const reauthUrl = VK.url('add.html',group) + '&account=' + a.id + '&mode=reauth';
+  act.href = a.level==='bad' ? reauthUrl : '#account/' + a.id;
+  // 小红书默认扫码：「重新登录」就地展开二维码面板；短信与登录窗口是备用入口（#101）。
+  const qrLogin = a.platform==='xhs' && a.level==='bad';
+  const box = document.getElementById('d-login');
+  box.hidden = true;
+  act.onclick = qrLogin ? (ev)=>{ ev.preventDefault(); box.hidden = false; box.scrollIntoView({block:'nearest',behavior:'smooth'}); } : null;
+  document.getElementById('d-alt-sms').href = reauthUrl;
+  document.getElementById('d-alt-window').href = reauthUrl;
+  if(qrLogin) document.getElementById('d-cmd').textContent = 'vk account login ' + a.id + ' --qr';
 
   const work = document.getElementById('d-work');
   work.style.display = a.level==='bad' ? 'none' : '';
@@ -277,6 +315,11 @@ function select(id,scroll){
 
   if(scroll) d.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
+
+document.getElementById('d-qr-refresh').addEventListener('click', ()=>{
+  document.querySelector('#d-login .login-state').textContent = '已换新二维码，请重新扫码。';
+});
+document.getElementById('d-qr-cancel').addEventListener('click', ()=>{ document.getElementById('d-login').hidden = true; });
 
 render();
 </script>
