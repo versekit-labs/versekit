@@ -1,125 +1,70 @@
-# 设计稿 → 代码：交接契约
+# 设计稿 → 代码：交接契约（v2）
 
-这份文档是 `docs/design/` 下九个页面的开发契约。界面已定稿（commit `5075bbc`），代码按这里实现；实现完用同一套闸门验收。
+2026-11-15 定稿。这份文档给协调器和实现 worker：照着它开 issue、派工、验收。旧版（九个页面、账号组 × 平台）已作废，旧页面在 `docs/design/v1/`。
 
-> **基线**：设计成果已合入 `main`，直接用 `main` 开工：仓库地址 `versekit-app/versekit`，含 daemon、
-> `packages/web`、路由派生与登录重做。直接从这里开工即可。
+## 0. 先读什么
 
-## 0. 开工前
+| 要知道 | 读 |
+|---|---|
+| 产品定义、对象模型、里程碑 | `docs/PRD.md` v0.2（§3 对象、§3.1 通用性、§4.2 确认、§7 需求） |
+| 每个时刻用户做什么、哪些机制藏起来 | `docs/design/FLOW-v2.md` |
+| 页面长什么样（可点） | `docs/design/{today,works,work,data,system,feishu}.html`，直接用浏览器打开 |
+| 颜色、字号、组件、文案规则 | 仓库根 `DESIGN.md` |
+| 每个页面的任务书 | `.impeccable/surfaces/docs-design-<页面>-html.md` |
+| 验收基线截图（1360 宽） | `docs/design/screenshots/v2/*.png` |
+| 飞书卡片 JSON | `docs/design/feishu-cards/` |
+| 验收口径（带 id） | `docs/design/ACCEPTANCE.md` 第十节，`[ACC-v2-*]` |
+
+**给实现方的一句话**：`docs/design/*.html` 是结构和文案的规范，`DESIGN.md` 是 token 与规则，截图是像素参考。与三者冲突的实现是 bug。原型里的 `app.js` 是演示数据和演示逻辑，**不要搬进产品**：聚合、状态推导、倍数计算都放 `packages/core`。
+
+## 1. 四条硬规则
+
+1. **没有人确认，一条都不会发。** 平台稿到了建议时间但没确认，队列不领取，只提醒。有测试钉住。
+2. **小红书逐条单独确认**，不能被"确认这 N 条"带上。有测试钉住。
+3. **真机红线**（`ACCEPTANCE.md` 第一节）：开发机上的任何 agent 不得对任何平台的真实账号登录、发布、体检或采集。只用 stub driver、fixture。需要真实账号的验证写进 PR 的「待人工」。
+4. **CLI 完整律 / 三端一致律 / 零后门律**（`AGENTS.md` §3）：页面和卡片上的每个动作先在 `commands.mjs` 里有命令。
+
+## 2. 现状差距（以 main 为准）
+
+| 设计需要 | main 现状 | 缺口 |
+|---|---|---|
+| 作品 → 成片 → 语言版本 → 平台稿 | `work` 表一个作品一个文件；`publish` 直接挂 `work`，`UNIQUE(work_id, account_id)` | 加成片层和语言版本；同一作品同一账号要能有多条平台稿（长片 1 条 + 短片 3 条） |
+| 入库 `vk work add / list / show` | 只有 `publish.create`（一条内容 → 多平台） | 新增 work 命令；`vk work add 视频.mp4` = 1 作品 1 成片 1 版本 |
+| 发布前人确认 | `publish` 默认 `state=queued` 直接进队列；`publish.confirm` 是"notify 模式下确认已在 App 里发完"，不是这个意思 | 新增"待确认"状态和 `publish.approve / skip / now / manual / edit`；别改 `publish.confirm` 的含义 |
+| 账号组 | `group.list / add / rename / use` 已有 | work、today、stats 按当前组过滤；能查别的组的待办数 |
+| 今天 | 没有 | `vk today` |
+| 和平时比 | `stats.works`、`stats.series` 有原始数 | 基线（同账号最近 20 条、发布 24 小时的中位数）和倍数 |
+| 发布方案 | 没有 | `vk plan show / edit`（M3） |
+| Web | `packages/web/public/` 是旧的九页 | 换成四页：今天、作品（含详情）、数据、系统 |
+| 飞书卡片 | 通道、配对、按钮回调（`executeAction`）已有 | 新的卡片内容与"一支一支发"的顺序 |
+
+## 3. 建议的 issue 顺序
+
+一次只放一个 `s:ready`；"涉及"的文件相交的串行。
+
+| 顺序 | issue | 里程碑 | 依赖 | 建议谁做 |
+|---|---|---|---|---|
+| 1 | core：成片层与语言版本，`vk work add / list / show` | M1 | 无 | Sonnet / Opus（改表结构和迁移） |
+| 2 | core：发布前人确认 | M1/M3 | 1 | Sonnet / Opus（状态机，有红线） |
+| 3 | core：`vk today`、账号组过滤、和平时比 | M1/M4 | 1 | Sonnet |
+| 4 | web：新外壳 + 今天页 | M1 | 2、3 | DeepSeek 可做（照原型接 API） |
+| 5 | web：作品与作品详情 | M1 | 1、4 | DeepSeek 可做 |
+| 6 | channel-feishu：入库与确认卡片 | M1/M3 | 2 | Sonnet |
+| 之后 | 数据页（M4）、系统页与发布方案（M2–M3）、视频消息、图文和文章预览 | | | 口径到时再补 |
+
+## 4. 原型里哪些是真的，哪些是演示
+
+- 真的（要照做）：页面结构、文案、状态词、按钮含义、什么时候出现什么（只有 1 支成片不出现成片列表等）、颜色和间距。
+- 演示（不要照搬）：`app.js` 里的作品、时间、播放数；"露营小记"账号组是虚构的；页面上写的 `vk plan show`、`vk stats --since`、`vk runs --failed`、`vk today`、`vk work …` 是提议的命令名，以 issue 里定的为准；系统页的每日上限和间隔数字是默认值，还没最后确定。
+- 原型没有存储：在一页确认过的内容，跳到另一页会恢复。产品里当然要一致。
+- 还没画：图文和文章的预览区。
+
+## 5. 验收
 
 ```bash
-git checkout main
-npm ci 2>/dev/null || true          # 零依赖仓库，这步可跳过
-npm test                            # 214 项，全绿再动手
-npm run design:check                # 设计闸门，全绿再动手
-npm run serve                       # 起 http://127.0.0.1:8787，看现有 UI
+npm run ci                                             # 合并前必须全绿
+npm run serve                                          # 实现方起真实服务
+npm run design:accept -- --url http://127.0.0.1:8787   # 机械验收（路径映射在 scripts/design-accept.mjs 的 PAGES）
 ```
 
-现有 UI 在 `packages/web/public/`（单页，7 个视图）；设计稿在 `docs/design/`（9 页）。
-两者并存是预期状态，按本文第 5 节逐步替换。
-
-**给实现方的一句话**：设计稿是规范，`docs/design/*.html` 是像素参考，`DESIGN.md` 是 token 与规则；
-任何与三者冲突的实现都是 bug，不是"优化"。
-
-## 1. 现状差距（以当前 main 为准）
-
-| 设计依赖 | main 现状 | 缺口 |
-|---|---|---|
-| `localhost:8787` 托管页面 + `/api/*` | ✅ `core/daemon.mjs` 已托管 `packages/web/public`，`/api` 由 `routes.mjs` 从命令表派生 | 无需新建，接上即可 |
-| 命令注册表 | ✅ `core/commands.mjs` 已有 account/publish/stats/run/event 等 | 缺 `group.*`、`schedule.*` |
-| 账号组 | ❌ `account` 表无 `group_id` | 需要 `account_group` 表与迁移 |
-| 排期投影 | ⚠️ `publish.scheduled_at` 有，`publish.list` 有，但**没有按作品聚合的排期接口** | 需要 `schedule.list/move/cancel` |
-| 平台级状态 | ✅ `publish.state` 天然逐账号 | 接口层按作品聚合即可，不要加字段 |
-| 撞车检测 | ❌ 无 | 逻辑放 core，Web 只读结果 |
-| 现有 Web UI | ⚠️ 单页 `packages/web/public/{index.html,style.css,app.js}`，1179 行，7 个视图 | IA 与设计稿不同，需要替换导航与页面结构 |
-
-## 2. 三条架构约束怎么落到这份设计上
-
-1. **CLI 完整律**：页面上的每个动作必须先在 `commands.mjs` 里出现。原型里那些 `vk xxx` 就是待补清单。
-2. **三端一致律**：HTTP 不是新实现。`routes.mjs` 已经由命令表派生——**加命令即得路由**，不要手写第二套。
-3. **零后门律**：Web 只走 `/api`；聚合、冲突、状态推导放 `core`。
-
-**推论**：原型 `store.js` 里的 `aggregate()`、`conflicts()`、`counts()` 三处逻辑必须迁到 `packages/core`，
-否则 Web 和 CLI 会各算一遍，数字迟早对不上。
-
-## 3. 数据模型
-
-```sql
-CREATE TABLE IF NOT EXISTS account_group (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
-  created_at INTEGER NOT NULL
-);
-
-ALTER TABLE account ADD COLUMN group_id TEXT REFERENCES account_group(id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_account_group_platform
-  ON account(group_id, platform) WHERE group_id IS NOT NULL;
-```
-
-**不需要排期表。** 一次排期 = 一个 `work` + N 条 `publish`（同 `scheduled_at`）。日历是投影：
-
-```sql
-SELECT w.id AS work_id, w.title, MIN(p.scheduled_at) AS at,
-       a.platform, p.state, p.id AS publish_id
-FROM work w
-JOIN publish p ON p.work_id = w.id
-JOIN account a ON a.id = p.account_id
-WHERE a.group_id = ? AND p.scheduled_at BETWEEN ? AND ?
-ORDER BY at;
-```
-接口把同一 `work_id` 的多行合成一张卡；作品状态取各平台最差（failed > limited/needs_human > scheduled > published）。
-
-改期 = 更新该 work 下所有 publish 的 `scheduled_at`（必须走 `transitionPublish` 之外的时间字段更新，状态不变）；
-取消 = 迁到 `failed` 并写 `E_USER_CANCELLED`，**不要删行**，保留现场。
-
-## 4. 需要新增的命令（加进 `commands.mjs`，路由自动出现）
-
-| 命令 | HTTP（派生） | 用途 |
-|---|---|---|
-| `group.list` | `GET /api/groups` | 组列表 + 每组账号数 |
-| `group.add` | `POST /api/groups` | 新建组 |
-| `group.use` | `POST /api/groups/current` | 记录当前组（本地状态） |
-| `account.add`（改造） | 已有 | 增加 `--group` 必填 |
-| `account.remove` | `DELETE /api/accounts/:accountId` | 移除（换号前） |
-| `schedule.list` | `GET /api/schedule?from&to` | 按当前组返回作品卡片 |
-| `schedule.move` | `POST /api/schedule/:workId/move` | 改期 |
-| `schedule.cancel` | `POST /api/schedule/:workId/cancel` | 取消排期 |
-| `publish.create`（改造） | 已有 | 增加 `--group`，默认取当前组 |
-| `stats.works` / `run.list`（改造） | 已有 | 增加 `--group` 过滤 |
-
-## 5. 前端怎么落地（关键决策）
-
-现有 `app.js` 是 1179 行单页，7 个视图；设计稿是「账号组工作区 + 6 个页面」。
-
-**不要重写成一整套新框架**，按这个顺序替换：
-
-1. **搬资产**：把 `docs/design/app.css` + 各页 CSS 合并进 `packages/web/public/`，设计稿的 `store.js` 换成 `api.js`。
-2. **先换外壳**：导航 + 账号组切换器（`app.js` 里新增 `bootstrap()`，一次拉 `/api/bootstrap`）。
-3. **逐页替换**：`accounts` → 账号页（五槽位）、新增 `plan` 页、`publish` 页对齐差异字段、`works`/`overview`/`tasks` 改皮肤。
-4. **删除旧视图**：每替换一页，删掉 `app.js` 里对应的渲染函数，不留两套。
-
-数据接口可以保持**同步门面**：页面加载抓一次快照，读是同步的，写操作 POST 后刷新——本地应用数据量小，不必把页面改成异步。
-
-## 6. 实施顺序
-
-| 阶段 | 做什么 | 验收 |
-|---|---|---|
-| **M0** | 合并 main，闸门仍绿 | `npm run design:check` 通过 |
-| **M1 数据** | `account_group` + `account.group_id` + 迁移 + `group.*` | `vk group add/list`；同组同平台唯一约束有测试 |
-| **M2 只读** | `schedule.list` + 三处聚合逻辑下沉 core；`api.js` 接 `bootstrap` | 账号页、计划页显示真实数据；`npm run design:check -- --url http://127.0.0.1:8787` 通过 |
-| **M3 写** | `schedule.move/cancel`、`account.remove`、发布带组 | 每个动作都能在 CLI 找到同名命令，HTTP 只转发 |
-| **M4 收口** | works/overview/tasks 接真实数据；`vk doctor` 加组维度 | CLI `--json` 与页面数字一致 |
-
-**M2 是分水岭**：只读打通后，设计稿从"图"变成"跑得起来的界面"，之后每一步都在真实页面上验收。
-
-## 7. 完成定义（每页）
-
-- 数据来自 `/api`，不是硬编码；
-- 每个可点动作在命令表里存在，且 HTTP 调用它；
-- `design:check --url` 通过（任务书、导航、死链、检测器、触控、溢出、hidden）；
-- 空态 / 错误 / 权限三种状态有真实表现。
-
-## 8. 明确不做
-
-不做评论私信 Inbox、公开内容采集、团队权限、托管、PWA；不做富文本编辑器。
-发布台只编排差异字段，这既是 PRD 的反范围，也是设计稿的边界。
+界面类 issue 的证据包：1360 宽的截图，和 `docs/design/screenshots/v2/` 里对应的那张并排；逐条写出 ACC id 和证据。

@@ -36,7 +36,7 @@ const add = (kind, msg) => problems.push({ kind, msg });
 // ── 1. 页面清单 ────────────────────────────────────────
 const PAGES = readdirSync(DESIGN).filter(f => f.endsWith('.html')).sort();
 // 入口页不参与「必须有组」的运行时检查
-const ENTRY = new Set(['groups.html']);
+const ENTRY = new Set(['feishu.html']); // 飞书卡片示意页：不是应用页面，没有主导航
 
 // ── 2. 每个页面必须有 surface brief ────────────────────
 function briefSlug(file){
@@ -50,7 +50,7 @@ for (const page of PAGES) {
 }
 
 // ── 3. 静态检查：死链接 / 导航一致性 / 资源存在 ────────
-const NAV_ORDER = ['account-wall.html','publish.html','calendar.html','overview.html','runs.html'];
+const NAV_ORDER = ['today.html','works.html','data.html','system.html'];
 for (const page of PAGES) {
   const html = readFileSync(join(DESIGN, page), 'utf8');
 
@@ -85,8 +85,8 @@ for (const page of PAGES) {
   }
 
   // 3e. hidden 与 display 冲突（点了不跳转的根因）
-  const setsDisplay = /(\.pub|\.modes|\.view|\.plats|\.cal-wrap)\{[^}]*display:(grid|flex)/.test(html);
-  const usesHidden = /(class="[^"]*"\s+hidden|hidden>)/.test(html);
+  const setsDisplay = /display:(grid|flex)/.test(html);
+  const usesHidden = /(\shidden[\s>]|\.hidden\s*=|'hidden')/.test(html);
   if (setsDisplay && usesHidden) {
     const css = readFileSync(join(DESIGN, 'app.css'), 'utf8');
     if (!/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(css)) {
@@ -169,14 +169,14 @@ async function runtimeChecks() {
   const cases = PAGES.map(p => ({
     page: p,
     url: URL_ARG
-      ? URL_ARG.replace(/\/$/, '') + '/' + p + (p === 'groups.html' ? '' : '?group=ai')
-      : 'file://' + join(DESIGN, p) + (p === 'groups.html' ? '' : '?group=ai')
+      ? URL_ARG.replace(/\/$/, '') + '/' + p
+      : 'file://' + join(DESIGN, p)
   }));
   const STATES = [
     { name: 'default', run: '' },
-    { name: 'expanded', run: "document.querySelector('.post')?.click()" },
-    { name: 'view2', run: "document.querySelectorAll('.view-btn')[1]?.click()" },
-    { name: 'view3', run: "document.querySelectorAll('.view-btn')[2]?.click()" }
+    { name: 'edit', run: "document.querySelector('[data-edit],[data-m=edit]')?.click()" },
+    { name: 'seg2', run: "document.querySelectorAll('.seg button')[1]?.click()" },
+    { name: 'cut2', run: "document.querySelectorAll('.step')[1]?.click()" }
   ];
 
   await withChrome(async (send, consoleErrors) => {

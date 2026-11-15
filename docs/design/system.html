@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px}
+.kv dt{color:var(--ink2);font-size:13px}
+.kv dd{margin:0}
+.plan td:first-child{white-space:nowrap;font-weight:600}
+.pfs{display:flex;gap:10px 14px;flex-wrap:wrap}
+@media (max-width:860px){.two{grid-template-columns:minmax(0,1fr)}}
+</style></head>
+<body><div class="app">
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<a class="nv" href="today.html">今天<b data-todo hidden></b></a>
+<a class="nv" href="works.html">作品</a>
+<a class="nv" href="data.html">数据</a>
+<a class="nv" href="system.html" aria-current="page">系统</a></nav>
+<main id="main"></main></div>
+<script src="app.js"></script>
+<script>
+initShell();
+const main = document.getElementById('main');
+// 账号、规则、发布方案都是演示数据。规则里的数字是默认值，还没最后确定。
+const ACC = SIMPLE
+  ? [['xhs', '露营小记', 1, 1, '逐条单独确认'], ['dy', '露营小记', 2, 3, ''], ['bili', '露营小记', 1, 2, '']]
+  : [['xhs', 'AssureLane 出海合规', 1, 1, '逐条单独确认'], ['dy', 'AssureLane', 3, 3, ''], ['sph', 'AssureLane', 2, 2, ''], ['bili', 'AssureLane', 2, 2, '发完归入合集「出海合规」'],
+    ['web', 'assurelane.ai', null, null, '提交到 trustbridge 仓库'], ['tk', 'assurelane', 2, 2, '走官方接口'], ['yt', 'AssureLane', 3, 3, '走官方接口']];
+const PLAN = SIMPLE
+  ? [['视频', ['xhs', 'dy', 'bili'], '每支成片发到所有接入的平台（默认方案）']]
+  : [['长片 · 中文', ['xhs', 'dy', 'sph', 'bili', 'web'], '先发'], ['长片 · English', ['tk', 'yt'], '中文版发出后第二天'], ['短片 · 中文', ['xhs', 'dy', 'sph'], '长片之后，隔一天一支'], ['短片 · English', ['tk', 'yt'], '跟着中文版，第二天']];
+let relogin = null;
+function draw() {
+  const up = upcoming(); const iss = issues();
+  main.innerHTML = `
+  <div class="hd"><h1>系统</h1><span class="sub">${iss.length ? `有 ${iss.length} 件事要处理` : '一切正常'}</span><span class="demo r">演示数据</span></div>
+  <h2 class="sec" style="margin-top:0">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>
+  <div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${GROUPS.map((g) => { const n = g === GROUP ? todoCount() : (g.id === 'main' ? MAIN_TODO : 1); return `<tr><td><b style="font-weight:600">${g.name}</b></td><td class="sub">${g.sub}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td><td class="n">${g === GROUP ? '<span class="sub">当前</span>' : `<a class="btn" href="system.html${g.q}" data-sw>切过去</a>`}</td></tr>`; }).join('')}</tbody></table></div>
+  <div class="cmd">对应命令：<code>vk group list</code>　<code>vk group add &lt;名字&gt;</code>　<code>vk group use &lt;名字&gt;</code>　飞书卡片标题会带上账号组的名字。<button class="link" data-newg>新建账号组</button></div>
+  <h2 class="sec">账号 · ${GROUP.name}</h2>
+  <div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ACC.map(([k, name, left, cap, note]) => `<tr><td>${pfn(k)}</td><td>${esc(name)}</td><td>${relogin === k ? '<span class="st wait">等你扫码</span>' : `<span class="st done">正常</span> <span class="sub">今天 07:10 检查过</span>`}</td><td>${cap == null ? '<span class="sub">不限</span>' : `${left} 条 <span class="sub">每天最多 ${cap} 条</span>`}</td><td class="sub">${note}</td><td class="n">${k === 'web' ? '' : `<button class="${relogin === k ? 'btn pri' : 'link'}" data-re="${k}">${relogin === k ? '我扫好了' : '重新登录'}</button>`}</td></tr>`).join('')}</tbody></table></div>
+  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account login &lt;平台&gt;</code>　登录在发布机上完成；二维码会同时发到飞书。</div>
+
+  <h2 class="sec">发布方案 · ${GROUP.name} · 哪种成片发到哪些平台、按什么节奏</h2>
+  <div class="tblwrap"><table class="plan"><thead><tr><th>成片</th><th>发到</th><th>节奏</th><th class="n"></th></tr></thead><tbody>${PLAN.map(([n, ps, rh], i) => `<tr><td>${n}</td><td><div class="pfs">${ps.map(pfn).join('')}</div></td><td class="sub">${rh}</td><td class="n"><button class="btn" data-plan="${i}">改</button></td></tr>`).join('')}</tbody></table></div>
+  <div class="cmd">这是你自己的习惯，可以改；新作品入库时按它生成平台稿和建议时间，每条仍然要你确认。对应命令：<code>vk plan show</code></div>
+
+  <div class="two">
+    <div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv"><dt>这台电脑</dt><dd><span class="st done">在线</span> <span class="sub">1 分钟前有心跳</span></dd><dt>排着要发</dt><dd>${up.length} 条已确认${up.length ? `，最近一条 ${when(up[0].x.at).text}` : ''}</dd><dt>正在发</dt><dd>没有</dd><dt>等你确认</dt><dd>${WORKS.reduce((n, w) => n + pendingOf(w).length, 0)} 条 <span class="sub">没确认的到时间也不会发</span></dd></dl></div>
+      <div class="cmd">对应命令：<code>vk doctor --human</code></div></div>
+    <div><h2 class="sec">平台规则 · 对所有人一样，不能关</h2><div class="panel"><dl class="kv"><dt>确认</dt><dd>每一条都要人确认后才会发</dd><dt>小红书</dt><dd>每条单独确认，不能批量</dd><dt>间隔</dt><dd>同一个平台两条之间至少隔 4 小时 <span class="sub">默认值</span></dd><dt>AI 标注</dt><dd>每个平台按它的要求标注</dd></dl></div>
+      <div class="cmd">你改的时间碰到规则时，会当场告诉你并给出最近的可用时间。</div></div>
+  </div>
+
+  <h2 class="sec">最近出的问题</h2>
+  ${iss.length ? `<div class="tblwrap"><table><tbody>${iss.map((r, i) => `<tr><td><a class="wcell" href="work.html#id=${r.w.id}&cut=${r.c.id}"><img class="cv" src="${r.w.cover}" width="48" height="36" alt=""><span><b>${esc(r.w.title)}</b><span class="sub">${esc(r.c.name)} · ${when(r.x.at).day}</span></span></a></td><td>${pfn(r.x.pf)}</td><td><span class="st bad">${esc(r.x.issue.what)}</span><div class="sub">${esc(r.x.issue.why)}</div></td><td class="n"><button class="btn pri" data-p="${i}">再试一次</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>'}
+  <div class="cmd">对应命令：<code>vk runs --failed</code>　手机上的通知和确认都在飞书里：<a class="link" href="feishu.html">看飞书卡片长什么样</a></div>`;
+}
+main.addEventListener('click', (e) => { if (e.target.closest('[data-sw]')) { setTimeout(() => location.reload(), 0); return; } if (e.target.closest('main [data-newg]')) { toast('原型里不能建；实现后在这里建，或用 vk group add'); return; } const b = e.target.closest('[data-re],[data-plan],[data-p]'); if (!b) return; const ds = b.dataset;
+  if (ds.re) { if (relogin === ds.re) { relogin = null; toast('登录正常'); } else { relogin = ds.re; toast(`二维码已发到飞书，用${PF[ds.re][1]} App 扫`); } draw(); }
+  else if (ds.plan) toast('原型里不能改；实现后在这里改，或用 vk plan edit');
+  else { issues()[+ds.p].x.issue.done = true; toast('正在重试'); changed(); } });
+listeners.push(draw); draw();
+</script></body></html>

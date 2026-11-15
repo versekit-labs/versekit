@@ -5,3 +5,6 @@ node_modules/
 *.db-wal
 *.db-shm
 coverage/
+
+# 设计原型的本地演示视频（太大，不入库；缺了页面只显示封面）。封面在 docs/design/demo/covers/，已入库
+docs/design/demo/videos

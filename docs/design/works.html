@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>作品 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+.bar input{margin-left:auto;width:220px}
+.pfs{display:flex;gap:4px;flex-wrap:wrap}
+.pf.off{background:none;border:1px solid var(--ctl);color:var(--ink2)}
+.pf.err{background:var(--bad)}
+.legend{margin-top:10px;font-size:12px;color:var(--ink2);display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+@media (max-width:860px){.bar input{margin-left:0;width:100%}}
+</style></head>
+<body><div class="app">
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<a class="nv" href="today.html">今天<b data-todo hidden></b></a>
+<a class="nv" href="works.html" aria-current="page">作品</a>
+<a class="nv" href="data.html">数据</a>
+<a class="nv" href="system.html">系统</a></nav>
+<main>
+<div class="hd"><h1>作品</h1><span class="sub" id="count"></span><span class="demo r">演示数据</span></div>
+<div class="bar"><div class="seg" id="seg" role="group" aria-label="按状态筛选"></div><input type="search" id="q" placeholder="搜标题" aria-label="搜标题"></div>
+<div id="list"></div>
+<div class="legend"></div>
+<div class="cmd">对应命令：<code>vk work list</code>　入库：<code>vk work add 视频.mp4</code></div>
+</main></div>
+<script src="app.js"></script>
+<script>
+initShell();
+const FIL = [['all', '全部'], ['wait', '等你确认'], ['sched', '排着要发'], ['pub', '都发完了'], ['bad', '有问题']];
+let fil = 'all', q = '';
+const order = ['xhs', 'dy', 'sph', 'bili', 'web', 'mp', 'tk', 'yt'];
+function chips(w) {
+  const by = {}; w.cuts.flatMap((c) => c.pubs).forEach((x) => (by[x.pf] ||= []).push(x));
+  return order.filter((k) => by[k]).map((k) => { const xs = by[k]; const bad = xs.some((x) => x.issue && !x.issue.done); const pubd = xs.filter((x) => x.state === 'published').length;
+    const tip = bad ? '出了问题' : pubd === xs.length ? '已发布' : pubd ? `已发 ${pubd} / ${xs.length}` : '还没发';
+    return `<span class="pf ${k} ${bad ? 'err' : pubd ? '' : 'off'}" title="${PF[k][1]}：${tip}">${PF[k][0]}</span>`; }).join('');
+}
+function best(w) {
+  const rs = w.cuts.flatMap((c) => c.pubs.filter((x) => x.state === 'published' && x.n != null).map((x) => ({ x, c })));
+  if (!rs.length) return '<span class="sub">还没有结果</span>';
+  const top = rs.sort((a, b) => ratio(b.x).x - ratio(a.x).x)[0]; const r = ratio(top.x);
+  return `<span class="pfn">${pf(top.x.pf)}<span class="x ${r.cls}">${r.txt}</span></span><div class="sub">${r.word}</div>`;
+}
+function draw() {
+  const rows = WORKS.filter((w) => (fil === 'all' || workState(w)[0] === fil) && w.title.toLowerCase().includes(q.toLowerCase()));
+  document.getElementById('count').textContent = `${GROUP.name} · ${WORKS.length} 个作品`;
+  document.getElementById('seg').innerHTML = FIL.map(([k, n]) => { const c = k === 'all' ? WORKS.length : WORKS.filter((w) => workState(w)[0] === k).length; return `<button data-f="${k}" aria-pressed="${k === fil}">${n}${c && k !== 'all' ? ' ' + c : ''}</button>`; }).join('');
+  document.getElementById('list').innerHTML = rows.length ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>现在</th><th>平台</th><th>最好的一条</th><th class="n">入库</th></tr></thead><tbody>${rows.map((w) => { const [cls, txt] = workState(w);
+    return `<tr><td><a class="wcell" href="work.html#id=${w.id}${SIMPLE ? '&g=camp' : ''}"><img class="cv" src="${w.cover}" width="64" height="48" alt=""><span><b>${esc(w.title)}</b><span class="sub">${w.cuts.length > 1 ? w.cuts.length + ' 支成片 · ' : ''}${w.cuts.flatMap((c) => c.pubs).length} 条平台稿</span></span></a></td><td><span class="st ${cls}">${txt}</span></td><td><div class="pfs">${chips(w)}</div></td><td>${best(w)}</td><td class="n sub">${when(w.inAt).day}</td></tr>`; }).join('')}</tbody></table></div>`
+    : `<div class="panel empty">${q ? `没有标题里带"${esc(q)}"的作品。` : '这个状态下没有作品。'} <button class="link" data-f="all">看全部</button></div>`;
+}
+document.querySelector('.legend').innerHTML = `<span><span class="pf dy">抖</span>实心：这个平台已发布</span><span><span class="pf dy off">抖</span>空心：还没发</span><span><span class="pf dy err">抖</span>红色：出了问题</span><span>"最好的一条"是和那个账号自己的平时比，不同平台之间不比较。</span>`;
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-f]'); if (!b) return; fil = b.dataset.f; if (fil === 'all') { q = ''; document.getElementById('q').value = ''; } draw(); });
+document.getElementById('q').addEventListener('input', (e) => { q = e.target.value.trim(); draw(); });
+draw();
+</script></body></html>

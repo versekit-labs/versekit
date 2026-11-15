@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作品详情 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.workhead{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.worktitle{font-size:25px;font-weight:650;letter-spacing:-.02em;line-height:1.3}
+.workmeta{margin-top:6px;color:var(--muted);font-size:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.work-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+.plats{display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));gap:10px;margin-top:16px}
+.plat{position:relative;display:flex;flex-direction:column;gap:8px;padding:12px 13px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.plat.limited{border-color:var(--amber-line);background:var(--amber-bg)}
+.plat.dead{border-color:var(--red-line);background:var(--red-bg)}
+.plat-head{display:flex;align-items:center;gap:7px}
+.plogo{width:18px;height:18px;flex:none;border-radius:4px}
+.plat-name{font-size:12px;font-weight:650}
+.plat-state{margin-left:auto}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:8px 0 2px;border-top:1px solid var(--line-soft)}
+.metric-k{color:var(--faint);font-size:12px}
+.metric-v{margin-top:1px;font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.plat-src{margin-top:auto;display:flex;align-items:center;gap:6px;color:var(--faint);font-size:12px;line-height:1.4;flex-wrap:wrap}
+.inline-action{display:inline-flex;align-items:center;min-height:32px;color:var(--amber);text-underline-offset:3px}
+
+/* 趋势 */
+.chart-wrap{margin-top:14px}
+.chart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.chart-legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+.chart-legend span{display:inline-flex;align-items:center;gap:6px}
+.legend-line{width:14px;height:2px;border-radius:4px;background:var(--navy)}
+.legend-gap{width:14px;height:8px;border-radius:4px;background:var(--red-bg);border:1px solid var(--red-line)}
+.chart{width:100%;height:auto;display:block;margin-top:10px}
+.chart text{font-family:var(--mono);font-size:12px;fill:var(--faint)}
+.chart .axis{stroke:var(--line-soft);stroke-width:1}
+.chart .grid{stroke:var(--line-soft);stroke-width:1;stroke-dasharray:2 4}
+.chart .series{fill:none;stroke:var(--navy);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .point{fill:var(--paper);stroke:var(--navy);stroke-width:2}
+.chart .point.bad{stroke:var(--red);fill:var(--red-bg)}
+.chart .gapband{fill:var(--red-bg);stroke:var(--red-line);stroke-width:1}
+.chart .gaplabel{fill:var(--red);font-family:var(--sans);font-size:12px}
+
+/* 采集记录 */
+.collog{display:flex;flex-direction:column}
+.clog{display:flex;align-items:center;gap:12px;padding:9px 16px;border-bottom:1px solid var(--line-soft);font-size:12px}
+.clog:last-child{border-bottom:0}
+.clog time{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);width:104px;flex:none}
+.clog .src{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clog .why{color:var(--faint);flex:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.two{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+@media (max-width:1100px){
+  .plats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .two{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:900px){
+  .worktitle{font-size:21px}
+  .plats{grid-template-columns:minmax(0,1fr)}
+  .work-actions .btn{flex:1;min-height:40px}
+  .clog{flex-wrap:wrap;gap:4px 10px}
+  .clog time{width:auto}
+  .clog .src,.clog .why{flex:1 1 100%}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="pl-xhs" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ff2442"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">红</text></symbol>
+  <symbol id="pl-douyin" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161823"/><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" font-family="-apple-system,PingFang SC,sans-serif">抖</text></symbol>
+  <symbol id="pl-bili" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#00a1d6"/><path d="M7.2 5.6 10 8.2M16.8 5.6 14 8.2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><rect x="4" y="8.2" width="16" height="10.6" rx="3" fill="#fff"/><path d="M10.2 11.4 14.4 13.5 10.2 15.6Z" fill="#00a1d6"/></symbol>
+  <symbol id="pl-youtube" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#f00"/><path d="M10 7.8 17 12 10 16.2Z" fill="#fff"/></symbol>
+  <symbol id="pl-tiktok" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#010101"/><path d="M14 4.4c.3 2.1 1.5 3.3 3.5 3.5v2.4c-1.3 0-2.5-.4-3.5-1.1v4.8c0 2.7-2 4.6-4.4 4.6-2.3 0-4.1-1.7-4.1-4s1.8-4 4.2-4c.3 0 .6 0 .9.1v2.5c-.3-.1-.6-.2-.9-.2-1 0-1.8.7-1.8 1.6 0 .9.7 1.6 1.7 1.6s1.8-.7 1.8-1.9V4.4H14Z" fill="#fff"/></symbol>
+</svg>
+
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="account-wall.html">versekit <span>/ vk</span></a>
+    <a class="publish" href="publish.html"><b>+</b> 发布内容</a>
+    <nav class="nav" aria-label="主导航">
+      <a href="account-wall.html" aria-current="page">账号</a>
+      <a href="publish.html">发布</a>
+      <a href="calendar.html">计划</a>
+      <a href="overview.html">总览</a>
+      <a href="runs.html">任务与日志</a>
+    </nav>
+    <div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>
+  </aside>
+
+  <main id="main"><div class="page">
+    <div class="crumb"><a href="account-wall.html">账号</a> / <span>作品</span></div>
+    <header class="workhead">
+      <div>
+        <h1 class="worktitle">《我用了 30 天 AI 剪辑，发现 3 个反常识结论》</h1>
+        <div class="workmeta">
+          <span>w_8f21</span><span>·</span><span>4 个平台已发</span><span>·</span><span>1 条仅自己可见</span><span>·</span><span>最近采集 12 分钟前</span>
+        </div>
+      </div>
+      <div class="work-actions">
+        <a class="btn" href="publish.html">再发一次</a>
+        <a class="btn" href="runs.html">看采集任务</a>
+      </div>
+    </header>
+
+    <section class="plats" aria-label="各平台数据">
+      <article data-platform="bili" class="plat">
+        <div class="plat-head">
+          <svg class="plogo" aria-hidden="true"><use href="#pl-bili"/></svg>
+          <span class="plat-name">B站</span>
+          <span class="plat-state"><span class="badge">已发布</span></span>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-k">播放</div><div class="metric-v">31,004</div></div>
+          <div><div class="metric-k">点赞</div><div class="metric-v">1,842</div></div>
+          <div><div class="metric-k">收藏</div><div class="metric-v">610</div></div>
+        </div>
+        <div class="plat-src">公开接口 · 12 分钟前 <span class="dot ok"></span></div>
+      </article>
+
+      <article data-platform="youtube" class="plat">
+        <div class="plat-head">
+          <svg class="plogo" aria-hidden="true"><use href="#pl-youtube"/></svg>
+          <span class="plat-name">YouTube</span>
+          <span class="plat-state"><span class="badge">已发布</span></span>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-k">播放</div><div class="metric-v">11,306</div></div>
+          <div><div class="metric-k">点赞</div><div class="metric-v">702</div></div>
+          <div><div class="metric-k">收藏</div><div class="metric-v">188</div></div>
+        </div>
+        <div class="plat-src">官方 API · 12 分钟前 <span class="dot ok"></span></div>
+      </article>
+
+      <article data-platform="douyin" class="plat">
+        <div class="plat-head">
+          <svg class="plogo" aria-hidden="true"><use href="#pl-douyin"/></svg>
+          <span class="plat-name">抖音</span>
+          <span class="plat-state"><span class="badge">已发布</span></span>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-k">播放</div><div class="metric-v">86,120</div></div>
+          <div><div class="metric-k">点赞</div><div class="metric-v">3,904</div></div>
+          <div><div class="metric-k">收藏</div><div class="metric-v">1,211</div></div>
+        </div>
+        <div class="plat-src">创作中心 · 12 分钟前 <span class="dot ok"></span></div>
+      </article>
+
+      <article data-platform="tiktok" class="plat limited">
+        <div class="plat-head">
+          <svg class="plogo" aria-hidden="true"><use href="#pl-tiktok"/></svg>
+          <span class="plat-name">TikTok</span>
+          <span class="plat-state"><span class="badge warn">仅自己可见</span></span>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-k">播放</div><div class="metric-v">—</div></div>
+          <div><div class="metric-k">点赞</div><div class="metric-v">—</div></div>
+          <div><div class="metric-k">收藏</div><div class="metric-v">—</div></div>
+        </div>
+        <div class="plat-src">未公开 · 数据不可用 <a href="runs.html" class="inline-action">去放行</a></div>
+      </article>
+    </section>
+
+    <div class="two">
+      <div class="stack">
+        <section class="panel chart-wrap" aria-label="播放趋势">
+          <div class="panel-head">
+            <h2>播放趋势</h2>
+            <span class="hint">B站 · YouTube · 抖音合计</span>
+          </div>
+          <div class="panel-body">
+            <div class="chart-head">
+              <div class="chart-legend">
+                <span><i class="legend-line"></i>播放</span>
+                <span><i class="legend-gap"></i>采集中断区间</span>
+              </div>
+              <span class="hint">最近 14 天 · 每 6 小时一次</span>
+            </div>
+            <svg class="chart" viewBox="0 0 640 220" role="img" aria-label="播放量从 10 月 24 日的 4.2 千增长到 11 月 6 日的 12.8 万；10 月 26 日因采集中断出现数据缺口">
+              <line class="grid" x1="54" y1="24" x2="620" y2="24"/>
+              <line class="grid" x1="54" y1="70" x2="620" y2="70"/>
+              <line class="grid" x1="54" y1="116" x2="620" y2="116"/>
+              <line class="grid" x1="54" y1="162" x2="620" y2="162"/>
+              <line class="axis" x1="54" y1="186" x2="620" y2="186"/>
+
+              <text x="48" y="28" text-anchor="end">128k</text>
+              <text x="48" y="74" text-anchor="end">96k</text>
+              <text x="48" y="120" text-anchor="end">64k</text>
+              <text x="48" y="166" text-anchor="end">32k</text>
+              <text x="48" y="190" text-anchor="end">0</text>
+
+              <rect class="gapband" x="168" y="20" width="42" height="166" rx="3"/>
+              <text class="gaplabel" x="176" y="14">中断</text>
+
+              <path class="series" d="M64 178 L104 172 L144 166 L186 158 L228 140 L270 118 L310 96 L352 78 L394 62 L436 50 L478 42 L520 34 L562 28 L604 24"/>
+
+              <circle class="point" cx="64" cy="178" r="3"/>
+              <circle class="point bad" cx="186" cy="158" r="4"/>
+              <circle class="point" cx="310" cy="96" r="3"/>
+              <circle class="point" cx="604" cy="24" r="3"/>
+
+              <text x="34" y="206">10-24</text>
+              <text x="168" y="206">10-27</text>
+              <text x="300" y="206">10-31</text>
+              <text x="436" y="206">11-03</text>
+              <text x="576" y="206">11-06</text>
+            </svg>
+            <p class="hint" style="margin-top:8px">10-26 14:10 的采集只拿到部分字段（partial），那一段曲线是插值，不是真实数据。</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="采集记录">
+          <div class="panel-head"><h2>采集记录</h2><span class="hint">来源与状态是一等公民</span></div>
+          <div class="collog">
+            <div class="clog"><time>11-06 19:12</time><span class="src">创作中心拦截</span><span class="why">3 个平台全部成功</span><span class="badge">ok</span></div>
+            <div class="clog"><time>11-06 13:12</time><span class="src">官方 API + 公开接口</span><span class="why">3 个平台全部成功</span><span class="badge">ok</span></div>
+            <div class="clog"><time>10-26 14:10</time><span class="src">创作中心拦截</span><span class="why">只拿到播放，点赞与收藏缺失</span><span class="badge warn">partial</span></div>
+            <div class="clog"><time>10-25 09:00</time><span class="src">CSV 手工导入</span><span class="why">你从后台导出的数据</span><span class="badge mute">手工</span></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel" aria-label="发布结果">
+          <div class="panel-head"><h2>发布结果</h2><span class="hint">逐平台</span></div>
+          <div class="rows">
+            <div class="row"><span class="dot ok"></span><div class="grow"><div class="row-title">B站</div><div class="row-sub">20:00 公开 · 已确认</div></div><span class="badge">published</span></div>
+            <div class="row"><span class="dot ok"></span><div class="grow"><div class="row-title">YouTube</div><div class="row-sub">20:00 公开 · 已确认</div></div><span class="badge">published</span></div>
+            <div class="row"><span class="dot ok"></span><div class="grow"><div class="row-title">抖音</div><div class="row-sub">20:00 公开 · 已确认</div></div><span class="badge">published</span></div>
+            <div class="row"><span class="dot warn"></span><div class="grow"><div class="row-title">TikTok</div><div class="row-sub">先私密后公开 · 等你放行</div></div><span class="badge warn">limited</span></div>
+            <div class="row"><span class="dot bad"></span><div class="grow"><div class="row-title">小红书</div><div class="row-sub">风控拦截 · 重试 2 次 · <span style="color:var(--red)">E_RISK_BLOCKED</span></div></div><a class="btn sm" href="runs.html">看现场</a></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="等价命令">
+          <div class="panel-head"><h2>等价命令</h2></div>
+          <div class="panel-body" style="display:flex;flex-direction:column;gap:8px">
+            <div class="cmd"><b>数据</b><code>vk stats w_8f21 --json</code></div>
+            <div class="cmd"><b>采集</b><code>vk collect w_8f21</code></div>
+            <div class="cmd"><b>放行</b><code>vk publish release p_1d</code></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="pagefoot">
+      <span>数据来源与采集状态永远写在数字旁边；没有来源的数字不可信。</span>
+      <a href="overview.html">看总览 →</a>
+    </footer>
+  </div></main>
+</div>
+<script src="store.js"></script>
+<script src="app.js"></script>
+<script>
+(function scope(){
+  const g = VK.current();
+  const list = VK.accounts(g);
+  const have = new Set(list.map(a=>a.platform));
+  document.querySelectorAll('[data-platform]').forEach(el=>{
+    const p = el.dataset.platform;
+    el.style.display = (el.classList.contains('plat') && !have.has(p)) ? 'none' : '';
+  });
+  const sub = document.querySelector('.workmeta');
+  if(sub){
+    const n = list.length;
+    sub.insertAdjacentHTML('afterbegin','<span>'+VK.groupLabel()+'</span><span>·</span>');
+  }
+  document.querySelectorAll('.plats').forEach(el=>{
+    const shown = [...el.querySelectorAll('.plat')].filter(x=>x.style.display!=='none').length;
+    el.style.setProperty('--cols', String(Math.max(1,Math.min(shown,4))));
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "schema": "2.0",
+  "config": { "update_multi": true },
+  "header": {
+    "template": "yellow",
+    "title": { "tag": "plain_text", "content": "{{cut_name}} · 第 {{index}} 支，共 {{total}} 支" },
+    "subtitle": { "tag": "plain_text", "content": "{{work_title}}" }
+  },
+  "body": {
+    "elements": [
+      { "tag": "markdown", "content": "**抖音**　{{dy_title}}\n<font color='grey'>{{dy_time}}</font>" },
+      { "tag": "hr" },
+      { "tag": "markdown", "content": "**视频号**　{{sph_title}}\n<font color='grey'>{{sph_time}}</font>" },
+      { "tag": "hr" },
+      { "tag": "markdown", "content": "**B站**　{{bili_title}}\n<font color='grey'>{{bili_time}}</font>" },
+      { "tag": "markdown", "content": "<font color='grey'>AI 生成的内容，每个平台都会按要求标注。确认之后才会排进发布；没确认的到时间也不会发。</font>" },
+      {
+        "tag": "button", "type": "primary", "width": "fill",
+        "text": { "tag": "plain_text", "content": "确认这 {{count}} 条，按时间发" },
+        "behaviors": [{ "type": "callback", "value": { "cmd": "publish.approve", "cut": "{{cut_id}}", "except": ["xiaohongshu"] } }]
+      },
+      {
+        "tag": "column_set",
+        "columns": [
+          { "tag": "column", "width": "weighted", "weight": 1, "elements": [
+            { "tag": "button", "width": "fill", "text": { "tag": "plain_text", "content": "改标题或时间" },
+              "behaviors": [{ "type": "callback", "value": { "cmd": "card.edit", "cut": "{{cut_id}}" } }] } ] },
+          { "tag": "column", "width": "weighted", "weight": 1, "elements": [
+            { "tag": "button", "width": "fill", "text": { "tag": "plain_text", "content": "这支先不发" },
+              "behaviors": [{ "type": "callback", "value": { "cmd": "publish.skip", "cut": "{{cut_id}}" } }] } ] }
+        ]
+      }
+    ]
+  }
+}

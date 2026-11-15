@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>今天 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.focus{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;padding:22px}
+.fh{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line2);flex-wrap:wrap}
+.fh .t{display:inline-flex;align-items:center;min-height:32px;font-size:18px;font-weight:700;letter-spacing:-.01em;color:inherit;text-decoration:none}
+.fh .t:hover{text-decoration:underline}
+.prog{margin-left:auto;font-size:13px;color:var(--ink2)}
+.others{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.oth{display:flex;gap:12px;align-items:center;padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px;min-width:0}
+.oth.bad{background:var(--bad-bg);border-color:var(--bad-line)}
+.oth .t{font-weight:600}
+.oth .bd{min-width:0}
+.oth .a{margin-left:auto;display:flex;gap:8px;flex:none}
+.oth .why{color:var(--bad)}
+.calm{padding:36px 28px}
+.calm h3{margin-bottom:4px}
+@media (max-width:1040px){.focus{grid-template-columns:minmax(0,1fr)}.others{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.oth{flex-wrap:wrap}.oth .a{margin-left:0}}
+</style></head>
+<body><div class="app">
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<a class="nv" href="today.html" aria-current="page">今天<b data-todo hidden></b></a>
+<a class="nv" href="works.html">作品</a>
+<a class="nv" href="data.html">数据</a>
+<a class="nv" href="system.html">系统</a></nav>
+<main id="main"></main></div>
+<script src="app.js"></script>
+<script>
+initShell();
+const main = document.getElementById('main'); let cur = HASH.cut || null;
+function draw() {
+  draw.W ||= WORKS.find((w) => pendingOf(w).length); const W = draw.W;
+  const up = upcoming(); const iss = issues();
+  const more = WORKS.filter((w) => w !== W && pendingOf(w).length);
+  const res = results().sort((a, b) => (Math.abs(Math.log(ratio(b.x).x)) >= Math.log(2)) - (Math.abs(Math.log(ratio(a.x).x)) >= Math.log(2)) || b.x.at.localeCompare(a.x.at)).slice(0, 5);
+  let focus = '';
+  if (W) {
+    const left = W.cuts.filter((c) => cutPending(c).length); const c = W.cuts.find((x) => x.id === cur) || left[0] || W.cuts[0]; cur = c.id;
+    const multi = W.cuts.length > 1; const done = W.cuts.length - left.length;
+    focus = `<div class="panel focus"><div class="fh"><span class="st ${left.length ? 'wait' : 'done'}"></span><a class="t" href="work.html#id=${W.id}${SIMPLE ? '&g=camp' : ''}">${esc(W.title)}</a><span class="sub">${when(W.inAt).text} 入库</span><span class="prog">${left.length ? (multi ? `${done} / ${W.cuts.length} 支成片已处理，还有 ${pendingOf(W).length} 条等你` : `${pendingOf(W).length} 条等你确认`) : '都处理完了'}</span></div>
+      <div id="cp"></div>
+      <div>${cutSteps(W, c.id)}
+        <div class="sidebox ${multi ? '' : 'first'}"><h2>接下来要发 · 你确认过的</h2>${up.length ? '' : '<div class="sub">还没有确认过的。</div>'}${up.slice(0, 7).map((r) => `<div class="nx"><b>${when(r.x.at).text}</b>${pf(r.x.pf)}<span class="ti" title="${esc(r.w.title)}">${r.w.cuts.length > 1 ? esc(r.c.name.split(' · ')[0]) + ' · ' : ''}${esc(r.w.title)}</span></div>`).join('')}${up.length > 7 ? `<div class="sub" style="padding-top:4px">还有 ${up.length - 7} 条在后面</div>` : ''}</div></div></div>`;
+  } else {
+    focus = `<div class="panel calm"><h3>今天没有要你处理的</h3><div class="sub">${up.length ? `接下来 ${up.length} 条已经确认过，会按时间发。最近一条：${when(up[0].x.at).text}，${PF[up[0].x.pf][1]}。` : '没有等确认的，也没有排着要发的。新作品入库后会出现在这里。'}</div></div>`;
+  }
+  main.innerHTML = `
+  <div class="hd"><h1>今天</h1><span class="sub">11 月 15 日 周日 · ${GROUP.name}</span><span class="demo r">演示数据</span></div>
+  ${focus}
+  <div class="others" ${more.length || iss.length ? '' : 'hidden'}>
+    ${more.map((w) => { const x = pendingOf(w)[0]; const n = pendingOf(w).length;
+      return n === 1 && x.solo
+        ? `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">小红书 · 建议${when(x.at).text} · 不确认就不发</div></div><div class="a"><button class="btn" data-x="manual" data-w="${w.id}">我自己发</button><button class="btn pri" data-x="confirmed" data-w="${w.id}">${when(x.at).t} 发</button></div></div>`
+        : `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div><div class="a"><a class="btn pri" href="work.html#id=${w.id}">去确认</a></div></div>`; }).join('')}
+    ${iss.map((r, i) => `<div class="oth bad"><span class="st bad"></span><img class="cv" src="${r.w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(r.w.title)}</div><div class="sub why">${PF[r.x.pf][1]}：${esc(r.x.issue.what)}</div></div><div class="a"><a class="btn" href="work.html#id=${r.w.id}&cut=${r.c.id}">看经过</a><button class="btn pri" data-p="${i}">再试一次</button></div></div>`).join('')}
+  </div>
+  ${GROUPS.filter((g) => g !== GROUP).map((g) => { const n = g.id === 'main' ? MAIN_TODO : 1; return `<div class="oth" style="margin-top:14px"><span class="st wait"></span><div class="bd"><div class="t">账号组「${g.name}」里还有 ${n} 件事等你</div><div class="sub">这一页只显示当前账号组「${GROUP.name}」的内容</div></div><div class="a"><a class="btn" href="today.html${g.q}" data-sw>切过去</a></div></div>`; }).join('')}
+  <h2 class="sec">最近结果 · 发布 24 小时的播放，和这个账号最近 20 条的中位数比</h2>
+  ${res.length ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${res.map((r) => { const q = ratio(r.x); return `<tr><td><a class="wcell" href="work.html#id=${r.w.id}&cut=${r.c.id}${SIMPLE ? '&g=camp' : ''}"><img class="cv" src="${r.w.cover}" width="48" height="36" alt=""><span><b>${esc(r.w.title)}</b><span class="sub">${r.w.cuts.length > 1 ? esc(r.c.name) + ' · ' : ''}${when(r.x.at).day} 发</span></span></a></td><td>${pfn(r.x.pf)}</td><td class="n">${fmt(r.x.n)}</td><td class="n sub">${fmt(BASE[r.x.pf])}</td><td>${typ(r.x)}</td><td class="n"><span class="x ${q.cls}">${q.txt}</span><div class="sub">${q.word}</div></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="panel empty">发布满 24 小时后，这里会出现每条和平时的对比。</div>'}`;
+  if (W) main.querySelector('#cp').append(confirmPanel(W, W.cuts.find((x) => x.id === cur), { onDone: () => { const nx = W.cuts.find((x) => cutPending(x).length); if (nx) cur = nx.id; } }));
+}
+main.addEventListener('click', (e) => { if (e.target.closest('[data-sw]')) { setTimeout(() => location.reload(), 0); return; } const b = e.target.closest('[data-c],[data-x],[data-p]'); if (!b) return; const ds = b.dataset;
+  if (ds.c) { cur = ds.c; draw(); }
+  else if (ds.x) { pendingOf(WORKS.find((w) => w.id === ds.w))[0].state = ds.x; toast(ds.x === 'manual' ? '好，这条你自己发' : '小红书这条已确认'); changed(); }
+  else if (ds.p) { issues()[+ds.p].x.issue.done = true; toast('正在重试'); changed(); } });
+listeners.push(draw); draw();
+</script></body></html>

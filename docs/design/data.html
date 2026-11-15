@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>数据 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.pl{padding:6px 18px 14px}
+.plr{display:grid;grid-template-columns:96px minmax(0,1fr) 150px;gap:16px;align-items:center;min-height:40px;border-bottom:1px solid var(--line2)}
+.plr:last-child{border-bottom:0}
+.plr.head{min-height:30px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink2);font-weight:600}
+.strip{position:relative;height:28px}
+.strip::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}
+.strip u{position:absolute;top:2px;bottom:2px;width:2px;margin-left:-1px;left:50%;background:var(--ink)}
+.strip s{position:absolute;top:8px;bottom:8px;width:1px;background:var(--ctl)}
+.strip i{position:absolute;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;background:#8d9399;border:1.5px solid var(--paper)}
+.strip i.up{background:var(--good)}.strip i.dn{background:var(--bad)}
+.axis{position:relative;height:18px}
+.axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.plr .m{text-align:right;font-size:13px}
+.bar{display:flex;gap:12px;align-items:center;margin:34px 0 8px;flex-wrap:wrap}
+.bar h2{margin-right:auto}
+.says{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:860px){.says{grid-template-columns:minmax(0,1fr)}.plr{grid-template-columns:72px minmax(0,1fr)}.plr .m{display:none}}
+</style></head>
+<body><div class="app">
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<a class="nv" href="today.html">今天<b data-todo hidden></b></a>
+<a class="nv" href="works.html">作品</a>
+<a class="nv" href="data.html" aria-current="page">数据</a>
+<a class="nv" href="system.html">系统</a></nav>
+<main id="main"></main></div>
+<script src="app.js"></script>
+<script>
+initShell();
+const main = document.getElementById('main'); let days = 30, onlyPf = 'all', sort = 'x';
+const pos = (x) => Math.max(0, Math.min(1, (Math.log2(x) + 2) / 4)) * 100; // 0.25 倍 … 4 倍，对数刻度，平时在正中
+const median = (a) => { const s = [...a].sort((p, q) => p - q); const m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
+function draw() {
+  const since = new Date(new Date(TODAY) - days * 864e5).toISOString().slice(0, 10);
+  const all = results().filter((r) => r.x.at >= since);
+  const pfs = Object.keys(PF).filter((k) => all.some((r) => r.x.pf === k));
+  const rows = all.filter((r) => onlyPf === 'all' || r.x.pf === onlyPf).sort((a, b) => sort === 'x' ? ratio(b.x).x - ratio(a.x).x : b.x.at.localeCompare(a.x.at));
+  const ranked = [...all].sort((a, b) => ratio(b.x).x - ratio(a.x).x); const top = ranked[0], low = ranked[ranked.length - 1];
+  const name = (r) => `${esc(r.w.title)}${r.w.cuts.length > 1 ? '（' + esc(r.c.name) + '）' : ''}`;
+  main.innerHTML = `
+  <div class="hd"><h1>数据</h1><span class="sub">${GROUP.name} · ${all.length} 条发布满 24 小时</span><span class="r"><span class="demo">演示数据</span><span class="seg" role="group" aria-label="时间范围">${[[7, '最近 7 天'], [30, '最近 30 天']].map(([n, t]) => `<button data-d="${n}" aria-pressed="${n === days}">${t}</button>`).join('')}</span></span></div>
+  ${all.length ? `
+  <h2 style="margin-bottom:8px">各平台 · 一个点是一条，位置是它相当于这个账号平时的几倍</h2>
+  <div class="panel pl">
+    <div class="plr head"><span>平台</span><div class="axis"><span style="left:0;transform:none">0.25 倍</span><span style="left:25%">0.5 倍</span><span style="left:50%;color:var(--ink)">平时</span><span style="left:75%">2 倍</span><span style="left:100%;transform:translateX(-100%)">4 倍</span></div><span class="m">条数 · 这段时间的中位数</span></div>
+    ${pfs.map((k) => { const rs = all.filter((r) => r.x.pf === k);
+      return `<div class="plr">${pfn(k)}<div class="strip" role="img" aria-label="${PF[k][1]}：${rs.length} 条，最高 ${ratio(rs.reduce((a, b) => ratio(a.x).x > ratio(b.x).x ? a : b).x).txt}"><s style="left:25%"></s><s style="left:75%"></s><u></u>${rs.map((r) => { const q = ratio(r.x); return `<i class="${q.cls}" style="left:${pos(q.x).toFixed(1)}%" title="${esc(r.w.title)} · ${q.txt}"></i>`; }).join('')}</div><span class="m">${rs.length} 条 · ${fmt(median(rs.map((r) => r.x.n)))}${rs.length < 5 ? '<div class="sub">条数少，只能看个大概</div>' : ''}</span></div>`; }).join('')}
+  </div>
+  <div class="cmd">不同平台的播放数不相加，也不互相比较；每个平台只和自己比。</div>
+  <h2 class="sec">这段时间值得说的</h2>
+  <div class="says">
+    ${ratio(top.x).x >= 2 ? `<div class="note"><b>最好：${PF[top.x.pf][1]} · <span class="x up">${ratio(top.x).txt}</span></b><div>${name(top)}，24 小时 ${fmt(top.x.n)} 播放，平时 ${fmt(BASE[top.x.pf])}。${top.w.insight ? esc(top.w.insight) : ''}</div><a class="link" href="work.html#id=${top.w.id}&cut=${top.c.id}${SIMPLE ? '&g=camp' : ''}">打开这个作品</a></div>` : '<div class="note">这段时间没有哪条明显好过平时（2 倍以上）。</div>'}
+    ${ratio(low.x).x <= 0.5 ? `<div class="note"><b>最差：${PF[low.x.pf][1]} · <span class="x dn">${ratio(low.x).txt}</span></b><div>${name(low)}，24 小时 ${fmt(low.x.n)} 播放，平时 ${fmt(BASE[low.x.pf])}。同一支成片在别的平台和平时差不多，原因还看不出来。</div><a class="link" href="work.html#id=${low.w.id}&cut=${low.c.id}${SIMPLE ? '&g=camp' : ''}">打开这个作品</a></div>` : '<div class="note">这段时间没有哪条明显差过平时（一半以下）。</div>'}
+  </div>
+  <div class="bar"><h2>每一条</h2><span class="seg" role="group" aria-label="按平台筛选"><button data-pf="all" aria-pressed="${onlyPf === 'all'}">全部</button>${pfs.map((k) => `<button data-pf="${k}" aria-pressed="${onlyPf === k}">${PF[k][1]}</button>`).join('')}</span><span class="seg" role="group" aria-label="排序"><button data-s="x" aria-pressed="${sort === 'x'}">按倍数</button><button data-s="t" aria-pressed="${sort === 't'}">按时间</button></span></div>
+  <div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th>发布</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${rows.map((r) => { const q = ratio(r.x); return `<tr><td><a class="wcell" href="work.html#id=${r.w.id}&cut=${r.c.id}${SIMPLE ? '&g=camp' : ''}"><img class="cv" src="${r.w.cover}" width="48" height="36" alt=""><span><b>${esc(r.w.title)}</b>${r.w.cuts.length > 1 ? `<span class="sub">${esc(r.c.name)}</span>` : ''}</span></a></td><td>${pfn(r.x.pf)}</td><td class="sub">${when(r.x.at).day}</td><td class="n">${fmt(r.x.n)}</td><td class="n sub">${fmt(BASE[r.x.pf])}</td><td>${typ(r.x)}</td><td class="n"><span class="x ${q.cls}">${q.txt}</span></td></tr>`; }).join('')}</tbody></table></div>
+  <div class="cmd">对应命令：<code>vk stats --since ${days}d</code>　"平时"= 这个账号最近 20 条在发布 24 小时的播放中位数；2 倍以上算好，一半以下算差。</div>`
+  : '<div class="panel empty">这段时间还没有发布满 24 小时的内容。</div>'}`;
+}
+main.addEventListener('click', (e) => { const b = e.target.closest('[data-d],[data-pf],[data-s]'); if (!b) return; const ds = b.dataset;
+  if (ds.d) { days = +ds.d; onlyPf = 'all'; } else if (ds.pf) onlyPf = ds.pf; else sort = ds.s; draw(); });
+draw();
+</script></body></html>
