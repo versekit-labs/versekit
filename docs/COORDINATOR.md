@@ -64,9 +64,12 @@ bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它
 | 超时 / 空结果 | 也跑一轮 `cycle.sh`（门禁晚绿的 PR 靠它合并），继续等 | 不退出 |
 | `escalation` / `question` / `worker_done` failed | **不 ack**，把消息打印出来 | 10 |
 | 连续 3 次空等且 `worker-list` 说有 worker 需要处理 | 列出那几行 | 11 |
+| 在跑的 worker 终端末尾出现额度/限流错误（`exceeded … quota`、`usage limit`、`HTTP 429`），或终端输出超过 30 分钟（`COORD_STALL_SECS`，默认 1800）没变化 | **下一次检查**就停下，打印 issue 号、dispatch id、原因（额度用尽 / 疑似卡住）和 `worker-read` 末尾几行；不自动 `worker-stop` / kill，由你确认后 stop 再重派 | 11 |
 | 等待被取消或 `check` 报错 | 说明原因 | 12 |
 | 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:ready`，再重新启动 | 13 |
 | 没有在跑的 worker，也没有新单可派 | 结束 | 0 |
+
+退出码 11 的停摆检测不看 `lastHeartbeatAt`（正常干活的 worker 心跳也可能只有派出时一次），只看终端输出；上次输出摘要与时间存在 `~/.orca/versekit-state/worker-watch/`，不进仓库。
 
 退出码 10 / 13 时轮到你：按下表处理，`orca orchestration check --run "$RUN" --ack <deliveryId> --json`，再重新启动脚本。
 手动走这一圈时的等价命令：
