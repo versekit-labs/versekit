@@ -48,10 +48,10 @@ npm run ci
 - [ACC-account-03] 空组：五个缺口 + 一句引导，不能白屏。
 - [ACC-account-04] 状态文案与接口一致：`/api/accounts` 返回 `state=ok` 时页面显示「正常」，不得显示「即将过期」；同一平台只渲染一个槽位。
 - [ACC-account-05] 在账号页点「重新登录」并在弹出的窗口里完成登录后，不用刷新、不用再点别的：页面自己检查登录态，成功才把该账号显示为「正常」；没登录成功时不得显示成功，也不得保持「已失效」不变（小红书、B站都要）。数据库里的 `account.state` 与页面一致。
-- [ACC-account-06] 小红书扫码登录不弹窗口：在账号页对小红书账号点「重新登录」，页面里直接显示二维码（后台无头 Chrome 取自创作服务平台登录页），**屏幕上不出现新的浏览器窗口**；用手机小红书扫码并确认后，页面无需刷新自己变为「正常」。验收人必须用「测试探针」组的 `@测试` 亲自扫一次（协调器可代为请用户扫码），并在关闭该账号 Chrome 后再做一次账号检查，仍为 `ok`。
+- [ACC-account-06] （真机部分**仅用户本人在自己电脑上执行**；开发机上的验收只用 stub driver / 录制的登录页，不打开真实平台页面）小红书扫码登录不弹窗口：在账号页对小红书账号点「重新登录」，页面里直接显示二维码（后台无头 Chrome 取自创作服务平台登录页），**屏幕上不出现新的浏览器窗口**；扫码确认后，页面无需刷新自己变为「正常」。开发机验收：用录制页面 / stub 模拟「出码 → 已扫 → 确认成功」，验证页面无窗口、自动变「正常」。真机核对（用 `@测试` 扫一次，关闭该账号 Chrome 后再做一次账号检查仍为 `ok`）写进 PR 的「待人工」，由用户在与手机同网的电脑上做。
 - [ACC-account-07] 二维码过期（约 1–2 分钟）时页面自动换新二维码或给出「刷新」并能换新；已扫未确认时显示「请在手机上确认」；失败（被风控、页面结构变化）时用人话说明并给出备用入口：短信验证码登录、打开登录窗口。不得静默卡住。
 - [ACC-account-08] CLI 同等可用：`vk account login <id> --qr` 输出二维码图片路径并等待到成功或过期；`vk account login <id> --phone <11 位手机号>` 与 `--code <验证码>` 能被正确解析（单元测试覆盖参数解析；不得在测试里真的发短信）。
-- [ACC-account-09] 状态不冒充：账号行显示「上次检查时间」；超过 24 小时未检查的显示「待确认」而不是「正常」。发布创建/排队时对目标账号做一次真实检查，未登录直接拦下并提示「重新登录」，publish 不落到执行阶段才失败。
+- [ACC-account-09] 状态不冒充：账号行显示「上次检查时间」；超过 24 小时未检查的显示「待确认」而不是「正常」。发布创建/排队时对目标账号做一次真实检查（指调用适配器的 `check()`，而不是读库里的旧状态），未登录直接拦下并提示「重新登录」，publish 不落到执行阶段才失败。开发机验收用 stub driver 让 `check()` 返回未登录来验证拦截；真实平台上的检查列为「待人工」。
 - 实现提示 命令：`vk account list --group <g>`、`vk account reauth <id>`、`vk account remove <id>`
 
 ### 选择账号组 `groups.html`
@@ -172,6 +172,8 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-cycle-08 | 准备两个互不相关的 `s:ready` issue（涉及文件不相交），`bin/cycle.sh --max 2` | 每个 issue 各得到**独立 worktree、独立终端、独立 Dispatch**，不会把两个 issue 塞进同一 worktree；`dispatch-<id>.json` 各记各的 issue |
 | ACC-harness-cycle-09 | 准备两个 `s:ready` issue，「涉及」里列了同一个文件 | 只派其中一个，另一个保持 `s:ready` 并在日志写明「与 #N 涉及同一文件，串行」；工单没写「涉及」的文件时按串行处理 |
 | ACC-harness-cycle-10 | `git ls-files bin`；对同一 PR 在验收未结束时连续跑两轮 `bin/cycle.sh` | 仓库里不存在 `bin/cycle.sh-E`；同一 PR 同一 head 不会被重复派验收（沿用验收锁）；并行 lane 数有上限（默认 3，可配置）；旧 lane 的 worktree 空闲后可复用，不无限新建 |
+| ACC-harness-cycle-11 | 删掉本地分支 `issue-N-lane-1` 与 `rework-N` 目录（远端分支保留），让 `bin/cycle.sh --max 1` 为该 issue 新建返工 worktree | `ensure_rework_worktree` 的 stdout **只有** `path:<绝对路径>` 一行，git 的提示（如 `branch '…' set up to track '…'`）不得混入；`worker-start` 第一次就成功，不出现 `selector_not_found`（2026-11-15 #101 返工三连败的根因）|
+| ACC-harness-cycle-12 | 用假 `orca` 让某个在跑的 worker：(a) `worker-read` 末尾出现额度/限流错误（`exceeded … quota`、`usage limit`、`HTTP 429`）；(b) 终端输出连续 30 分钟没有变化 | 循环**不得**再报「worker 仍在跑，无需处理」：(a) 下一次检查就以退出码 11 停下，(b) 30 分钟到点以退出码 11 停下；日志写明 issue 号、dispatch id、原因（额度用尽/疑似卡住）和 `worker-read` 末尾几行（不含密钥）。不自动 kill，由协调器决定 `worker-stop` 后重派。不以 `lastHeartbeatAt` 判活（正常干活的 worker 心跳也可能只有派出时一次）（2026-11-15 #102 验收因火山周额度用尽空挂近 1 小时）|
 | ACC-harness-leak-01 | 假 `orca` 包装脚本：让一个 worker 完成并被 `cycle.sh` 处理（ack）后，查看 `terminal close` 调用 | 该 worker 的终端被自动关闭；验收 worker 同理；仍在运行的 worker 终端不被关；关闭失败只写日志，不阻断整轮 |
 | ACC-harness-leak-02 | 假 `orca` 与假 `dsh-model.sh`：`$role.channel` 记录 volc，本轮选 qwen，跑 `ensure_terminal` | 先关闭旧终端、再新建；日志含「通道切换，已关旧终端」；不出现两个终端同时留存 |
 | ACC-harness-leak-03 | 假 `orca` 返回超过「lane 数 + 2」个已完成未关的 worker 终端，跑 `bin/cycle.sh --max 1` | 派工前先清理已完成终端；清完仍超上限则不再开新终端并写 `cycle-owner-alert.txt`；上限可配置 |
