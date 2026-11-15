@@ -20,6 +20,24 @@ import { sleep } from "../../driver-browser/src/index.mjs";
 
 export const MAX_IMAGE_NOTE_IMAGES = 18;
 
+/** 发布接口响应 → 笔记 id；响应不是成功或没有 id 返回 null。视频与图文共用这一份。 */
+export function noteIdFromPublishResponse(body) {
+  if (!body || typeof body !== "object") return null;
+  if (!(body.success === true || body.code === 0)) return null;
+  const d = body.data ?? {};
+  const id = d.id ?? d.note_id ?? d.noteId ?? (Array.isArray(d.note_ids) ? d.note_ids[0] : null) ?? d.note?.id;
+  return id ? String(id) : null;
+}
+
+/** 钩子记下的一条提交回执 → 笔记 id（回执不是 JSON / 没有 id 时为 null）。 */
+function noteIdOfRecord(rec) {
+  try {
+    return noteIdFromPublishResponse(JSON.parse(rec?.body || "null"));
+  } catch {
+    return null;
+  }
+}
+
 // 小红书图文只收这四种；gif/heic 等在 core 里算「图片」，但平台不收，所以在适配器里再挡一次。
 export const IMAGE_NOTE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
@@ -131,6 +149,7 @@ export async function waitPublishOutcome(tab, { timeout = 120e3, every = 500 } =
 //     没发出且按钮仍可点，才按退避间隔再点，直到提交阶段的时间预算用完。
 // 提交接口的响应体是平台自己的话：失败时把它原样带给人，而不是「等不到结果」。
 const SUBMIT_URL = String.raw`/\/web_api\/sns\/v\d+\/note(?:[?#]|$)/`;
+const NOTE_MANAGER = "https://creator.xiaohongshu.com/new/note-manager";
 const UPLOAD_URL = String.raw`/ros-upload|\/spectrum\//`;
 
 export const NET_HOOK = `(() => {
@@ -224,13 +243,20 @@ export const UPLOAD_SETTLE_MS = 60e3; // 点之前最多等图片上传请求清
 export const RETRY_GAPS_MS = [8e3, 15e3, 25e3, 40e3, 60e3]; // 没发出提交时，再点之前分别等多久
 
 /**
- * 点「发布」并确认它真的提交了。返回 { state: "published", clicks, submitted }；
- * 平台拒绝抛 platform_reject（带平台原话），一直提交不出去 / 提交后没结局抛 flaky_ui（说清停在哪）。
+ * 点「发布」并确认它真的提交了。返回 { state: "published", noteId, clicks, submitted }；
+ * 平台拒绝抛 platform_reject（带平台原话）。
+ *
+ * 点击之后判不出结果一律抛 result_unconfirmed（ACC-publish-09）：帖子可能已发出，可重试的
+ * flaky_ui 会让队列重试 / 转草稿而重复发帖。抛之前先调一次 `verify(sinceMs)` 去笔记管理
+ * 按标题 + 时间核对，核对到就改判成功（ACC-publish-08）。点击之前的失败（第一下点击本身
+ * 就抛错）原样上抛，仍按原重试规则。
+ *
+ * `onClicked` 在第一下点击成功送出后调用，让调用方知道「已经点过了」。
  */
 export async function submitAndWait(
   tab,
   step = () => {},
-  { budgetMs = SUBMIT_BUDGET_MS, settleMs = UPLOAD_SETTLE_MS, gaps = RETRY_GAPS_MS, every = 500 } = {},
+  { budgetMs = SUBMIT_BUDGET_MS, settleMs = UPLOAD_SETTLE_MS, gaps = RETRY_GAPS_MS, every = 500, verify = async () => null, onClicked = () => {} } = {},
 ) {
   await tab.eval(NET_HOOK).catch(() => {});
   const start = Date.now();
@@ -245,13 +271,33 @@ export async function submitAndWait(
   }
 
   let clicks = 0;
+  let firstClickAt = 0;
   let observable = false; // 钩子确实看到过页面请求，才能把「没看到提交」当作「没提交」
   let last = null;
+
+  // 判不出结果：先去笔记管理核对一次，核对到就是成功；否则「结果待确认」。
+  const settle = async (reason) => {
+    step("核对笔记管理");
+    const found = await Promise.resolve(verify(firstClickAt)).catch(() => null);
+    if (found) return { state: "published", noteId: String(found), clicks, submitted: true };
+    throw new AdapterError("result_unconfirmed", `已点击发布、未确认结果，请到笔记管理核对（${NOTE_MANAGER}）：${reason}`);
+  };
+
   for (;;) {
     const before = (await snapshot(tab))?.submits?.length ?? 0;
     clicks += 1;
     step(clicks === 1 ? "点击发布" : `第 ${clicks} 次点击发布（上一次平台没有发出提交）`);
-    await tab.clickInShadow("xhs-publish-btn", "发布");
+    if (clicks === 1) {
+      firstClickAt = Date.now();
+      await tab.clickInShadow("xhs-publish-btn", "发布"); // 第一下就失败 = 点击之前的失败，原样上抛
+      onClicked();
+    } else {
+      try {
+        await tab.clickInShadow("xhs-publish-btn", "发布");
+      } catch (err) {
+        return await settle(`再次点击发布时出错：${err.message}`);
+      }
+    }
 
     const gap = gaps[Math.min(clicks - 1, gaps.length - 1)];
     const windowEnd = Math.min(deadline, Date.now() + gap);
@@ -262,18 +308,26 @@ export async function submitAndWait(
       if (!s) continue;
       last = s;
       if (s.seen > 0) observable = true;
-      if (outcomeOf(s)) return { state: "published", clicks, submitted: submitted || s.submits.length > before };
+      if (outcomeOf(s)) {
+        // 页面说成功了，但笔记 id 只认接口回执；回执里没有就去笔记管理核对，不拿标题冒充。
+        const id = s.submits.map(noteIdOfRecord).find(Boolean);
+        if (id) return { state: "published", noteId: id, clicks, submitted: submitted || s.submits.length > before };
+        return await settle("页面出现成功提示，但发布接口回执里没有笔记 id");
+      }
       const mine = s.submits.slice(before);
       if (mine.length) {
         if (!submitted) step("平台已收到提交，等待结果");
         submitted = true;
-        const verdict = submitVerdict(mine[mine.length - 1]);
+        const rec = mine[mine.length - 1];
+        const verdict = submitVerdict(rec);
         if (verdict.state === "rejected") {
           throw new AdapterError("platform_reject", `小红书拒绝了这条图文：${verdict.message}`);
         }
-        // 接口已确认收下：给页面几秒跳成功页；不跳也算发出（平台回执比页面文案可靠）。
-        if (verdict.state === "ok" && Date.now() - mine[mine.length - 1].done > 15e3) {
-          return { state: "published", clicks, submitted: true };
+        if (verdict.state === "ok") {
+          const id = noteIdOfRecord(rec);
+          if (id) return { state: "published", noteId: id, clicks, submitted: true };
+          // 接口收下了但回执里没有 id：给页面几秒跳成功页，仍无 id 就去笔记管理找。
+          if (Date.now() - rec.done > 15e3) return await settle("发布接口已确认收下，但回执里没有笔记 id");
         }
       } else if (s.btn.startsWith("true|")) {
         // 按钮进入「提交中」：同样不能再点，延长等待到预算结束。
@@ -282,10 +336,7 @@ export async function submitAndWait(
     }
 
     if (submitted) {
-      throw new AdapterError(
-        "flaky_ui",
-        `已经点了发布、平台也开始处理了，但 ${Math.round((Date.now() - start) / 1000)} 秒内没有等到结果：先去小红书「笔记管理」看这条是否已发出，确认没有再重试，避免重复发帖`,
-      );
+      return await settle(`平台已开始处理，但 ${Math.round((Date.now() - start) / 1000)} 秒内没有等到结果`);
     }
     const remaining = deadline - Date.now();
     const clickable = last?.btn === "false|false";
@@ -295,10 +346,7 @@ export async function submitAndWait(
         : !observable
           ? "页面请求观察不到，为避免重复发帖不再连点"
           : "按钮一直可点、图片上传已结束";
-      throw new AdapterError(
-        "flaky_ui",
-        `点了 ${clicks} 次「发布」，平台一直没有发出提交请求（${why}）：这条图文没有发出去，可以直接重试`,
-      );
+      return await settle(`点了 ${clicks} 次「发布」，平台一直没有发出提交请求（${why}）`);
     }
   }
 }
@@ -361,10 +409,10 @@ async function setVisibility(tab, text, clickOn) {
 /**
  * 图文发布主流程。调用方已保证 tab 停在发表页且本地校验通过；这里只做页面动作。
  *
- * 返回 `{ state, visibility, missed }`，由 index.mjs 补 id / url / followups——
+ * 返回 `{ state, noteId, visibility, missed }`（noteId 来自发布接口回执或笔记管理核对），由 index.mjs 补 id / url / followups——
  * 适配器不认识数据库，也不迁移状态。
  */
-export async function publishImageNote(tab, { note, plan, step = () => {}, clickOn, addTag, fillTitle, fillBody }) {
+export async function publishImageNote(tab, { note, plan, step = () => {}, clickOn, addTag, fillTitle, fillBody, verify, onClicked }) {
   step("切换到上传图文");
   if (!(await tab.eval(IMAGE_INPUT_READY))) {
     // 页面默认停在「上传视频」；点页签切过去。找不到页签时给出候选文案便于排障。
@@ -417,7 +465,7 @@ export async function publishImageNote(tab, { note, plan, step = () => {}, click
     [],
     { timeout: 20e3, what: "发布按钮可用" },
   );
-  const outcome = await submitAndWait(tab, step);
+  const outcome = await submitAndWait(tab, step, { verify, onClicked });
 
-  return { state: outcome.state, visibility: plan.visibility, missed };
+  return { state: outcome.state, noteId: outcome.noteId, visibility: plan.visibility, missed };
 }

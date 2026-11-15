@@ -197,7 +197,7 @@ const fast = { budgetMs: 2000, settleMs: 300, gaps: [80, 120, 160], every: 10 };
 test("提交：点一次就发出提交且接口确认 → published，只点一次", async () => {
   const { page, tab } = fakePage({
     onClick: (p) => {
-      p.submits.push({ at: Date.now(), status: 200, body: JSON.stringify({ success: true, code: 0 }), done: Date.now() });
+      p.submits.push({ at: Date.now(), status: 200, body: JSON.stringify({ success: true, code: 0, data: { id: "n-real-1" } }), done: Date.now() });
       p.url = "https://creator.xiaohongshu.com/publish/success";
     },
   });
@@ -212,7 +212,7 @@ test("提交：前几次点击没发出提交请求 → 按退避再点，直到
   const { page, tab } = fakePage({
     onClick: (p) => {
       if (p.clicks < 3) return; // 前两下：事件到了按钮，但平台没有发出提交（验收现场）
-      p.submits.push({ at: Date.now(), status: 200, body: "{}", done: Date.now() });
+      p.submits.push({ at: Date.now(), status: 200, body: JSON.stringify({ success: true, data: { note_id: "n-real-2" } }), done: Date.now() });
       p.text = "发布成功";
     },
   });
@@ -237,11 +237,11 @@ test("提交：已发出提交就绝不再点（避免重复发帖），回执�
   assert.equal(page.clicks, 1);
 });
 
-test("提交：一直没发出提交 → 预算内停手，flaky_ui 说清点了几次、没发出去、可以重试", async () => {
+test("提交：一直没发出提交 → 预算内停手，核对不到就 result_unconfirmed（点击之后不再可重试）", async () => {
   const { page, tab } = fakePage({ onClick: () => {} });
   await assert.rejects(
     submitAndWait(tab, () => {}, { ...fast, budgetMs: 600 }),
-    (err) => err instanceof AdapterError && err.code === "flaky_ui" && /点了 \d+ 次「发布」/.test(err.message) && /没有发出去/.test(err.message),
+    (err) => err instanceof AdapterError && err.code === "result_unconfirmed" && /点了 \d+ 次「发布」/.test(err.message) && /请到笔记管理核对/.test(err.message),
   );
   assert.ok(page.clicks >= 2, `应当重试过，实际 ${page.clicks} 次`);
 });
@@ -251,6 +251,7 @@ test("提交：图片上传请求还在途时先等，不在图片没就绪时�
     uploads: 2,
     onClick: (p) => {
       assert.equal(p.uploads, 0, "上传请求清零前不该点发布");
+      p.submits.push({ at: Date.now(), status: 200, body: JSON.stringify({ success: true, data: { id: "n3" } }), done: Date.now() });
       p.text = "发布成功";
     },
   });
@@ -262,7 +263,7 @@ test("提交：图片上传请求还在途时先等，不在图片没就绪时�
 test("提交：看不到页面请求（钩子失效）时最多点两次，不盲目连点", async () => {
   const { page, tab } = fakePage({ onClick: () => {} });
   page.seen = 0;
-  await assert.rejects(submitAndWait(tab, () => {}, fast), (err) => err.code === "flaky_ui" && /观察不到/.test(err.message));
+  await assert.rejects(submitAndWait(tab, () => {}, fast), (err) => err.code === "result_unconfirmed" && /观察不到/.test(err.message));
   assert.equal(page.clicks, 2);
 });
 
