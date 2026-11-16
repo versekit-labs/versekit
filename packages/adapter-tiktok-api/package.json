@@ -1,0 +1,9 @@
+{
+  "name": "@versekit-app/adapter-tiktok-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TikTok 官方接口适配器：Login Kit（Desktop）授权 + Content Posting API 发布；与浏览器自动化的 adapter-tiktok 并列，按账号二选一",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}

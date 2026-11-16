@@ -15,7 +15,7 @@ import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf } from "../../core/src/store.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
@@ -889,7 +889,10 @@ async function cmdAccount() {
     if (human) {
       if (data.group) console.log(`账号组：${data.group.name}`);
       if (!data.accounts.length) console.log(`还没有账号：vk account add tiktok --group ${data.group?.name ?? "<组>"} --name 主号`);
-      for (const a of data.accounts) console.log(`${a.id.padEnd(16)}${a.platform.padEnd(12)}${a.handle.padEnd(18)}${a.state}`);
+      for (const a of data.accounts) {
+        const who = a.avatar_url && a.display_name ? `  ${a.display_name}（头像 ${a.avatar_url}）` : "";
+        console.log(`${a.id.padEnd(16)}${platformLabelOf(a.platform).padEnd(12)}${a.handle.padEnd(18)}${a.state}${who}`);
+      }
     } else out(data);
     return data;
   }
@@ -910,7 +913,7 @@ async function cmdAccount() {
       },
       { log },
     );
-    if (human) console.log(`已添加 ${platform} ${name}（${data.id}）到账号组「${data.group.name}」\n${data.next ?? ""}`);
+    if (human) console.log(`已添加 ${platformLabelOf(platform)} ${name}（${data.id}）到账号组「${data.group.name}」\n${data.next ?? ""}`);
     else out(data);
     return data;
   }
@@ -922,6 +925,45 @@ async function cmdAccount() {
       console.log(`已移除 ${data.platform} ${data.handle}（${accountId}）${data.group ? `，${data.group.name} 的这个平台槽位已空出` : ""}`);
       if (data.historyKept) console.log(`历史 ${data.historyKept} 条发布仍保留（只移除账号，不删数据）`);
       console.log("现在可以重新添加这个平台的账号：vk account add <platform> --group <组> --name <名字>");
+    } else out(data);
+    return data;
+  }
+  // TikTok 官方接口授权：第一次调用拿到授权链接，之后轮询到完成（会话在守护进程里）。
+  if (sub === "connect") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account connect <accountId>");
+    let data = await send("account.connect", { accountId }, { log });
+    if (data.state === "waiting") {
+      // 链接走 stderr：stdout 留给 JSON，管道里的脚本不会被它污染。
+      console.error(`请在浏览器里打开下面的链接，用 TikTok 登录并同意授权：\n${data.url}`);
+      if (!process.env.VK_NO_BROWSER) {
+        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+        try {
+          spawn(opener, process.platform === "win32" ? ["/c", "start", "", data.url] : [data.url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+        } catch {
+          /* 打不开浏览器不算失败：链接已经打印 */
+        }
+      }
+      const deadline = Date.now() + 6 * 60e3;
+      while (data.state === "waiting" && Date.now() < deadline) {
+        data = await send("account.connect", { accountId, timeoutMs: 15000 }, { log });
+      }
+      if (data.state === "waiting") throw new Error("6 分钟内没有完成授权，已放弃：重新运行 vk account connect " + accountId);
+    }
+    if (human) console.log(`已连接 TikTok：${data.displayName ?? "（没有昵称）"}${data.avatarUrl ? `\n头像：${data.avatarUrl}` : ""}`);
+    else out(data);
+    return data;
+  }
+  if (sub === "creator") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account creator <accountId>");
+    const data = await send("account.creator", { accountId }, { log });
+    if (human) {
+      console.log(`TikTok 创作者：${data.nickname ?? "?"}`);
+      console.log(`可选隐私级别：${data.privacyLevelOptions.join(" / ") || "（TikTok 没有返回可选项）"}`);
+      const flag = (off) => (off ? "不允许" : "允许");
+      console.log(`评论：${flag(data.commentDisabled)}  合拍：${flag(data.duetDisabled)}  拼接：${flag(data.stitchDisabled)}`);
+      console.log(`最长时长：${data.maxVideoPostDurationSec ?? "?"} 秒`);
     } else out(data);
     return data;
   }
@@ -1134,7 +1176,8 @@ async function cmdPublish() {
     if (!cutId && !publishId) throw new Error("用法：vk publish approve --cut <cutId> | --publish <publishId>");
     const data = await send("publish.approve", { ...(cutId ? { cutId } : {}), ...(publishId && !cutId ? { publishId } : {}) }, { log });
     if (human) {
-      for (const a of data.approved) console.log(`已确认 ${a.platform.padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}`);
+      for (const a of data.approved) console.log(`已确认 ${platformLabelOf(a.platform).padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}`);
+      for (const x of data.incomplete ?? []) console.log(`还不能确认 ${platformLabelOf(x.platform)} ${x.publishId}：${x.reason}`);
       for (const x of data.perItem ?? []) console.log(`待逐条决定 ${x.platform.padEnd(9)}${x.publishId}：vk publish approve --publish ${x.publishId} | now | manual`);
     } else out(data);
     return data;
@@ -1154,9 +1197,25 @@ async function cmdPublish() {
   if (sub === "edit") {
     const publishId = pos[2];
     const at = val("--at") != null ? parseSchedule(val("--at")) : null;
-    if (!publishId || (val("--title") == null && at == null)) throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>]");
-    const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(at != null ? { at } : {}) }, { log });
-    if (human) console.log(`已改 ${data.platform} ${data.publishId}：${data.title ? `标题「${data.title}」 ` : ""}${data.scheduledAt ? fmtTime(data.scheduledAt) : ""}`);
+    // 开关三态：--comment 开、--no-comment 关、都不写 = 不改。
+    const toggle = (name) => (has(`--${name}`) ? true : has(`--no-${name}`) ? false : undefined);
+    const tiktok = {
+      ...(val("--privacy") != null ? { privacy: val("--privacy") } : {}),
+      ...(val("--caption") != null ? { caption: val("--caption") } : {}),
+      ...Object.fromEntries(["comment", "duet", "stitch", "draft"].map((n) => [n, toggle(n)]).filter(([, v]) => v !== undefined)),
+    };
+    if (!publishId || (val("--title") == null && at == null && !Object.keys(tiktok).length)) {
+      throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]");
+    }
+    const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(at != null ? { at } : {}), ...tiktok }, { log });
+    if (human) {
+      console.log(`已改 ${platformLabelOf(data.platform)} ${data.publishId}：${data.title ? `标题「${data.title}」 ` : ""}${data.scheduledAt ? fmtTime(data.scheduledAt) : ""}`);
+      if (data.tiktok) {
+        const on = (v) => (v ? "开" : "关");
+        console.log(`  隐私级别：${data.tiktok.privacy_level ?? "（还没选，没选不能发）"}  评论 ${on(data.tiktok.allow_comment)} / 合拍 ${on(data.tiktok.allow_duet)} / 拼接 ${on(data.tiktok.allow_stitch)}`);
+        console.log(`  文案：${data.tiktok.caption ?? "（沿用标题）"}  去向：${data.tiktok.draft ? "送到 TikTok 草稿箱" : "直接发布（Post）"}`);
+      }
+    }
     else out(data);
     return data;
   }
