@@ -288,7 +288,7 @@ test("ACC-v2-card-02 提交表单：改动逐条走 publish.edit；改后回到�
   const p2 = (n) => String(n).padStart(2, "0");
   const picked = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 
-  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "  新标题  ", at_douyin: picked, title_bilibili: store.getPublish(f.pubs["0:bilibili"]).work_title, at_bilibili: cards.formatPickerTime(store.getPublish(f.pubs["0:bilibili"]).scheduled_at) } });
+  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "  新标题  ", at_douyin: picked, title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title, at_bilibili: cards.formatPickerTime(store.getPublish(f.pubs["0:bilibili"]).scheduled_at) } });
   const row = store.getPublish(f.pubs["0:douyin"]);
   assert.equal(JSON.parse(row.overrides_json).title, "新标题");
   assert.equal(row.scheduled_at, cards.parsePickerTime(picked));
@@ -328,7 +328,7 @@ test("ACC-v2-card-02 平台规则（#151）拒绝的改动：留在表单里，�
   const past = new Date(Date.now() - 2 * H);
   const p2 = (n) => String(n).padStart(2, "0");
   const picked = `${past.getFullYear()}-${p2(past.getMonth() + 1)}-${p2(past.getDate())} ${p2(past.getHours())}:${p2(past.getMinutes())}`;
-  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: bili.work_title, at_douyin: picked } });
+  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: store.resolvePublishCopy(f.pubs["0:douyin"]).title, at_douyin: picked } });
   assert.match(text(ch.updates().at(-1).card), /抖音：.*过去的时间/);
   assert.ok(ch.updates().at(-1).card.body.elements.some((e) => e.tag === "form"));
 });
@@ -346,7 +346,7 @@ test("ACC-v2-card-02 小红书单独卡片：结构与按钮；点完原地更�
   assert.equal(xhs.header.title.content, "小红书，要你单独确认");
   assert.equal(xhs.header.subtitle.content, `${f.title} · 短片一`);
   const info = xhs.body.elements[0].content;
-  assert.match(info, /^\*\*露营小记 \d+\*\*\n<font color='grey'>zh 版本 · cards-v2-\d+-short\.mp4 · 建议 .*\d\d:\d\d 发 · 今天还能发 \d+ 条<\/font>\n<font color='grey'>没有正文<\/font>\n<font color='grey'>没有话题<\/font>$/);
+  assert.match(info, /^\*\*短片一\*\*\n<font color='grey'>zh 版本 · cards-v2-\d+-short\.mp4 · 建议 .*\d\d:\d\d 发 · 今天还能发 \d+ 条<\/font>\n<font color='grey'>没有正文<\/font>\n<font color='grey'>没有话题<\/font>$/);
   const primary = xhs.body.elements.find((e) => e.tag === "button");
   assert.equal(primary.type, "primary");
   assert.match(primary.text.content, /\d\d:\d\d 发$/);

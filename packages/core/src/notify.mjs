@@ -24,7 +24,7 @@ import {
 } from "./cards.mjs";
 import { getPublishRow } from "./publish-flow.mjs";
 import { approvalLink } from "./approval.mjs";
-import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups, effectiveCopy } from "./store.mjs";
+import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups, effectiveCopy, effectiveTitle } from "./store.mjs";
 import { planRules, takenTimes } from "./plan-rules.mjs";
 import { basename } from "node:path";
 
@@ -257,9 +257,8 @@ function groupNameOf(groupId) {
   return open().prepare("SELECT name FROM account_group WHERE id = ?").get(groupId)?.name ?? null;
 }
 
-/** 卡片上这条平台稿的标题 = 适配器真正会发的标题：overrides.title > 作品 meta.title > 作品标题。 */
+/** 卡片上这条平台稿的标题 = 适配器真正会发的标题，只读 store.effectiveTitle，不在这里另写回退链。 */
 const rowCopy = (r) => effectiveCopy({ overrides: r.overrides_json, versionMeta: r.version_meta, workMeta: r.work_meta_json, cutTitle: r.cut_title, workTitle: r.work_title });
-const rowTitle = (r) => jsonOr(r.overrides_json).title ?? jsonOr(r.work_meta_json).title ?? r.work_title;
 
 function loadCut(cutId) {
   const rows = open()
@@ -285,7 +284,7 @@ function loadCut(cutId) {
   };
 }
 
-const toRow = (r) => ({ publishId: r.publish_id, platform: r.platform, title: rowTitle(r), body: rowCopy(r).body, tags: rowCopy(r).tags, at: r.scheduled_at });
+const toRow = (r) => ({ publishId: r.publish_id, platform: r.platform, title: effectiveTitle(r), body: rowCopy(r).body, tags: rowCopy(r).tags, at: r.scheduled_at });
 
 /** 这支成片在作品里排第几、一共几支（不算整支已取消的）。 */
 function cutPosition(workId, cutId) {
@@ -348,7 +347,7 @@ function renderXhs(publishId, { now } = {}) {
     publishId,
     workTitle: r.work_title,
     cutTitle: r.cut_title,
-    title: rowTitle(r),
+    title: effectiveTitle(r),
     body: rowCopy(r).body,
     tags: rowCopy(r).tags,
     at: r.scheduled_at,
@@ -544,7 +543,7 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     const rawTitle = form[names[i].title];
     const rawAt = form[names[i].at];
     const change = { publishId: r.publish_id, label };
-    if (typeof rawTitle === "string" && rawTitle.trim() !== rowTitle(r)) {
+    if (typeof rawTitle === "string" && rawTitle.trim() !== effectiveTitle(r)) {
       if (!rawTitle.trim()) problems.push(`${label}：标题不能为空`);
       else change.title = rawTitle.trim();
     }

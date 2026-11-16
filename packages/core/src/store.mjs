@@ -583,25 +583,6 @@ const asObject = (json) => {
 
 const nonEmpty = (value) => (typeof value === "string" && value.trim() ? value : null);
 
-/**
- * 一条平台稿「现在点确认，实际会发出去」的标题（ACC-v2-confirm-04 / ACC-v2-web-02）。
- *
- * 与适配器的取值链一致：确认前改过的 overrides.title 优先，其次是作品 meta 里的改写结果，
- * 最后才是作品标题。平台自己的限制（如小红书 20 字、B 站 80 字截断）仍在适配器里判——
- * 这里给的是人看到的、也是发给平台的那个值，页面和卡片都读它，不再各写一份回退链。
- */
-export function effectiveTitle(row) {
-  const overrides = asObject(row?.overrides_json ?? row?.overrides);
-  const meta = asObject(row?.meta_json);
-  return (
-    nonEmpty(overrides.title) ??
-    nonEmpty(meta.title) ??
-    nonEmpty(row?.work_title) ??
-    nonEmpty(row?.title) ??
-    ""
-  );
-}
-
 const textList = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === "string" && t.trim()).map((t) => t.trim()) : null);
 
 /**
@@ -624,6 +605,23 @@ export function effectiveCopy({ overrides, versionMeta, workMeta, cutTitle = nul
     body: typeof ov.body === "string" ? ov.body : pick(ov.body, ov.desc, oc.body, vm.body, vm.description, wm.body, wm.description) ?? "",
     tags: textList(ov.tags) ?? textList(oc.tags) ?? textList(vm.tags) ?? textList(wm.tags) ?? [],
   };
+}
+
+/**
+ * 一条平台稿「现在点确认，实际会发出去」的标题（ACC-v2-title-01 / ACC-v2-confirm-04）。
+ *
+ * 不另写回退链：直接取 effectiveCopy().title，也就是 resolvePublishCopy 交给适配器的那个值。
+ * 页面（workView）、确认卡片（notify.mjs）、适配器三处读同一个来源。
+ * 入参是带 overrides_json / version_meta / work_meta_json（或 work_meta）/ cut_title / work_title 的查询行。
+ */
+export function effectiveTitle(row) {
+  return effectiveCopy({
+    overrides: row?.overrides_json ?? row?.overrides,
+    versionMeta: row?.version_meta,
+    workMeta: row?.work_meta_json ?? row?.work_meta,
+    cutTitle: row?.cut_title,
+    workTitle: row?.work_title,
+  }).title;
 }
 
 /**
