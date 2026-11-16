@@ -254,3 +254,14 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v2-card-03] 账号组多于一个时卡片标题带组名；只有一个时不带。
 - [ACC-v2-card-04] 卡片测试只用 fixture 和假的发送函数，不往任何真实飞书会话发消息。
 
+### TikTok 官方接口（审核演示用，2026-11-16）
+
+开发机上只用本地 mock 的 TikTok 服务端，不连 `open.tiktokapis.com`、不用真实 client_key；真机与录屏由所有者在自己电脑上做（第一节红线）。
+
+- [ACC-tiktok-api-01] PKCE：每次授权新生成 `code_verifier`，`code_challenge` 等于 verifier 的 **SHA256 hex**（不是 base64url），单测钉住；回调只在 `127.0.0.1` 的临时端口 `/callback/tiktok/` 上收，拿到 code 后立即关端口；`state` 不符时拒绝并给人话。
+- [ACC-tiktok-api-02] 对 mock 服务端跑通 `vk` 授权 → `user.info.basic`（头像、昵称存到账号）→ token 存本地凭证目录、账号表只存 `credential_ref`；token 过期前用 refresh 续期，续期失败账号变「需要重新登录」并发事件。client_key/secret 只从环境变量或本地配置读，仓库里 grep 不到。
+- [ACC-tiktok-api-03] 对 mock 跑通 Direct Post：`creator_info/query` → `video/init`（FILE_UPLOAD 分片）→ 轮询 `status/fetch` → 平台稿经 `transitionPublish()` 到已发布；`inbox/video/init` 草稿箱路径同样跑通，状态是「已送到草稿箱」、不算已发布。作品是 AI 生成时请求里 `is_aigc: true`。隐私级别没选时 CLI 拒绝并给人话；隐私选项只来自 creator_info，代码里不硬编码；时长超过 creator_info 上限在发布前就报错。
+- [ACC-tiktok-api-04] 错误：429 指数退避后重试；`spam_risk_too_many_posts`、`spam_risk_user_banned_from_posting`、`reached_active_user_cap` 立即暂停账号、发事件、**不重试**；token 失效转「需要重新登录」。每种都有 `error_code` + 人话 + 事件，测试逐个钉住。浏览器自动化后端 `packages/adapter-tiktok` 行为不变（原测试全过），同一账号只能挂一个后端。
+- [ACC-tiktok-api-05] Web：系统页账号处有 **Connect TikTok**，连上后显示头像和昵称；TikTok 平台稿确认时有设置面板：隐私级别下拉（选项来自 creator_info、默认不选，没选不能发）、评论/合拍/拼接三个开关默认全关且 creator_info 不允许的置灰、文案可改、AI 生成标记可见、**Post** 与 **Send to TikTok drafts** 两个按钮；发布后显示进度和结果（成功/失败原因）。无水印。按 AGENTS.md §6 先写任务书，`npm run design:check` 通过。
+- [ACC-tiktok-api-06] 用 mock 服务端在本机 Web 上把审核视频要拍的四段走一遍并截图留证：授权显示头像昵称；选隐私→开关默认关→改文案→Post→成功；Send to drafts→显示已送到草稿箱；出错时的人话。证据附在 PR，不碰真实账号。
+
