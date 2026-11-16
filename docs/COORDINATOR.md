@@ -65,6 +65,7 @@ bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它
 | `escalation` / `question` / `worker_done` failed | **不 ack**，把消息打印出来 | 10 |
 | 连续 3 次空等且 `worker-list` 说有 worker 需要处理 | 列出那几行 | 11 |
 | 在跑的 worker 终端末尾出现额度/限流错误（`exceeded … quota`、`usage limit`、`HTTP 429`），或终端输出超过 30 分钟（`COORD_STALL_SECS`，默认 1800）没变化 | **下一次检查**就停下，打印 issue 号、dispatch id、原因（额度用尽 / 疑似卡住）和 `worker-read` 末尾几行；不自动 `worker-stop` / kill，由你确认后 stop 再重派 | 11 |
+| **跑在火山通道上的验收 worker** 终端末尾出现额度用尽（如 `You have exceeded the 5-hour usage quota. It will reset at …`） | 这是正证据，循环**自己处理、不退出**：① 解析报错里的重置时间（解析不出按 5 小时）写进 `$STATE_DIR/volc-exhausted`；② 对该 worker `worker-stop`；③ 清掉它的验收锁（`accept-<issue>-*.lock`）与验收终端记录，本轮 `cycle.sh` 用千问重派。三步都写日志。此后 `bin/dsh-model.sh` 到期前不探测火山、直接选千问并在 stderr 写原因，到期自动恢复火山（1 token 探测在额度用尽时仍返回 200，所以不能靠探测）。千问通道的额度错误仍按上一行以 11 停下 | — |
 | 等待被取消或 `check` 报错 | 说明原因 | 12 |
 | 同一项目已有循环在跑（锁里的 pid 还活着，且进程名是本项目的循环） | stderr 写「已有循环在跑：pid=N」，不调 `orca` / `cycle.sh`，直接退出 | 14 |
 | 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:ready`，再重新启动 | 13 |

@@ -33,7 +33,9 @@
 #   13  没活可派，但 s:triage 里还有 issue：要协调器补验收口径、转 s:ready（流程「停住」最常见的原因）
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
 #   11  有 worker 需要处理：worker-list 报 requiresAction/已退出；或 worker-read 末尾出现额度/限流错误；
-#       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定
+#       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定。
+#       例外：跑在火山通道上的验收 worker 报额度用尽（ACC-harness-model-07）是正证据，循环自己处理、不退出：
+#       写 $STATE_DIR/volc-exhausted（解析报错里的重置时间，解析不出按 5 小时）→ worker-stop → 清验收锁 → 改用千问重派
 #   14  同一项目已有循环在跑（锁文件 $COORD_STATE_DIR/coordinator-loop.lock 里的 pid 还活着且是本项目的循环）；
 #       什么都不做就退出，不调用 orca / cycle.sh
 #   12  等待被取消（多半是同一终端跑了 run-use）或 check 报错
@@ -106,6 +108,10 @@ WAIT_MS="${COORD_WAIT_MS:-300000}"
 IDLE_LIMIT="${COORD_IDLE_ROUNDS:-2}"
 export CYCLE_LANES="${CYCLE_LANES:-2}"
 TYPES="worker_done,escalation,question,merge_ready"
+# 火山用尽记录与验收锁：与 bin/dsh-model.sh / bin/cycle.sh 用同一组默认路径。
+VOLC_STATE_DIR="${STATE_DIR:-$HOME/.orca/versekit-state}"
+LOCK_DIR="${LOCK_DIR:-$HOME/.orca/versekit-locks}"
+export STATE_DIR="$VOLC_STATE_DIR" LOCK_DIR
 
 say() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
@@ -178,9 +184,9 @@ for w in ws:
 #   - 输出摘要超过 COORD_STALL_SECS 没变化 → 判「疑似卡住」
 # 命中的行（制表符分隔）打印到 stdout；上次摘要与时间存在 COORD_STATE_DIR，不进仓库。
 stall_rows() {
-  COORD_STATE_DIR="$COORD_STATE_DIR" \
+  COORD_STATE_DIR="$COORD_STATE_DIR" VOLC_STATE_DIR="$VOLC_STATE_DIR" \
   COORD_STALL_SECS="${COORD_STALL_SECS:-1800}" RUN_ID="$RUN_ID" python3 -c '
-import json,os,re,subprocess,sys,time,hashlib
+import json,os,re,subprocess,sys,time,hashlib,datetime
 d=os.path.join(os.environ["COORD_STATE_DIR"],"worker-watch"); os.makedirs(d,exist_ok=True)
 limit=int(os.environ["COORD_STALL_SECS"]); now=time.time()
 def run(args):
@@ -195,6 +201,27 @@ def strings(o,acc):
     return acc
 QUOTA=re.compile(r"exceeded.{0,60}quota|usage limit|HTTP 429|rate.?limit(ed)?|too many requests",re.I)
 SECRET=re.compile(r"(sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+|(?:token|key|secret|password)\s*[=:]\s*\S+)",re.I)
+RESET=re.compile(r"reset\s+at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*([+-]\d{2}:?\d{2})?",re.I)
+def reset_at(text):
+    # 解析「It will reset at 2026-11-16 13:47:50 +0800 CST」；解析不出、或时间已过，按 5 小时算。
+    m=RESET.search(text)
+    if m:
+        try:
+            z=(m.group(3) or "+0800").replace(":","")
+            t=datetime.datetime.strptime(m.group(1)+" "+m.group(2)+" "+z,"%Y-%m-%d %H:%M:%S %z")
+            if t.timestamp()>now: return int(t.timestamp()),m.group(1)+" "+m.group(2)+" "+z
+        except Exception: pass
+    t=int(now+5*3600)
+    return t,time.strftime("%Y-%m-%d %H:%M:%S %z",time.localtime(t))+"（按 5 小时估算）"
+def volc_worker(did):
+    # 只有跑在火山通道上的验收 worker 才算「火山额度用尽」；其它通道的额度错误仍交给协调器。
+    sd=os.environ["VOLC_STATE_DIR"]
+    try: rec=json.load(open(os.path.join(sd,"dispatch-%s.json"%did)))
+    except Exception: return None
+    if rec.get("role")!="acceptance": return None
+    try: ch=open(os.path.join(sd,"acceptance.channel")).read().strip()
+    except Exception: ch=""
+    return rec.get("issue") if ch=="volc" else None
 ws=(run(["worker-list","--run",os.environ["RUN_ID"],"--json"]).get("result") or {}).get("workers") or []
 live=set()
 for w in ws:
@@ -226,7 +253,12 @@ for w in ws:
     if QUOTA.search("\n".join(lines[-15:])): reason="额度用尽"
     elif now-st["since"]>=limit: reason="疑似卡住（终端输出 %d 秒没变化）" % int(now-st["since"])
     if reason:
-        print("%s\t%s\t%s\t%s" % (issue,did,reason," ⏎ ".join(SECRET.sub("***",l)[:200] for l in tail)))
+        vu,vt,vi="-","-","-"
+        if reason=="额度用尽":
+            vi0=volc_worker(did)
+            if vi0 is not None:
+                ep,vt=reset_at("\n".join(lines[-15:])); vu=str(ep); vi=str(vi0); issue="#"+vi
+        print("%s\t%s\t%s\t%s\t%s\t%s\t%s" % (issue,did,reason," ⏎ ".join(SECRET.sub("***",l)[:200] for l in tail),vu,vt,vi))
 for f in os.listdir(d):
     if f.endswith(".json") and f[:-5] not in live: os.remove(os.path.join(d,f))
 ' 2>/dev/null
@@ -316,6 +348,31 @@ print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage"
   fi
 
   stalled=$(stall_rows)
+  # 火山额度用尽是正证据（ACC-harness-model-07）：自动 记录用尽 → worker-stop → 清验收锁 → 改用千问重派；
+  # 其余停摆（疑似卡住、非火山的额度错误）仍交给协调器。
+  if [ -n "$stalled" ]; then
+    rest=""
+    while IFS=$'\t' read -r issue did reason tail vu vt vi; do
+      [ -n "$issue" ] || continue
+      if [ "${vu:--}" = "-" ]; then
+        rest="${rest:+$rest$'\n'}$(printf '%s\t%s\t%s\t%s' "$issue" "$did" "$reason" "$tail")"
+        continue
+      fi
+      say "火山额度用尽（${issue} dispatch=${did}）：worker-read 末尾 ⏎ ${tail}"
+      mkdir -p "$VOLC_STATE_DIR" && printf '%s\t%s\n' "$vu" "$vt" > "$VOLC_STATE_DIR/volc-exhausted"
+      say "  1/3 已记「火山额度用尽，到 ${vt} 为止」→ $VOLC_STATE_DIR/volc-exhausted（dsh-model.sh 到期前选千问）"
+      if orca orchestration worker-stop --dispatch "$did" --json >/dev/null 2>&1; then
+        say "  2/3 已 worker-stop dispatch=${did}"
+      else
+        say "  2/3 ✗ worker-stop dispatch=${did} 失败，下一轮仍会重试"
+      fi
+      rm -rf "$LOCK_DIR"/accept-"${vi}"-*.lock
+      rm -f "$VOLC_STATE_DIR/acceptance.dispatch" "$VOLC_STATE_DIR/acceptance.channel" "$VOLC_STATE_DIR/acceptance.model"
+      say "  3/3 已清 #${vi} 的验收锁与验收终端记录；本轮改用千问重派（见下方派工）"
+      run_cycle || true
+    done <<< "$stalled"
+    stalled="$rest"
+  fi
   if [ -n "$stalled" ]; then
     [ -n "$ack" ] && orca orchestration check --run "$RUN_ID" --ack "$ack" --json >/dev/null 2>&1
     say "✗ 有 worker 停摆，需要协调器处理（不自动 stop/kill；确认后 worker-stop 再重派）："

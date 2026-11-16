@@ -13,7 +13,13 @@
 # 所以派工前先用 1 token 的请求探一下，不可用就换通道。
 #
 # 结果缓存 5 分钟（DSH_MODEL_TTL_S），避免每次派工都探。
-# 已知边界：只管"派工那一刻"。worker 跑到一半额度用尽，这里看不到。
+# 已知边界：只管"派工那一刻"。worker 跑到一半额度用尽，这里看不到——
+# 那一类由 bin/coordinator-loop.sh 在 worker-read 里发现，并写下面的「火山用尽」记录。
+#
+# 火山额度用尽（ACC-harness-model-07）：火山的 5 小时额度用完后，1 token 探测仍可能返回 200，
+# 探测判断不出来。循环发现后把「用尽到何时」写进 $STATE_DIR/volc-exhausted（制表符分隔：
+# 到期 epoch 秒、到期时间文本）。到期前本脚本不探测火山、直接选千问并在 stderr 写明原因；
+# 到期后自动删除记录、恢复火山优先。
 #
 # 用法：bin/dsh-model.sh [--force]     # --force 忽略缓存
 
@@ -21,9 +27,22 @@ set -uo pipefail
 STATE_DIR="${STATE_DIR:-$HOME/.orca/versekit-state}"
 TTL="${DSH_MODEL_TTL_S:-300}"
 CACHE="$STATE_DIR/dsh-model.choice"
+EXHAUSTED="$STATE_DIR/volc-exhausted"
 mkdir -p "$STATE_DIR"
 
-if [ "${1:-}" != "--force" ] && [ -f "$CACHE" ]; then
+# 火山用尽记录：未到期 → VOLC_SKIP=1；已到期或内容损坏 → 删掉，按正常流程。
+VOLC_SKIP=0
+VOLC_UNTIL_TEXT=""
+if [ -f "$EXHAUSTED" ]; then
+  IFS=$'\t' read -r _until VOLC_UNTIL_TEXT < "$EXHAUSTED" || true
+  case "${_until:-}" in
+    ''|*[!0-9]*) rm -f "$EXHAUSTED" ;;
+    *) if [ "$(date +%s)" -lt "$_until" ]; then VOLC_SKIP=1; else rm -f "$EXHAUSTED"; fi ;;
+  esac
+fi
+
+# 用尽期间不读缓存：缓存里可能还是用尽之前选的 volc。
+if [ "$VOLC_SKIP" = 0 ] && [ "${1:-}" != "--force" ] && [ -f "$CACHE" ]; then
   age=$(( $(date +%s) - $(stat -f %m "$CACHE" 2>/dev/null || stat -c %Y "$CACHE") ))
   if [ "$age" -lt "$TTL" ]; then cat "$CACHE"; exit 0; fi
 fi
@@ -93,7 +112,12 @@ probe() {
 }
 
 choice=""
-if probe volc "https://ark.cn-beijing.volces.com/api/coding/v3" ARKCLI_CODING_PLAN_API_KEY deepseek-v4.1-flash; then
+if [ "$VOLC_SKIP" = 1 ]; then
+  echo "dsh-model: 火山额度用尽（到 ${VOLC_UNTIL_TEXT:-?} 为止），跳过火山，直接选千问" >&2
+  if probe qwen "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" QWEN_TOKEN_PLAN_CN_API_KEY deepseek-v4.1-flash-1017; then
+    choice=qwen
+  fi
+elif probe volc "https://ark.cn-beijing.volces.com/api/coding/v3" ARKCLI_CODING_PLAN_API_KEY deepseek-v4.1-flash; then
   choice=volc
 elif probe qwen "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" QWEN_TOKEN_PLAN_CN_API_KEY deepseek-v4.1-flash-1017; then
   choice=qwen
@@ -101,4 +125,6 @@ elif probe qwen "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode
 fi
 
 if [ -z "$choice" ]; then echo "dsh-model: 火山与千问都不可用，本轮不派工" >&2; exit 1; fi
+# 用尽期间不写缓存：否则到期后最多还要等一个 TTL 才恢复火山。
+if [ "$VOLC_SKIP" = 1 ]; then printf '%s\n' "$choice"; exit 0; fi
 printf '%s\n' "$choice" | tee "$CACHE"

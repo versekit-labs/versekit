@@ -1460,6 +1460,10 @@ for q in (json.load(sys.stdin).get("queue") or []):
   if [ -n "$ch" ]; then
     log "    · 角色 验收 → 通道 ${ch} → 模型 ${md}（${rsn}）"
   fi
+  # 火山额度用尽记录由 coordinator-loop 写、dsh-model.sh 读；这里只把它写进日志，方便对上「为什么是千问」。
+  if [ -s "$STATE_DIR/volc-exhausted" ]; then
+    log "    · 火山额度用尽记录：$(cut -f2 "$STATE_DIR/volc-exhausted")（到期前 dsh-model.sh 直接选千问，到期自动恢复火山）"
+  fi
 
   local spec
   spec=$(printf '目标：验收 issue #%s 的 PR #%s（head %s）。\n\n改动：不改实现代码，只产出判定。\n\n约束：\n- 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR\n- 不改实现代码、不合并 PR、不改 s:* label\n- 需要看界面时用 8788 端口，避开实现方可能占用的 8787\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个 worktree 里，验收必须换上下文，不看实现方的思考过程。\n\n可观察验收（必须逐条做到）：\n1. 拉 PR diff 与 body 里的证据包 YAML\n2. 逐条比对：%s\n3. 本地跑 npm run ci\n4. 在 PR 留一条评论，正文必须含 ```yaml 块：\n   verdict: PASS|FAIL\n   round: <第几轮>\n   head_sha: "<PR 当前 head>"\n   acceptance:\n     - id: <ACC id>\n       status: pass|fail\n   FAIL 时额外给 failed: 列表，每条含 item / expected / observed / repro\n5. 不要改 s:* label，状态迁移由协调器做（AGENT-COLLAB §2）\n6. PASS 发一条 merge_ready 消息；FAIL 发 escalation 说明卡在哪\n7. 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n8. 真机红线（docs/design/ACCEPTANCE.md 开头）：本机是开发机，不得让任何平台（小红书、B 站、抖音等）的真实站点被访问——包括未登录打开平台页面、账号检查、体检、采集、登录、发布；会走真实平台适配器的 vk 命令与 /api 调用一律不跑；起 vk 服务只能用 VK_HOME=$(mktemp -d) vk serve --offline（演示数据用 vk demo seed），不带 --offline 的服务启动就会自己体检、访问真实平台（2026-11-16 事故）。只用 stub driver、fixture、录制页面验证判定逻辑，能用 stub 跑的必须自己跑、留自己的证据，不得只读实现方证据包。口径里需要真实平台的部分在 PR 评论里列为「待人工」（用户在自己电脑上做），不计 pass 也不计 fail；没有 stub 就无法验证的条目发 escalation，由协调器处理\n9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome' \
