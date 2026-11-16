@@ -36,7 +36,9 @@ export function sweepAccountChecks(options = {}) {
 }
 
 /** Starts the periodic sweep. Returns a stop function; the timer must not keep the process alive. */
-export function startCheckSweeper({ everyMs = 10 * 60e3, intervalMs = CHECK_INTERVAL_MS, log = () => {} } = {}) {
+export function startCheckSweeper({ everyMs = 10 * 60e3, intervalMs = CHECK_INTERVAL_MS, log = () => {}, offline = false } = {}) {
+  // 离线模式不排任何体检（#180）。
+  if (offline) return () => {};
   const run = () => {
     try {
       const queued = sweepAccountChecks({ intervalMs });

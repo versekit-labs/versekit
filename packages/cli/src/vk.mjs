@@ -753,6 +753,7 @@ process.env.VK_FEISHU_PROFILE = process.env.VK_FEISHU_PROFILE ?? feishuProfileNa
 
 async function cmdServe() {
   if (!guard()) return;
+  if (has("--offline") && has("--detach")) throw new Error("--offline 不支持 --detach：离线服务只在前台跑，用完直接 Ctrl-C");
 
   if (has("--detach")) {
     const wanted = Number(val("--port") ?? 8787);
@@ -772,22 +773,25 @@ async function cmdServe() {
     return data;
   }
 
-  const { adapters, errors } = await loadAdapters();
+  const offline = has("--offline");
+  // 离线模式连适配器都不加载：不会有任何东西能走到真实平台。
+  const { adapters, errors } = offline ? { adapters: [], errors: [] } : await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
   const handlers = daemonHandlers(adapters, log);
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
-  const daemon = await startDaemon({ handlers, log, port, host, channels: [channelFeishu], doctor: doctorReport });
+  const daemon = await startDaemon({ handlers, log, port, host, channels: offline ? [] : [channelFeishu], doctor: doctorReport, offline });
+  if (offline) log("离线模式：不会访问任何平台");
 
   const web = `http://127.0.0.1:${daemon.port}`;
   if (has("--open")) openBrowser(web);
   log(`versekit 守护进程已启动：${web} · socket ${daemon.socketPath}`);
-  log(`适配器 ${adapters.length} 个${adapters.length ? "：" + adapters.map((a) => a.platform).join(", ") : "（尚未安装）"}`);
+  if (!offline) log(`适配器 ${adapters.length} 个${adapters.length ? "：" + adapters.map((a) => a.platform).join(", ") : "（尚未安装）"}`);
   for (const e of errors) log(`适配器加载失败 ${e.dir}: ${e.message}`);
 
   // 上一任守护进程（被 kill -9 / 重启）留下的账号 Chrome：接管并纳入空闲回收。
-  adoptOrphanAccounts()
+  (offline ? Promise.resolve([]) : adoptOrphanAccounts())
     .then((ids) => ids.length && log(`接管了 ${ids.length} 个遗留的账号浏览器：${ids.join(", ")}（空闲后自动回收）`))
     .catch((err) => log(`接管遗留账号浏览器失败：${err.message}`));
 
@@ -805,6 +809,16 @@ async function cmdServe() {
     });
   }
   await new Promise(() => {});
+}
+
+async function cmdDemo() {
+  const sub = args[1];
+  if (sub !== "seed") throw new Error("用法：vk demo seed（在当前 VK_HOME 造演示数据）");
+  const { seedDemoAsync } = await import("../../../scripts/demo-seed.mjs");
+  const data = await seedDemoAsync();
+  if (human) console.log(`演示数据已写入 ${paths().root}：${data.works} 个作品、${data.publishes} 条平台稿`);
+  else out(data);
+  return data;
 }
 
 function cmdCommands() {
@@ -1529,6 +1543,8 @@ function usage() {
       "  vk now [--human]",
       "  vk doctor [--human]",
       "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
+      "  vk serve --offline [--port 8787]             # 离线模式：不访问任何平台（验收/演示用）",
+      "  vk demo seed                                 # 在当前 VK_HOME 造演示数据",
       "  vk commands [--human]",
       "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
       "  vk group list | add <名字> | use <组 id 或名字>",
@@ -1570,6 +1586,7 @@ try {
   else if (cmd === "commands") cmdCommands();
   else if (cmd === "bootstrap") await cmdBootstrap();
   else if (cmd === "serve") await cmdServe();
+  else if (cmd === "demo") await cmdDemo();
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
