@@ -14,6 +14,8 @@ export const VALUE_FLAGS = new Set([
   "--phone", "--code",
   // TikTok 官方接口的发布设置（#143）：隐私级别与文案都带值。
   "--privacy", "--caption",
+  // 确认时改正文和话题（#175）：都带值。
+  "--body", "--tags",
 ]);
 
 /** argv（不含 node 与脚本路径）→ { flags, pos }。带值参数缺值时记为 undefined，不吞掉下一个 --flag。 */

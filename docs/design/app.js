@@ -26,10 +26,10 @@ const WORKS = [
       { id: 'long', name: '长片', dur: '3:04', poster: CV + 'iso27001-machine-4x3.jpg',
         versions: [['中文', VID + 'renders/iso27001-machine.mp4'], ['English', VID + 'en/renders/iso27001-machine-en-16x9.mp4']],
         pubs: [
-          p('xhs', '2026-11-16T20:00', '警报响了 58 小时没人管：有 ISO 27001 也会被罚', { solo: true, note: '竖屏 · 封面 3:4' }),
-          p('dy', '2026-11-16T21:00', '有 ISO 27001，为什么还被罚 1400 万英镑？'),
+          p('xhs', '2026-11-16T20:00', '警报响了 58 小时没人管：有 ISO 27001 也会被罚', { solo: true, note: '竖屏 · 封面 3:4', body: 'Capita 持有 ISO 27001，警报响了 58 小时没人处理，最后被罚 1400 万英镑。\n证书证明的是“有流程”，不是“流程被执行”。\n看完这条，你能知道审核时该盯哪三处。', tags: ['ISO27001', '信息安全', '合规', '出海'] }),
+          p('dy', '2026-11-16T21:00', '有 ISO 27001，为什么还被罚 1400 万英镑？', { body: '证书不等于安全：Capita 的 58 小时警报事件，说明了什么。', tags: ['ISO27001', '信息安全'] }),
           p('sph', '2026-11-17T09:30', '有 ISO 27001 证书，为什么还会被罚？'),
-          p('bili', '2026-11-17T12:00', '有 ISO 27001，为什么还被罚 1400 万英镑？一站一站看它说了什么、没说什么', { note: '发完归入合集「出海合规」' }),
+          p('bili', '2026-11-17T12:00', '有 ISO 27001，为什么还被罚 1400 万英镑？一站一站看它说了什么、没说什么', { note: '发完归入合集「出海合规」', body: '0:00 事件经过\n1:10 证书到底证明什么\n2:20 审核时该盯哪三处', tags: ['ISO27001', '合规', '科普'] }),
           p('web', '2026-11-17T12:30', 'assurelane.ai 视频页'),
           p('tk', '2026-11-17T09:00', 'Certified to ISO 27001 and still fined £14m', { lang: 'English' }),
           p('yt', '2026-11-17T10:00', 'ISO 27001 certified, still fined £14 million: what the certificate says and what it doesn’t', { lang: 'English' }),
@@ -156,10 +156,15 @@ function initShell() {
   listeners.push(upd); upd();
 }
 
+// 正文与话题：展开看；为空就明说「没有正文」「没有话题」，不阻止确认。
+const tagList = (text) => [...new Set(String(text || '').split(/[,，、\s]+/).map((t) => t.trim().replace(/^#+/, '')).filter(Boolean))];
+const detHtml = (x) => `<div class="pdet"><div class="dl"><span class="k">正文</span><div class="bd">${x.body ? esc(x.body) : '<span class="none">没有正文</span>'}</div></div><div class="dl"><span class="k">话题</span>${(x.tags || []).length ? `<div class="tags">${x.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : '<div class="bd"><span class="none">没有话题</span></div>'}</div></div>`;
+const editFields = (x, i, name) => `<div class="ef"><label class="lab" for="b${i}">正文</label><textarea id="b${i}" data-body="${i}" aria-label="${name} 正文">${esc(x.body || '')}</textarea><label class="lab" for="t${i}">话题（用逗号或空格分开）</label><input type="text" id="t${i}" value="${esc((x.tags || []).map((t) => '#' + t).join(' '))}" data-tags="${i}" aria-label="${name} 话题"></div>`;
+
 // ---------- 成片面板：视频 + 各平台一行 + 小红书单独一块 + 一个确认按钮。发过的成片也用它，只是每行换成结果。
 function confirmPanel(work, cut, opts = {}) {
   const el = $(`<section class="cp ${cut.vert ? 'vert' : ''}" aria-label="${esc(cut.name)}"></section>`);
-  let ver = 0; const editing = new Set(); const one = work.cuts.length === 1;
+  let ver = 0; const editing = new Set(); const opened = new Set(); const one = work.cuts.length === 1;
   const render = () => {
     const batch = cutBatch(cut); const solo = cut.pubs.filter((x) => x.solo && x.state !== 'published'); const rest = cut.pubs.filter((x) => !solo.includes(x));
     const media = cut.versions.length
@@ -170,24 +175,28 @@ function confirmPanel(work, cut, opts = {}) {
       <div class="cph"><h3>${esc(cut.name)}</h3><span class="sub">${cut.dur}</span>
         <span class="vers">${(cut.versions.length > 1 ? cut.versions : []).map((v, i) => `<button class="btn" data-ver="${i}" aria-pressed="${i === ver}">${v[0]}</button>`).join('')}</span></div>
       ${media}
-      <div class="ai">${anyOpen ? 'AI 生成的内容，每个平台都会按它的要求标注。标题和时间是建议，想改再改。' : 'AI 生成的内容，每个平台都按它的要求标注了。'}</div>
+      <div class="ai">${anyOpen ? 'AI 生成的内容，每个平台都会按它的要求标注。标题、正文、话题和时间是建议，想改再改。' : 'AI 生成的内容，每个平台都按它的要求标注了。'}</div>
       <div class="rows">${rest.map((x) => {
         const i = cut.pubs.indexOf(x); const w = when(x.at); const name = PF[x.pf][1];
-        if (editing.has(i)) return `<div class="prow ed">${pf(x.pf)}<span class="nm">${name}</span><input type="text" value="${esc(x.title)}" data-title="${i}" aria-label="${name} 标题"><input type="datetime-local" value="${x.at}" data-at="${i}" aria-label="${name} 发布时间"><button class="btn" data-save="${i}">好了</button></div>`;
+        if (editing.has(i)) return `<div class="prow ed">${pf(x.pf)}<span class="nm">${name}</span><input type="text" value="${esc(x.title)}" data-title="${i}" aria-label="${name} 标题"><input type="datetime-local" value="${x.at}" data-at="${i}" aria-label="${name} 发布时间"><button class="btn" data-save="${i}">好了</button>${editFields(x, i, name)}</div>`;
         let st;
-        if (x.state === 'pending') st = `<button class="link" data-edit="${i}" aria-label="改${name}的标题或时间">改</button>`;
+        if (x.state === 'pending') st = `<button class="link" data-edit="${i}" aria-label="改${name}的标题、正文、话题或时间">改</button>`;
         else if (x.state === 'confirmed') st = '<span class="st sched">已确认</span>';
         else if (x.state === 'skip') st = '<span class="st">不发</span>';
         else if (x.issue && !x.issue.done) st = '<span class="st bad">出了问题</span>';
         else st = x.n != null ? `<span class="x ${ratio(x).cls}" title="24 小时 ${fmt(x.n)} 播放，平时 ${fmt(BASE[x.pf])}">${ratio(x).txt}</span>` : '<span class="st pub">已发布</span>';
-        return `<div class="prow ${x.state === 'skip' ? 'off' : ''} ${x.issue && !x.issue.done ? 'bad' : ''}">${pf(x.pf)}<span class="nm">${name}</span><span class="ti" title="${esc(x.title)}">${esc(x.title)}${x.note ? `<span class="sub"> · ${esc(x.note)}</span>` : ''}</span><span class="tm">${w.text}</span>${st}</div>`;
+        return `<div class="prow ${x.state === 'skip' ? 'off' : ''} ${x.issue && !x.issue.done ? 'bad' : ''}">${pf(x.pf)}<span class="nm">${name}</span><button class="ti tog" type="button" data-more="${i}" aria-expanded="${opened.has(i)}" title="${esc(x.title)}">${esc(x.title)}${x.note ? `<span class="sub"> · ${esc(x.note)}</span>` : ''}</button><span class="tm">${w.text}</span>${st}${opened.has(i) ? detHtml(x) : ''}</div>`;
       }).join('')}</div>
       ${solo.map((x) => {
         const i = cut.pubs.indexOf(x); const w = when(x.at);
         const body = x.state === 'pending'
           ? `<div class="acts"><button class="btn pri" data-solo="confirmed" data-i="${i}">${w.text} 发</button><button class="btn" data-solo="now" data-i="${i}">现在发</button><button class="btn" data-solo="manual" data-i="${i}">我自己发</button></div>`
           : `<div class="acts"><span class="st ${x.state === 'skip' ? '' : 'done'}">${{ confirmed: `已确认，${w.text} 发`, now: '已确认，正在发', manual: '你自己发，发完告诉我', skip: '先不发' }[x.state]}</span></div>`;
-        return `<div class="solo"><div class="sh">${pf('xhs')}小红书 · 每条都要你单独确认</div><div class="ti">${esc(x.title)}</div><div class="sub">${esc(x.note || '竖屏 · 封面 3:4')}</div>${body}</div>`;
+        const ed = editing.has(i);
+        const head = ed
+          ? `<div class="ef"><label class="lab" for="st${i}">标题</label><input type="text" id="st${i}" value="${esc(x.title)}" data-title="${i}" aria-label="小红书 标题"><label class="lab" for="sa${i}">发布时间</label><input type="datetime-local" id="sa${i}" value="${x.at}" data-at="${i}" aria-label="小红书 发布时间"></div>${editFields(x, i, '小红书')}<div class="acts"><button class="btn" data-save="${i}">好了</button></div>`
+          : `<div class="ti">${esc(x.title)}</div><div class="sub">${esc(x.note || '竖屏 · 封面 3:4')}</div><button class="tog" type="button" data-more="${i}" aria-expanded="${opened.has(i)}">${opened.has(i) ? '收起正文和话题' : '看正文和话题'}</button>${opened.has(i) ? detHtml(x) : ''}`;
+        return `<div class="solo"><div class="sh">${pf('xhs')}小红书 · 每条都要你单独确认${x.state === 'pending' && !ed ? '<button class="link" style="margin-left:auto" data-edit="' + i + '" aria-label="改小红书的标题、正文、话题或时间">改</button>' : ''}</div>${head}${ed ? '' : body}</div>`;
       }).join('')}
       ${batch.length
         ? `<div class="cfoot"><span class="hint">确认之后才会排进发布；没确认的到时间也不会发。</span><button class="link" data-skipcut>${one ? '先不发' : '这支先不发'}</button><button class="btn pri lg" data-confirm>确认这 ${batch.length} 条，按时间发</button></div>`
@@ -198,7 +207,8 @@ function confirmPanel(work, cut, opts = {}) {
     const b = e.target.closest('button'); if (!b) return; const ds = b.dataset;
     if (ds.ver) ver = +ds.ver;
     else if (ds.edit) editing.add(+ds.edit);
-    else if (ds.save) { const i = +ds.save; cut.pubs[i].title = el.querySelector(`[data-title="${i}"]`).value; cut.pubs[i].at = el.querySelector(`[data-at="${i}"]`).value || cut.pubs[i].at; editing.delete(i); }
+    else if (ds.more) { const i = +ds.more; opened.has(i) ? opened.delete(i) : opened.add(i); }
+    else if (ds.save) { const i = +ds.save; const x = cut.pubs[i]; x.title = el.querySelector(`[data-title="${i}"]`).value; x.at = el.querySelector(`[data-at="${i}"]`).value || x.at; x.body = el.querySelector(`[data-body="${i}"]`).value.trim(); x.tags = tagList(el.querySelector(`[data-tags="${i}"]`).value); editing.delete(i); opened.add(i); }
     else if (ds.solo) { cut.pubs[+ds.i].state = ds.solo; toast(ds.solo === 'manual' ? '好，这条你自己发' : '小红书这条已确认'); changed(); }
     else if (ds.retry) { cut.pubs[+ds.retry].issue.done = true; toast('正在重试'); changed(); }
     else if ('skipcut' in ds) { cutPending(cut).forEach((x) => (x.state = 'skip')); cut.skipped = true; opts.onDone && opts.onDone(); changed(); }

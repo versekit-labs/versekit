@@ -620,7 +620,8 @@ export function effectiveCopy({ overrides, versionMeta, workMeta, cutTitle = nul
   const pick = (...vals) => vals.find((v) => nonEmpty(v)) ?? null;
   return {
     title: pick(ov.title, oc.title, vm.title, wm.title, cutTitle, workTitle) ?? "",
-    body: pick(ov.body, ov.desc, oc.body, vm.body, vm.description, wm.body, wm.description) ?? "",
+    // 人亲手清空的正文（空字符串）也算数：不回退到入库时写的正文。
+    body: typeof ov.body === "string" ? ov.body : pick(ov.body, ov.desc, oc.body, vm.body, vm.description, wm.body, wm.description) ?? "",
     tags: textList(ov.tags) ?? textList(oc.tags) ?? textList(vm.tags) ?? textList(wm.tags) ?? [],
   };
 }
@@ -1244,13 +1245,15 @@ export function editPublish({
   stitch = null,
   caption = null,
   draft = null,
+  body = null,
+  tags = null,
   now = Date.now(),
 }) {
   const row = requireConfirmable(publishId);
   const tiktokFields = { privacy, comment, duet, stitch, caption, draft };
   const touchesTiktok = Object.values(tiktokFields).some((v) => v != null);
-  if (title == null && at == null && !touchesTiktok) {
-    fail("要改什么？给 --title 或 --at（至少一个）；TikTok 平台稿还可以改 --privacy / --comment / --duet / --stitch / --caption / --draft");
+  if (title == null && at == null && body == null && tags == null && !touchesTiktok) {
+    fail("要改什么？给 title、body、tags 或 at（至少一个）；TikTok 平台稿还可以改 --privacy / --comment / --duet / --stitch / --caption / --draft");
   }
   if (touchesTiktok && row.platform !== TIKTOK_API) {
     fail(`隐私级别、评论/合拍/拼接开关、文案和送草稿箱只适用于 TikTok 官方接口的平台稿；这条是 ${row.platform}，只能改标题和时间`);
@@ -1260,6 +1263,31 @@ export function editPublish({
   if (title != null) {
     changes.title = { from: overrides.title ?? null, to: requireString(title, "标题", { max: 200 }) };
     overrides.title = changes.title.to;
+  }
+  // 正文、话题（ACC-v2-copy-04）：存在 overrides 顶层，effectiveCopy 取值链里排第一。
+  // 正文可以清空（给空字符串）；话题可以清空（给 []）。改完按这个平台的限制整体校验，超限拒绝、不截断。
+  if (body != null) {
+    if (typeof body !== "string") fail("正文必须是字符串");
+    if (body.length > 20000) fail("正文太长（最多 20000 字）");
+    const to = body.trim();
+    changes.body = { from: overrides.body ?? null, to };
+    overrides.body = to;
+  }
+  if (tags != null) {
+    if (!Array.isArray(tags) || tags.some((t) => typeof t !== "string")) fail("话题必须是字符串数组（不带 #）");
+    const to = tags.map((t) => t.trim().replace(/^#+/, "")).filter(Boolean);
+    changes.tags = { from: overrides.tags ?? null, to };
+    overrides.tags = to;
+  }
+  const now0 = resolvePublishCopy(row.id);
+  if (body != null || tags != null || (title != null && title.trim() !== now0.title)) {
+    const next = {
+      title: overrides.title ?? now0.title,
+      body: overrides.body ?? now0.body,
+      tags: Array.isArray(overrides.tags) ? overrides.tags : now0.tags,
+    };
+    const bad = copyViolations(row.platform, next);
+    if (bad.length) fail(`${bad.join("；")}（超限不会自动截断，请改短后再保存）`);
   }
   if (touchesTiktok) {
     const t = { ...(overrides.tiktok ?? {}) };
@@ -1305,6 +1333,8 @@ export function editPublish({
       handle: row.handle,
       state: row.state,
       title: overrides.title ?? null,
+      body: overrides.body ?? null,
+      tags: overrides.tags ?? null,
       scheduledAt: changes.at ? at : row.scheduled_at,
       ...(touchesTiktok ? { tiktok: { ...(overrides.tiktok ?? {}), caption: overrides.caption ?? null, draft: overrides.draft === true } } : {}),
       changes,

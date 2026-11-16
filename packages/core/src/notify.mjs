@@ -24,7 +24,7 @@ import {
 } from "./cards.mjs";
 import { getPublishRow } from "./publish-flow.mjs";
 import { approvalLink } from "./approval.mjs";
-import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups } from "./store.mjs";
+import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups, effectiveCopy } from "./store.mjs";
 import { planRules, takenTimes } from "./plan-rules.mjs";
 import { basename } from "node:path";
 
@@ -258,6 +258,7 @@ function groupNameOf(groupId) {
 }
 
 /** 卡片上这条平台稿的标题 = 适配器真正会发的标题：overrides.title > 作品 meta.title > 作品标题。 */
+const rowCopy = (r) => effectiveCopy({ overrides: r.overrides_json, versionMeta: r.version_meta, workMeta: r.work_meta_json, cutTitle: r.cut_title, workTitle: r.work_title });
 const rowTitle = (r) => jsonOr(r.overrides_json).title ?? jsonOr(r.work_meta_json).title ?? r.work_title;
 
 function loadCut(cutId) {
@@ -265,11 +266,12 @@ function loadCut(cutId) {
     .prepare(
       `SELECT p.id AS publish_id, p.state, p.scheduled_at, p.overrides_json, p.account_id, p.version_id, p.work_id,
               a.platform, a.handle, a.removed_at, a.group_id,
-              c.id AS cut_id, c.title AS cut_title, w.title AS work_title, w.meta_json AS work_meta_json
+              c.id AS cut_id, c.title AS cut_title, w.title AS work_title, w.meta_json AS work_meta_json, v.meta_json AS version_meta
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN cut c ON c.id = p.cut_id
          JOIN work w ON w.id = p.work_id
+         LEFT JOIN cut_version v ON v.id = p.version_id
         WHERE p.cut_id = ?
         ORDER BY p.rowid`, // 按建稿顺序：同一毫秒建的不能靠随机 id 排，卡片上的行序会飘
     )
@@ -283,7 +285,7 @@ function loadCut(cutId) {
   };
 }
 
-const toRow = (r) => ({ publishId: r.publish_id, platform: r.platform, title: rowTitle(r), at: r.scheduled_at });
+const toRow = (r) => ({ publishId: r.publish_id, platform: r.platform, title: rowTitle(r), body: rowCopy(r).body, tags: rowCopy(r).tags, at: r.scheduled_at });
 
 /** 这支成片在作品里排第几、一共几支（不算整支已取消的）。 */
 function cutPosition(workId, cutId) {
@@ -332,8 +334,9 @@ function renderXhs(publishId, { now } = {}) {
   const r = open()
     .prepare(
       `SELECT p.id AS publish_id, p.state, p.scheduled_at, p.overrides_json, p.account_id, p.version_id,
-              a.platform, a.group_id, c.title AS cut_title, w.title AS work_title, w.meta_json AS work_meta_json
+              a.platform, a.group_id, c.title AS cut_title, w.title AS work_title, w.meta_json AS work_meta_json, v.meta_json AS version_meta
          FROM publish p JOIN account a ON a.id = p.account_id JOIN cut c ON c.id = p.cut_id JOIN work w ON w.id = p.work_id
+         LEFT JOIN cut_version v ON v.id = p.version_id
         WHERE p.id = ?`,
     )
     .get(publishId);
@@ -346,6 +349,8 @@ function renderXhs(publishId, { now } = {}) {
     workTitle: r.work_title,
     cutTitle: r.cut_title,
     title: rowTitle(r),
+    body: rowCopy(r).body,
+    tags: rowCopy(r).tags,
     at: r.scheduled_at,
     assetNote: version ? `${version.language} 版本 · ${basename(version.asset_path)}` : null,
     quotaLeft: Math.max(0, rules.dailyCap - today),

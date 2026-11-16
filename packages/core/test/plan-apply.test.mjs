@@ -12,7 +12,7 @@ const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
 const { publishInputFor } = await import("../src/publish-flow.mjs");
-const { COMMANDS } = await import("../src/commands.mjs");
+const { COMMANDS, findCommand, parseArgs } = await import("../src/commands.mjs");
 const bilibili = (await import("../../adapter-bilibili/src/index.mjs")).default;
 const xhs = (await import("../../adapter-xiaohongshu/src/index.mjs")).default;
 
@@ -187,4 +187,52 @@ test("只给成片标题：适配器拿到成片标题而不是作品标题；�
   assert.equal((await bilibili.publish(publishInputFor(p.id, { dryRun: true }))).title, "短片标题");
   store.editPublish({ publishId: p.id, title: "人改的标题" });
   assert.equal((await bilibili.publish(publishInputFor(p.id, { dryRun: true }))).title, "人改的标题");
+});
+
+test("ACC-v2-copy-04：publish.edit 可改正文、话题；适配器收到改后的值；清空后「没有正文/没有话题」", async () => {
+  setup();
+  const { work, short } = ingest({ copy: { bilibili: { title: "B站标题", body: "入库正文", tags: ["a", "b"] } } });
+  h["plan.apply"]({ cutId: short.id, accounts: ["bilibili"] });
+  const view = () => store.showWork(work.id).cuts[1].publishes[0];
+  const p = view();
+  assert.equal(p.body, "入库正文");
+
+  const r = h["publish.edit"]({ publishId: p.id, body: "人改的正文", tags: ["#新话题", " 第二个 "] });
+  assert.equal(r.body, "人改的正文");
+  assert.deepEqual(view().tags, ["新话题", "第二个"]);
+  const out = await bilibili.publish(publishInputFor(p.id, { dryRun: true }));
+  assert.equal(out.args[out.args.indexOf("--desc") + 1], "人改的正文");
+  assert.deepEqual(out.tags, ["新话题", "第二个"]);
+
+  h["publish.edit"]({ publishId: p.id, body: "", tags: [] });
+  assert.equal(view().body, "");
+  assert.deepEqual(view().tags, []);
+  assert.deepEqual(view().empty.filter((k) => k !== "title"), ["body", "tags"]);
+});
+
+test("ACC-v2-copy-04：经 parseArgs（CLI/HTTP 入口）给空正文也能清空，而不是被当成没填", () => {
+  setup();
+  const { work, short } = ingest({ copy: { bilibili: { title: "B站标题", body: "入库正文", tags: ["a"] } } });
+  h["plan.apply"]({ cutId: short.id, accounts: ["bilibili"] });
+  const p = store.showWork(work.id).cuts[1].publishes[0];
+  const cmd = findCommand("publish.edit");
+  const args = parseArgs(cmd, { publishId: p.id, body: "" });
+  assert.equal(args.body, "", "空字符串要保留下来");
+  h["publish.edit"](args);
+  assert.equal(store.showWork(work.id).cuts[1].publishes[0].body, "");
+  // 其他可选参数的空串仍当没填
+  assert.deepEqual(parseArgs(cmd, { publishId: p.id, title: "" }), { publishId: p.id });
+});
+
+test("ACC-v2-copy-04：改正文、话题按平台限制校验，超限给人话且不落库；只改时间不受已超限标题影响", () => {
+  setup();
+  const { work, short } = ingest({ copy: { xiaohongshu: { title: "短标题", body: "正文" } } });
+  h["plan.apply"]({ cutId: short.id, accounts: ["xiaohongshu", "bilibili"] });
+  const pubs = Object.fromEntries(store.showWork(work.id).cuts[1].publishes.map((x) => [x.platform, x]));
+  assert.throws(() => h["publish.edit"]({ publishId: pubs.xiaohongshu.id, body: "字".repeat(1001) }), /小红书 正文最多 1000 字，现在是 1001 字/);
+  assert.throws(() => h["publish.edit"]({ publishId: pubs.xiaohongshu.id, title: "题".repeat(21) }), /小红书 标题最多 20 字/);
+  assert.throws(() => h["publish.edit"]({ publishId: pubs.bilibili.id, tags: Array.from({ length: 11 }, (_, i) => `t${i}`) }), /B站 话题最多 10 个/);
+  assert.throws(() => h["publish.edit"]({ publishId: pubs.bilibili.id, tags: ["字".repeat(21)] }), /每个话题最多 20 字/);
+  assert.equal(store.showWork(work.id).cuts[1].publishes.find((x) => x.platform === "xiaohongshu").body, "正文");
+  assert.throws(() => h["publish.edit"]({ publishId: pubs.bilibili.id }), /要改什么/);
 });

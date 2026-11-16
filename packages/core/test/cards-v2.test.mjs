@@ -346,7 +346,7 @@ test("ACC-v2-card-02 小红书单独卡片：结构与按钮；点完原地更�
   assert.equal(xhs.header.title.content, "小红书，要你单独确认");
   assert.equal(xhs.header.subtitle.content, `${f.title} · 短片一`);
   const info = xhs.body.elements[0].content;
-  assert.match(info, /^\*\*露营小记 \d+\*\*\n<font color='grey'>zh 版本 · cards-v2-\d+-short\.mp4 · 建议 .*\d\d:\d\d 发 · 今天还能发 \d+ 条<\/font>$/);
+  assert.match(info, /^\*\*露营小记 \d+\*\*\n<font color='grey'>zh 版本 · cards-v2-\d+-short\.mp4 · 建议 .*\d\d:\d\d 发 · 今天还能发 \d+ 条<\/font>\n<font color='grey'>没有正文<\/font>\n<font color='grey'>没有话题<\/font>$/);
   const primary = xhs.body.elements.find((e) => e.tag === "button");
   assert.equal(primary.type, "primary");
   assert.match(primary.text.content, /\d\d:\d\d 发$/);
@@ -503,4 +503,20 @@ test("旧按钮（重试等）行为不变：照旧执行并原地更新成一�
   assert.equal(res.ok, true);
   assert.equal(ch.updates().length, 1);
   assert.equal(ch.updates()[0].card.header.title.content, "versekit · 已处理");
+});
+
+test("ACC-v2-copy-04：确认卡片显示正文前几行与话题；为空时写「没有正文」「没有话题」", () => {
+  const rows = [
+    { publishId: "p1", platform: "bilibili", title: "标题", body: "第一行\n第二行\n\n第三行\n第四行", tags: ["露营", "新手"], at: Date.now() + H },
+    { publishId: "p2", platform: "douyin", title: "标题二", body: "", tags: [], at: Date.now() + H },
+  ];
+  const card = cards.buildConfirmCard({ cut: { id: "c1", title: "长片" }, index: 1, total: 1, workTitle: "作品", rows });
+  const t = text(card);
+  assert.match(t, /第一行\\n第二行\\n第三行…/);
+  assert.doesNotMatch(t, /第四行/);
+  assert.match(t, /#露营 #新手/);
+  assert.match(t, /没有正文/);
+  assert.match(t, /没有话题/);
+  const long = cards.copySummary({ body: "字".repeat(60), tags: [] });
+  assert.equal([...long.bodyText].length, 41);
 });

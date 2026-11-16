@@ -244,6 +244,28 @@ export function buildNewWorkCard({ workId, workTitle, cutCount, publishCount, gr
 }
 
 /**
+ * 卡片上看到的文案摘要（ACC-v2-copy-04）：正文前几行 + 话题；为空时明确写「没有正文」「没有话题」。
+ * 正文只给前 3 行、每行最多 40 字，免得卡片被长文撑开；完整内容到 Web 确认面板里看、改。
+ */
+const BODY_LINES = 3;
+const BODY_LINE_CHARS = 40;
+export function copySummary({ body = "", tags = [] } = {}) {
+  const clip = (t) => (t.length > BODY_LINE_CHARS ? `${[...t].slice(0, BODY_LINE_CHARS).join("")}…` : t);
+  const all = String(body ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const shown = all.slice(0, BODY_LINES).map(clip);
+  const more = all.length > BODY_LINES ? "…" : "";
+  const bodyText = shown.length ? shown.join("\n") + more : "没有正文";
+  const tagList = (tags ?? []).filter(Boolean);
+  const tagText = tagList.length ? tagList.map((t) => `#${t}`).join(" ") : "没有话题";
+  return { bodyText, tagText, bodyEmpty: !shown.length, tagsEmpty: !tagList.length };
+}
+const copyLines = (r) => {
+  const c = copySummary(r);
+  const dim = (empty, t) => (empty ? grey(t) : t);
+  return `${dim(c.bodyEmpty, c.bodyText)}\n${dim(c.tagsEmpty, c.tagText)}`;
+};
+
+/**
  * 一支成片的确认卡片。rows 是这支成片实际的平台稿（不含小红书）：
  * [{ publishId, platform, title, at }]，所以有几条平台稿就有几行，不是固定 6 行。
  */
@@ -251,7 +273,7 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
   const lines = [];
   rows.forEach((r, i) => {
     if (i) lines.push({ tag: "hr" });
-    lines.push(md(`**${platformLabel(r.platform)}**　${r.title}\n${grey(formatWhen(r.at, now))}`));
+    lines.push(md(`**${platformLabel(r.platform)}**　${r.title}\n${grey(formatWhen(r.at, now))}\n${copyLines(r)}`));
   });
   return v2Card({
     title: withGroup(`${cut.title} · 第 ${index} 支，共 ${total} 支`, groupName),
@@ -354,7 +376,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
 }
 
 /** 小红书单独确认：三个按钮，各对应一条真命令（按建议时间发 / 现在发 / 我自己发）。 */
-export function buildXhsCard({ publishId, workTitle, cutTitle, title, at, assetNote = null, quotaLeft = null, groupName = null, now = Date.now(), cardKey = `xhs:${publishId}:${now}` }) {
+export function buildXhsCard({ publishId, workTitle, cutTitle, title, body = "", tags = [], at, assetNote = null, quotaLeft = null, groupName = null, now = Date.now(), cardKey = `xhs:${publishId}:${now}` }) {
   const when = formatWhen(at, now);
   const facts = [assetNote, Number.isFinite(at) ? `建议 ${when} 发` : "还没排时间", Number.isInteger(quotaLeft) ? `今天还能发 ${quotaLeft} 条` : null].filter(Boolean);
   const half = (label, cmd) => ({
@@ -367,7 +389,7 @@ export function buildXhsCard({ publishId, workTitle, cutTitle, title, at, assetN
     title: withGroup("小红书，要你单独确认", groupName),
     subtitle: `${workTitle} · ${cutTitle}`,
     elements: [
-      md(`**${title}**\n${grey(facts.join(" · "))}`),
+      md(`**${title}**\n${grey(facts.join(" · "))}\n${copyLines({ body, tags })}`),
       {
         tag: "button",
         type: "primary",

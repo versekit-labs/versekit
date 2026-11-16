@@ -124,6 +124,26 @@ a.wcell:hover b{text-decoration:underline}
 .prow .tm{font-size:13px;font-weight:600;white-space:nowrap}
 .prow.ed{grid-template-columns:20px 64px minmax(0,1fr) auto auto}
 .prow.ed input[type=text]{width:100%}
+/* 每条平台稿能展开看正文和话题；「改」里能改标题、正文、话题、时间（#175） */
+.prow{align-content:center}
+.prow .tog{font:inherit;font-size:14px;color:var(--ink);background:none;border:0;padding:0;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;min-height:32px}
+.prow .tog::after{content:" ▾";color:var(--ink2);font-size:12px}
+.prow .tog[aria-expanded=true]::after{content:" ▴"}
+.pdet{grid-column:1/-1;padding:2px 0 10px 30px;display:grid;gap:6px;font-size:13px}
+.pdet .dl{display:grid;grid-template-columns:40px minmax(0,1fr);gap:8px;align-items:start}
+.pdet .k{color:var(--ink2)}
+.pdet .bd{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+.pdet .none{color:var(--ink2)}
+.pdet .tags{display:flex;gap:6px;flex-wrap:wrap}
+.pdet .tag{border:1px solid var(--line);border-radius:6px;padding:1px 7px;background:var(--paper)}
+.prow.ed .ef{grid-column:3/-1;display:grid;gap:6px}
+.prow.ed textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
+.prow.ed .lab{font-size:12px;color:var(--ink2)}
+.solo .pdet{padding:6px 0 0}
+.solo .tog{font:inherit;font-size:13px;background:none;border:0;padding:0;color:var(--ink2);text-decoration:underline;cursor:pointer;min-height:32px}
+.solo .ef{display:grid;gap:6px;margin-top:8px}
+.solo .ef textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
+.solo .ef .lab{font-size:12px;color:#6b5d1c}
 .prow.off .ti,.prow.off .tm{color:var(--ink2);text-decoration:line-through}
 .prow.bad{background:var(--bad-bg)}
 .solo{margin-top:12px;border:1px solid var(--mark-line);background:var(--mark-bg);border-radius:var(--r);padding:12px}
@@ -163,5 +183,7 @@ a.wcell:hover b{text-decoration:underline}
   .prow .nm{display:none}
   .prow .tm{grid-column:2}
   .prow.ed input[type=datetime-local]{grid-column:2}
+  .prow.ed .ef{grid-column:2/-1}
+  .pdet{padding-left:0}
   .cp video,.cp .poster,.cp.vert video,.cp.vert .poster{height:220px}
 }

@@ -1257,10 +1257,13 @@ async function cmdPublish() {
       ...(val("--caption") != null ? { caption: val("--caption") } : {}),
       ...Object.fromEntries(["comment", "duet", "stitch", "draft"].map((n) => [n, toggle(n)]).filter(([, v]) => v !== undefined)),
     };
-    if (!publishId || (val("--title") == null && at == null && !Object.keys(tiktok).length)) {
-      throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]");
+    // 话题用逗号分隔（半角或全角）；--tags "" 表示清空话题。
+    const tags = val("--tags") != null ? val("--tags").split(/[,，]/).map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
+    const body = val("--body");
+    if (!publishId || (val("--title") == null && body == null && tags === undefined && at == null && !Object.keys(tiktok).length)) {
+      throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--body <正文>] [--tags <话题,逗号分隔>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]");
     }
-    const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(at != null ? { at } : {}), ...tiktok }, { log });
+    const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(body != null ? { body } : {}), ...(tags !== undefined ? { tags } : {}), ...(at != null ? { at } : {}), ...tiktok }, { log });
     if (human) {
       console.log(`已改 ${platformLabelOf(data.platform)} ${data.publishId}：${data.title ? `标题「${data.title}」 ` : ""}${data.scheduledAt ? fmtTime(data.scheduledAt) : ""}`);
       if (data.tiktok) {
