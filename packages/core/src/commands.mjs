@@ -715,6 +715,10 @@ export const remoteCommands = () => COMMANDS.filter((c) => c.remote);
  * args or throws with a field name — never a silent coercion, because `publishId: undefined`
  * reaching the queue is how a card button "does nothing".
  */
+// 空字符串本身是有意义的值的参数：publish.edit 的 body 给 "" 表示清空正文（ACC-v2-copy-04）。
+// 其他可选参数仍把 "" 当成没填，避免表单里的空输入框变成"改成空"。
+const EMPTY_STRING_MEANS_VALUE = { "publish.edit": ["body"] };
+
 export function parseArgs(command, input = {}) {
   const args = command.args ?? {};
   const out = {};
@@ -722,7 +726,8 @@ export function parseArgs(command, input = {}) {
     const optional = spec.endsWith("?");
     const type = spec.replace(/\?$/, "");
     const value = input[key];
-    if (value == null || value === "") {
+    const keepEmpty = value === "" && optional && type === "string" && (EMPTY_STRING_MEANS_VALUE[command.name] ?? []).includes(key);
+    if (!keepEmpty && (value == null || value === "")) {
       if (optional) continue;
       throw new Error(`命令 ${command.name} 缺少参数：${key}`);
     }

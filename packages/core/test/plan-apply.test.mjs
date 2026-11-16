@@ -12,7 +12,7 @@ const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
 const { publishInputFor } = await import("../src/publish-flow.mjs");
-const { COMMANDS } = await import("../src/commands.mjs");
+const { COMMANDS, findCommand, parseArgs } = await import("../src/commands.mjs");
 const bilibili = (await import("../../adapter-bilibili/src/index.mjs")).default;
 const xhs = (await import("../../adapter-xiaohongshu/src/index.mjs")).default;
 
@@ -208,6 +208,20 @@ test("ACC-v2-copy-04：publish.edit 可改正文、话题；适配器收到改�
   assert.equal(view().body, "");
   assert.deepEqual(view().tags, []);
   assert.deepEqual(view().empty.filter((k) => k !== "title"), ["body", "tags"]);
+});
+
+test("ACC-v2-copy-04：经 parseArgs（CLI/HTTP 入口）给空正文也能清空，而不是被当成没填", () => {
+  setup();
+  const { work, short } = ingest({ copy: { bilibili: { title: "B站标题", body: "入库正文", tags: ["a"] } } });
+  h["plan.apply"]({ cutId: short.id, accounts: ["bilibili"] });
+  const p = store.showWork(work.id).cuts[1].publishes[0];
+  const cmd = findCommand("publish.edit");
+  const args = parseArgs(cmd, { publishId: p.id, body: "" });
+  assert.equal(args.body, "", "空字符串要保留下来");
+  h["publish.edit"](args);
+  assert.equal(store.showWork(work.id).cuts[1].publishes[0].body, "");
+  // 其他可选参数的空串仍当没填
+  assert.deepEqual(parseArgs(cmd, { publishId: p.id, title: "" }), { publishId: p.id });
 });
 
 test("ACC-v2-copy-04：改正文、话题按平台限制校验，超限给人话且不落库；只改时间不受已超限标题影响", () => {
