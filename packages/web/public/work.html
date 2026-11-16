@@ -111,7 +111,7 @@
     }
     const multi = work.cuts.length > 1;
     const [cls, txt] = workState(work);
-    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state));
+    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state) || p.state === "notify_pending");
     const current = VK.current();
 
     main.innerHTML =
@@ -122,8 +122,8 @@
       `<div>${cutSteps(work, cut.id)}<div class="sidebox ${multi ? "" : "first"}"><h2>经过${multi ? " · " + esc(cut.title) : ""}</h2>` +
       `<div class="tl" style="margin-top:6px">${events(work, cut).map(([at, t, bad]) => `<b>${esc(when(at).text)}</b><span class="${bad ? "bad" : ""}">${esc(t)}</span>`).join("")}</div></div></div></div>` +
       `<div class="below">` +
-      issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：没有发出去</b>` +
-        `<div class="why">${esc(p.error?.message ?? "原因还没记下来")}</div>` +
+      issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：${p.state === "notify_pending" && !p.error ? "需要你手动处理" : "没有发出去"}</b>` +
+        `<div class="why">${esc(p.error?.message ?? (p.state === "notify_pending" ? "这条停在待人工确认，处理好后可以直接再试一次" : "原因还没记下来"))}</div>` +
         `<div class="acts"><button class="btn pri" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
       resultsTable(cut, multi) + `</div>` +
       `<div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;

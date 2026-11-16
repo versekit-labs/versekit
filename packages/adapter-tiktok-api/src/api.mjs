@@ -56,7 +56,7 @@ export function classifyError(code, message = "", { status = 0, logId = null } =
   if (code === "rate_limit_exceeded") return new AdapterError("quota", `TikTok 限流（${text}）`);
   if (status >= 500 || code === "internal_error" || code === "internal") return new AdapterError("unknown", `TikTok 服务端出错（${text}）`);
   if (code === "unaudited_client_can_only_post_to_private_accounts") {
-    return new AdapterError("platform_reject", `应用还没通过 TikTok 审核，只能发「仅自己可见」（${text}）`);
+    return new AdapterError("platform_reject", `应用还没通过 TikTok 审核，所以 TikTok 要求发布账号本身是私密账号：先在 TikTok App 里设置和隐私 → 隐私 → 私密账号，打开后再重试；应用通过审核后就没有这个限制（${text}）`);
   }
   return new AdapterError("platform_reject", `TikTok 拒绝了这次请求（${text}）`);
 }
