@@ -112,7 +112,16 @@
 
     const others = awaiting.filter((w) => w.workId !== state.focusId);
     const more = others.map((w) => {
-      const n = w.cuts.reduce((sum, c) => sum + pending(c).length, 0);
+      const pend = w.cuts.flatMap((c) => c.publishes.filter((p) => p.state === "pending_confirm"));
+      const n = pend.length;
+      const x = pend[0];
+      if (n === 1 && x.platform === "xiaohongshu") {
+        const t = when(x.scheduledAt);
+        return `<div class="oth"><span class="st wait"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+          `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">小红书 · 建议${esc(t.text)} · 不确认就不发</div></div>` +
+          `<div class="a"><button class="btn" type="button" data-solo="manual" data-pub="${esc(x.publishId)}">我自己发</button>` +
+          `<button class="btn pri" type="button" data-solo="approve" data-pub="${esc(x.publishId)}">${esc(t.t || "按建议时间")} 发</button></div></div>`;
+      }
       return `<div class="oth"><span class="st wait"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
         `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div>` +
         `<div class="a"><a class="btn pri" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
@@ -126,7 +135,7 @@
       `<div class="sub">这一页只显示当前账号组${current ? "「" + esc(current.name) + "」" : ""}的内容</div></div>` +
       `<div class="a"><button class="btn" type="button" data-group="${esc(o.group.id)}">切过去</button></div></div>`).join("");
 
-    const results = (data.results ?? []).map((r) => {
+    const results = (data.results ?? []).slice(0, 5).map((r) => {
       const q = r.multiple;
       const width = q == null ? 0 : Math.min(100, q * 40);
       const verdict = q == null ? "还没法比" : esc(r.verdictLabel ?? "");
@@ -149,7 +158,7 @@
       groupRows +
       `<h2 class="sec">最近结果 · 发布 24 小时的播放，和这个账号最近 20 条的中位数比</h2>` +
       (results
-        ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${results}</tbody></table></div>`
+        ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${results}</tbody></table></div><div class="sub" style="padding-top:8px"><a class="link" href="data.html">看全部 →</a></div>`
         : '<div class="panel empty">发布满 24 小时后，这里会出现每条和平时的对比。</div>') +
       `<div class="cmd">对应命令：<code>vk today</code>　没确认的到时间也不会发；小红书每条单独确认。</div>`;
 
