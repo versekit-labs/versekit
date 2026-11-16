@@ -13,6 +13,17 @@
 .legacy b{font-weight:600;display:block}
 .legacy .sub{display:block}
 .legacy .go{margin-left:auto;color:var(--ink2);font-size:13px;flex:none}
+.tk{max-width:720px;margin-top:14px;padding:16px 18px}
+.tk .who{display:flex;align-items:center;gap:14px;min-height:56px}
+.tk .av{width:48px;height:48px;border-radius:50%;background:var(--side);border:1px solid var(--line);flex:none;object-fit:cover;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--ink2)}
+.tk .nick{font-size:16px;font-weight:700;overflow-wrap:anywhere}
+.tk .meta{font-size:13px;color:var(--ink2);overflow-wrap:anywhere}
+.tk .go{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tk .say{margin-top:12px;font-size:13px;color:var(--ink2);line-height:1.6;max-width:62ch}
+.tk .say.bad{color:var(--bad);font-weight:600}
+.tk .say a{color:var(--ink)}
+.tk .add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.tk .add input{flex:1 1 220px}
 </style>
 </head>
 <body data-page="system">
@@ -30,6 +41,10 @@
         这些读的是 <code>vk group list</code> / <code>vk account list</code> / <code>vk doctor --human</code> 的同一份结果。</p>
       <div class="cmd">对应命令：<code>vk group list</code>　<code>vk account list</code>　<code>vk doctor --human</code></div>
     </section>
+
+    <h2 class="sec">TikTok（官方接口）</h2>
+    <div class="panel tk" id="tk" aria-label="TikTok 官方接口账号"><div class="meta">正在读账号…</div></div>
+    <div class="cmd">对应命令：<code>vk account connect &lt;账号&gt;</code>　<code>vk account creator &lt;账号&gt;</code>　令牌只存在这台电脑上。</div>
 
     <h2 class="sec">现在还能用的旧流程</h2>
     <div class="panel legacy" aria-label="旧流程入口">
@@ -53,6 +68,84 @@
   } catch (err) {
     sub.textContent = `读不到账号组：${err.message}`;
   }
+})();
+
+// ── TikTok 官方接口：Connect TikTok（Login Kit）──────────────────────────────
+// 授权由守护进程在本机临时端口接回调；这里只负责：登记账号 → 打开授权链接 → 等结果 → 显示头像和昵称。
+(function () {
+  const box = document.getElementById("tk");
+  const VK = window.VK;
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const ui = { account: null, note: "", bad: false, url: null, busy: false };
+
+  async function load() {
+    await VK.ready();
+    const current = VK.current();
+    const list = (await VK.request("/api/accounts")).accounts ?? [];
+    ui.account = list.find((a) => a.platform === "tiktok-api" && (!current || a.groupId === current.id) && !a.removed_at) ?? null;
+  }
+
+  const connected = (a) => Boolean(a && a.credential_ref && a.state === "ok");
+
+  function draw() {
+    const a = ui.account;
+    const say = ui.note ? `<div class="say ${ui.bad ? "bad" : ""}" role="status">${ui.note}</div>` : "";
+    if (!a) {
+      box.innerHTML = `<div class="meta">还没有 TikTok 账号。填你的 TikTok 用户名，再点 Connect TikTok，在 TikTok 页面登录并同意即可。</div>` +
+        `<div class="add"><input class="input" id="tk-handle" type="text" placeholder="@你的用户名" aria-label="TikTok 用户名" autocomplete="off">` +
+        `<button class="btn pri" type="button" id="tk-connect"${ui.busy ? " disabled" : ""}>Connect TikTok</button></div>${say}`;
+      return;
+    }
+    const name = a.display_name || a.handle;
+    const avatar = a.avatar_url
+      ? `<img class="av" src="${esc(a.avatar_url)}" alt="${esc(name)} 的头像" width="48" height="48" referrerpolicy="no-referrer">`
+      : `<span class="av" aria-hidden="true">${esc(String(name).replace(/^@/, "").slice(0, 1).toUpperCase())}</span>`;
+    const ok = connected(a);
+    box.innerHTML = `<div class="who">${ok ? avatar : '<span class="av" aria-hidden="true">T</span>'}` +
+      `<div><div class="nick">${ok ? esc(name) : "TikTok"}</div>` +
+      `<div class="meta">${ok ? `${esc(a.handle)} · 已连接，用官方接口发布` : `${esc(a.handle)} · 还没连接`}</div></div>` +
+      `<div class="go"><button class="btn ${ok ? "" : "pri"}" type="button" id="tk-connect"${ui.busy ? " disabled" : ""}>${ok ? "重新连接" : "Connect TikTok"}</button></div></div>${say}`;
+  }
+
+  async function connect() {
+    if (ui.busy) return;
+    ui.busy = true; ui.bad = false; ui.url = null;
+    try {
+      if (!ui.account) {
+        const handle = (document.getElementById("tk-handle")?.value ?? "").trim();
+        if (!handle) throw new Error("先填 TikTok 用户名");
+        const group = VK.current();
+        if (!group) throw new Error("先建一个账号组");
+        await VK.request("/api/accounts", { method: "POST", body: { platform: "tiktok-api", name: handle.replace(/^@/, ""), handle: handle.startsWith("@") ? handle : "@" + handle, group: group.id } });
+        await load();
+      }
+      const id = ui.account.id;
+      ui.note = "正在准备授权链接…"; draw();
+      let r = await VK.request(`/api/accounts/${encodeURIComponent(id)}/connect`, { method: "POST", body: { accountId: id } });
+      if (r.state === "waiting") {
+        ui.url = r.url;
+        ui.note = `请在新打开的 TikTok 页面登录并同意授权；没有弹出就 <a href="${esc(r.url)}" target="_blank" rel="noopener">点这里打开授权页</a>。授权完成后这里会自动显示头像和昵称。`;
+        draw();
+        window.open(r.url, "_blank", "noopener");
+        // 同一账号再调一次 = 等结果（长轮询，最多等 20 秒一轮）。
+        for (let i = 0; i < 30 && r.state === "waiting"; i++) {
+          r = await VK.request(`/api/accounts/${encodeURIComponent(id)}/connect`, { method: "POST", body: { accountId: id, timeoutMs: 20000 } });
+        }
+      }
+      if (r.state !== "connected") throw new Error("等了很久还没有授权完成：再点一次 Connect TikTok 重新开始");
+      await load();
+      ui.note = "已连接。以后在「今天」里确认 TikTok 稿子时，可以选隐私级别后直接发布，或送到 TikTok 草稿箱。";
+    } catch (err) {
+      ui.bad = true;
+      ui.note = `没连上：${esc(err.message)}`;
+    } finally {
+      ui.busy = false;
+      draw();
+    }
+  }
+
+  box.addEventListener("click", (e) => { if (e.target.closest("#tk-connect")) connect(); });
+  load().then(draw, (err) => { box.innerHTML = `<div class="say bad">读不到账号：${esc(err.message)}</div>`; });
 })();
 </script>
 </body>

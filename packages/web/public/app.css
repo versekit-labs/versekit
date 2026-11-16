@@ -347,6 +347,39 @@ a.hint{display:inline-flex;align-items:center;min-height:32px;text-underline-off
 .solo .ti{font-size:14px;margin:8px 0 2px;overflow-wrap:anywhere}
 .solo .sub{color:#6b5d1c}
 .solo .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+/* TikTok 官方接口的发布设置面板（#173）：黄 = 等你处理；绿 = 成了；红 = 出了问题。 */
+.tkset .tk-note{margin:8px 0 10px;font-size:13px;color:#6b5d1c}
+.tkset .tk-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px 18px;align-items:start}
+.tkset .tk-f{display:flex;flex-direction:column;gap:5px;border:0;min-width:0}
+.tkset .tk-f.wide,.tkset .tk-meta.wide,.tkset .tk-load{grid-column:1/-1}
+.tkset .tk-l{font-size:12px;font-weight:600;color:var(--ink2);padding:0}
+.tkset .tk-sel,.tkset .tk-ta{width:100%;border:1px solid var(--ctl);border-radius:7px;background:var(--paper);color:var(--ink);font:400 14px/1.45 var(--sans);padding:0 9px}
+.tkset .tk-sel{height:36px}
+.tkset .tk-ta{padding:7px 9px;resize:vertical;min-height:56px}
+.tkset .tk-tgs{display:flex;flex-direction:column;gap:0}
+.tkset .tk-tg{display:inline-flex;align-items:center;gap:8px;min-height:36px;font-size:14px;cursor:pointer}
+.tkset .tk-tg input{width:18px;height:18px;accent-color:var(--ink);flex:none}
+.tkset .tk-tg em{display:block;font-style:normal;font-size:12px;color:var(--ink2)}
+.tkset .tk-tg.off{color:var(--ink2);cursor:not-allowed}
+.tkset .tk-meta,.tkset .tk-wm,.tkset .tk-load{font-size:12px;color:var(--ink2)}
+.tkset .tk-load.bad{color:var(--bad);font-weight:600}
+.tkset .tk-ai{display:flex;gap:10px;align-items:baseline;margin-top:12px;padding:8px 10px;border:1px solid var(--mark-line);border-radius:8px;background:var(--paper);font-size:13px}
+.tkset .tk-ai b{flex:none;font-size:12px;padding:1px 7px;border-radius:5px;background:var(--ink);color:#fffffe}
+.tkset .tk-wm{margin-top:6px}
+.tkset .tk-why{font-size:13px;color:var(--ink2)}
+.tkset .tk-res{margin-top:8px;font-size:13px;color:var(--ink2);overflow-wrap:anywhere}
+.tkset .tk-res:empty{display:none}
+.tkset .tk-res b{font-size:14px;color:var(--ink)}
+.tkset .tk-more{margin-top:2px}
+.tkset.run{border-color:var(--line);background:var(--paper)}
+.tkset.done{border-color:var(--good-line);background:var(--good-bg)}
+.tkset.done .tk-res b{color:var(--good)}
+.tkset.bad{border-color:var(--bad-line);background:var(--bad-bg)}
+.tkset.bad .tk-res b,.tkset.bad .tk-more{color:var(--bad)}
+.tkset .tk-bar{height:4px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:8px;max-width:320px}
+.tkset .tk-bar i{display:block;height:100%;width:40%;background:var(--ink);animation:tkbar 1.2s cubic-bezier(.16,1,.3,1) infinite}
+@keyframes tkbar{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+@media (max-width:860px){.tkset .tk-grid{grid-template-columns:minmax(0,1fr)}}
 .cfoot{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px 0;position:sticky;bottom:0;background:var(--paper);border-top:1px solid var(--line);flex-wrap:wrap}
 .cfoot .hint{font-size:12px;color:var(--ink2);margin-right:auto}
 .done-note{border:1px solid var(--good-line);background:var(--good-bg);color:var(--good);border-radius:var(--r);padding:12px 14px;font-size:14px;font-weight:600;flex:1}
