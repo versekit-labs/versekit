@@ -66,8 +66,17 @@ bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它
 | 连续 3 次空等且 `worker-list` 说有 worker 需要处理 | 列出那几行 | 11 |
 | 在跑的 worker 终端末尾出现额度/限流错误（`exceeded … quota`、`usage limit`、`HTTP 429`），或终端输出超过 30 分钟（`COORD_STALL_SECS`，默认 1800）没变化 | **下一次检查**就停下，打印 issue 号、dispatch id、原因（额度用尽 / 疑似卡住）和 `worker-read` 末尾几行；不自动 `worker-stop` / kill，由你确认后 stop 再重派 | 11 |
 | 等待被取消或 `check` 报错 | 说明原因 | 12 |
+| 同一项目已有循环在跑（锁里的 pid 还活着，且进程名是本项目的循环） | stderr 写「已有循环在跑：pid=N」，不调 `orca` / `cycle.sh`，直接退出 | 14 |
 | 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:ready`，再重新启动 | 13 |
 | 没有在跑的 worker，也没有新单可派 | 结束 | 0 |
+
+退出码 14 的锁在 `$COORD_STATE_DIR/coordinator-loop.lock`（内容是 pid，默认目录 `~/.orca/<项目名>-state/`）。锁里的 pid 已不存在、或那个进程不是本项目的循环时算陈旧锁，新循环接管并在日志写一行；任何方式退出都只删自己的锁。重复起循环会让两个循环共用同一个 Run、把同一单派两次，所以这里宁可拒绝。
+
+**按项目名查进程**：脚本启动时用 `exec -a` 把进程名改成 `coordinator-loop[<项目名>]`。项目名默认取 `origin` 远端的仓库名（取不到用仓库目录名），可用 `COORD_PROJECT` 覆盖。本机同时跑着多个项目的循环，**不要**按 `coordinator-loop.sh` 这个名字 `pgrep`（会命中别的项目、误停对方）：
+
+```bash
+pgrep -fl 'coordinator-loop\[versekit\]'   # 只命中 versekit 的循环；换项目就换方括号里的名字
+```
 
 退出码 11 的停摆检测不看 `lastHeartbeatAt`（正常干活的 worker 心跳也可能只有派出时一次），只看终端输出；上次输出摘要与时间存在 `~/.orca/versekit-state/worker-watch/`，不进仓库。
 

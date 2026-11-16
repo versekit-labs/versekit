@@ -23,7 +23,10 @@
 #   COORD_IDLE_ROUNDS    连续空转几轮后退出（默认 2）
 #   CYCLE_LANES          并行 lane 数（默认 2）
 #   COORD_STALL_SECS     终端输出多久没变化就判疑似卡住（默认 1800）
-#   COORD_STATE_DIR      停摆检测的状态目录（默认 ~/.orca/versekit-state，不进仓库）
+#   COORD_STATE_DIR      停摆检测与循环锁的状态目录（默认 ~/.orca/<项目名>-state，不进仓库）
+#   COORD_PROJECT        项目名（默认取 origin 远端的仓库名，取不到用仓库目录名）；
+#                        进程名是 coordinator-loop[<项目名>]，按它 pgrep 只命中本项目
+#   RUN_FILE             Run id 文件（默认 ~/.orca/<项目名>-run-id）
 #   CYCLE_BIN            cycle 脚本路径（默认 bin/cycle.sh；测试用）
 # 退出码：
 #   0   没活可等了（全部结算，没有新单可派，s:triage 里也没有待整理的 issue）
@@ -31,10 +34,57 @@
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
 #   11  有 worker 需要处理：worker-list 报 requiresAction/已退出；或 worker-read 末尾出现额度/限流错误；
 #       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定
+#   14  同一项目已有循环在跑（锁文件 $COORD_STATE_DIR/coordinator-loop.lock 里的 pid 还活着且是本项目的循环）；
+#       什么都不做就退出，不调用 orca / cycle.sh
 #   12  等待被取消（多半是同一终端跑了 run-use）或 check 报错
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+# 项目名：COORD_PROJECT > origin 远端的仓库名 > 仓库目录名。
+if [ -z "${COORD_PROJECT:-}" ]; then
+  _url=$(git remote get-url origin 2>/dev/null || true)
+  _url="${_url%/}"; _url="${_url%.git}"; _url="${_url##*[/:]}"
+  COORD_PROJECT="${_url:-$(basename "$PWD")}"
+fi
+export COORD_PROJECT
+PROC_NAME="coordinator-loop[${COORD_PROJECT}]"
+
+# 进程名带项目名：重新执行自己一次（COORD_LOOP_REEXEC 防无限 re-exec）。
+if [ -z "${COORD_LOOP_REEXEC:-}" ]; then
+  export COORD_LOOP_REEXEC=1
+  exec -a "$PROC_NAME" bash "$0" "$@"
+fi
+
+COORD_STATE_DIR="${COORD_STATE_DIR:-$HOME/.orca/${COORD_PROJECT}-state}"
+export COORD_STATE_DIR
+LOCK_FILE="$COORD_STATE_DIR/coordinator-loop.lock"
+
+# 循环锁（不依赖 flock）：noclobber 原子创建，内容是 pid。
+# 陈旧锁（pid 不在，或那个进程不是本项目的循环）接管；只删自己的锁。
+release_lock() { [ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LOCK_FILE"; return 0; }
+acquire_lock() {
+  mkdir -p "$COORD_STATE_DIR" || return 1
+  local tries=0 old cmd
+  while [ "$tries" -lt 5 ]; do
+    tries=$((tries + 1))
+    if ( set -C; printf '%s\n' "$$" > "$LOCK_FILE" ) 2>/dev/null; then return 0; fi
+    old=$(cat "$LOCK_FILE" 2>/dev/null || true)
+    cmd=""
+    if [ -n "$old" ] && [ "$old" != "$$" ] && kill -0 "$old" 2>/dev/null; then
+      cmd=$(ps -p "$old" -o command= 2>/dev/null || true)
+    fi
+    case "$cmd" in
+      *"$PROC_NAME"*)
+        echo "已有循环在跑：pid=${old}" >&2
+        exit 14 ;;
+    esac
+    printf '[%s] 接管陈旧的循环锁（原 pid=%s）\n' "$(date '+%H:%M:%S')" "${old:-空}"
+    rm -f "$LOCK_FILE"
+  done
+  echo "coordinator-loop: 拿不到锁：$LOCK_FILE" >&2
+  exit 12
+}
 
 MAX=2
 while [ $# -gt 0 ]; do
@@ -44,7 +94,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-RUN_FILE="${RUN_FILE:-$HOME/.orca/versekit-run-id}"
+acquire_lock
+trap release_lock EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT HUP
+
+RUN_FILE="${RUN_FILE:-$HOME/.orca/${COORD_PROJECT}-run-id}"
 [ -s "$RUN_FILE" ] || { echo "coordinator-loop: 没有 Run id 文件：$RUN_FILE" >&2; exit 12; }
 RUN_ID=$(cat "$RUN_FILE")
 WAIT_MS="${COORD_WAIT_MS:-300000}"
@@ -123,7 +178,7 @@ for w in ws:
 #   - 输出摘要超过 COORD_STALL_SECS 没变化 → 判「疑似卡住」
 # 命中的行（制表符分隔）打印到 stdout；上次摘要与时间存在 COORD_STATE_DIR，不进仓库。
 stall_rows() {
-  COORD_STATE_DIR="${COORD_STATE_DIR:-$HOME/.orca/versekit-state}" \
+  COORD_STATE_DIR="$COORD_STATE_DIR" \
   COORD_STALL_SECS="${COORD_STALL_SECS:-1800}" RUN_ID="$RUN_ID" python3 -c '
 import json,os,re,subprocess,sys,time,hashlib
 d=os.path.join(os.environ["COORD_STATE_DIR"],"worker-watch"); os.makedirs(d,exist_ok=True)
@@ -181,9 +236,9 @@ run_cycle() {
   local out
   out=$("${CYCLE_BIN:-bin/cycle.sh}" --max "$MAX" --no-consume 2>&1) || true
   # 完整输出留一份：屏幕上只摘 ✓✗ 行，出错时要能看到 stderr 和失败阶段。
-  { printf '===== %s\n' "$(date '+%F %T')"; printf '%s\n' "$out"; } >> "${CYCLE_LOG:-$HOME/.orca/versekit-state/cycle-rounds.log}"
+  { printf '===== %s\n' "$(date '+%F %T')"; printf '%s\n' "$out"; } >> "${CYCLE_LOG:-$COORD_STATE_DIR/cycle-rounds.log}"
   printf '%s\n' "$out" | grep -E '✓|✗|↩|→ |worker-release|⚠' | sed 's/^/    /' || true
-  printf '%s\n' "$out" | grep -qE '✗' && printf '    （完整输出：%s）\n' "${CYCLE_LOG:-$HOME/.orca/versekit-state/cycle-rounds.log}"
+  printf '%s\n' "$out" | grep -qE '✗' && printf '    （完整输出：%s）\n' "${CYCLE_LOG:-$COORD_STATE_DIR/cycle-rounds.log}"
   if printf '%s' "$out" | grep -qE '✓ 已派|✓ 合并|↩ '; then return 0; fi
   return 1
 }

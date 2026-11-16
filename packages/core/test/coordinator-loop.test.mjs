@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -72,3 +72,78 @@ test('正常变化的输出 → 继续等，不以 11 退出；日志不泄露�
   assert.doesNotMatch(r.stdout, /停摆/);
   assert.ok(existsSync(join(dir, 'state', 'worker-watch', 'ctx_fake.json')));
 });
+
+// ACC-harness-loop-01 / 02：循环锁与带项目名的进程名
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+const PROJECT = 'proj-x';
+function lockSetup() {
+  const dir = setup('change');
+  // 假 orca / cycle 一旦被调用就留痕，用来证明「已有循环在跑」时什么都没调
+  writeFileSync(join(dir, 'cycle.sh'), `#!/usr/bin/env bash\ntouch "${dir}/cycle-called"\nexit 0\n`);
+  const orca = readFileSync(join(dir, 'orca'), 'utf8').replace('D="', `touch "${dir}/orca-called"\nD="`);
+  writeFileSync(join(dir, 'orca'), orca);
+  mkdirSync(join(dir, 'state'));
+  return dir;
+}
+const lockPath = (dir) => join(dir, 'state', 'coordinator-loop.lock');
+const runP = (dir, extra = {}) => run(dir, { COORD_PROJECT: PROJECT, ...extra });
+function fakeLoop(name) {
+  const p = spawn('bash', ['-c', `exec -a "${name}" sleep 30`], { stdio: 'ignore' });
+  return p;
+}
+
+test('已有本项目循环在跑 → 退出码 14，stderr 写 pid，不调 orca / cycle.sh，不删别人的锁', () => {
+  const dir = lockSetup();
+  const other = fakeLoop(`coordinator-loop[${PROJECT}]`);
+  try {
+    writeFileSync(lockPath(dir), `${other.pid}\n`);
+    const r = runP(dir);
+    assert.equal(r.status, 14, r.stdout + r.stderr);
+    assert.match(r.stderr, new RegExp(`已有循环在跑：pid=${other.pid}`));
+    assert.ok(!existsSync(join(dir, 'orca-called')) && !existsSync(join(dir, 'cycle-called')));
+    assert.equal(readFileSync(lockPath(dir), 'utf8').trim(), String(other.pid));
+  } finally { other.kill('SIGKILL'); }
+});
+
+test('陈旧锁（pid 已死 / pid 不是本项目的循环）→ 接管并写日志，退出后锁被删', () => {
+  for (const kind of ['dead', 'foreign']) {
+    const dir = lockSetup();
+    // dead：spawnSync 已回收的子进程，pid 确实不存在；foreign：活着但进程名是别的项目
+    const proc = kind === 'dead' ? { kill() {} } : fakeLoop('coordinator-loop[other-project]');
+    const pid = kind === 'dead' ? Number(spawnSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout) : proc.pid;
+    try {
+      writeFileSync(lockPath(dir), `${pid}\n`);
+      const r = runP(dir, { COORD_STALL_SECS: '1' });
+      assert.equal(r.status, 12, `${kind}: ${r.stdout}${r.stderr}`); // 走到了正常主循环（假 check 第 9 次 cancelled）
+      assert.match(r.stdout, /接管陈旧的循环锁/);
+      assert.ok(!existsSync(lockPath(dir)), '退出后锁应被删除');
+    } finally { proc.kill('SIGKILL'); }
+  }
+});
+
+test('正常退出（任何退出码）删掉自己的锁；进程名带项目名且不写死项目', () => {
+  const dir = lockSetup();
+  rmSyncSafe(join(dir, 'run-id')); // 没 Run id → 退出码 12，锁也要删
+  const r = runP(dir);
+  assert.equal(r.status, 12, r.stdout + r.stderr);
+  assert.ok(!existsSync(lockPath(dir)));
+
+  // 进程名：运行期间 ps 里能按项目名 pgrep 到，别的项目名命中不到
+  const dir2 = lockSetup();
+  const child = spawn('bash', [join(ROOT, 'bin/coordinator-loop.sh')], {
+    cwd: ROOT, stdio: 'ignore',
+    env: { ...process.env, PATH: `${dir2}:${process.env.PATH}`, RUN_FILE: join(dir2, 'run-id'), CYCLE_BIN: join(dir2, 'cycle.sh'),
+      CYCLE_LOG: join(dir2, 'cycle.log'), COORD_STATE_DIR: join(dir2, 'state'), COORD_WAIT_MS: '100', COORD_PROJECT: 'proj-y' },
+  });
+  try {
+    spawnSync('bash', ['-c', 'sleep 1']);
+    const hit = spawnSync('pgrep', ['-f', 'coordinator-loop\\[proj-y\\]'], { encoding: 'utf8' });
+    const miss = spawnSync('pgrep', ['-f', 'coordinator-loop\\[versekit\\]'], { encoding: 'utf8' });
+    assert.ok(hit.stdout.split('\n').includes(String(child.pid)), hit.stdout);
+    assert.ok(!miss.stdout.split('\n').includes(String(child.pid)));
+  } finally { child.kill('SIGKILL'); }
+});
+
+function rmSyncSafe(p) { try { unlinkSync(p); } catch {} }
