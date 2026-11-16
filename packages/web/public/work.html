@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>作品详情 · versekit</title>
 <link rel="stylesheet" href="/app.css">
+<style>
+.wh{display:flex;gap:12px;align-items:center;margin:2px 0 20px;flex-wrap:wrap}
+.wh h1{min-width:0;overflow-wrap:anywhere}
+.wh .st{margin-left:auto}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;padding:22px}
+.tl{font-size:13px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px}
+.tl b{font-weight:600;white-space:nowrap}
+.tl .bad{color:var(--bad)}
+.below{margin-top:14px;display:grid;gap:14px}
+.note .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.note .why{margin-top:2px;overflow-wrap:anywhere}
+@media (max-width:1040px){.grid{grid-template-columns:minmax(0,1fr)}}
+</style>
 </head>
 <body data-page="works">
 <div class="app">
@@ -13,36 +26,164 @@
     <a class="nv" href="works.html" data-key="works" aria-current="page">作品</a>
     <a class="nv" href="data.html" data-key="data">数据</a>
     <a class="nv" href="system.html" data-key="system">系统</a></nav>
-  <main id="main">
-    <div class="hd"><h1>作品详情</h1><span class="sub" id="sub">每支成片、每个平台稿、每个数字的来源都在这一页。</span></div>
-    <section class="wip" aria-label="还没做">
-      <h3 id="title">这一页还没做</h3>
-      <p>作品详情要按成片列出每条平台稿，发过的显示和平时比的倍数，出问题的有红底说明和「再试一次」。
-        数据来自 <code>vk work show &lt;作品 id&gt;</code>。</p>
-      <div class="cmd">对应命令：<code>vk work show &lt;workId&gt;</code></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <a class="btn" href="/works">回作品 →</a>
-        <a class="btn" href="/today">回今天 →</a>
-      </div>
-    </section>
-  </main>
+  <main id="main"><div class="panel loading">正在读这个作品…</div></main>
 </div>
 <script src="/api.js"></script>
 <script src="/shell.js"></script>
+<script src="/panel.js"></script>
 <script>
 (async function () {
-  const sub = document.getElementById("sub");
-  const title = document.getElementById("title");
-  const id = new URLSearchParams(location.search).get("id");
-  // 只显示这条作品的标题；页面本身等下一轮做（#149），这里不假装已经能看到详情。
-  if (!id) return;
+  const VK = window.VK;
+  const main = document.getElementById("main");
+  const params = new URLSearchParams(location.search);
+  const id = params.get("id");
+  const state = { work: null, cutId: params.get("cut"), editing: new Set(), ver: new Map() };
+  const { esc, pfBadge, pfName, when, fmt, ratioText, ratioCls, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
+
+  const PROBLEM = new Set(["failed", "blocked", "expired"]);
+  const PUBLISHED = new Set(["published", "published_limited"]);
+  const hasProblem = (c) => c.publishes.some((p) => PROBLEM.has(p.state));
+
+  function pickCut(work, prefer) {
+    if (prefer && work.cuts.some((c) => c.id === prefer)) return prefer;
+    return (work.cuts.find(cutHasPending) ?? work.cuts.find(hasProblem) ?? work.cuts[0])?.id ?? null;
+  }
+
+  async function load({ advance = false } = {}) {
+    state.work = (await VK.work(id)).work;
+    state.editing.clear();
+    const prefer = advance ? (state.work.cuts.find(cutHasPending)?.id ?? state.cutId) : state.cutId;
+    state.cutId = pickCut(state.work, prefer);
+    render();
+  }
+
+  /** 作品现在的状态：数量只来自这支作品的平台稿。 */
+  function workState(work) {
+    const ps = work.cuts.flatMap((c) => c.publishes);
+    const n = (set) => ps.filter((p) => set.has(p.state)).length;
+    switch (work.status?.key) {
+      case "problem": return ["bad", `有 ${n(PROBLEM)} 条出了问题`];
+      case "awaiting_confirm": return ["wait", `${n(new Set(["pending_confirm", "notify_pending", "draft_pending"]))} 条等你确认`];
+      case "scheduled": return ["sched", `${n(new Set(["queued", "auto_running", "draft_running"]))} 条已确认，等时间`];
+      case "done": return ["pub", "都发完了"];
+      default: return ["", work.status?.label ?? ""];
+    }
+  }
+
+  /** 经过：只列库里记着时间的事——入库、已发布、已确认等时间；出了问题的挂在计划时间上。 */
+  function events(work, cut) {
+    const ev = [[work.createdAt, `Claude 入库${work.cuts.length > 1 ? `，${work.cuts.length} 支成片` : ""}`, false]];
+    for (const p of cut.publishes) {
+      const name = pfName(p.platform);
+      if (PUBLISHED.has(p.state) && p.publishedAt != null) ev.push([p.publishedAt, `${name} 已发布`, false]);
+      else if (p.state === "queued" && p.scheduledAt != null) ev.push([p.scheduledAt, `${name} 已确认，到时间发`, false]);
+      else if (PROBLEM.has(p.state)) ev.push([p.scheduledAt ?? work.createdAt, `${name} 没发出去`, true]);
+    }
+    return ev.sort((a, b) => a[0] - b[0]);
+  }
+
+  function resultsTable(cut, multi) {
+    const rows = cut.publishes.filter((p) => PUBLISHED.has(p.state) && p.publishedAt != null)
+      .sort((a, b) => b.publishedAt - a.publishedAt);
+    if (!rows.length) return "";
+    const body = rows.map((p) => {
+      const q = p.multiple;
+      const verdict = q == null ? "还没法比" : esc(p.verdictLabel ?? "");
+      const verdictTitle = q == null ? ` title="${esc(p.reason ?? "")}"` : "";
+      const typ = q == null ? '<span class="sub">—</span>'
+        : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${verdict}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${Math.min(100, q * 40)}%"></i><u></u></div>`;
+      return `<tr><td><span class="pfn">${pfBadge(p.platform)}${esc(pfName(p.platform))}</span></td>` +
+        `<td class="sub">${esc(when(p.publishedAt).text)}</td><td class="n">${fmt(p.play24h)}</td><td class="n sub">${fmt(p.baselineMedian)}</td><td>${typ}</td>` +
+        `<td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span><div class="sub"${verdictTitle}>${verdict}</div></td></tr>`;
+    }).join("");
+    return `<div><h2 style="margin-bottom:8px">${multi ? esc(cut.title) + "的" : ""}结果 · 发布 24 小时的播放，和每个账号自己的平时比</h2>` +
+      `<div class="tblwrap"><table><thead><tr><th>平台</th><th>发布</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+  }
+
+  function render() {
+    const work = state.work;
+    const cut = work.cuts.find((c) => c.id === state.cutId) ?? work.cuts[0];
+    document.title = `${work.title} · 作品详情 · versekit`;
+    if (!cut) {
+      main.innerHTML = `<a class="crumb" href="/works">← 作品</a><div class="wh"><h1>${esc(work.title)}</h1></div>` +
+        `<div class="panel empty">这个作品还没有成片。</div><div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;
+      return;
+    }
+    const multi = work.cuts.length > 1;
+    const [cls, txt] = workState(work);
+    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state));
+    const current = VK.current();
+
+    main.innerHTML =
+      `<a class="crumb" href="/works">← 作品</a>` +
+      `<div class="wh"><h1>${esc(work.title)}</h1><span class="sub">${esc(when(work.createdAt).text)} 入库${multi ? ` · ${work.cuts.length} 支成片` : ""}${current ? " · " + esc(current.name) : ""}</span>` +
+      `<span class="st ${cls}">${esc(txt)}</span></div>` +
+      `<div class="panel grid"><div>${confirmPanel(work, cut)}</div>` +
+      `<div>${cutSteps(work, cut.id)}<div class="sidebox ${multi ? "" : "first"}"><h2>经过${multi ? " · " + esc(cut.title) : ""}</h2>` +
+      `<div class="tl" style="margin-top:6px">${events(work, cut).map(([at, t, bad]) => `<b>${esc(when(at).text)}</b><span class="${bad ? "bad" : ""}">${esc(t)}</span>`).join("")}</div></div></div></div>` +
+      `<div class="below">` +
+      issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：没有发出去</b>` +
+        `<div class="why">${esc(p.error?.message ?? "原因还没记下来")}</div>` +
+        `<div class="acts"><button class="btn pri" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
+      resultsTable(cut, multi) + `</div>` +
+      `<div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;
+
+    for (const video of main.querySelectorAll("video[data-media]")) {
+      video.addEventListener("error", () => {
+        video.outerHTML = fallback(video.dataset.label || "这支成片", "这个文件在这台电脑上读不到，或浏览器不能播放它");
+      }, { once: true });
+    }
+  }
+
+  let busy = false;
+  async function act(fn, okMessage, opts) {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+      if (okMessage) window.VKShell?.toast(okMessage);
+      await load(opts);
+    } catch (err) {
+      window.VKShell?.toast(err.message || "没成功");
+    } finally {
+      busy = false;
+    }
+  }
+
+  main.addEventListener("click", (event) => {
+    const el = event.target.closest("[data-cut],[data-edit],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver]");
+    if (!el) return;
+    const d = el.dataset;
+    if (d.cut) { state.cutId = d.cut; render(); return; }
+    if (d.edit) { state.editing.add(d.edit); render(); return; }
+    if (d.save) {
+      const pub = d.save;
+      const title = main.querySelector(`[data-title="${pub}"]`)?.value ?? null;
+      const at = main.querySelector(`[data-at="${pub}"]`)?.value ?? null;
+      act(async () => { await VK.editPublish(pub, { title, at: at || null }); }, "改好了，确认时按新的发");
+      return;
+    }
+    if (d.ver) { const [cutId, versionId] = d.ver.split(":"); state.ver.set(cutId, versionId); render(); return; }
+    if (d.confirm) { act(() => VK.approveCut(d.confirm), "已确认，会按时间发", { advance: true }); return; }
+    if (d.skip) { act(() => VK.skipCut(d.skip), "好，这支先不发", { advance: true }); return; }
+    if (d.retry) { act(() => VK.retryPublish(d.retry), "正在重试"); return; }
+    if (d.solo && d.pub) {
+      const map = { approve: VK.approvePublish, now: VK.publishNow, manual: VK.publishManual };
+      const done = { approve: "小红书这条已确认", now: "好，现在就发这一条", manual: "好，这条你自己发" };
+      act(() => map[d.solo](d.pub), done[d.solo], { advance: true });
+    }
+  });
+
+  if (!id) {
+    main.innerHTML = `<div class="hd"><h1>作品详情</h1></div><a class="crumb" href="/works">← 作品</a><div class="panel empty">没指定作品。<a class="link" href="/works">去作品列表挑一个 →</a></div>`;
+    return;
+  }
   try {
-    await window.VK.ready();
-    const data = await window.VK.work(id);
-    title.textContent = `${data.work.title} · 详情还没做`;
-    sub.textContent = `${data.work.cuts.length} 支成片 · ${data.work.cuts.reduce((n, c) => n + c.publishes.length, 0)} 条平台稿`;
+    await VK.ready();
+    await load();
   } catch (err) {
-    sub.textContent = `读不到这个作品：${err.message}`;
+    main.innerHTML = `<div class="hd"><h1>作品详情</h1></div><a class="crumb" href="/works">← 作品</a><div class="panel empty">读不到这个作品：${esc(err.message)}</div>` +
+      `<div class="cmd">对应命令：<code>vk work show ${esc(id)}</code></div>`;
   }
 })();
 </script>
