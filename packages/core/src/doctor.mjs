@@ -5,9 +5,10 @@
 
 import { existsSync } from "node:fs";
 import { paths, getMeta, isInitialised, open } from "./index.mjs";
+import { COPY_LIMITS, unverifiedCopyPlatforms } from "./store.mjs";
 
 /** 这些红灯不阻塞使用（还没配账号、还没配对通道），所以不算整体失败。 */
-export const OPTIONAL_CHECKS = ["adapters", "channel_feishu", "browser_profile", "accounts", "daemon", "account_probe"];
+export const OPTIONAL_CHECKS = ["copy_limits", "adapters", "channel_feishu", "browser_profile", "accounts", "daemon", "account_probe"];
 
 export function doctorReport({
   browserReady = () => "未接入浏览器驱动",
@@ -72,6 +73,15 @@ export function doctorReport({
       passiveOnly.length ? "给这些适配器补 check()；在此之前账号失效只会在发布/采集时暴露" : null,
     );
   }
+
+  // 平台文案限制表里标了「未核实」的平台不校验（ACC-v2-copy-01）：列出来，别让人以为它们被校验过。
+  const unverified = unverifiedCopyPlatforms();
+  add(
+    "copy_limits",
+    unverified.length === 0,
+    unverified.length ? `${unverified.map((p) => COPY_LIMITS[p].label).join("、")} 的文案限制未核实，入库时不校验长度` : `${Object.keys(COPY_LIMITS).length} 个平台的文案限制都已核实`,
+    unverified.length ? "查到官方数字后补进 packages/core/src/store.mjs 的 COPY_LIMITS" : null,
+  );
 
   const feishu = initialised ? open({ readonly: true }).prepare("SELECT COUNT(*) n FROM channel_binding WHERE channel='feishu'").get().n > 0 : false;
   add("channel_feishu", feishu, feishu ? "已配对" : "未配对", feishu ? null : "vk channel bind feishu");

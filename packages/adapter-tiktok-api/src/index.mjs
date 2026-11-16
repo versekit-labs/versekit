@@ -16,6 +16,7 @@ import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { extname } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { resolvePublishCopy } from "../../core/src/publish-flow.mjs";
 import { callApi, fetchWithBackoff, classifyError, PauseError, PAUSE_CODES } from "./api.mjs";
 import { connect, ensureAccessToken, fetchProfile, REFRESH_EXPIRING_MS } from "./auth.mjs";
 import { mp4DurationSeconds } from "./mp4.mjs";
@@ -55,7 +56,12 @@ export function postSettings(row) {
   const overrides = asObject(row.overrides_json);
   const t = asObject(overrides.tiktok);
   const meta = { ...asObject(row.work_meta), ...asObject(row.version_meta) };
-  const caption = [overrides.caption, overrides.title, meta.title, row.work_title].find((x) => typeof x === "string" && x.trim());
+  // 文案由 core 解析进 meta（标题、正文、话题）；人在确认时填的 caption 优先，否则标题 + 正文 + 话题。
+  const written = [meta.title ?? row.work_title, meta.body, Array.isArray(meta.tags) ? meta.tags.map((t) => `#${t}`).join(" ") : ""]
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  const caption = [overrides.caption, overrides.title, written].find((x) => typeof x === "string" && x.trim());
   return {
     privacyLevel: typeof t.privacy_level === "string" && t.privacy_level ? t.privacy_level : null,
     allowComment: t.allow_comment === true,
@@ -132,20 +138,18 @@ const CONTENT_TYPES = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm":
 
 // ------------------------------------------------------------------ 取数
 
-function loadRow(publishId) {
+// 标题、正文、话题、元数据由 core 按平台稿解析后传入（ACC-v2-copy-03），这里不再 JOIN work 表。
+function loadRow(publishId, copy = resolvePublishCopy(publishId)) {
   const row = open()
     .prepare(
-      `SELECT p.id, p.mode, p.overrides_json, a.id AS account_id, a.credential_ref,
-              w.title AS work_title, w.meta_json AS work_meta, v.meta_json AS version_meta
+      `SELECT p.id, p.mode, a.id AS account_id, a.credential_ref
          FROM publish p
          JOIN account a ON a.id = p.account_id
-         JOIN work w ON w.id = p.work_id
-         LEFT JOIN cut_version v ON v.id = p.version_id
         WHERE p.id = ?`,
     )
     .get(publishId);
   if (!row) throw new AdapterError("unknown", `没有这条发布：${publishId}`);
-  return row;
+  return { ...row, overrides_json: copy.overridesJson, work_title: copy.title, work_meta: copy.metaJson, version_meta: null, copy };
 }
 
 const credentialRefOf = (accountId) => {
@@ -225,11 +229,11 @@ async function pollStatus({ token, publishId, draft, signal, onStep }) {
   throw new AdapterError("timeout", "等了很久 TikTok 还没处理完：稍后可以在 TikTok 里核对，或重试");
 }
 
-async function publish({ publishId, asset, dryRun = false, signal, onStep } = {}) {
+async function publish({ publishId, asset, copy: givenCopy = null, dryRun = false, signal, onStep } = {}) {
   // 彩排：契约门禁要求 dry-run 不联网、不改任何东西。
   if (dryRun) return { dryRun: true };
 
-  const row = loadRow(publishId);
+  const row = loadRow(publishId, givenCopy ?? undefined);
   const settings = postSettings(row);
   if (!existsSync(asset)) throw new AdapterError("asset_invalid", `找不到视频文件：${asset}`);
   const size = statSync(asset).size;

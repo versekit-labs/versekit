@@ -16,7 +16,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError, toAdapterError } from "../../core/src/errors.mjs";
-import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
+import { resolvePublishAsset, resolvePublishCopy, copyRowFields } from "../../core/src/publish-flow.mjs";
 import { openAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
 
 const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en";
@@ -407,18 +407,18 @@ function normaliseHandle(value) {
 
 // ------------------------------------------------------------------ 读库（只读）
 
-function load(publishId) {
+// 标题、正文、话题由 core 按平台稿解析后传入（ACC-v2-copy-03），这里不再 JOIN work 表。
+function load(publishId, copy = resolvePublishCopy(publishId)) {
   const db = open();
-  const row = db
+  const base = db
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.id AS account_id,
-              w.title AS work_title, w.meta_json
+      `SELECT p.*, a.platform, a.handle, a.id AS account_id
          FROM publish p
          JOIN account a ON a.id = p.account_id
-         JOIN work w ON w.id = p.work_id
         WHERE p.id = ?`,
     )
     .get(publishId);
+  const row = base ? { ...base, ...copyRowFields(copy) } : base;
   if (!row) throw new AdapterError("unknown", `找不到发布：${publishId}`);
   if (row.platform !== "tiktok") throw new AdapterError("unknown", `账号 ${row.account_id} 不是 TikTok`);
   return row;
@@ -452,13 +452,13 @@ async function withEvidence(tab, accountId, tag, err) {
 
 // ------------------------------------------------------------------ 发布
 
-async function publish({ publishId, asset: given = null, dryRun = false } = {}) {
+async function publish({ publishId, asset: given = null, copy: givenCopy = null, dryRun = false } = {}) {
   requirePublishId(publishId);
   let tab = null;
   let accountId = null;
 
   try {
-    const row = load(publishId);
+    const row = load(publishId, givenCopy ?? undefined);
     accountId = row.account_id;
     const plan = planPost(row);
     const policy = requestedVisibility(row);

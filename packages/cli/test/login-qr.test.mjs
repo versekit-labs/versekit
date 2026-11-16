@@ -39,6 +39,12 @@ test("parseArgv：--phone / --code 是带值参数，值不会掉成位置参数
   assert.ok(VALUE_FLAGS.has("--phone") && VALUE_FLAGS.has("--code"));
 });
 
+test("parseArgv：vk plan apply 的 --accounts 是带值参数，值不会掉成位置参数（#160）", () => {
+  const a = parseArgv(["plan", "apply", "cut_1", "--accounts", "acc_1,acc_2", "--human"]);
+  assert.equal(a.flags["--accounts"], "acc_1,acc_2");
+  assert.deepEqual(a.pos, ["plan", "apply", "cut_1"]);
+});
+
 test("parseArgv：带值参数缺值时不吞掉下一个 --flag", () => {
   const a = parseArgv(["account", "login", "acc_1", "--phone", "--human"]);
   assert.equal(a.flags["--phone"], undefined);

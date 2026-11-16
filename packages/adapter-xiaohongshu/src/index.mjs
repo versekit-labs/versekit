@@ -14,7 +14,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
-import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
+import { resolvePublishAsset, resolvePublishCopy, copyRowFields } from "../../core/src/publish-flow.mjs";
 import { assetSetOf } from "../../core/src/asset-kind.mjs";
 import { planImageNote, publishImageNote, noteIdFromPublishResponse } from "./image-note.mjs";
 
@@ -31,17 +31,17 @@ const MAX_TITLE = 20;
 const MAX_BODY = 1000;
 const MAX_TAGS = 10;
 
-function load(publishId) {
-  const row = open()
+// 标题、正文、话题由 core 按平台稿解析后传入（ACC-v2-copy-03），这里不再 JOIN work 表。
+function load(publishId, copy = resolvePublishCopy(publishId)) {
+  const base = open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.id AS account_id,
-              w.title AS work_title, w.meta_json
+      `SELECT p.*, a.platform, a.handle, a.id AS account_id
          FROM publish p
          JOIN account a ON a.id = p.account_id
-         JOIN work w ON w.id = p.work_id
         WHERE p.id = ?`,
     )
     .get(publishId);
+  const row = base ? { ...base, ...copyRowFields(copy) } : base;
   if (!row) throw new AdapterError("unknown", `找不到发布：${publishId}`);
   if (row.platform !== "xiaohongshu") throw new AdapterError("unknown", `账号 ${row.account_id} 不是小红书`);
   return row;
@@ -232,7 +232,7 @@ async function fillBody(tab, body) {
   }
 }
 
-async function publish({ publishId, asset: given = null, dryRun = false, signal, onStep } = {}) {
+async function publish({ publishId, asset: given = null, copy: givenCopy = null, dryRun = false, signal, onStep } = {}) {
   requireId(publishId);
   let tab = null;
   let accountId = null;
@@ -253,7 +253,7 @@ async function publish({ publishId, asset: given = null, dryRun = false, signal,
     }
   };
   try {
-    const row = load(publishId);
+    const row = load(publishId, givenCopy ?? undefined);
     accountId = row.account_id;
     const note = planNote(row);
     // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）；直接调用（dry-run、测试）时

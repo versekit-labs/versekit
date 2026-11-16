@@ -108,10 +108,11 @@ export function validateAdapter(adapter, where = "adapter") {
 /**
  * core 交给适配器 publish() 的入参（ACC-v2-confirm-07）。
  *
- *   { publishId, asset, dryRun?, signal?, onStep? }
+ *   { publishId, asset, copy, dryRun?, signal?, onStep? }
  *
  * `asset` 是 core 按平台稿的 `version_id` 解析出的素材路径（视频文件或图文目录）。适配器
  * 用它，不再自己去读 `work.asset_path`——那一列只代表第一支成片的第一个版本。
+ * `copy` 是 core 按平台稿解析好的标题、正文、话题（见 store.resolvePublishCopy），同理不再 JOIN `work` 表。
  */
 export function assertPublishInput(input, where = "publish") {
   if (!input || typeof input !== "object") fail(where, "适配器入参必须是对象");

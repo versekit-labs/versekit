@@ -1072,7 +1072,12 @@ async function cmdWork() {
       for (const c of w.cuts) {
         console.log(`  成片 ${c.title}  ${c.status.label}`);
         for (const v of c.versions) console.log(`    版本 ${v.language.padEnd(10)}${v.asset}`);
-        for (const p of c.publishes) console.log(`    平台稿 ${p.platform.padEnd(12)}${p.handle.padEnd(16)}${p.state}${p.language ? `（${p.language}）` : ""}`);
+        for (const p of c.publishes) {
+          console.log(`    平台稿 ${p.platform.padEnd(12)}${p.handle.padEnd(16)}${p.state}${p.language ? `（${p.language}）` : ""}`);
+          console.log(`      标题：${p.title || "（空）"}`);
+          console.log(`      正文：${p.empty?.includes("body") ? "（没有正文）" : p.body.split("\n")[0].slice(0, 60)}`);
+          console.log(`      话题：${p.empty?.includes("tags") ? "（没有话题）" : p.tags.map((t) => `#${t}`).join(" ")}`);
+        }
       }
     } else out(data);
     return data;
@@ -1096,7 +1101,13 @@ async function cmdWork() {
         ...(manifest.source ? { source: resolve(base, manifest.source) } : {}),
         cuts: (manifest.cuts ?? []).map((c) => ({
           title: c.title,
-          versions: (c.versions ?? []).map((v) => ({ language: v.language, asset: v.asset ? resolve(base, v.asset) : v.asset, ...(v.meta ? { meta: v.meta } : {}) })),
+          ...(c.copy ? { copy: c.copy } : {}),
+          versions: (c.versions ?? []).map((v) => ({
+            language: v.language,
+            asset: v.asset ? resolve(base, v.asset) : v.asset,
+            ...(v.meta ? { meta: v.meta } : {}),
+            ...(v.copy ? { copy: v.copy } : {}),
+          })),
         })),
       };
     } else {
@@ -1109,6 +1120,34 @@ async function cmdWork() {
     return data;
   }
   throw new Error(usage);
+}
+
+async function cmdPlan() {
+  const sub = pos[1];
+  const log = (m) => human && console.log(m);
+  const usage = "用法：vk plan apply <cutId> [--accounts a,b] [--group <组>]";
+  if (sub !== "apply") throw new Error(usage);
+  const cutId = pos[2];
+  if (!cutId) throw new Error(usage);
+  const accounts = val("--accounts");
+  const args = {
+    cutId,
+    ...(accounts ? { accounts: String(accounts).split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+    ...(val("--group") ? { group: val("--group") } : {}),
+  };
+  const data = await send("plan.apply", args, { log });
+  if (human) {
+    console.log(`成片「${data.cutTitle}」（${data.cutId}，${data.language} 版）`);
+    console.log(`建了 ${data.created.length} 条平台稿（都是待确认，不会自动发）`);
+    for (const p of data.created) {
+      console.log(`  ${p.platform.padEnd(12)}${p.handle.padEnd(16)}建议 ${clock(p.suggestedAt)}  ${p.publishId}`);
+      console.log(`    标题：${p.title}${p.empty.includes("body") ? " · 没有正文" : ""}${p.empty.includes("tags") ? " · 没有话题" : ""}`);
+    }
+    for (const p of data.skipped) console.log(`跳过 ${p.platform} ${p.handle}：${p.reason}（${p.publishId}）`);
+    for (const p of data.rejected) console.log(`没建 ${p.platform} ${p.handle}：${p.reason}`);
+    if (data.next) console.log(data.next);
+  } else out(data);
+  return data;
 }
 
 async function cmdGroup() {
@@ -1537,6 +1576,7 @@ function usage() {
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
       "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
+      "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片生成平台稿（待确认，建议时间守平台规则）",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
@@ -1573,6 +1613,7 @@ try {
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
+  else if (cmd === "plan") await cmdPlan();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();

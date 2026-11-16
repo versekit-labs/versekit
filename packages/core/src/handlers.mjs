@@ -12,7 +12,7 @@ import { open, transitionPublish, enqueue, emit, DEFAULT_LANGUAGE } from "./inde
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
-import { assertPlanSlot } from "./plan-rules.mjs";
+import { assertPlanSlot, planRules, takenTimes, nearestAvailable } from "./plan-rules.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
@@ -435,6 +435,110 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const checkable = plan.accounts.filter((a) => typeof byPlatform.get(a.platform)?.adapter?.check === "function");
       if (!checkable.length) return plan.commit();
       return verifyLogins(checkable).then((extra) => plan.commit(extra));
+    },
+
+    /**
+     * 按成片生成平台稿（发布方案的最小形式，ACC-v2-plan-01/02/03、ACC-v2-copy-02）。
+     * 不给 --accounts：当前账号组（或 --group）里所有已接入平台的账号各一条，状态一律待确认。
+     * 每条要么建出来，要么跳过（已有）、要么拒绝（说明原因）——没有静默丢掉的账号。
+     */
+    "plan.apply": ({ cutId, accounts = null, group = null }) => {
+      const conn = open();
+      const cut = conn.prepare("SELECT * FROM cut WHERE id = ?").get(cutId);
+      if (!cut) fail(`没有这支成片：${cutId}（vk work show <workId> 能看到每支成片的 id）`);
+      const versions = conn.prepare("SELECT * FROM cut_version WHERE cut_id = ? ORDER BY rowid").all(cut.id);
+      if (!versions.length) fail(`成片「${cut.title}」没有语言版本，没有素材可发：先用 vk work add 补上`);
+      const version = versions.find((v) => v.language === "zh") ?? versions[0];
+      const scope = group ? requireGroup(group) : store.currentGroup();
+
+      let targets;
+      if (accounts != null) {
+        const refs = [...new Set((Array.isArray(accounts) ? accounts : String(accounts).split(",")).map((x) => String(x).trim()).filter(Boolean))];
+        if (!refs.length) fail("--accounts 是空的：写账号 id，或这个组里的平台名（如 bilibili）");
+        const pool = store.listAccounts({ groupId: scope?.id ?? null });
+        targets = refs.map(
+          (ref) =>
+            pool.find((a) => a.id === ref) ??
+            pool.find((a) => store.copyPlatformOf(a.platform) === store.copyPlatformOf(ref)) ??
+            fail(`${scope ? `账号组「${scope.name}」里` : ""}没有账号「${ref}」（写账号 id，或这个组里的平台名；vk account list 可查）`),
+        );
+        targets = [...new Map(targets.map((a) => [a.id, a])).values()];
+      } else {
+        targets = store.listAccounts({ groupId: scope?.id ?? null });
+        if (!targets.length) fail(`${scope ? `账号组「${scope.name}」里` : ""}还没有账号：先 vk account add <platform> --name 主号 --group <组>`);
+      }
+
+      const versionCopy = (() => {
+        try {
+          return JSON.parse(version.meta_json ?? "null")?.copy ?? null;
+        } catch {
+          return null;
+        }
+      })();
+      const kind = assetSetOf(version.asset_path).kind;
+      const now = Date.now();
+      const language = version.language;
+      const view = { cutId: cut.id, cutTitle: cut.title, workId: cut.work_id, language, group: scope ? { id: scope.id, name: scope.name } : null };
+      const created = [];
+      const skipped = [];
+      const rejected = [];
+      const who = (a) => ({ accountId: a.id, platform: a.platform, handle: a.handle });
+
+      for (const account of targets) {
+        const existing = conn.prepare("SELECT id, state FROM publish WHERE cut_id = ? AND account_id = ?").get(cut.id, account.id);
+        if (existing) {
+          skipped.push({ ...who(account), publishId: existing.id, state: existing.state, reason: "已经有这支成片的平台稿" });
+          continue;
+        }
+        const reject = (reason) => rejected.push({ ...who(account), reason });
+        if (store.UNUSABLE_ACCOUNT_STATES.includes(account.state)) {
+          reject(store.accountUnusableReason(account));
+          continue;
+        }
+        const adapter = byPlatform.get(account.platform);
+        if (!adapter) {
+          reject(`没有 ${account.platform} 适配器，发不出去`);
+          continue;
+        }
+        if (kind && Array.isArray(adapter.assetTypes) && !adapter.assetTypes.includes(kind)) {
+          reject(`${platformLabel(account.platform)}目前只能发${adapter.assetTypes.map((t) => ASSET_KIND_LABEL[t]).join("、")}，这支成片是${ASSET_KIND_LABEL[kind]}`);
+          continue;
+        }
+        const entry = store.copyFor(versionCopy, account.platform);
+        const copy = { title: entry.title ?? cut.title, ...(entry.body ? { body: entry.body } : {}), ...(entry.tags?.length ? { tags: entry.tags } : {}) };
+        const bad = store.copyViolations(account.platform, copy);
+        if (bad.length) {
+          reject(`文案超限：${bad.join("；")}。入库时给 ${platformLabel(account.platform)} 单独写一份更短的文案（超限不会自动截断）`);
+          continue;
+        }
+        // 建议时间：从现在起离「一分钟后」最近、守平台规则（每日上限、最小间隔）的时间。
+        const rules = planRules(account.platform);
+        const suggestedAt = nearestAvailable(now + 60e3, takenTimes(account.id, ""), rules, now);
+        if (suggestedAt == null) {
+          reject(`近期排不进去：${account.platform} 这个账号已排满（每日上限 ${rules.dailyCap} 条，最小间隔 ${rules.minGapMinutes} 分钟）`);
+          continue;
+        }
+        const made = store.createPublish({ workId: cut.work_id, accountId: account.id, cutId: cut.id, versionId: version.id, scheduledAt: suggestedAt, overrides: { copy } });
+        const shown = store.effectiveCopy({ overrides: JSON.stringify({ copy }), cutTitle: cut.title });
+        created.push({
+          ...who(account),
+          publishId: made.id,
+          state: made.state,
+          suggestedAt,
+          title: shown.title,
+          body: shown.body,
+          tags: shown.tags,
+          empty: [...(shown.body ? [] : ["body"]), ...(shown.tags.length ? [] : ["tags"])],
+        });
+      }
+      log(`[handlers] plan.apply ${cut.id}：建 ${created.length}、跳过 ${skipped.length}、拒绝 ${rejected.length}`);
+      return {
+        ...view,
+        created,
+        skipped,
+        rejected,
+        next: created.length ? `确认后才会发：vk publish approve --cut ${cut.id}（小红书逐条：vk publish approve --publish <id>）` : null,
+      };
     },
 
     "approval.link": ({ publishId }) => {
