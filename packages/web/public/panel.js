@@ -72,6 +72,10 @@ window.VKPanel = function createPanel(state) {
     if (p.state === "draft_pending") return '<span class="st wait">待确认草稿</span>';
     if (p.state === "skipped") return '<span class="st">不发</span>';
     if (["failed", "blocked", "expired"].includes(p.state)) return '<span class="st bad">出了问题</span>';
+    // 已发布的行自己写结果：和这个账号平时比的倍数；满 24 小时但基线不足写「还没法比」。
+    const q = p.multiple;
+    if (q != null) return `<span class="st pub res"><span class="x ${ratioCls(q)}">${ratioText(q)}</span></span>`;
+    if ("multiple" in p) return `<span class="st pub res" title="${esc(p.reason ?? "")}">还没法比</span>`;
     return '<span class="st pub">已发布</span>';
   }
 

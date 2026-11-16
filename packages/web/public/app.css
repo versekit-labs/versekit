@@ -397,4 +397,5 @@ a.hint{display:inline-flex;align-items:center;min-height:32px;text-underline-off
   .app .grp{flex:1 1 100%;margin:0}
   .app .grp .menu{position:static;margin-top:4px}
   .app .hd .r{margin-left:0}
-}
+}.st.res{font-weight:600;color:var(--ink)}
+.st.res .x{font-size:14px}
