@@ -318,13 +318,26 @@ role_label() {
 }
 
 # issue 的 label 列表，逗号连接。model:deepseek / model:opus 决定实现 worker 的通道与模型。
-# 走 bin/ghx（与 agentctl 同一账号，不切换全局活跃账号）；gh 失败时当作没有 label，
-# 不阻断派工——最坏只是这一单用 Sonnet。
+# 走 bin/ghx（与 agentctl 同一账号，不切换全局活跃账号）。
+# 取失败：重试一次；仍失败就把 stderr 摘要写到 stderr 并返回 1。调用方（被 $(...) 捕获）
+# 必须据此跳过这一单——取不到 label 就不知道该用哪个模型，不能悄悄退回 Sonnet
+# （2026-11-15 #145 带 model:opus 却被 Sonnet 做了，ACC-harness-cycle-13）。
 issue_labels() {
-  local num="$1" out
+  local num="$1" out err attempt errf
   [ -n "$num" ] || return 0
-  out=$(bin/ghx issue view "$num" --json labels --jq '.labels[].name' 2>/dev/null) || return 0
-  printf '%s' "$out" | tr '\n' ',' | sed 's/,$//'
+  errf=$(mktemp "${TMPDIR:-/tmp}/vk-labels.XXXXXX")
+  for attempt in 1 2; do
+    if out=$(bin/ghx issue view "$num" --json labels --jq '.labels[].name' 2>"$errf"); then
+      rm -f "$errf"
+      printf '%s' "$out" | tr '\n' ',' | sed 's/,$//'
+      return 0
+    fi
+    [ "$attempt" -lt 2 ] && sleep "${CYCLE_LABEL_RETRY_SLEEP:-1}"
+  done
+  err=$(tr '\n' ' ' < "$errf" | head -c 300)
+  rm -f "$errf"
+  logerr "    ✗ 取 #${num} 的 label 失败：${err:-（无 stderr）}"
+  return 1
 }
 
 # 选通道 + 模型。结果写 CHOSEN_CHANNEL / CHOSEN_MODEL / CHOSEN_REASON。
@@ -1044,7 +1057,10 @@ for i,w in enumerate(d.get("wouldClaim") or []):
         print(w.get("number"))
 ' "$cap" 2>/dev/null || true)
   for n in $nums; do
-    labels=$(issue_labels "$n")
+    if ! labels=$(issue_labels "$n"); then
+      log "    · [dry-run] #${n} 取不到 label，模型无法确定，本轮不派"
+      continue
+    fi
     if choose_worker_channel engineer "$labels" "" 1; then
       log "    · [dry-run] #${n} 角色 实现 → 通道 ${CHOSEN_CHANNEL} → 模型 ${CHOSEN_MODEL}（${CHOSEN_REASON}）"
     else
@@ -1088,7 +1104,13 @@ dispatch_engineer_lane() {
   local selector; selector=$(lane_selector "$wt")
   local branch; branch=$(lane_read "$lane" branch)
 
-  local labels; labels=$(issue_labels "$num")
+  # 取不到 label 就不知道该用哪个模型：不派这一单，退回 s:ready 下轮再试，不退回 Sonnet。
+  local labels
+  if ! labels=$(issue_labels "$num"); then
+    log "    ✗ #$num 模型无法确定，本轮不派，退回 s:ready 下轮再试"
+    set_issue_state "$num" ready || true
+    return 3
+  fi
   local handle
   if ! handle=$(ensure_terminal engineer "$selector" "worker: #$num" "" "lane-$lane" "$labels"); then
     log "    ✗ 起 worker 终端失败，把 #$num 退回 s:ready"
@@ -1159,6 +1181,8 @@ if [ "$LANES_THIS_RUN" -gt 0 ]; then
       dispatch_engineer_lane "$lane" || rc=$?
       # 2 = 没有可派的活，不必再占下一个 lane。
       [ "$rc" -eq 2 ] && break
+      # 3 = 这一单取不到 label 被跳过：已退回 s:ready，再 claim 只会拿到同一单，本轮停止。
+      [ "$rc" -eq 3 ] && break
       [ "$rc" -ne 0 ] && FAILED=1
     done
   fi
@@ -1295,7 +1319,16 @@ print(",".join(d.get("files") or []))
     log "    · 没找到分支 ${branch} 的 worktree，仍在 ${ENGINEER_WT} 里派工（任务书要求先切到该分支）"
   fi
 
-  local labels; labels=$(issue_labels "$num")
+  local labels
+  if ! labels=$(issue_labels "$num"); then
+    if [ "$DRY" = "1" ]; then
+      log "    · [dry-run] #${num} 取不到 label，模型无法确定，本轮不派返工"
+    else
+      log "    ✗ #$num 模型无法确定，本轮不派返工，退回 s:changes 下轮再试"
+      set_issue_state "$num" changes force || true
+    fi
+    return 1
+  fi
   local ch="" md="" rsn="" spec
   if [ "$DRY" = "1" ]; then
     if choose_worker_channel rework "$labels" "$round" 1; then
