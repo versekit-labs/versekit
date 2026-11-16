@@ -812,7 +812,7 @@ async function cmdServe() {
 }
 
 async function cmdDemo() {
-  const sub = args[1];
+  const sub = pos[1];
   if (sub !== "seed") throw new Error("用法：vk demo seed（在当前 VK_HOME 造演示数据）");
   const { seedDemoAsync } = await import("../../../scripts/demo-seed.mjs");
   const data = await seedDemoAsync();

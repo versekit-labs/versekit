@@ -31,3 +31,14 @@ test("造出待确认（长片+短片）、已发布（好/平/差）、出问�
   assert.equal(unchecked, 0, "假账号不该被体检排单");
   core.close();
 });
+
+test("CLI：vk demo seed 退出码 0，并在 VK_HOME 里造出数据", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const home = mkdtempSync(join(tmpdir(), "vk-demo-cli-"));
+  const r = spawnSync(process.execPath, [new URL("../../cli/src/vk.mjs", import.meta.url).pathname, "demo", "seed"], {
+    env: { ...process.env, VK_HOME: home },
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(r.stdout).pending_confirm, 4);
+});
