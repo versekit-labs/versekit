@@ -8,6 +8,8 @@ export const VALUE_FLAGS = new Set([
   "--to", "--name", "--handle", "--credential", "--title", "--schedule", "--visibility",
   "--range", "--publish", "--platform", "--concurrency", "--port", "--actor", "--origin",
   "--group", "--from", "--at",
+  // 发布方案（#160）：账号列表带值，漏登记会静默退化成默认全组。
+  "--accounts",
   // 账号登录：短信手机号与验证码（ACC-account-08）
   "--phone", "--code",
   // TikTok 官方接口的发布设置（#143）：隐私级别与文案都带值。
