@@ -181,3 +181,16 @@ test("vk publish edit 的用法提示里有新参数；不带任何改动时报�
   assert.match(errorText(r), /--privacy/);
   assert.match(errorText(r), /--no-comment/);
 });
+
+test("vk publish edit --body/--tags 能改正文和话题，超限给人话（#175）", async () => {
+  const id = newPublish(video());
+  const ok = await vk(["publish", "edit", id, "--body", "新正文第一行", "--tags", "a,#b，c"]);
+  assert.equal(ok.code, 0, ok.stderr + ok.stdout);
+  const row = store.getPublish(id);
+  const ov = JSON.parse(row.overrides_json);
+  assert.equal(ov.body, "新正文第一行");
+  assert.deepEqual(ov.tags, ["a", "b", "c"]);
+  const bad = await vk(["publish", "edit", id, "--body", "长".repeat(5000)]);
+  assert.notEqual(bad.code, 0);
+  assert.match(errorText(bad), /最多/);
+});

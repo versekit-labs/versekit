@@ -515,7 +515,7 @@ export const COMMANDS = [
       `edit:${a.publishId}:${a.title ?? ""}:${a.at ?? ""}:${a.body ?? ""}:${(a.tags ?? []).join(",")}:${a.privacy ?? ""}:${a.comment ?? ""}:${a.duet ?? ""}:${a.stitch ?? ""}:${a.caption ?? ""}:${a.draft ?? ""}`,
     ttlMs: 24 * 3600e3,
     http: { method: "POST", path: "/api/publishes/:publishId/edit" },
-    cli: { usage: "vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]" },
+    cli: { usage: "vk publish edit <publishId> [--title <标题>] [--body <正文>] [--tags <话题,逗号分隔>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]" },
     card: { label: "改标题、正文或时间", style: "default", confirm: false },
     audit: "always",
   },
