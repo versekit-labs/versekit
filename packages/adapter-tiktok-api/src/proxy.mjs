@@ -90,7 +90,10 @@ async function viaProxy(url, init, proxy, signal) {
   if (u.protocol === "https:") {
     const socket = await connectTunnel(proxy, u, signal);
     const tlsSocket = tls.connect({ socket, servername: u.hostname });
-    reqOpts = { createConnection: () => tlsSocket, agent: false };
+    // agent:false 会新建默认 agent 并忽略 createConnection，隧道就被绕过、直连 host:443；必须用自带 createConnection 的 agent。
+    const agent = new https.Agent({ keepAlive: false });
+    agent.createConnection = () => tlsSocket;
+    reqOpts = { agent };
   } else {
     // 明文 http：请求直接发给代理，路径写完整 URL。
     const p = new URL(proxy);

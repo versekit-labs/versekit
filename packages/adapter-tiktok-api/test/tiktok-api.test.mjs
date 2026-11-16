@@ -488,6 +488,7 @@ test("account.creator：展示 creator_info（隐私选项、开关、最长时�
 const { proxiedFetch, proxyFor } = await import("../src/proxy.mjs");
 const { callApi } = await import("../src/api.mjs");
 const { createServer: createHttpServer } = await import("node:http");
+const { connect: netConnect } = await import("node:net");
 
 const startFakeProxy = async () => {
   const seen = [];
@@ -518,6 +519,49 @@ test("代理：设了 ALL_PROXY，请求确实经过代理；不用设 NODE_USE_
     assert.match(px.seen[0].url, /\/v2\/post\/publish\/status\/fetch\//);
   } finally {
     await px.close();
+  }
+});
+
+test("代理：HTTPS 目标经 CONNECT 隧道发出，不直连目标 443", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { createServer: createTlsServer } = await import("node:https");
+  const dir = mkdtempSync(join(tmpdir(), "vk-tls-"));
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], { stdio: "ignore" });
+  const targetSeen = [];
+  const target = createTlsServer({ key: readFileSync(join(dir, "k.pem")), cert: readFileSync(join(dir, "c.pem")) }, (req, res) => {
+    targetSeen.push(req.url);
+    res.end("ok");
+  });
+  await new Promise((r) => target.listen(0, "127.0.0.1", r));
+  const connects = [];
+  const proxy = createHttpServer();
+  proxy.on("connect", (req, client, head) => {
+    connects.push(req.url);
+    const [host, port] = req.url.split(":");
+    const up = netConnect(Number(port), host, () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) up.write(head);
+      up.pipe(client);
+      client.pipe(up);
+    });
+    up.on("error", () => client.destroy());
+    client.on("error", () => up.destroy());
+  });
+  await new Promise((r) => proxy.listen(0, "127.0.0.1", r));
+  const savedTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // 目标是自签证书
+  try {
+    const tport = target.address().port;
+    const res = await proxiedFetch(`https://127.0.0.1:${tport}/raw?x=1`, { method: "GET" }, { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`, NO_PROXY: "" });
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "ok");
+    assert.deepEqual(connects, [`127.0.0.1:${tport}`]);
+    assert.deepEqual(targetSeen, ["/raw?x=1"]);
+  } finally {
+    if (savedTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = savedTls;
+    proxy.close();
+    target.close();
   }
 });
 
