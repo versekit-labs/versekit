@@ -112,6 +112,35 @@ export async function checkAccount(adapters, accountId) {
   }
 }
 
+/**
+ * 适配器报了「必须暂停账号」的错（TikTok 的 spam_risk_* / reached_active_user_cap）：立即暂停、推事件。
+ * 不重试由错误码 platform_reject（终态）保证；这里只负责暂停与留痕。TikTok 自己的错误码写进事件。
+ */
+function pauseAccountFor(publishId, row, err) {
+  const { code, banned } = err.pause;
+  open().prepare(`UPDATE account SET is_manual = 1${banned ? ", state = 'banned'" : ""} WHERE id = ?`).run(row.account_id);
+  const day = new Date().toISOString().slice(0, 10);
+  const payload = {
+    error_code: err.code,
+    platform_error: code,
+    accountId: row.account_id,
+    platform: row.platform,
+    handle: row.handle,
+    accountPaused: true,
+    message: String(err.message).slice(0, 300),
+  };
+  emit({ type: "publish.needs_human", severity: "critical", publishId, payload, dedupeKey: `publish:${publishId}:${code}` });
+  if (banned) {
+    emit({
+      type: "account.banned",
+      severity: "critical",
+      publishId,
+      payload: { accountId: row.account_id, platform: row.platform, handle: row.handle, detail: payload.message },
+      dedupeKey: `account:${row.account_id}:banned:${day}`,
+    });
+  }
+}
+
 /** 队列可以拿去调适配器的平台稿状态（白名单）。running 是租约过期后重领的情形。 */
 export const RUNNABLE_PUBLISH_STATES = ["queued", "auto_running", "draft_running"];
 
@@ -155,6 +184,24 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         });
         log(`[publish] ${message}`);
         return { skipped: true, state: row.state, error_code: "not_runnable" };
+      }
+
+      // 暂停中的账号不再发（#143）：TikTok 判了 spam_risk_* / 活跃用户上限后，账号已被暂停；
+      // 队列里同账号的其他平台稿不能绕过暂停继续往外发。不静默：转「待人处理」并留事件。
+      if (adapter.adapter.respectsPause) {
+        const acc = open().prepare("SELECT is_manual FROM account WHERE id = ?").get(row.account_id);
+        if (acc?.is_manual) {
+          const message = `账号 ${row.handle} 已被暂停自动发布（TikTok 风控或用户上限）：这条没有发；确认没问题后 vk account mode ${row.account_id} auto 恢复，再重新确认`;
+          transitionPublish(publishId, "notify_pending", { reason: "account_paused", patch: { fallback_reason: "risk_control", error_message: message.slice(0, 500) } });
+          emit({
+            type: "publish.needs_human",
+            severity: "warn",
+            publishId,
+            payload: { error_code: "account_paused", accountId: row.account_id, message },
+            dedupeKey: `publish:${publishId}:account_paused`,
+          });
+          return { state: "notify_pending", error: "account_paused" };
+        }
       }
 
       // notify / manual are choices, not failures: the person asked to be told, so tell them.
@@ -213,8 +260,20 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       try {
         const result = await Promise.race([runAdapter, deadline]);
         if (result?.dryRun) return result;
-        return applyPublishResult(publishId, result);
+        const applied = applyPublishResult(publishId, result);
+        // 选了「送草稿箱」不是失败也不是降级：说清楚下一步在 TikTok 收件箱里发。
+        if (result?.state === "draft_pending" && result.note) {
+          emit({
+            type: "publish.needs_human",
+            severity: "info",
+            publishId,
+            payload: { kind: "draft_sent", platform: adapter.platform, message: String(result.note).slice(0, 300) },
+            dedupeKey: `publish:${publishId}:draft_sent`,
+          });
+        }
+        return applied;
       } catch (err) {
+        if (err?.pause) pauseAccountFor(publishId, row, err);
         const disposition = applyPublishError(publishId, err);
         if (disposition.retryable) throw toAdapterError(err);
         // 超时还要把 run 标成失败：任务页靠 run.state=failed 显示这条错误并给出「重试」入口。

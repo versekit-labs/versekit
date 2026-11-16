@@ -3,8 +3,9 @@
 // Nothing above the core touches SQL directly: this module is where "create a publish" means the
 // same five things everywhere (work row, publish row, queue entry, validation, readable error).
 
-import { resolve } from "node:path";
-import { open, newId, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { open, newId, paths, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 import { withBaselines } from "./baseline.mjs";
 
@@ -19,6 +20,20 @@ export const UNUSABLE_ACCOUNT_STATES = ["expired", "banned"];
 
 /** Handles are stored with or without a leading @; the person should never see `@@`. */
 export const handleLabel = (handle) => (String(handle ?? "").startsWith("@") ? String(handle) : `@${handle}`);
+
+/**
+ * 同一个对人展示的平台可以有两个后端：tiktok = TikTok Studio 浏览器自动化，tiktok-api = 官方接口
+ * （#143）。内部 id 不同，对人展示一律叫「TikTok」；同一个账号只能挂其中一个。
+ */
+export const PLATFORM_BACKENDS = { tiktok: ["tiktok", "tiktok-api"], "tiktok-api": ["tiktok", "tiktok-api"] };
+export const backendsOf = (platform) => PLATFORM_BACKENDS[platform] ?? [platform];
+const BACKEND_LABEL = { tiktok: "浏览器自动化", "tiktok-api": "官方接口" };
+export const TIKTOK_API = "tiktok-api";
+
+/** 对人展示的平台名：两个 TikTok 后端都叫 TikTok，不出现内部 id。 */
+export const platformLabelOf = (platform) => (backendsOf(platform).includes("tiktok") ? "TikTok" : platform);
+
+const normHandle = (handle) => String(handle ?? "").replace(/^@/, "").trim().toLowerCase();
 
 export function accountUnusableReason(account) {
   if (account.state === "expired") {
@@ -141,6 +156,22 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
   const group = open().prepare("SELECT id, name FROM account_group WHERE id = ?").get(groupId);
   if (!group) fail(`没有这个账号组：${groupId}`);
 
+  // 同一个 TikTok 账号不能同时挂两个后端（ACC-tiktok-api-04）：由 core 强制，不靠「平台名不同所以天然不冲突」。
+  const family = backendsOf(p);
+  if (family.length > 1) {
+    const others = open()
+      .prepare(`SELECT * FROM account WHERE platform IN (${family.map(() => "?").join(",")}) AND platform != ? AND removed_at IS NULL`)
+      .all(...family, p);
+    const same = others.find((a) => normHandle(a.handle) === normHandle(h));
+    if (same) {
+      fail(`${handleLabel(h)} 已经用「${BACKEND_LABEL[same.platform]}」接入 TikTok（${same.id}）：同一个账号不能同时挂两个后端；要换，先运行 vk account remove ${same.id}`);
+    }
+    const slot = others.find((a) => a.group_id === groupId);
+    if (slot) {
+      fail(`账号组「${group.name}」的 TikTok 已被 ${handleLabel(slot.handle)} 占用（${slot.id}，${BACKEND_LABEL[slot.platform]}）：一个组每个平台只能有一个；要换号或换后端，先运行 vk account remove ${slot.id}`);
+    }
+  }
+
   const existing = open().prepare("SELECT * FROM account WHERE platform = ? AND handle = ?").get(p, h);
   if (existing && !existing.removed_at) {
     if (existing.group_id !== groupId) {
@@ -210,6 +241,42 @@ export function setAccountMode(accountId, mode) {
   if (!account) fail(`没有这个账号：${accountId}`);
   open().prepare("UPDATE account SET is_manual = ? WHERE id = ?").run(mode === "manual" ? 1 : 0, accountId);
   return { id: accountId, mode };
+}
+
+/**
+ * 授权完成后把结果落到账号行：账号表只存 credential_ref（token 在本机凭证目录里），昵称进 display_name。
+ * 头像不进表：留在凭证文件的 profile 里，由 accountProfile 读出来给界面显示。
+ */
+export function applyAccountConnection({ accountId, credentialRef, displayName = null, expiresAt = null }) {
+  const account = getAccount(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`);
+  const now = Date.now();
+  open()
+    .prepare(
+      "UPDATE account SET credential_ref = ?, display_name = COALESCE(?, display_name), state = 'ok', expires_at = COALESCE(?, expires_at), last_ok_at = ?, last_checked_at = ? WHERE id = ?",
+    )
+    .run(requireString(credentialRef, "credentialRef", { max: 512 }), displayName, expiresAt, now, now, accountId);
+  return { accountId, state: "ok", displayName: displayName ?? account.display_name ?? null };
+}
+
+/** 账号的头像与昵称（来自 user.info.basic）。只读凭证文件里的 profile 字段，绝不把 token 带出去。 */
+export function accountProfile(account) {
+  if (account?.platform !== TIKTOK_API || !account.credential_ref) return null;
+  const ref = normalize(String(account.credential_ref));
+  if (isAbsolute(ref) || ref.split(sep).includes("..")) return null;
+  const file = join(paths().credentials, ref);
+  if (!existsSync(file)) return null;
+  try {
+    const profile = JSON.parse(readFileSync(file, "utf8")).profile ?? null;
+    return profile ? { avatarUrl: profile.avatar_url ?? null, displayName: profile.display_name ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 暂停账号（不再自动发）并记因：TikTok 的 spam_risk_* / reached_active_user_cap 走这里。 */
+export function pauseAccount(accountId, { banned = false } = {}) {
+  open().prepare(`UPDATE account SET is_manual = 1${banned ? ", state = 'banned'" : ""} WHERE id = ?`).run(accountId);
 }
 
 export function setAccountState(accountId, state) {
@@ -615,13 +682,16 @@ export function accountsForPlatforms(platforms, { groupId = null } = {}) {
   const blocked = [];
   for (const platform of platforms) {
     // 已移除的账号不占槽位，也不能进候选：软删除和 group 作用域是两个独立条件，二者都在这里过滤。
+    // --to tiktok 同时覆盖两个后端（浏览器自动化 / 官方接口）：同一个账号只会挂其中一个。
+    const family = backendsOf(platform);
+    const inList = family.map(() => "?").join(",");
     const accounts = groupId
       ? open()
-          .prepare("SELECT * FROM account WHERE platform = ? AND group_id = ? AND removed_at IS NULL ORDER BY created_at")
-          .all(platform, groupId)
+          .prepare(`SELECT * FROM account WHERE platform IN (${inList}) AND group_id = ? AND removed_at IS NULL ORDER BY created_at`)
+          .all(...family, groupId)
       : open()
-          .prepare("SELECT * FROM account WHERE platform = ? AND removed_at IS NULL ORDER BY created_at")
-          .all(platform);
+          .prepare(`SELECT * FROM account WHERE platform IN (${inList}) AND removed_at IS NULL ORDER BY created_at`)
+          .all(...family);
     if (!accounts.length) {
       missing.push(platform);
       continue;
@@ -864,8 +934,31 @@ function requireConfirmable(publishId) {
 
 const label = (r) => `${r.platform} ${handleLabel(r.handle)}`;
 
+const asObj = (json) => {
+  try {
+    const v = json ? JSON.parse(json) : {};
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * TikTok 官方接口的 Post 必须由人选了隐私级别（审核要求：不预选，没选不能发）。送草稿箱不需要隐私级别。
+ * 返回人话原因；没问题返回 null。选项是否合法由适配器对照 creator_info 判，core 不硬编码任何级别。
+ */
+export function missingPlatformSettings(row) {
+  if (row.platform !== TIKTOK_API) return null;
+  const o = asObj(row.overrides_json);
+  if (o.draft === true || row.mode === "draft") return null;
+  if (typeof o.tiktok?.privacy_level === "string" && o.tiktok.privacy_level) return null;
+  return `TikTok 发布前要先选隐私级别，没选不会发：vk publish edit ${row.id} --privacy <级别>（可选项以 TikTok 返回为准，先看 vk account creator ${row.account_id}）；想送草稿箱就用 vk publish edit ${row.id} --draft`;
+}
+
 /** 人确认了：进队列，按建议时间（或现在）发。mode=manual 的只记跟踪，不排 run。 */
 function admit(row, { reason, now, at = null }) {
+  const missing = missingPlatformSettings(row);
+  if (missing) fail(missing);
   // 账号已从组里移除：确认了也发不出去，而且会从一个已让出的槽位发帖。说清楚，不进队列。
   if (row.removed_at) fail(`${label(row)} 已从账号组移除，这条平台稿不能再确认（${row.id}）`);
   const patch = at != null ? { scheduled_at: at } : {};
@@ -905,18 +998,23 @@ export function approvePublishes({ cutId = null, publishId = null, now = Date.no
   const rows = confirmRows(`p.cut_id = ? AND p.state IN (${CONFIRMABLE_STATES.map(() => "?").join(",")})`, cutId, ...CONFIRMABLE_STATES);
   // 账号已移除的不带上，回执里单独列出（不静默跳过）。
   const removed = rows.filter((r) => r.removed_at).map((r) => ({ publishId: r.id, platform: r.platform, handle: r.handle, reason: `${label(r)} 已从账号组移除` }));
-  const batch = rows.filter((r) => !r.removed_at && !PER_ITEM_PLATFORMS.includes(r.platform));
+  // 缺必填设置的（TikTok 没选隐私级别）不带上，也不静默：回执里写明原因，其余平台照常确认。
+  const incomplete = rows
+    .filter((r) => !r.removed_at && missingPlatformSettings(r))
+    .map((r) => ({ publishId: r.id, platform: r.platform, handle: r.handle, reason: missingPlatformSettings(r) }));
+  const batch = rows.filter((r) => !r.removed_at && !PER_ITEM_PLATFORMS.includes(r.platform) && !missingPlatformSettings(r));
   const perItem = rows
     .filter((r) => !r.removed_at && PER_ITEM_PLATFORMS.includes(r.platform))
     .map((r) => ({ publishId: r.id, platform: r.platform, handle: r.handle, state: r.state, scheduledAt: r.scheduled_at }));
   if (!batch.length) {
+    if (incomplete.length) fail(`成片「${cut.title}」还不能确认：${incomplete.map((x) => x.reason).join("；")}`);
     if (perItem.length) {
       fail(`成片「${cut.title}」只剩 ${perItem.map(label).join("、")} 要逐条决定：vk publish approve --publish ${perItem[0].publishId}（或 now / manual）`);
     }
     fail(`成片「${cut.title}」没有等确认的平台稿`);
   }
   const approved = inTransaction(() => batch.map((r) => admit(r, { reason: "approved_by_operator", now })));
-  return { cutId, title: cut.title, approved, perItem, ...(removed.length ? { removed } : {}) };
+  return { cutId, title: cut.title, approved, perItem, ...(removed.length ? { removed } : {}), ...(incomplete.length ? { incomplete } : {}) };
 }
 
 /** publish.now：这一条现在就发（建议时间改成现在）。 */
@@ -959,14 +1057,58 @@ export function skipCut({ cutId }) {
  * 改一个平台的标题不该波及同一支成片的其他平台。时间只拦过去；平台的每日上限、
  * 最小间隔不在这里判（#151）。状态不变，所以不走 transitionPublish，但留 publish.edited 事件。
  */
-export function editPublish({ publishId, title = null, at = null, now = Date.now() }) {
+export function editPublish({
+  publishId,
+  title = null,
+  at = null,
+  privacy = null,
+  comment = null,
+  duet = null,
+  stitch = null,
+  caption = null,
+  draft = null,
+  now = Date.now(),
+}) {
   const row = requireConfirmable(publishId);
-  if (title == null && at == null) fail("要改什么？给 --title 或 --at（至少一个）");
+  const tiktokFields = { privacy, comment, duet, stitch, caption, draft };
+  const touchesTiktok = Object.values(tiktokFields).some((v) => v != null);
+  if (title == null && at == null && !touchesTiktok) {
+    fail("要改什么？给 --title 或 --at（至少一个）；TikTok 平台稿还可以改 --privacy / --comment / --duet / --stitch / --caption / --draft");
+  }
+  if (touchesTiktok && row.platform !== TIKTOK_API) {
+    fail(`隐私级别、评论/合拍/拼接开关、文案和送草稿箱只适用于 TikTok 官方接口的平台稿；这条是 ${row.platform}，只能改标题和时间`);
+  }
   const changes = {};
   const overrides = row.overrides_json ? JSON.parse(row.overrides_json) : {};
   if (title != null) {
     changes.title = { from: overrides.title ?? null, to: requireString(title, "标题", { max: 200 }) };
     overrides.title = changes.title.to;
+  }
+  if (touchesTiktok) {
+    const t = { ...(overrides.tiktok ?? {}) };
+    if (privacy != null) {
+      // 不在这里枚举合法级别：可选项只来自 TikTok 的 creator_info，发布时由适配器对照。
+      const level = requireString(privacy, "隐私级别", { max: 64 });
+      if (!/^[A-Z_]+$/.test(level)) fail(`隐私级别要写 TikTok 返回的原样名字（如 SELF_ONLY），收到「${level}」；可选项见 vk account creator ${row.account_id}`);
+      changes.privacy = { from: t.privacy_level ?? null, to: level };
+      t.privacy_level = level;
+    }
+    for (const [key, name, value] of [["allow_comment", "comment", comment], ["allow_duet", "duet", duet], ["allow_stitch", "stitch", stitch]]) {
+      if (value == null) continue;
+      if (typeof value !== "boolean") fail(`${name} 只能是 true 或 false`);
+      changes[name] = { from: t[key] === true, to: value };
+      t[key] = value;
+    }
+    overrides.tiktok = t;
+    if (caption != null) {
+      changes.caption = { from: overrides.caption ?? null, to: requireString(caption, "文案", { max: 2200 }) };
+      overrides.caption = changes.caption.to;
+    }
+    if (draft != null) {
+      if (typeof draft !== "boolean") fail("draft 只能是 true 或 false");
+      changes.draft = { from: overrides.draft === true, to: draft };
+      overrides.draft = draft;
+    }
   }
   if (at != null) {
     if (!Number.isInteger(at) || at < 0) fail("时间必须是毫秒时间戳");
@@ -974,9 +1116,11 @@ export function editPublish({ publishId, title = null, at = null, now = Date.now
     changes.at = { from: row.scheduled_at ?? null, to: at };
   }
   return inTransaction(() => {
+    // 「送到草稿箱」走现有的 draft 模式（draft_running → draft_pending），不新增状态。
+    const mode = changes.draft ? (changes.draft.to ? "draft" : row.mode === "draft" ? "auto" : row.mode) : row.mode;
     open()
-      .prepare("UPDATE publish SET overrides_json = ?, scheduled_at = ?, updated_at = ? WHERE id = ?")
-      .run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, changes.at ? at : row.scheduled_at, Date.now(), row.id);
+      .prepare("UPDATE publish SET overrides_json = ?, scheduled_at = ?, mode = ?, updated_at = ? WHERE id = ?")
+      .run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, changes.at ? at : row.scheduled_at, mode, Date.now(), row.id);
     emit({ type: "publish.edited", severity: "info", publishId: row.id, payload: { state: row.state, changes } });
     return {
       publishId: row.id,
@@ -985,6 +1129,7 @@ export function editPublish({ publishId, title = null, at = null, now = Date.now
       state: row.state,
       title: overrides.title ?? null,
       scheduledAt: changes.at ? at : row.scheduled_at,
+      ...(touchesTiktok ? { tiktok: { ...(overrides.tiktok ?? {}), caption: overrides.caption ?? null, draft: overrides.draft === true } } : {}),
       changes,
     };
   });

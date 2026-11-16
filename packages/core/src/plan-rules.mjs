@@ -17,13 +17,17 @@ export const DEFAULT_PLAN_RULES = Object.freeze({ daily_cap: 10, min_gap_minutes
 /** 不占名额的状态：人没打算发，或已经没发出去。 */
 export const SLOT_FREE_STATES = ["skipped", "canceled", "failed", "blocked", "expired"];
 
+const ALIAS_OF = { "tiktok-api": "tiktok" };
+
 const posInt = (v) => (Number.isInteger(v) && v > 0 ? v : null);
 
 /** 某平台生效的规则：平台覆盖 > 配置里的 default > 内置默认。返回 { dailyCap, minGapMs, minGapMinutes }。 */
 export function planRules(platform, config = readConfig()) {
   const rules = config?.plan?.rules ?? {};
+  // 同一个对人展示的平台的另一个后端沿用它的覆盖：tiktok-api（官方接口）与 tiktok 用同一套每日上限、最小间隔。
   const pick = (key) =>
-    posInt(rules.platforms?.[platform]?.[key]) ?? posInt(rules.default?.[key]) ?? DEFAULT_PLAN_RULES[key];
+    posInt(rules.platforms?.[platform]?.[key])
+    ?? posInt(rules.platforms?.[ALIAS_OF[platform]]?.[key]) ?? posInt(rules.default?.[key]) ?? DEFAULT_PLAN_RULES[key];
   const dailyCap = pick("daily_cap");
   const minGapMinutes = pick("min_gap_minutes");
   return { dailyCap, minGapMinutes, minGapMs: minGapMinutes * 60e3 };

@@ -10,6 +10,8 @@ export const VALUE_FLAGS = new Set([
   "--group", "--from", "--at",
   // 账号登录：短信手机号与验证码（ACC-account-08）
   "--phone", "--code",
+  // TikTok 官方接口的发布设置（#143）：隐私级别与文案都带值。
+  "--privacy", "--caption",
 ]);
 
 /** argv（不含 node 与脚本路径）→ { flags, pos }。带值参数缺值时记为 undefined，不吞掉下一个 --flag。 */

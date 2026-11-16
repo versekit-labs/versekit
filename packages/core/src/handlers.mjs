@@ -112,11 +112,16 @@ export function loginHint(platform, accountId) {
   if (platform === "xiaohongshu") {
     return `下一步：vk account login ${accountId} --qr（手机小红书扫码，不弹窗口；遇到风控改用 --phone <手机号> 短信登录或 --open 打开登录窗口）`;
   }
+  if (platform === "tiktok-api") {
+    return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用 TikTok 登录并同意）`;
+  }
   return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
 }
 
 export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
+  /** 进行中的 TikTok 授权会话，按账号。 */
+  const connectSessions = new Map();
 
   /** 创建发布的本地校验：不写任何行、不碰网络。 */
   function planPublish({ asset, to, schedule, visibility = "public", dryRun = false, title, body, tags, group }) {
@@ -215,7 +220,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "account.list": ({ group } = {}) => {
       // 账号页与总览新鲜度面板共用 overview.listAccountViews 的同一份对象（ACC-overview-02）。
-      const stamp = (list) => list.map((a) => withCheckStatus(a));
+      // TikTok 官方接口的账号带上头像（授权时从 user.info.basic 取得，界面要显示）。
+      const stamp = (list) =>
+        list.map((a) => {
+          const view = withCheckStatus(a);
+          const profile = store.accountProfile(a);
+          return profile ? { ...view, avatar_url: profile.avatarUrl } : view;
+        });
       if (!group) return { accounts: stamp(overview.listAccountViews()) };
       const g = requireGroup(group);
       const accounts = stamp(overview.listAccountViews({ groupId: g.id }));
@@ -335,6 +346,65 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "account.mode": ({ accountId, mode }) => store.setAccountMode(accountId, mode),
 
     /**
+     * TikTok 官方接口授权（Login Kit for Desktop）。授权要在本机起临时端口、等人在浏览器里点同意，
+     * 一次 HTTP 请求等不了那么久，所以分两段：
+     *   · 第一次调用：起授权会话，立刻返回 { state: "waiting", url }，由 CLI 打开/打印链接；
+     *   · 之后再调（同一账号）：最多等 timeoutMs，等到完成返回 { state: "connected", 昵称, 头像 }。
+     * 会话、PKCE、state、端口都在适配器里；这里只负责把结果落到账号行（credential_ref + 昵称）。
+     */
+    "account.connect": async ({ accountId, timeoutMs = null }) => {
+      const account = store.getAccount(accountId);
+      if (!account) fail(`没有这个账号：${accountId}`);
+      const adapter = byPlatform.get(account.platform)?.adapter;
+      if (typeof adapter?.connect !== "function") {
+        fail(`${store.platformLabelOf(account.platform)} 账号不需要这种授权；请用 vk account reauth ${accountId}`);
+      }
+      let session = connectSessions.get(accountId);
+      const fresh = !session;
+      if (fresh) {
+        session = { startedAt: Date.now(), url: null, result: null, error: null };
+        const urlReady = new Promise((resolve) => (session.resolveUrl = resolve));
+        session.done = Promise.resolve()
+          .then(() => adapter.connect({ accountId, onUrl: (url) => { session.url = url; session.resolveUrl(); } }))
+          .then(
+            (result) => { session.result = result; },
+            (error) => { session.error = error; },
+          )
+          .finally(() => session.resolveUrl());
+        connectSessions.set(accountId, session);
+        await urlReady; // 拿到链接（或这次授权在起步就失败）再返回
+      } else if (timeoutMs !== 0) {
+        await Promise.race([session.done, new Promise((r) => setTimeout(r, Math.min(Math.max(timeoutMs ?? 20000, 0), 60000)))]);
+      }
+      if (session.error) {
+        connectSessions.delete(accountId);
+        throw session.error;
+      }
+      if (session.result) {
+        connectSessions.delete(accountId);
+        const r = session.result;
+        store.applyAccountConnection({ accountId, credentialRef: r.credentialRef, displayName: r.displayName, expiresAt: r.expiresAt });
+        log(`[connect] ${account.platform} ${accountId} 授权完成`);
+        return { accountId, state: "connected", displayName: r.displayName, avatarUrl: r.avatarUrl };
+      }
+      return {
+        accountId,
+        state: "waiting",
+        url: session.url,
+        next: "在浏览器里打开这个链接，用 TikTok 登录并同意；完成后这条命令会显示头像和昵称",
+      };
+    },
+
+    /** creator_info：账号现在能选的隐私级别、三个开关是否允许、最长时长。选项只来自 TikTok，不在代码里写死。 */
+    "account.creator": async ({ accountId }) => {
+      const account = store.getAccount(accountId);
+      if (!account) fail(`没有这个账号：${accountId}`);
+      const adapter = byPlatform.get(account.platform)?.adapter;
+      if (typeof adapter?.creatorInfo !== "function") fail("这个账号不是 TikTok 官方接口账号，没有创作者设置可查");
+      return { accountId, ...(await adapter.creatorInfo({ accountId })) };
+    },
+
+    /**
      * Reauth cannot be completed from a phone — a scan needs a screen. So this command starts the
      * flow where it can start, and otherwise says plainly where the person has to go.
      */
@@ -347,6 +417,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         return { accountId, started: false, next: `在电脑上运行：biliup -u ${account.credential_ref ?? "<cookies.json>"} login，选「浏览器登录」` };
       }
       if (account.platform === "xiaohongshu") {
+        return { accountId, started: false, next: loginHint(account.platform, accountId) };
+      }
+      if (account.platform === "tiktok-api") {
         return { accountId, started: false, next: loginHint(account.platform, accountId) };
       }
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
@@ -420,13 +493,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "publish.skip": ({ cutId }) => store.skipCut({ cutId }),
 
-    "publish.edit": ({ publishId, title = null, at = null }) => {
+    "publish.edit": ({ publishId, title = null, at = null, privacy = null, comment = null, duet = null, stitch = null, caption = null, draft = null }) => {
       // 时间要先过平台规则（每日上限、最小间隔）。状态不对、过去的时间等错误仍由 store 报，保持原来的措辞。
       if (at != null && Number.isInteger(at) && at > Date.now()) {
         const row = store.getPublish(publishId);
         if (row && store.CONFIRMABLE_STATES.includes(row.state)) assertPlanSlot(row, at);
       }
-      return store.editPublish({ publishId, title, at });
+      return store.editPublish({ publishId, title, at, privacy, comment, duet, stitch, caption, draft });
     },
 
     "collect.now": ({ publishId = null, platform = null }) => {

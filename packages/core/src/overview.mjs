@@ -29,7 +29,8 @@ export const MATRIX_COLUMNS = [
   { platform: "douyin", label: "抖音", aliases: [] },
   { platform: "bilibili", label: "B站", aliases: ["bili"] },
   { platform: "youtube", label: "YouTube", aliases: [] },
-  { platform: "tiktok", label: "TikTok", aliases: [] },
+  // tiktok-api = 官方接口后端（#143）：对人展示仍是 TikTok，同一列。
+  { platform: "tiktok", label: "TikTok", aliases: ["tiktok-api"] },
 ];
 
 const PLATFORM_ALIASES = new Map(
