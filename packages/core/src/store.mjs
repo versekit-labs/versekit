@@ -6,6 +6,7 @@
 import { resolve } from "node:path";
 import { open, newId, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
+import { withBaselines } from "./baseline.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
 export const PUBLISH_VISIBILITIES = ["public", "private", "friends", "private_then_public"];
@@ -424,6 +425,25 @@ export function effectiveTitle(row) {
   );
 }
 
+const PUBLISHED_STATES = new Set(["published", "published_limited"]);
+
+/**
+ * 发过的平台稿补「和平时比」：24 小时播放、平时的中位数、倍数、结论（口径只在 baseline.mjs 一处）。
+ * 没发过的不带这些字段；发了但数据不足时 multiple 为 null、reason 说清为什么（页面显示「还没法比」）。
+ * accountId 是内部键，算完就拿掉，不外泄。
+ */
+function attachBaselines(cuts) {
+  const rows = cuts.flatMap((c) => c.publishes).filter((p) => PUBLISHED_STATES.has(p.state) && p.publishedAt != null);
+  const byId = new Map(withBaselines(rows.map((p) => ({ ...p, publishId: p.id }))).map((r) => [r.id, r.baseline]));
+  for (const c of cuts) {
+    for (const p of c.publishes) {
+      const b = byId.get(p.id);
+      if (b) Object.assign(p, { play24h: b.play24h, baselineMedian: b.baselineMedian, multiple: b.multiple, verdict: b.verdict, verdictLabel: b.verdictLabel, reason: b.reason });
+      delete p.accountId;
+    }
+  }
+}
+
 function workView(work) {
   const conn = open();
   const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c) => {
@@ -434,7 +454,7 @@ function workView(work) {
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
-                p.overrides_json, a.platform, a.handle, v.language
+                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, v.language
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
@@ -454,9 +474,12 @@ function workView(work) {
         scheduledAt: p.scheduled_at,
         url: p.external_url,
         error: p.error_code ? { code: p.error_code, message: p.error_message } : null,
+        publishedAt: p.published_at ?? null,
+        accountId: p.account_id,
       }));
     return { id: c.id, title: c.title, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
   });
+  attachBaselines(cuts);
   const allStates = cuts.flatMap((c) => c.publishes.map((p) => p.state));
   return {
     id: work.id,
@@ -483,6 +506,12 @@ export function listWorks({ limit = 100 } = {}) {
         versions: v.cuts.reduce((n, c) => n + c.versions.length, 0),
         publishes: v.cuts.reduce((n, c) => n + c.publishes.length, 0),
         createdAt: v.createdAt,
+        platformList: v.cuts.flatMap((c) => c.publishes.map((p) => ({ publishId: p.id, platform: p.platform, state: p.state, cutId: c.id }))),
+        coverVersionId: v.cuts.flatMap((c) => c.versions)[0]?.id ?? null,
+        // 有倍数的已发平台稿（页面取最大的一条当「最好的一条」；按组过滤要靠 publishId，所以带上）。
+        compared: v.cuts.flatMap((c) =>
+          c.publishes.filter((p) => p.multiple != null).map((p) => ({ publishId: p.id, platform: p.platform, cutId: c.id, multiple: p.multiple, verdictLabel: p.verdictLabel })),
+        ),
       };
     });
 }

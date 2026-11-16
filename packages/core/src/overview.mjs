@@ -341,21 +341,35 @@ export function listWorksInScope(works, groupId) {
   if (!groupId) return works;
   const rows = open()
     .prepare(
-      `SELECT p.work_id AS workId, p.state, a.group_id AS groupId
+      `SELECT p.id AS publishId, p.work_id AS workId, p.state, p.cut_id AS cutId, a.platform, a.group_id AS groupId
          FROM publish p JOIN account a ON a.id = p.account_id`,
     )
     .all();
   const mine = new Map();
+  const mineRows = new Map();
   const everWithPublishes = new Set();
   for (const r of rows) {
     everWithPublishes.add(r.workId);
     if (r.groupId !== groupId) continue;
     if (!mine.has(r.workId)) mine.set(r.workId, []);
     mine.get(r.workId).push(r.state);
+    if (!mineRows.has(r.workId)) mineRows.set(r.workId, []);
+    mineRows.get(r.workId).push({ publishId: r.publishId, platform: r.platform, state: r.state, cutId: r.cutId });
   }
   return works
     .filter((w) => mine.has(w.id) || !everWithPublishes.has(w.id))
-    .map((w) => (mine.has(w.id) ? { ...w, publishes: mine.get(w.id).length, status: deriveStatus(mine.get(w.id)) } : w));
+    .map((w) => {
+      if (!mine.has(w.id)) return w;
+      // 平台列表和有倍数的平台稿都只留这个组的（别的组账号的倍数不该出现在这里）。
+      const keep = new Set(mineRows.get(w.id).map((r) => r.publishId));
+      return {
+        ...w,
+        publishes: mine.get(w.id).length,
+        status: deriveStatus(mine.get(w.id)),
+        platformList: mineRows.get(w.id),
+        compared: (w.compared ?? []).filter((c) => keep.has(c.publishId)),
+      };
+    });
 }
 
 /** 单个作品只留这个组账号的平台稿；成片与版本照旧（它们不属于账号），状态按留下的重算。 */
