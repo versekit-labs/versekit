@@ -9,6 +9,7 @@
 //   · 其余 4xx                             → platform_reject；5xx / 网络错误 → unknown（可重试）
 
 import { AdapterError } from "../../core/src/errors.mjs";
+import { proxiedFetch } from "./proxy.mjs";
 import { apiBase } from "./settings.mjs";
 
 /** 触发「暂停账号、不重试」的 TikTok 错误码。人话在这里写一次，事件与 CLI 都读它。 */
@@ -82,16 +83,16 @@ export const MAX_429_RETRIES = 4;
 
 /**
  * fetch + 429 指数退避。别的状态码原样交给调用方，由它按 body 里的 error.code 归类。
- * 网络层异常（断网、DNS）按 unknown 抛出，可重试。
+ * 网络层异常（断网、DNS、代理不通）按 network_unreachable 抛出，可重试；走不走代理见 proxy.mjs。
  */
 export async function fetchWithBackoff(url, init = {}, { signal, sleep = defaultSleep } = {}) {
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
-      res = await fetch(url, { ...init, signal });
+      res = await proxiedFetch(url, { ...init, signal });
     } catch (err) {
       if (signal?.aborted) throw new AdapterError("timeout", "发布已被中止");
-      throw new AdapterError("unknown", `连不上 TikTok（${err.message}）`, { cause: err });
+      throw err; // proxiedFetch 已归类为 network_unreachable，并写明该查哪些代理变量
     }
     if (res.status !== 429) return res;
     await res.arrayBuffer().catch(() => {});
