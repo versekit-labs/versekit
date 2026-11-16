@@ -483,3 +483,127 @@ test("account.creator：展示 creator_info（隐私选项、开关、最长时�
   assert.equal(info.duetDisabled, true);
   assert.equal(info.maxVideoPostDurationSec, 180);
 });
+
+// ---- ACC-tiktok-api-07：代理 ----
+const { proxiedFetch, proxyFor } = await import("../src/proxy.mjs");
+const { callApi } = await import("../src/api.mjs");
+const { createServer: createHttpServer } = await import("node:http");
+const { connect: netConnect } = await import("node:net");
+
+const startFakeProxy = async () => {
+  const seen = [];
+  const server = createHttpServer((req, res) => {
+    // 明文 http 请求：路径是完整 URL，转发给真正的目标。
+    seen.push({ method: req.method, url: req.url });
+    const u = new URL(req.url);
+    const up = createHttpServer;
+    void up;
+    import("node:http").then(({ request }) => {
+      const r = request({ host: u.hostname, port: u.port, path: u.pathname + u.search, method: req.method, headers: req.headers }, (ur) => {
+        res.writeHead(ur.statusCode, ur.headers);
+        ur.pipe(res);
+      });
+      req.pipe(r);
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { seen, url: `http://user:secret@127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
+};
+
+test("代理：设了 ALL_PROXY，请求确实经过代理；不用设 NODE_USE_ENV_PROXY", async () => {
+  const px = await startFakeProxy();
+  try {
+    const res = await proxiedFetch(`${mock.base}/v2/post/publish/status/fetch/`, { method: "POST" }, { ALL_PROXY: px.url });
+    assert.ok(res.status > 0);
+    assert.equal(px.seen.length, 1);
+    assert.match(px.seen[0].url, /\/v2\/post\/publish\/status\/fetch\//);
+  } finally {
+    await px.close();
+  }
+});
+
+test("代理：HTTPS 目标经 CONNECT 隧道发出，不直连目标 443", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { createServer: createTlsServer } = await import("node:https");
+  const dir = mkdtempSync(join(tmpdir(), "vk-tls-"));
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], { stdio: "ignore" });
+  const targetSeen = [];
+  const target = createTlsServer({ key: readFileSync(join(dir, "k.pem")), cert: readFileSync(join(dir, "c.pem")) }, (req, res) => {
+    targetSeen.push(req.url);
+    res.end("ok");
+  });
+  await new Promise((r) => target.listen(0, "127.0.0.1", r));
+  const connects = [];
+  const proxy = createHttpServer();
+  proxy.on("connect", (req, client, head) => {
+    connects.push(req.url);
+    const [host, port] = req.url.split(":");
+    const up = netConnect(Number(port), host, () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) up.write(head);
+      up.pipe(client);
+      client.pipe(up);
+    });
+    up.on("error", () => client.destroy());
+    client.on("error", () => up.destroy());
+  });
+  await new Promise((r) => proxy.listen(0, "127.0.0.1", r));
+  const savedTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // 目标是自签证书
+  try {
+    const tport = target.address().port;
+    const res = await proxiedFetch(`https://127.0.0.1:${tport}/raw?x=1`, { method: "GET" }, { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`, NO_PROXY: "" });
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "ok");
+    assert.deepEqual(connects, [`127.0.0.1:${tport}`]);
+    assert.deepEqual(targetSeen, ["/raw?x=1"]);
+  } finally {
+    if (savedTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = savedTls;
+    proxy.close();
+    target.close();
+  }
+});
+
+test("代理：NO_PROXY 命中的主机直连，不经过代理", async () => {
+  const px = await startFakeProxy();
+  try {
+    const env = { HTTP_PROXY: px.url, NO_PROXY: "localhost,127.0.0.1" };
+    assert.equal(proxyFor(`${mock.base}/x`, env), null);
+    await proxiedFetch(`${mock.base}/v2/post/publish/status/fetch/`, { method: "POST" }, env);
+    assert.equal(px.seen.length, 0);
+  } finally {
+    await px.close();
+  }
+});
+
+test("代理：小写变量也认", () => {
+  assert.equal(proxyFor("https://open.tiktokapis.com/", { https_proxy: "127.0.0.1:7890" }), "http://127.0.0.1:7890");
+});
+
+test("代理不通：error_code 是 network_unreachable，人话点名要检查的代理变量，不是 fetch failed", async () => {
+  const saved = process.env.HTTPS_PROXY;
+  const savedHttp = process.env.HTTP_PROXY;
+  const savedNo = { NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy };
+  delete process.env.NO_PROXY; // 开发机的 NO_PROXY 可能含 127.0.0.1，会让请求绕开假代理
+  delete process.env.no_proxy;
+  process.env.HTTP_PROXY = "http://127.0.0.1:1"; // 没人监听
+  try {
+    await assert.rejects(
+      () => callApi("/v2/x/", { token: "t" }),
+      (err) => {
+        assert.equal(err.code, "network_unreachable");
+        assert.match(err.message, /网络或代理/);
+        assert.match(err.message, /HTTPS_PROXY/);
+        assert.match(err.message, /ALL_PROXY/);
+        assert.doesNotMatch(err.message, /^连不上 TikTok（fetch failed/);
+        return true;
+      },
+    );
+  } finally {
+    if (savedHttp === undefined) delete process.env.HTTP_PROXY;
+    else process.env.HTTP_PROXY = savedHttp;
+    if (saved !== undefined) process.env.HTTPS_PROXY = saved;
+    for (const [k, v] of Object.entries(savedNo)) if (v !== undefined) process.env[k] = v;
+  }
+});

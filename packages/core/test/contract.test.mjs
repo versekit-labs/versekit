@@ -156,3 +156,14 @@ test("visibility 传了非数组也要报错", () => {
   const bad = base({ capabilities: { visibility: "public" } });
   assert.throws(() => validateAdapter(bad, "adapter-x"), /必须是数组/);
 });
+
+test("doctor 报告当前生效的代理：只含主机和端口，不含账号密码（ACC-tiktok-api-07）", async () => {
+  const { proxySummary } = await import("../src/doctor.mjs");
+  const s = proxySummary({ HTTPS_PROXY: "http://alice:pa55@proxy.example:7890", all_proxy: "socks5://10.0.0.1:1080", NO_PROXY: "localhost" });
+  const text = JSON.stringify(s);
+  assert.match(text, /proxy\.example:7890/);
+  assert.match(text, /10\.0\.0\.1:1080/);
+  assert.doesNotMatch(text, /alice|pa55/);
+  assert.equal(s.noProxy, true);
+  assert.deepEqual(proxySummary({}).found, []);
+});
