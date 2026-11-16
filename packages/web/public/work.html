@@ -111,7 +111,7 @@
     }
     const multi = work.cuts.length > 1;
     const [cls, txt] = workState(work);
-    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state));
+    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state) || (p.state === "notify_pending" && p.error));
     const current = VK.current();
 
     main.innerHTML =

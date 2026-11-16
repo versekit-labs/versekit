@@ -483,3 +483,13 @@ test("account.creator：展示 creator_info（隐私选项、开关、最长时�
   assert.equal(info.duetDisabled, true);
   assert.equal(info.maxVideoPostDurationSec, 180);
 });
+
+test("未审核应用被拒：提示要求账号设为私密，不再说只能发仅自己可见", async () => {
+  const { classifyError } = await import("../src/api.mjs");
+  const err = classifyError("unaudited_client_can_only_post_to_private_accounts", "x");
+  assert.equal(err.code, "platform_reject");
+  assert.match(err.message, /设置和隐私 → 隐私 → 私密账号/);
+  assert.match(err.message, /再重试/);
+  assert.match(err.message, /通过审核后就没有这个限制/);
+  assert.doesNotMatch(err.message, /只能发「仅自己可见」/);
+});
