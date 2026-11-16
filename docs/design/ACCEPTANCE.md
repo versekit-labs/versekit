@@ -6,8 +6,10 @@
 ## 一、验收怎么跑
 
 ```bash
-# 1. 起真实服务（实现方负责）
-npm run serve                      # http://127.0.0.1:8787
+# 1. 起离线服务（实现方负责）：只能用 --offline，不得起会连真实平台的服务
+export VK_HOME=$(mktemp -d)
+npm run vk -- demo seed            # 演示数据：待确认（长片+短片）、已发布（有好有差）、出问题
+npm run vk -- serve --offline      # http://127.0.0.1:8787；不跑队列/体检/采集，不接飞书，平台类接口返回 offline_mode
 
 # 2. 机械验收（一条命令）
 npm run design:accept -- --url http://127.0.0.1:8787

@@ -574,10 +574,56 @@ function listen(server, options) {
 }
 
 /**
+ * 离线模式（#180）：验收与演示不得访问真实平台。
+ *
+ * 会走平台适配器 / 浏览器的 handler 一律换成「拒绝」，只改库的动作原样保留。
+ * 队列 kind（publish / check / collect）也一并拒绝，这样即使有人手动把 run 塞进队列也不会触网。
+ */
+export const OFFLINE_BLOCKED = new Set([
+  "publish", "check", "collect", // runner 的 kind
+  "account.check", "account.connect", "account.creator", "collect.now",
+]);
+const OFFLINE_BLOCKED_PREFIXES = ["account.login."];
+
+export function isOfflineBlocked(name) {
+  return OFFLINE_BLOCKED.has(name) || OFFLINE_BLOCKED_PREFIXES.some((p) => name.startsWith(p));
+}
+
+export function offlineError(name) {
+  const err = new Error(`离线模式：不会访问任何平台，「${name}」已拒绝（用不带 --offline 的 vk serve 才能真实操作）`);
+  err.code = "offline_mode";
+  return err;
+}
+
+export function offlineHandlers(handlers) {
+  const out = {};
+  for (const [name, fn] of Object.entries(handlers)) {
+    out[name] = isOfflineBlocked(name)
+      ? () => {
+          throw offlineError(name);
+        }
+      : fn;
+  }
+  // 命令层可能没有注册这些 handler（没装适配器）；仍要给出 offline_mode 而不是 not_implemented。
+  for (const name of ["account.check", "account.connect", "account.creator", "collect.now", "account.login.open", "account.login.start", "account.login.qr", "account.login.resend", "account.login.status", "account.login.verify", "account.login.cancel"]) {
+    out[name] ??= () => {
+      throw offlineError(name);
+    };
+  }
+  return out;
+}
+
+/**
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null, offline = false } = {}) {
+  if (offline) {
+    // 离线：不跑队列、不排体检/采集、不接飞书；handler 全部过一遍拦截。
+    runQueue = false;
+    channels = [];
+    handlers = offlineHandlers(handlers);
+  }
   const runner = createRunner({
     handlers,
     log,
@@ -613,7 +659,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   let stuckTimer = null;
   if (runQueue) {
     runner.loop();
-    stopSweeper = startCheckSweeper({ log });
+    stopSweeper = startCheckSweeper({ log, offline });
 
     // auto_running 的第二道保险（ACC-publish-05）：handler 的定时器只管进程还活着、run 还在
     // 手上的那一次。这里每 30 秒扫一遍「没有活 run 却还停在 auto_running」的行，按同一个
