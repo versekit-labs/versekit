@@ -1,7 +1,7 @@
 // issue #147 · ACC-v2-today-01 / ACC-v2-group-01 / ACC-v2-base-01
 // vk today 四块、work / today / stats 默认只看当前账号组、和平时比的倍数。
 // 只用临时库和假数据：不登录、不发布、不采集任何真实账号。
-import { test, after } from "node:test";
+import { test, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -262,7 +262,10 @@ test("ACC-v2-today-01 四块：等确认按成片、出了问题、等时间按�
   const old = insertPublish({ workId: w.id, accountId: tt, publishedAt: NOW - 2 * DAY, play: 400 });
   const fresh = insertPublish({ workId: w.id, accountId: tt, publishedAt: NOW - 3 * HOUR }); // 还没满 24 小时
 
-  const today = handlers["today"]({ group: g.name });
+  // 用例里的时间都相对固定的 NOW；把 Date 钉在 NOW，否则真实日期一过，"没满 24 小时"就会翻成满了。
+  mock.timers.enable({ apis: ["Date"], now: NOW });
+  let today;
+  try { today = handlers["today"]({ group: g.name }); } finally { mock.timers.reset(); }
   assert.deepEqual(Object.keys(today).filter((k) => ["awaiting", "problems", "scheduled", "results"].includes(k)).sort(), ["awaiting", "problems", "results", "scheduled"]);
 
   // 等确认：只有长片；先不发的短片不催；小红书标逐条
