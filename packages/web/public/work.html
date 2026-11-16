@@ -37,7 +37,7 @@
   const main = document.getElementById("main");
   const params = new URLSearchParams(location.search);
   const id = params.get("id");
-  const state = { work: null, cutId: params.get("cut"), editing: new Set(), ver: new Map() };
+  const state = { work: null, cutId: params.get("cut"), editing: new Set(), opened: new Set(), ver: new Map() };
   const { esc, pfBadge, pfName, when, fmt, ratioText, ratioCls, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
 
   const PROBLEM = new Set(["failed", "blocked", "expired"]);
@@ -151,16 +151,21 @@
   }
 
   main.addEventListener("click", (event) => {
-    const el = event.target.closest("[data-cut],[data-edit],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver]");
+    const el = event.target.closest("[data-cut],[data-edit],[data-more],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver]");
     if (!el) return;
     const d = el.dataset;
     if (d.cut) { state.cutId = d.cut; render(); return; }
     if (d.edit) { state.editing.add(d.edit); render(); return; }
+    if (d.more) { state.opened.has(d.more) ? state.opened.delete(d.more) : state.opened.add(d.more); render(); return; }
     if (d.save) {
       const pub = d.save;
       const title = main.querySelector(`[data-title="${pub}"]`)?.value ?? null;
       const at = main.querySelector(`[data-at="${pub}"]`)?.value ?? null;
-      act(async () => { await VK.editPublish(pub, { title, at: at || null }); }, "改好了，确认时按新的发");
+      // 正文、话题只在改过时才传：没动就不写进这条平台稿，免得把入库时的文案固定住。
+      const changed = (sel) => { const f = main.querySelector(sel); return f && f.value !== f.defaultValue ? f.value : null; };
+      const body = changed(`[data-body="${pub}"]`);
+      const tags = changed(`[data-tags="${pub}"]`);
+      act(async () => { await VK.editPublish(pub, { title, at: at || null, body, tags }); state.editing.delete(pub); state.opened.add(pub); }, "改好了，确认时按新的发");
       return;
     }
     if (d.ver) { const [cutId, versionId] = d.ver.split(":"); state.ver.set(cutId, versionId); render(); return; }

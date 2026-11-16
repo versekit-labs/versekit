@@ -426,10 +426,12 @@
   }
 
   /** 改标题 / 改时间 = 命令 publish.edit；时间是毫秒，页面传本地时间字符串。 */
-  async function editPublish(publishId, { title = null, at = null } = {}) {
+  async function editPublish(publishId, { title = null, at = null, body: text = null, tags = null } = {}) {
     if (!publishId) throw new Error("先指定一条平台稿");
     const body = { publishId };
     if (title != null) body.title = String(title).trim();
+    if (text != null) body.body = String(text);
+    if (tags != null) body.tags = Array.isArray(tags) ? tags : VK.parseTags(tags);
     if (at != null) {
       const ms = typeof at === "number" ? at : fromLocalStamp(at);
       if (!Number.isFinite(ms)) throw new Error("时间格式不对：" + at);
@@ -496,6 +498,8 @@
   VK.publishNow = publishNow;
   VK.publishManual = publishManual;
   VK.skipCut = skipCut;
+  /** 话题输入：逗号、顿号、空格、# 都能分；去掉 # 和重复。 */
+  VK.parseTags = (text) => [...new Set(String(text ?? "").split(/[,，、\s]+/).map((t) => t.trim().replace(/^#+/, "")).filter(Boolean))];
   VK.editPublish = editPublish;
   VK.retryPublish = retryPublish;
 })();

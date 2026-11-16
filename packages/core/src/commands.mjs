@@ -493,12 +493,15 @@ export const COMMANDS = [
   },
   {
     name: "publish.edit",
-    summary: "确认前改这条平台稿的标题或建议时间（发布用改后的值；不改作品标题）",
+    summary: "确认前改这条平台稿的标题、正文、话题或建议时间（发布用改后的值；不改作品标题）",
     remote: true,
     args: {
       publishId: "string",
       title: "string?",
       at: "number?",
+      // 确认时看得到、改得了每个平台的正文和话题（#175）：按平台文案限制校验，超限拒绝。
+      body: "string?",
+      tags: "string[]?",
       // TikTok 官方接口的发布设置（#143）：确认时由人填，存在这条平台稿的 overrides 里。
       privacy: "string?",
       comment: "boolean?",
@@ -509,11 +512,11 @@ export const COMMANDS = [
     },
     // 同一次改动点两下只执行一次；改成别的值是另一次改动。
     idempotent: (a) =>
-      `edit:${a.publishId}:${a.title ?? ""}:${a.at ?? ""}:${a.privacy ?? ""}:${a.comment ?? ""}:${a.duet ?? ""}:${a.stitch ?? ""}:${a.caption ?? ""}:${a.draft ?? ""}`,
+      `edit:${a.publishId}:${a.title ?? ""}:${a.at ?? ""}:${a.body ?? ""}:${(a.tags ?? []).join(",")}:${a.privacy ?? ""}:${a.comment ?? ""}:${a.duet ?? ""}:${a.stitch ?? ""}:${a.caption ?? ""}:${a.draft ?? ""}`,
     ttlMs: 24 * 3600e3,
     http: { method: "POST", path: "/api/publishes/:publishId/edit" },
     cli: { usage: "vk publish edit <publishId> [--title <标题>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]" },
-    card: { label: "改标题或时间", style: "default", confirm: false },
+    card: { label: "改标题、正文或时间", style: "default", confirm: false },
     audit: "always",
   },
   {

@@ -597,13 +597,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "publish.skip": ({ cutId }) => store.skipCut({ cutId }),
 
-    "publish.edit": ({ publishId, title = null, at = null, privacy = null, comment = null, duet = null, stitch = null, caption = null, draft = null }) => {
+    "publish.edit": ({ publishId, title = null, at = null, privacy = null, comment = null, duet = null, stitch = null, caption = null, draft = null, body = null, tags = null }) => {
       // 时间要先过平台规则（每日上限、最小间隔）。状态不对、过去的时间等错误仍由 store 报，保持原来的措辞。
       if (at != null && Number.isInteger(at) && at > Date.now()) {
         const row = store.getPublish(publishId);
         if (row && store.CONFIRMABLE_STATES.includes(row.state)) assertPlanSlot(row, at);
       }
-      return store.editPublish({ publishId, title, at, privacy, comment, duet, stitch, caption, draft });
+      return store.editPublish({ publishId, title, at, privacy, comment, duet, stitch, caption, draft, body, tags });
     },
 
     "collect.now": ({ publishId = null, platform = null }) => {
