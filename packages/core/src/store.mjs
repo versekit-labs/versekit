@@ -327,7 +327,9 @@ export function getWork(workId) {
  * 不新建，也不删掉这次没提到的成片/版本——入库是追加与更新，不是整体替换，
  * 已经挂在成片下的平台稿因此不会被悄悄丢掉。
  *
- * cuts: [{ title, versions: [{ language, asset, meta? }] }]。校验在写任何行之前做完。
+ * cuts: [{ title, copy?, versions: [{ language, asset, meta?, copy? }] }]。校验在写任何行之前做完。
+ * copy 是 Claude 入库时写好的各平台文案（见 normaliseCopy）；成片级打底、版本级覆盖，
+ * 整理后存进每个语言版本的 meta_json.copy。
  */
 export function upsertWork({ title, source = null, cuts, meta = null }) {
   const t = requireString(title, "作品标题", { max: 200 });
@@ -340,13 +342,17 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
     const versions = Array.isArray(c?.versions) ? c.versions : [];
     if (!versions.length) fail(`成片「${cutTitle}」至少要有一个语言版本`);
     const seenLang = new Set();
+    const cutCopy = normaliseCopy(c?.copy, `成片「${cutTitle}」的文案`);
     return {
       title: cutTitle,
       versions: versions.map((v) => {
         const language = requireString(v?.language ?? "", `成片「${cutTitle}」的语言`, { max: 32 });
         if (seenLang.has(language)) fail(`成片「${cutTitle}」的语言重复：${language}`);
         seenLang.add(language);
-        return { language, asset: requireString(v?.asset ?? "", `成片「${cutTitle}」${language} 版本的素材路径`, { max: 4096 }), meta: v?.meta ?? null };
+        const where = `成片「${cutTitle}」${language} 版本`;
+        const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`));
+        const meta = copy ? { ...(v?.meta ?? {}), copy } : v?.meta ?? null;
+        return { language, asset: requireString(v?.asset ?? "", `${where}的素材路径`, { max: 4096 }), meta };
       }),
     };
   });
@@ -408,6 +414,110 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
     throw err;
   }
 }
+
+// ------------------------------------------------------------------ 平台文案（ACC-v2-copy-01）
+//
+// 各平台的标题、正文、话题在入库时由 Claude 写好、随清单交来；versekit 不接 LLM。
+// 限制只在这张表里写一次：入库、生成平台稿、`vk doctor` 都读它。超限一律拒绝并指出平台与字段，
+// 不悄悄截断。长度按字符（码点）算。
+//   title / body / tags:{max,each}  分开计
+//   combined                        标题 + 正文 + 话题（带 #）合计
+//   verified:false                  查不到官方数字：不校验，只在 `vk doctor` 里列出
+export const COPY_LIMITS = Object.freeze({
+  bilibili: { label: "B站", title: 80, body: 2000, tags: { max: 10, each: 20 } },
+  xiaohongshu: { label: "小红书", title: 20, body: 1000, tags: { max: 10 } },
+  douyin: { label: "抖音", combined: 1000 },
+  tiktok: { label: "TikTok", combined: 2200 },
+  youtube: { label: "YouTube", title: 100, body: 5000 },
+});
+
+const COPY_ALIASES = { "tiktok-api": "tiktok", xhs: "xiaohongshu", bili: "bilibili" };
+export const copyPlatformOf = (platform) => COPY_ALIASES[String(platform)] ?? String(platform);
+
+/** 表里标了「未核实」的平台（不校验）。 */
+export const unverifiedCopyPlatforms = () => Object.entries(COPY_LIMITS).filter(([, l]) => l.verified === false).map(([k]) => k);
+
+const chars = (text) => [...String(text ?? "")].length;
+const tagText = (tags) => (tags ?? []).map((t) => `#${t}`).join(" ");
+
+/** 一份文案的结构校验与整理：{ title?, body?, tags? }。空的字段不保留。 */
+function normaliseEntry(raw, where) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail(`${where}：文案必须是 { title, body, tags } 对象`);
+  const out = {};
+  for (const key of Object.keys(raw)) {
+    if (!["title", "body", "tags"].includes(key)) fail(`${where}：文案里没有「${key}」这个字段（只有 title / body / tags）`);
+  }
+  for (const key of ["title", "body"]) {
+    if (raw[key] == null) continue;
+    if (typeof raw[key] !== "string") fail(`${where}：${key} 必须是字符串`);
+    if (raw[key].trim()) out[key] = raw[key].trim();
+  }
+  if (raw.tags != null) {
+    if (!Array.isArray(raw.tags) || raw.tags.some((t) => typeof t !== "string")) fail(`${where}：tags 必须是字符串数组（不带 #）`);
+    const tags = raw.tags.map((t) => t.trim().replace(/^#+/, "")).filter(Boolean);
+    if (tags.length) out.tags = tags;
+  }
+  return out;
+}
+
+/** 这份文案放进某平台超限吗？返回人话数组（空 = 合规）。未核实的平台不校验。 */
+export function copyViolations(platform, copy) {
+  const limit = COPY_LIMITS[copyPlatformOf(platform)];
+  if (!limit || limit.verified === false) return [];
+  const bad = [];
+  const { title = "", body = "", tags = [] } = copy ?? {};
+  if (limit.title != null && chars(title) > limit.title) bad.push(`${limit.label} 标题最多 ${limit.title} 字，现在是 ${chars(title)} 字`);
+  if (limit.body != null && chars(body) > limit.body) bad.push(`${limit.label} 正文最多 ${limit.body} 字，现在是 ${chars(body)} 字`);
+  if (limit.tags?.max != null && tags.length > limit.tags.max) bad.push(`${limit.label} 话题最多 ${limit.tags.max} 个，现在是 ${tags.length} 个`);
+  if (limit.tags?.each != null) {
+    const long = tags.filter((t) => chars(t) > limit.tags.each);
+    if (long.length) bad.push(`${limit.label} 每个话题最多 ${limit.tags.each} 字，超限的有：${long.join("、")}`);
+  }
+  if (limit.combined != null) {
+    const total = chars([title, body, tagText(tags)].filter(Boolean).join("\n"));
+    if (total > limit.combined) bad.push(`${limit.label} 文案（标题、正文、话题合计）最多 ${limit.combined} 字，现在是 ${total} 字`);
+  }
+  return bad;
+}
+
+/**
+ * 清单里的 `copy` → { default?: {...}, <platform>: {...} }。
+ * 写法二选一或并用：`{ title, body, tags }` 是不分平台的默认文案；`{ bilibili: {...}, xiaohongshu: {...} }`
+ * 是按平台写；也可以显式写 `default`。平台名写错（表里没有）直接拒绝，免得文案悄悄落空。
+ * 平台文案在这里就按平台限制校验；默认文案要到生成平台稿、知道发哪个平台时才能判（plan.apply）。
+ */
+export function normaliseCopy(raw, where) {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) fail(`${where}：copy 必须是对象`);
+  const out = {};
+  const direct = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (["title", "body", "tags"].includes(key)) direct[key] = value;
+    else if (key === "default") out.default = normaliseEntry(value, `${where} 的默认文案`);
+    else {
+      const platform = copyPlatformOf(key);
+      if (!COPY_LIMITS[platform]) fail(`${where}：不认识的平台「${key}」（可选：${Object.keys(COPY_LIMITS).join(" / ")}；不分平台的默认文案直接写 title / body / tags）`);
+      const entry = normaliseEntry(value, `${where} 的 ${COPY_LIMITS[platform].label} 文案`);
+      const bad = copyViolations(platform, entry);
+      if (bad.length) fail(`${where}：${bad.join("；")}（超限不会自动截断，请改短后重新入库）`);
+      out[platform] = entry;
+    }
+  }
+  if (Object.keys(direct).length) out.default = { ...normaliseEntry(direct, `${where} 的默认文案`), ...(out.default ?? {}) };
+  return Object.keys(out).length ? out : null;
+}
+
+/** 成片级文案打底、语言版本级文案按平台覆盖。 */
+const mergeCopy = (base, over) => {
+  if (!base) return over ?? null;
+  if (!over) return base;
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over)) out[k] = { ...(base[k] ?? {}), ...v };
+  return out;
+};
+
+/** 这个平台、这份文案表里该用哪一条：逐字段，平台专属盖住默认。 */
+export const copyFor = (copy, platform) => ({ ...(copy?.default ?? {}), ...(copy?.[copyPlatformOf(platform)] ?? {}) });
 
 /** 一支成片的默认语言版本：最早建的那个。publish.create 的快捷方式靠它挂版本。 */
 function defaultCutOf(workId) {
@@ -492,6 +602,66 @@ export function effectiveTitle(row) {
   );
 }
 
+const textList = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === "string" && t.trim()).map((t) => t.trim()) : null);
+
+/**
+ * 一条平台稿「现在点确认，实际会发出去」的标题、正文、话题（ACC-v2-plan-03 / ACC-v2-copy-03）。
+ *
+ * 取值链：人在确认前改过的（overrides 顶层的 title/body/tags）> 生成平台稿时写进去的
+ * （overrides.copy）> 语言版本 meta > 作品 meta（旧的 publish.create 把正文/话题放在这里）>
+ * 成片标题 > 作品标题。正文、话题没有就是空，不编造。
+ * 平台自己的限制仍在适配器里判；这里给的是页面、卡片、适配器共用的那一个值。
+ */
+export function effectiveCopy({ overrides, versionMeta, workMeta, cutTitle = null, workTitle = null }) {
+  const ov = asObject(overrides);
+  const oc = ov.copy && typeof ov.copy === "object" ? ov.copy : {};
+  const vm = asObject(versionMeta);
+  const wm = asObject(workMeta);
+  const pick = (...vals) => vals.find((v) => nonEmpty(v)) ?? null;
+  return {
+    title: pick(ov.title, oc.title, vm.title, wm.title, cutTitle, workTitle) ?? "",
+    body: pick(ov.body, ov.desc, oc.body, vm.body, vm.description, wm.body, wm.description) ?? "",
+    tags: textList(ov.tags) ?? textList(oc.tags) ?? textList(vm.tags) ?? textList(wm.tags) ?? [],
+  };
+}
+
+/**
+ * core 解析好、交给适配器的文案（ACC-v2-copy-03）：适配器不再 JOIN `work` 表取标题/元数据。
+ * 返回 { title, body, tags, language, cutId, cutTitle, workTitle, metaJson, overridesJson }：
+ * `metaJson` 是作品 meta 叠语言版本 meta、再用解析后的标题/正文/话题盖住同名字段（平台专属字段原样保留），
+ * 适配器里原有的纯函数（planNote / planPost / postSettings）读它就行；`overridesJson` 是这条平台稿自己的。
+ */
+export function resolvePublishCopy(publishId) {
+  const row = open()
+    .prepare(
+      `SELECT p.id, p.overrides_json, a.platform, c.title AS cut_title, c.id AS cut_id, v.language, v.meta_json AS version_meta,
+              w.title AS work_title, w.meta_json AS work_meta
+         FROM publish p
+         JOIN account a ON a.id = p.account_id
+         JOIN work w ON w.id = p.work_id
+         LEFT JOIN cut c ON c.id = p.cut_id
+         LEFT JOIN cut_version v ON v.id = p.version_id
+        WHERE p.id = ?`,
+    )
+    .get(publishId);
+  if (!row) fail(`没有这条发布：${publishId}`);
+  const copy = effectiveCopy({ overrides: row.overrides_json, versionMeta: row.version_meta, workMeta: row.work_meta, cutTitle: row.cut_title, workTitle: row.work_title });
+  const { copy: _planCopy, ...versionRest } = asObject(row.version_meta);
+  const meta = { ...asObject(row.work_meta), ...versionRest, title: copy.title, body: copy.body, description: copy.body, tags: copy.tags };
+  return {
+    ...copy,
+    language: row.language ?? null,
+    cutId: row.cut_id ?? null,
+    cutTitle: row.cut_title ?? null,
+    workTitle: row.work_title,
+    metaJson: JSON.stringify(meta),
+    overridesJson: row.overrides_json ?? null,
+  };
+}
+
+/** 适配器 load() 用：把解析后的文案摊成它原来读的那几列（work_title / meta_json / overrides_json）。 */
+export const copyRowFields = (copy) => ({ work_title: copy.title, meta_json: copy.metaJson, overrides_json: copy.overridesJson });
+
 const PUBLISHED_STATES = new Set(["published", "published_limited"]);
 
 /**
@@ -521,20 +691,26 @@ function workView(work) {
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
-                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, v.language
+                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, v.language, v.meta_json AS version_meta
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
           WHERE p.cut_id = ? ORDER BY p.created_at, p.id`,
       )
       .all(c.id)
-      .map((p) => ({
+      .map((p) => {
+        const copy = effectiveCopy({ overrides: p.overrides_json, versionMeta: p.version_meta, workMeta: work.meta_json, cutTitle: c.title, workTitle: work.title });
+        return {
         id: p.id,
         platform: p.platform,
         handle: p.handle,
         state: p.state,
         mode: p.mode,
-        title: effectiveTitle({ ...p, work_title: work.title, meta_json: work.meta_json }),
+        title: copy.title,
+        body: copy.body,
+        tags: copy.tags,
+        // 哪些是空的：标题总有回退（成片标题），正文、话题没写就是空，页面据此提示。
+        empty: [...(copy.title ? [] : ["title"]), ...(copy.body ? [] : ["body"]), ...(copy.tags.length ? [] : ["tags"])],
         titleEdited: Boolean(nonEmpty(asObject(p.overrides_json).title)),
         versionId: p.version_id,
         language: p.language ?? null,
@@ -543,7 +719,8 @@ function workView(work) {
         error: p.error_code ? { code: p.error_code, message: p.error_message } : null,
         publishedAt: p.published_at ?? null,
         accountId: p.account_id,
-      }));
+        };
+      });
     return { id: c.id, title: c.title, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
   });
   attachBaselines(cuts);

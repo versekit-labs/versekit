@@ -10,6 +10,10 @@ import { AdapterError, ERROR_CODES, toAdapterError } from "./errors.mjs";
 import { assertPublishResult, assertPublishInput } from "./contract.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { DEFAULT_PUBLISH_TIMEOUT_MS } from "./config.mjs";
+import { resolvePublishCopy, copyRowFields } from "./store.mjs";
+
+// 适配器取文案的入口：标题、正文、话题由 core 按平台稿解析（ACC-v2-copy-03），适配器不 JOIN work 表。
+export { resolvePublishCopy, copyRowFields };
 
 const SNAPSHOT_SOURCES = ["api", "intercept", "csv"];
 const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
@@ -67,7 +71,7 @@ export function resolvePublishAsset(publishId) {
  */
 export function publishInputFor(publishId, extra = {}) {
   const { asset } = resolvePublishAsset(publishId);
-  return assertPublishInput({ ...extra, publishId, asset }, `publish ${publishId}`);
+  return assertPublishInput({ ...extra, publishId, asset, copy: resolvePublishCopy(publishId) }, `publish ${publishId}`);
 }
 
 /** One row per capture; the caller supplies what it knows and `status` says how complete it is. */

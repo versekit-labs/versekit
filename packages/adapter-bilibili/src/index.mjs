@@ -13,7 +13,7 @@ import { readFileSync, existsSync, accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
-import { resolvePublishAsset } from "../../core/src/publish-flow.mjs";
+import { resolvePublishAsset, resolvePublishCopy } from "../../core/src/publish-flow.mjs";
 import { login, loginStatus } from "./login.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
@@ -59,20 +59,19 @@ const isAuthError = (err) =>
 
 // ------------------------------------------------------------------ 数据
 
-function load(publishId) {
+// 标题、正文、话题、元数据由 core 按平台稿解析后传入（ACC-v2-copy-03），这里不再 JOIN work 表。
+function load(publishId, copy = resolvePublishCopy(publishId)) {
   const db = open();
   const row = db
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.credential_ref, a.id AS account_id,
-              w.title AS work_title, w.meta_json
+      `SELECT p.*, a.platform, a.handle, a.credential_ref, a.id AS account_id
          FROM publish p
          JOIN account a ON a.id = p.account_id
-         JOIN work w ON w.id = p.work_id
         WHERE p.id = ?`,
     )
     .get(publishId);
   if (!row) throw new Error(`找不到发布：${publishId}`);
-  return { db, row, meta: row.meta_json ? JSON.parse(row.meta_json) : {}, overrides: row.overrides_json ? JSON.parse(row.overrides_json) : {} };
+  return { db, row, meta: JSON.parse(copy.metaJson), overrides: copy.overridesJson ? JSON.parse(copy.overridesJson) : {} };
 }
 
 function cookiesOf(credentialRef) {
@@ -91,11 +90,12 @@ function cookiesOf(credentialRef) {
 
 // ------------------------------------------------------------------ 发布
 
-async function publish({ publishId, asset: given = null, dryRun = false }) {
-  const { row, meta, overrides } = load(publishId);
-  const title = String(overrides.title ?? meta.title ?? row.work_title).slice(0, 80);
-  const desc = String(overrides.desc ?? meta.description ?? "").slice(0, 2000);
-  const tags = (overrides.tags ?? meta.tags ?? []).map((t) => String(t).replace(/[,，]/g, " ").trim().slice(0, 20)).filter(Boolean).slice(0, 10);
+async function publish({ publishId, asset: given = null, copy: givenCopy = null, dryRun = false }) {
+  const copy = givenCopy ?? resolvePublishCopy(publishId);
+  const { row, meta, overrides } = load(publishId, copy);
+  const title = String(copy.title).slice(0, 80);
+  const desc = String(overrides.desc ?? copy.body ?? "").slice(0, 2000);
+  const tags = (copy.tags ?? []).map((t) => String(t).replace(/[,，]/g, " ").trim().slice(0, 20)).filter(Boolean).slice(0, 10);
   const tid = overrides.tid ?? meta.bilibili?.tid ?? 208; // 知识 · 职业职场
   const cover = overrides.cover ?? meta.bilibili?.cover ?? null;
   // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）；直接调用（dry-run、测试）时
