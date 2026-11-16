@@ -61,6 +61,12 @@ export const ERROR_CODES = {
     human: "发布卡住了，等超时后已中止",
     action: "retry_or_draft",
   },
+  network_unreachable: {
+    // 网络或代理问题：稍后重试有意义，但要让人知道该去查代理变量，而不是只看到 fetch failed。
+    retryable: true,
+    human: "连不上平台：网络或代理有问题，请检查 HTTPS_PROXY / ALL_PROXY / NO_PROXY",
+    action: "check_network",
+  },
   unknown: {
     retryable: true,
     human: "发布时出错了，现场已留存",

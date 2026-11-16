@@ -8,7 +8,23 @@ import { paths, getMeta, isInitialised, open } from "./index.mjs";
 import { COPY_LIMITS, unverifiedCopyPlatforms } from "./store.mjs";
 
 /** 这些红灯不阻塞使用（还没配账号、还没配对通道），所以不算整体失败。 */
-export const OPTIONAL_CHECKS = ["copy_limits", "adapters", "channel_feishu", "browser_profile", "accounts", "daemon", "account_probe"];
+export const OPTIONAL_CHECKS = ["copy_limits", "adapters", "channel_feishu", "browser_profile", "accounts", "daemon", "account_probe", "proxy"];
+
+/** 当前生效的代理：只给主机和端口，绝不带账号密码（ACC-tiktok-api-07）。 */
+export function proxySummary(env = process.env) {
+  const pick = (n) => env[n] || env[n.toLowerCase()] || "";
+  const found = [];
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]) {
+    const raw = pick(name);
+    if (!raw) continue;
+    try {
+      found.push(`${name}=${new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`).host}`);
+    } catch {
+      found.push(`${name}=（格式无法解析）`);
+    }
+  }
+  return { found, noProxy: Boolean(pick("NO_PROXY")) };
+}
 
 export function doctorReport({
   browserReady = () => "未接入浏览器驱动",
@@ -16,6 +32,7 @@ export function doctorReport({
   adapters = [],
   adapterErrors = [],
   now = Date.now(),
+  env = process.env,
 } = {}) {
   const checks = [];
   const add = (id, ok, detail, next) => checks.push({ id, ok, detail, ...(next ? { next } : {}) });
@@ -29,6 +46,9 @@ export function doctorReport({
   add("config_dir", existsSync(p.config), p.config, existsSync(p.config) ? null : "运行 vk init");
   add("database", initialised, initialised ? p.db : "还没有初始化", initialised ? null : "运行 vk init");
   add("schema_version", getMeta("schema_version") === "1", getMeta("schema_version") ?? "（无）", initialised ? null : "运行 vk init");
+
+  const proxy = proxySummary(env);
+  add("proxy", true, proxy.found.length ? `${proxy.found.join("、")}${proxy.noProxy ? "（NO_PROXY 已设置）" : ""}` : "未设置代理（直连）");
 
   const chrome = browserReady();
   add("chrome", chrome === null, chrome ?? "已找到 Chrome", chrome);
