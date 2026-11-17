@@ -22,6 +22,7 @@ import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, closeAccount, logoutAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
+import { createRelayServer } from "../../relay/src/index.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
 import * as service from "./service.mjs";
 import * as updates from "../../core/src/update.mjs";
@@ -1226,7 +1227,20 @@ async function cmdToday() {
 async function cmdWork() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json>";
+  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json> | push <清单.json> --group <组名>";
+  if (sub === "push") {
+    const target = pos[2];
+    if (!target) throw new Error(usage);
+    if (!val("--group")) throw new Error("vk work push 要 --group <组名>：投递到发布机上的哪个账号组");
+    // 上传可能很久（出口带宽窄）：守护进程那一头不设上限，这里也放宽到 3 小时。
+    const data = await send("work.push", { manifest: resolve(target), group: val("--group") }, { log, timeout: 3 * 3600e3 });
+    if (human) {
+      console.log(`已上传：${data.files} 个文件，${(data.bytes / 1048576).toFixed(1)}MB`);
+      console.log(`投递 ${data.id} → 账号组「${data.group}」`);
+      console.log("等发布机拉取（发布机上入库后一律待确认，不会自动发）");
+    } else out(data);
+    return data;
+  }
   if (sub === "list" || !sub) {
     const data = await send("work.list", { ...(val("--group") ? { group: val("--group") } : {}) }, { log });
     if (human) {
@@ -1293,6 +1307,70 @@ async function cmdWork() {
     if (human) {
       console.log(`${data.updated ? "已更新" : "已入库"}作品「${data.work.title}」（${data.id}）：成片 新建 ${data.cuts.created}/更新 ${data.cuts.updated}，版本 新建 ${data.versions.created}/更新 ${data.versions.updated}`);
     } else out(data);
+    return data;
+  }
+  throw new Error(usage);
+}
+
+/** vk relay serve|status|connect|pull|token（#226）。serve 是云端（volc1）上跑的中转，不需要数据库。 */
+async function cmdRelay() {
+  const sub = pos[1];
+  const log = (m) => human && console.log(m);
+  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | pull | token push|pull";
+  if (sub === "serve") {
+    const { mkdirSync, chmodSync: chmod } = await import("node:fs");
+    const { randomBytes } = await import("node:crypto");
+    const p = paths();
+    mkdirSync(p.config, { recursive: true, mode: 0o700 });
+    const cfg = readConfig().relay ?? {};
+    const fresh = {};
+    for (const k of ["push_token", "pull_token"]) if (!cfg[k]) fresh[k] = randomBytes(24).toString("base64url");
+    if (Object.keys(fresh).length) {
+      updateConfig({ relay: fresh });
+      chmod(p.configFile, 0o600);
+      console.error("[relay] 已生成缺少的 token，写入 config.json（权限 600）；用 vk relay token push|pull 取出");
+    }
+    const conf = readConfig().relay;
+    const dataDir = val("--data") ?? conf.data_dir ?? join(p.state, "relay");
+    const port = Number(val("--port") ?? conf.port ?? 8790);
+    const relay = createRelayServer({ dataDir, pushToken: conf.push_token, pullToken: conf.pull_token, log: (m) => console.error(m) });
+    const bound = await relay.listen({ port });
+    console.error(`[relay] 监听 127.0.0.1:${bound}（数据目录 ${dataDir}）；HTTPS 由反向代理提供`);
+    for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => relay.close().then(() => process.exit(0)));
+    await new Promise(() => {});
+  }
+  if (sub === "token") {
+    const which = pos[2];
+    if (!["push", "pull"].includes(which)) throw new Error(usage);
+    const token = readConfig().relay?.[`${which}_token`];
+    if (!token) throw new Error("还没有这个 token：先在云端 vk relay serve 一次，它会自动生成");
+    console.log(token);
+    return;
+  }
+  if (sub === "status") {
+    const data = await send("relay.status", {}, { log });
+    if (human) {
+      const label = { not_configured: "没配置", never: "已配置，还没拉取过", ok: "正常", error: "连不上" }[data.connection];
+      console.log(`中转：${label}${data.url ? `（${data.url}）` : ""}`);
+      if (data.lastPullAt) console.log(`上次拉取：${new Date(data.lastPullAt).toLocaleString()}`);
+      if (data.lastError) console.log(`上次出错：${data.lastError.message}`);
+      for (const d of data.downloading) console.log(`正在下载：${d.id} ${d.name} ${d.percent}%`);
+      console.log(`每 ${data.intervalMinutes} 分钟拉取一次；还没拉完的投递 ${data.pending} 个`);
+      for (const f of data.failures) console.log(`没入库：${f.id}：${f.message}`);
+    } else out(data);
+    return data;
+  }
+  if (sub === "connect") {
+    if (!pos[2] || !val("--token")) throw new Error(usage);
+    const data = await send("relay.connect", { url: pos[2], token: val("--token"), ...(has("--push") ? { push: true } : {}) }, { log });
+    if (human) console.log(data.message);
+    else out(data);
+    return data;
+  }
+  if (sub === "pull") {
+    const data = await send("relay.pull", {}, { log, timeout: 3 * 3600e3 });
+    if (human) console.log(`拉取完成：入库 ${data.ingested.length}，失败 ${data.failed.length}，没下完 ${data.pending.length}`);
+    else out(data);
     return data;
   }
   throw new Error(usage);
@@ -1804,6 +1882,10 @@ function usage() {
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
       "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
+      "  vk work push <清单.json> --group <组名>                  制作机：把清单和成片传到云端中转，等发布机拉取入库（本机不建作品）",
+      "  vk relay serve [--port 8790] [--data <目录>]            云端中转（只存文件和投递清单；只监听 127.0.0.1，HTTPS 由反代提供）",
+      "  vk relay connect <地址> --token <token> [--push]        写中转配置：发布机用拉取 token，制作机加 --push 用推送 token",
+      "  vk relay status | pull | token push|pull                中转连接状态 / 立刻拉一轮 / 在云端取 token",
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
       "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
       "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
@@ -1850,6 +1932,7 @@ try {
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
   else if (cmd === "plan") await cmdPlan();
+  else if (cmd === "relay") await cmdRelay();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "collect") await cmdCollect();
