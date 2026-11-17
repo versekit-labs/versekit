@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# versekit 一键安装 / 升级（ACC-install-01..05）
+# versekit 一键安装 / 升级（ACC-install-01..06）
 #
 #   curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash
 #
@@ -97,8 +97,12 @@ main() {
   elif command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"
   else die "缺少 shasum / sha256sum，没法校验下载" "安装 coreutils 后重新运行"; fi
 
+  # 终端是 tty 时显示 curl 进度条（stderr），否则（管道、CI、日志）静默，不刷屏。
   fetch() { # fetch <url> <输出文件>
-    curl -fsSL --retry 2 --connect-timeout 15 -o "$2" "$1" </dev/null ||
+    local flags=-fsSL
+    [ -t 2 ] && flags="-fL --progress-bar"
+    # shellcheck disable=SC2086
+    curl $flags --retry 2 --connect-timeout 15 -o "$2" "$1" </dev/null ||
       die "下载失败：$1" "检查网络（需要能访问该地址）后重新运行；这条命令可以反复运行"
   }
   sha_of() { $SHA "$1" | awk '{print $1}'; }
@@ -125,8 +129,10 @@ main() {
   if [ "$HAVE_NODE" = "v$NODE_VER" ]; then
     say "Node v$NODE_VER 已经在了，跳过下载"
   else
+    say "下载 Node ${NODE_VERSION}（约 40MB，视网速十几秒到一两分钟）"
     fetch "$NODE_URL/$NODE_FILE" "$TMP/$NODE_FILE"
     STEP="校验 Node"
+    say "校验并解压 Node……"
     local WANT GOT
     WANT="$(awk -v f="$NODE_FILE" '$2==f {print $1; exit}' "$TMP/SHASUMS256.txt")"
     GOT="$(sha_of "$TMP/$NODE_FILE")"
@@ -139,13 +145,14 @@ main() {
 
   # ------------------------------------------------------------ 2. versekit 程序
   STEP="下载 versekit"
-  say "下载 versekit 程序"
+  say "下载 versekit 程序（约 1MB）"
   fetch "$APP_URL" "$TMP/app.tar.gz"
   if [ -n "${VERSEKIT_APP_SHA256:-}" ]; then
     STEP="校验 versekit"
     [ "$(sha_of "$TMP/app.tar.gz")" = "$VERSEKIT_APP_SHA256" ] || die "versekit 压缩包校验不通过" "重新运行；确认 VERSEKIT_APP_SHA256 对应这个地址"
   fi
   STEP="解压 versekit"
+  say "解压 versekit……"
   mkdir -p "$TMP/app-x"
   tar -xzf "$TMP/app.tar.gz" -C "$TMP/app-x" --strip-components=1 || die "versekit 压缩包解压失败" "重新运行"
   [ -f "$TMP/app-x/packages/cli/src/vk.mjs" ] && [ -f "$TMP/app-x/package.json" ] ||
@@ -155,7 +162,7 @@ main() {
 
   # ------------------------------------------------------------ 3. biliup
   STEP="下载 biliup"
-  say "下载 biliup（装在 $PREFIX/bin）"
+  say "下载 biliup（约 5MB，装在 $PREFIX/bin）"
   local BILIUP_URL="${VERSEKIT_BILIUP_URL:-https://github.com/biliup/biliup-rs/releases/download/$BILIUP_VERSION/biliupR-$BILIUP_VERSION-$BILIUP_PLAT.tar.xz}"
   fetch "$BILIUP_URL" "$TMP/biliup.pkg"
   STEP="解压 biliup"
@@ -188,6 +195,7 @@ EOF
 
   # ------------------------------------------------------------ 4. init + 服务
   STEP="初始化（vk init）"
+  say "初始化数据库（vk init）……"
   "$VK" init >/dev/null || die "vk init 失败" "运行 $VK init 看具体报错"
 
   STEP="选端口"
@@ -218,6 +226,7 @@ EOF
   printf '%s\n' "$SVC_OUT" | sed 's/^/  /'
 
   STEP="等控制台起来"
+  say "等控制台起来（最多 30 秒）……"
   local i=0 code=""
   while [ $i -lt 60 ]; do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/today" </dev/null || true)"
