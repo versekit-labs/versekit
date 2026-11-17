@@ -323,3 +323,8 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 **清理旧实现（所有者 2026-11-17："做好后要把旧的实现相关代码给清理掉，保留新的就行"）**
 
 - [ACC-v2-sys-10] 新版四页（今天、作品、数据、系统）做完后删掉旧实现：`packages/web/public/` 下的 `add.html`、`groups.html`、`publish.html`、`runs.html` 及只被它们用到的脚本/样式；`daemon.mjs` 里指向它们的路由改成跳转到新页对应位置（`/accounts/add`、`/groups` → `/system` 账号处，`/publish` → `/today`，`/runs`、`/tasks` → `/system` 最近出的问题），不 404；只为旧页存在的测试、`.impeccable/surfaces/packages-web-public-{add,groups,publish,runs,matrix,account-wall}-html.md` 任务书、`design:check` 里对它们的登记一并删掉；`docs/design/v1/` 旧原型删掉。删之前 PR 里列一张表：旧页的每项能力 → 新页位置或 `vk` 命令；有能力在新页和 `vk` 里都找不到的，不删那一页，先 `question` 问协调器。`npm test`、`npm run design:check` 通过，`grep -rn "add.html\|groups.html\|publish.html\|runs.html" packages scripts` 只剩跳转表。
+
+**系统页收尾（协调器 2026-11-17 对照设计稿复看时发现）**
+
+- [ACC-v2-sys-11] 侧栏底部「发布机在线」不再写死：和系统页「发布机」一块读同一份 `machine.status`，不在线时侧栏显示红点「发布机不在线」。有测试或截图钉住：离线服务（没有心跳）时侧栏与系统页都显示不在线。
+- [ACC-v2-sys-12] 「接入账号」下拉框分清两种情况：一个适配器都没装时写「没有已安装的平台」；装了但当前组都已接入时写「这个组的平台都接上了」并禁用按钮；还有可接的平台时列出来。截图钉住后两种。
