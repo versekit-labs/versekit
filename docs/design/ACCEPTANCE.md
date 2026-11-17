@@ -319,3 +319,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-v2-sys-08] 有 `vk plan show` 与修改发布方案的命令（在 `commands.mjs` 定义，CLI / HTTP 由它派生）：按当前账号组列出「成片类型 · 语言 → 发到哪些平台 → 节奏」；改动后新作品 `plan.apply` 按新方案生成平台稿，已生成的平台稿不变。有测试钉住。
 - [ACC-v2-sys-09] 系统页「发布方案」「发布机」「平台规则」「最近出的问题」四块的结构、文案与设计稿一致，数据来自 `/api`：发布方案的「改」可以就地改并保存；发布机显示心跳、排着要发、正在发、等你确认（与今天页数字一致）；平台规则显示生效的每日上限与最小间隔（改过配置就显示改过的值，默认值标「默认值」）；最近出的问题来自 `run.list` 的失败记录，「再试一次」调 `publish.retry`，最近 7 天没有就显示设计稿里的空状态。
+
+**清理旧实现（所有者 2026-11-17："做好后要把旧的实现相关代码给清理掉，保留新的就行"）**
+
+- [ACC-v2-sys-10] 新版四页（今天、作品、数据、系统）做完后删掉旧实现：`packages/web/public/` 下的 `add.html`、`groups.html`、`publish.html`、`runs.html` 及只被它们用到的脚本/样式；`daemon.mjs` 里指向它们的路由改成跳转到新页对应位置（`/accounts/add`、`/groups` → `/system` 账号处，`/publish` → `/today`，`/runs`、`/tasks` → `/system` 最近出的问题），不 404；只为旧页存在的测试、`.impeccable/surfaces/packages-web-public-{add,groups,publish,runs,matrix,account-wall}-html.md` 任务书、`design:check` 里对它们的登记一并删掉；`docs/design/v1/` 旧原型删掉。删之前 PR 里列一张表：旧页的每项能力 → 新页位置或 `vk` 命令；有能力在新页和 `vk` 里都找不到的，不删那一页，先 `question` 问协调器。`npm test`、`npm run design:check` 通过，`grep -rn "add.html\|groups.html\|publish.html\|runs.html" packages scripts` 只剩跳转表。
