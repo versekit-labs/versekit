@@ -1339,3 +1339,34 @@ export function editPublish({
     };
   });
 }
+
+// ------------------------------------------------------------------ 发布方案 / 发布机心跳（#209）
+// 都存在 meta 表（key/value），不改 schema。方案按账号组各一份：meta['plan:<groupId>']。
+
+const planKey = (groupId) => `plan:${groupId}`;
+const upsertMeta = (key, value) =>
+  open().prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, String(value));
+
+/** 某个账号组存下来的发布方案行；没存过返回 null（调用方按「默认方案」处理）。 */
+export function getGroupPlan(groupId) {
+  const row = open().prepare("SELECT value FROM meta WHERE key = ?").get(planKey(groupId));
+  if (!row) return null;
+  try {
+    const rows = JSON.parse(row.value)?.rows;
+    return Array.isArray(rows) ? rows : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setGroupPlan(groupId, rows) {
+  if (rows == null) open().prepare("DELETE FROM meta WHERE key = ?").run(planKey(groupId));
+  else upsertMeta(planKey(groupId), JSON.stringify({ rows }));
+}
+
+export const DAEMON_HEARTBEAT_KEY = "daemon_heartbeat";
+export const recordHeartbeat = (now = Date.now()) => upsertMeta(DAEMON_HEARTBEAT_KEY, now);
+export function lastHeartbeat() {
+  const v = Number(open().prepare("SELECT value FROM meta WHERE key = ?").get(DAEMON_HEARTBEAT_KEY)?.value);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}

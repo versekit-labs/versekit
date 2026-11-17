@@ -254,11 +254,12 @@ test("旧地址不 404：/accounts/add、/groups 跳到系统页对应位置（A
   assert.match(html, /\/api\/accounts/, "账号从 /api 来");
   assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
 
-  // 发布台、任务页仍是旧流程，这一轮先留着。
-  for (const path of ["/publish", "/runs", "/tasks"]) {
-    const res = await fetch(`${base}${path}`);
-    assert.equal(res.status, 200, `${path} 应该返回页面`);
-    assert.match(await res.text(), /src="\/api\.js"/, "页面必须由 api.js 拉真实快照");
+  // 发布台、任务页已删除（ACC-v2-sys-10）：旧地址跳到新页对应位置，不 404。
+  const GONE = { "/publish": "/today", "/publish.html": "/today", "/runs": "/system#problems", "/runs.html": "/system#problems", "/tasks": "/system#problems" };
+  for (const [path, to] of Object.entries(GONE)) {
+    const res = await fetch(`${base}${path}`, { redirect: "manual" });
+    assert.equal(res.status, 302, `${path} 应该跳转而不是 404`);
+    assert.equal(res.headers.get("location"), to);
   }
 
   // /accounts 不再返回旧账号墙：它落到系统页（账号管理并入系统）。旧页面文件本身已经删除。

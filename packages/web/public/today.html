@@ -152,7 +152,7 @@
 
     main.innerHTML =
       `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
-      (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/groups.html">先建一个账号组 →</a></div>`) +
+      (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/system#groups">先建一个账号组 →</a></div>`) +
       focus +
       `<div class="others" ${more || badOnes ? "" : "hidden"}>${more}${badOnes}</div>` +
       groupRows +

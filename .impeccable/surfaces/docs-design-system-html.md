@@ -14,7 +14,7 @@ related_targets: []
 **成功长什么样**：能回答"为什么这条没发""今天还能发几条""我的发布习惯在哪改"。
 **接入账号（#208 补）**：账号表下方一行——选平台（只列已安装的适配器）→ 填账号名 → 墨色主按钮「接入账号」，当场就地登录（B站/小红书/抖音扫码或登录窗口，TikTok 官方接口走授权链接），成功后出现在表里、归当前账号组。TikTok 官方接口没有应用凭证时，在那一行下面就地填 client key / secret 保存。设计稿里没有这个入口，按现有样式补，不另起一页；旧 `/accounts/add`、`/groups` 跳到本页对应位置。
 **明确不做**：账号组矩阵、日志全文、云端运维。
-**数据从哪来**：`vk group list`、`vk account list`（含今天还能发）、`vk platforms`、`vk account credentials`；发布方案 `vk plan show`、发布机 `vk doctor`、问题 `vk runs --failed` 在 #209 接入前本页不出现。
+**数据从哪来**：`vk group list`、`vk account list`（含今天还能发）、`vk platforms`、`vk account credentials`；发布方案 `vk plan show` / `vk plan set`（#209，存在 meta 表，按账号组各一份）、发布机 `vk machine`（心跳 + 与「今天」同源的排队数）、平台规则（`plan.show` 里的生效规则，默认值标「默认值」）、最近出的问题 `vk runs --failed`（最近 7 天、能「再试一次」的）。
 **依据**：`docs/PRD.md` v0.2、`docs/design/FLOW-v2.md`。硬规则：没有人确认，一条都不会发。
 
 ## Direction contract

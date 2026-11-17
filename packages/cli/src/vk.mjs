@@ -1197,9 +1197,42 @@ async function cmdWork() {
 }
 
 async function cmdPlan() {
-  const sub = pos[1];
+  const sub = pos[1] ?? "show";
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk plan apply <cutId> [--accounts a,b] [--group <组>]";
+  const usage = "用法：vk plan show | vk plan set --to <平台,平台> [--kind video|image] [--lang zh|en] [--delay-days N] [--remove] | vk plan reset | vk plan apply <cutId> [--accounts a,b] [--group <组>]";
+  const groupArg = val("--group") ? { group: val("--group") } : {};
+  const printPlan = (data) => {
+    console.log(`发布方案 · ${data.group?.name ?? "（没有账号组）"}${data.isDefault ? "（默认方案）" : ""}`);
+    for (const r of data.rows) console.log(`  ${r.label.padEnd(14)}→ ${r.platforms.map((p) => p.name).join("、") || "（还没有接入平台）"}  ${r.rhythm}`);
+    console.log("平台规则（每个账号）：");
+    for (const r of data.rules) console.log(`  ${r.name.padEnd(10)}每天最多 ${r.dailyCap} 条，两条至少隔 ${r.minGapMinutes} 分钟${r.isDefault ? "（默认值）" : ""}`);
+  };
+  if (sub === "show" || sub === "set" || sub === "reset") {
+    let data;
+    if (sub === "show") data = await send("plan.show", groupArg, { log });
+    else if (sub === "reset") data = await send("plan.reset", groupArg, { log });
+    else {
+      const to = val("--to");
+      const remove = has("--remove");
+      if (!to && !remove) throw new Error(usage);
+      const days = val("--delay-days");
+      data = await send(
+        "plan.set",
+        {
+          ...(val("--kind") ? { kind: val("--kind") } : {}),
+          ...(val("--lang") ? { language: val("--lang") } : {}),
+          ...(to ? { platforms: String(to).split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+          ...(days != null ? { delayDays: Number(days) } : {}),
+          ...(remove ? { remove: true } : {}),
+          ...groupArg,
+        },
+        { log },
+      );
+    }
+    if (human) printPlan(data);
+    else out(data);
+    return data;
+  }
   if (sub !== "apply") throw new Error(usage);
   const cutId = pos[2];
   if (!cutId) throw new Error(usage);
@@ -1207,7 +1240,7 @@ async function cmdPlan() {
   const args = {
     cutId,
     ...(accounts ? { accounts: String(accounts).split(",").map((x) => x.trim()).filter(Boolean) } : {}),
-    ...(val("--group") ? { group: val("--group") } : {}),
+    ...groupArg,
   };
   const data = await send("plan.apply", args, { log });
   if (human) {
@@ -1417,13 +1450,25 @@ async function cmdPlatforms() {
 
 async function cmdRuns() {
   const data = await send("run.list", {
-    ...(val("--state") ? { state: val("--state") } : {}),
+    ...(has("--failed") ? { state: "failed" } : val("--state") ? { state: val("--state") } : {}),
     ...(val("--group") ? { group: val("--group") } : {}),
   });
   if (human) {
     if (data.group) console.log(`账号组：${data.group.name}`);
     for (const r of data.rows) console.log(`${r.kind.padEnd(9)}${String(r.state).padEnd(10)}${String(r.target_id).padEnd(18)}${r.attempts}/${data.retry_limit ?? "?"} 次  ${r.last_error ?? ""}`);
     if (!data.rows.length) console.log("队列是空的");
+  } else out(data);
+  return data;
+}
+
+async function cmdMachine() {
+  const data = await send("machine.status", val("--group") ? { group: val("--group") } : {});
+  if (human) {
+    const ago = data.heartbeatAgeMs == null ? "还没有心跳" : `${Math.max(1, Math.round(data.heartbeatAgeMs / 60e3))} 分钟内有心跳`;
+    console.log(`发布机：${data.online ? "在线" : "不在线"}（${ago}）`);
+    console.log(`排着要发：${data.queued.count} 条${data.queued.nextAt ? `，最近一条 ${clock(data.queued.nextAt)}` : ""}`);
+    console.log(`正在发：${data.running.count || "没有"}`);
+    console.log(`等你确认：${data.awaiting.count} 条（没确认的到时间也不会发）`);
   } else out(data);
   return data;
 }
@@ -1657,7 +1702,9 @@ function usage() {
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
       "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
-      "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片生成平台稿（待确认，建议时间守平台规则）",
+      "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
+      "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
+      "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
@@ -1705,6 +1752,7 @@ try {
   else if (cmd === "platforms") await cmdPlatforms();
   else if (cmd === "setup") await cmdSetup();
   else if (cmd === "runs") await cmdRuns();
+  else if (cmd === "machine") await cmdMachine();
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();
   else if (cmd === "approval") await cmdApproval();
