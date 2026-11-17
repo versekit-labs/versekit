@@ -287,7 +287,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 开发机红线照旧：验收只用临时 `HOME`、本机假下载源和 `--offline` 服务，不碰任何真实平台账号，不往真实的 `~/Library/LaunchAgents`、`~/.config/versekit`、`~/.local/state/versekit` 写东西。
 
-- [ACC-install-01] 一条命令装好并启动：`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`。在一台**没有 Node、没有 Homebrew** 的 macOS（arm64 与 x86_64）上，全程不用 sudo、不问任何问题，依次完成：下载官方 Node 22 LTS（≥ 22.13，校验官方 SHASUMS256）到 `~/.versekit/node`，不动系统里已有的 Node；下载 versekit 到 `~/.versekit/app`（下载 tarball，不要求有 git）；按 CPU 架构下载 biliup-rs 到 `~/.versekit/bin`；`vk init`；注册后台服务（见 02）；等控制台真的能打开（`/today` 返回 200）后用默认浏览器打开 `http://127.0.0.1:8787`，最后打印一行"装好了，控制台地址 …，终端可以关了"。不跑 `npm test`。
+- [ACC-install-01] 一条命令装好并启动：`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`。在一台**没有 Node、没有 Homebrew** 的 macOS（arm64 与 x86_64）上，全程不用 sudo、不问任何问题，依次完成：下载官方 Node **26 LTS**（版本号写死在脚本里、且是 CI 跑过 `npm test` 的那个版本；校验官方 SHASUMS256）到 `~/.versekit/node`，不动系统里已有的 Node；下载 versekit 到 `~/.versekit/app`（下载 tarball，不要求有 git）；按 CPU 架构下载 biliup-rs 到 `~/.versekit/bin`；`vk init`；注册后台服务（见 02）；等控制台真的能打开（`/today` 返回 200）后用默认浏览器打开 `http://127.0.0.1:8787`，最后打印一行"装好了，控制台地址 …，终端可以关了"。不跑 `npm test`。
 - [ACC-install-02] 后台运行，终端可以关：macOS 用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist，`RunAtLoad` + `KeepAlive`），关掉终端、注销重登、重启电脑后控制台都还在，进程崩了会被拉起；服务环境的 `PATH` 含 `~/.versekit/bin` 和装好的 Node，所以 `vk doctor` 能找到 biliup；日志写进 `vk.log`。Linux 用 `systemd --user`；没有 systemd 时退回 `vk serve --detach`，并明确告诉用户"重启电脑后要再运行一次安装命令"。Windows 不在本次范围，脚本在 Windows/WSL 以外的系统上直接说不支持并退出。
 - [ACC-install-03] 再运行一次就是升级：重复执行安装命令不报错，替换程序文件、重启服务，**数据库、配置、凭证、账号、浏览器登录全部保留**；输出升级前后的版本。任一步失败（断网、校验不过、端口被占）都说清是哪一步、为什么、该怎么办，退出码非 0，不留下半启动的服务；端口 8787 被别的程序占用时自动换一个空闲端口并在最后一行写明实际地址。
 - [ACC-install-04] 装完后的日常操作都有现成命令（CLI 完整律）：`vk` 可以直接在新终端里用（安装脚本把 `~/.versekit/bin` 加进 shell 配置，只加一次，带注释标记）；`vk service status|start|stop|restart` 管后台服务，在 `commands.mjs` 定义，标 `localOnly`，不出卡片按钮；`vk service uninstall` 卸掉后台服务和程序文件，默认**保留数据**，加 `--purge` 才删数据并先列出要删的目录。README 第一屏的上手步骤只剩这一条安装命令，原来的手动步骤挪到"开发者"一节。
@@ -295,4 +295,4 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 ### 新版 Node 兼容（所有者 2026-11-17 在 Node 26 上跑测试时踩到）
 
-- [ACC-compat-01] 在 Node 26 上 `npm test` 全部通过。代理走 HTTPS 隧道时，目标是 IP 地址就不设 TLS `servername`（Node 26 会直接拒绝，见 `packages/adapter-tiktok-api/src/proxy.mjs`），是域名照常设。某条测试失败时，该测试文件不能挂住两分钟才结束：要么测试自己有超时，要么失败路径把服务端、socket 都关掉。CI 增加一个用最新版 Node 跑 `npm test` 的 job，原来 Node 22 的五个 job 不变。
+- [ACC-compat-01] 在 Node 26 上 `npm test` 全部通过。代理走 HTTPS 隧道时，目标是 IP 地址就不设 TLS `servername`（Node 26 会直接拒绝，见 `packages/adapter-tiktok-api/src/proxy.mjs`），是域名照常设。某条测试失败时，该测试文件不能挂住两分钟才结束：要么测试自己有超时，要么失败路径把服务端、socket 都关掉。CI 增加一个用 Node 26 跑 `npm test` 的 job（一键安装装的就是 26，见 ACC-install-01），原来 Node 22 的五个 job 不变，`package.json` 的最低版本仍是 22.13。
