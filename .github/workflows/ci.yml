@@ -41,6 +41,10 @@ jobs:
           node-version: "22"
       # 语义不变：仍然是一条 npm test（node --test packages/*/test/*.test.mjs）。
       # 失败时 node:test 会打印具体 test 名与断言差异。
+      # install.sh 的语法先单独过一遍（curl | bash 的脚本写坏了用户第一步就卡住）。
+      # 它的端到端测试（假下载源 + 临时 HOME，Linux 上走无 systemd 的 detach 路径）在下面这条 npm test 里。
+      - name: install.sh 语法检查
+        run: bash -n install.sh
       - name: npm test（全部单测）
         run: npm test
         env:
