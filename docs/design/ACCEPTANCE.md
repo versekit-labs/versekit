@@ -194,6 +194,8 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-claude-06 | 给 issue 打 `model:deepseek` label 后派实现；再造该 issue 的一个返工（round 1）派工；用假 `claude`（调用即报错并记录）跑 | 实现与返工 worker 都走 DeepSeek 通道（`--agent opencode`，volc 优先、qwen 兜底），**全程不调用、不探测 claude**；日志写明「issue 带 model:deepseek label → DeepSeek」；DeepSeek 两个通道都不可用时本轮不派并说明原因，**不得自动改用 claude** |
 | ACC-harness-claude-07 | `model:deepseek` 的 issue 造第 2 轮及以后的返工派工 | 自动升到 Sonnet（简单活 DeepSeek 做不好时的台阶），日志写明「DeepSeek 第 N 轮仍未过 → 升 Sonnet」；仍不自动升 Opus；`IMPL_CHANNEL` / `IMPL_MODEL` 显式覆盖照旧生效 |
 | ACC-harness-claude-08 | 读 `docs/COORDINATOR.md` | 有「选哪个模型」一节：给出 `model:deepseek`（简单活）/ 默认 Sonnet / `model:opus`（须人点头）三档的判定表与例子；写新 issue 时协调器必须按它打 label，并在 issue 里写明理由 |
+| ACC-harness-lane-01 | 从 market-research #40/#189（78a1dec）移植。离线测试造一个不能复用的 lane worktree（有已跟踪改动），调用 `prepare_lane_worktree` / `reset_lane_worktree` | 函数 stdout 只有 worktree 路径（或为空），说明性日志全部走 stderr，含原因与路径（如「有未提交或未跟踪文件：<前 5 个路径>」）。起因：versekit 2026-11-17 lane 1 每次派工都失败，「不能安全复用」这行日志混进了路径，`worker-start` 报 `selector_not_found`（#196、#197 都先在 lane 1 失败） |
+| ACC-harness-lane-02 | 离线测试用临时 git 仓库覆盖三种情况，再跑 `node bin/agentctl.mjs tick` | ① 旧 worktree 只有未跟踪文件（无已跟踪改动、无未推送提交）→ `git clean -fd`（不带 `-x`）后复用；② 有已跟踪改动或未推送提交 → 不复用、不删，新建并写日志和 `cycle-owner-alert.txt`（同轮不被清掉）；③ 新建成功后旧的若已干净 → `orca worktree rm --force` 回收，失败只告警不阻塞派工；④ tick 列出「未登记 worktree」（排除主仓库、lane 登记、验收 worktree、协调器 worktree），不自动删除。lane 1 修好后实际派一单成功 |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
 
 ## 账号浏览器的内存（driver-browser）
