@@ -223,8 +223,27 @@ reset_owner_failures() {
   # 本轮的终端泄漏 alert 不能被同轮的消费段静默清掉：协调器开场要读它。
   # 用 marker 文件而不是变量：ensure_terminal 跑在 $(...) 子 shell 里，变量带不回来。
   if [ ! -e "$STATE_DIR/cycle-terminal-leak.marker" ]; then
-    rm -f "$STATE_DIR/cycle-owner-alert.txt"
+    keep_lane_worktree_alerts
   fi
+  return 0
+}
+# 清掉所有权类 alert，但保留仍然有效的 [lane-worktree] 条目（对应 worktree 还在且
+# 仍有已跟踪改动/未推送提交）；worktree 没了或已干净才算处理完，条目随之清除。
+keep_lane_worktree_alerts() {
+  local f="$STATE_DIR/cycle-owner-alert.txt" tmp line wt st keep=0 kept=0
+  [ -e "$f" ] || return 0
+  tmp="$f.tmp.$$"; : > "$tmp"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "[lane-worktree] "*)
+        wt="${line#\[lane-worktree\] }"
+        st=""; [ -d "$wt" ] && st=$(lane_worktree_state "$wt" 2>/dev/null || true)
+        case "$st" in tracked|unpushed) keep=1; kept=1 ;; *) keep=0 ;; esac ;;
+      "[终端回收]"*|"Run 所有权"*) keep=0 ;;
+    esac
+    [ "$keep" = 1 ] && printf '%s\n' "$line" >> "$tmp"
+  done < "$f"
+  if [ "$kept" = 1 ]; then mv -f "$tmp" "$f"; else rm -f "$tmp" "$f"; fi
   return 0
 }
 record_owner_failure() {
@@ -770,13 +789,56 @@ pick_free_lane() {
   return 1
 }
 
+# 旧 worktree 的状态：clean / untracked（只有未跟踪文件）/ tracked（有已跟踪改动）/ unpushed（有未推送提交）。
+# 未推送 = HEAD 上不在任何远端分支、也不在 main 上的提交；没有远端时 main 上的提交不算。
+lane_worktree_state() {
+  local wt="$1" porcelain tracked ahead
+  porcelain=$(git -C "$wt" status --porcelain 2>/dev/null || true)
+  tracked=$(printf '%s\n' "$porcelain" | grep -v '^??' | grep -v '^$' || true)
+  if [ -n "$tracked" ]; then printf 'tracked'; return 0; fi
+  ahead=$(git -C "$wt" rev-list --count HEAD --not --remotes main 2>/dev/null || echo 0)
+  case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+  if [ "$ahead" -gt 0 ]; then printf 'unpushed'; return 0; fi
+  if [ -n "$porcelain" ]; then printf 'untracked'; return 0; fi
+  printf 'clean'
+}
+
+# 不复用也不删：现场里有人没提交/没推送的东西，写日志并给协调器留 alert（同一路径只写一次）。
+lane_worktree_alert() {
+  local wt="$1" lane="$2" why="$3" f
+  f="${STATE_DIR:-$(dirname "$LANE_DIR")}/cycle-owner-alert.txt"
+  grep -qF "[lane-worktree] ${wt}" "$f" 2>/dev/null && return 0
+  printf '[lane-worktree] %s\n原因：lane %s 旧 worktree %s，不复用也不回收，需要人看一眼。\n时间：%s\n' \
+    "$wt" "$lane" "$why" "$(date -u +%FT%TZ)" >> "$f" 2>/dev/null || true
+}
+
 # 复用旧 worktree 前把它拨到新分支：lane 是资源，不是 issue 的私产。
-# 有未提交修改就拒绝复用（宁可多建一个，也不覆盖别人没提交的现场）。
+# 只有未跟踪文件（旧构建产物等）：git clean -fd（不带 -x，被忽略的内容保留）后复用；
+# 有已跟踪改动或未推送提交：不复用、不删，写日志和 alert，调用方会新建。
+# 日志一律走 stderr：调用方用 $(…) 取路径，stdout 只能有返回值。
 reset_lane_worktree() {
-  local wt="$1" lane="$2" issue="$3" branch n=2 base
+  local wt="$1" lane="$2" issue="$3" branch n=2 base st
   command -v git >/dev/null 2>&1 || return 1
   git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-  [ -z "$(git -C "$wt" status --porcelain 2>/dev/null || true)" ] || return 1
+  st=$(lane_worktree_state "$wt")
+  case "$st" in
+    tracked|unpushed)
+      local why="有已跟踪改动"; [ "$st" = unpushed ] && why="有未推送提交"
+      logerr "    · lane ${lane} 旧 worktree ${why}（${wt}），不复用也不删除："
+      git -C "$wt" status --porcelain 2>/dev/null | head -5 | sed 's/^/        /' >&2
+      lane_worktree_alert "$wt" "$lane" "$why"
+      return 1 ;;
+    untracked)
+      local dirty total
+      dirty=$(git -C "$wt" status --porcelain 2>/dev/null || true)
+      total=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
+      logerr "    · lane ${lane} 旧 worktree 有未跟踪文件（共 ${total} 个），前 5 个，将 git clean -fd 后复用："
+      printf '%s\n' "$dirty" | head -5 | sed 's/^/        /' >&2
+      if ! git -C "$wt" clean -fd >/dev/null 2>&1 || [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+        logerr "    · lane ${lane} 旧 worktree 清理后仍有未提交/未跟踪文件，不复用"
+        return 1
+      fi ;;
+  esac
 
   branch="issue-$issue-lane-$lane"
   while git -C "$wt" show-ref --verify --quiet "refs/heads/$branch"; do
@@ -802,14 +864,15 @@ reset_lane_worktree() {
 # 取 lane 的 worktree：有且能安全复用就复用，否则用 Orca 新建（不自己拿 git 命令建工作树）。
 prepare_lane_worktree() {
   local lane="$1" issue="$2" title="$3"
-  local wt name out rc branch
+  local wt name out rc branch old=""
   wt=$(lane_read "$lane" worktree)
   if [ -n "$wt" ] && [ -d "$wt" ]; then
     if reset_lane_worktree "$wt" "$lane" "$issue"; then
       printf '%s\n' "$wt"
       return 0
     fi
-    log "    · lane ${lane} 的旧 worktree 不能安全复用（${wt}），改为新建"
+    logerr "    · lane ${lane} 的旧 worktree 不能安全复用（${wt}），改为新建"
+    old="$wt"
   fi
 
   name="cycle-issue-$issue"
@@ -823,13 +886,13 @@ prepare_lane_worktree() {
     out=$(orca worktree create --name "$name" --no-parent --setup skip --json 2>&1) || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    log "    ✗ orca worktree create 失败：$(printf '%s' "$out" | tr '\n' ' ' | head -c 400)"
+    logerr "    ✗ orca worktree create 失败：$(printf '%s' "$out" | tr '\n' ' ' | head -c 400)"
     return 1
   fi
 
   wt=$(printf '%s' "$out" | jfind path)
   if [ -z "$wt" ]; then
-    log "    ✗ worktree create 回执里没有 path：$(printf '%s' "$out" | tr '\n' ' ' | head -c 300)"
+    logerr "    ✗ worktree create 回执里没有 path：$(printf '%s' "$out" | tr '\n' ' ' | head -c 300)"
     return 1
   fi
   branch=$(printf '%s' "$out" | jfind branch)
@@ -838,7 +901,33 @@ prepare_lane_worktree() {
   lane_write "$lane" name "$name"
   lane_write "$lane" branch "$branch"
   lane_write "$lane" since "$(date +%s)"
+  reclaim_old_worktree "$old" "$wt" "$lane"
   printf '%s\n' "$wt"
+}
+
+# 新建成功后回收旧的：只回收干净的（untracked/tracked/unpushed 都留着）；失败只告警。
+# 删之前再看一眼 --ignored：被忽略但只在本机的内容（.env、本地配置）一并算"有东西"，留着。
+reclaim_old_worktree() {
+  local old="$1" new="$2" lane="$3" st
+  [ -n "$old" ] && [ -d "$old" ] && [ "$old" != "$new" ] || return 0
+  git -C "$old" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  st=$(lane_worktree_state "$old")
+  if [ "$st" != clean ]; then
+    logerr "    · lane ${lane} 旧 worktree 状态 ${st}，保留不回收（${old}）"
+    return 0
+  fi
+  local ign
+  ign=$(git -C "$old" status --porcelain --ignored 2>/dev/null | grep '^!!' | grep -v ' node_modules/$' | head -3 || true)
+  if [ -n "$ign" ]; then
+    logerr "    · lane ${lane} 旧 worktree 有被忽略但只在本机的内容，保留不回收（${old}）："
+    printf '%s\n' "$ign" | sed 's/^/        /' >&2
+    return 0
+  fi
+  if orca worktree rm --worktree "path:$old" --force >/dev/null 2>&1; then
+    logerr "    ✓ lane ${lane} 旧 worktree 已回收（${old}）"
+  else
+    logerr "    ⚠ 回收失败，留待人工（${old}）"
+  fi
 }
 
 # 从 worker-start 失败回执里抽现场：failedStage / stage / residualResources / error。
