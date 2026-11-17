@@ -3,6 +3,7 @@
 // 自己走一遍 CONNECT 隧道，仍然零运行时依赖。没配代理或命中 NO_PROXY 时直接用全局 fetch。
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import tls from "node:tls";
 import { AdapterError } from "../../core/src/errors.mjs";
 
@@ -89,7 +90,15 @@ async function viaProxy(url, init, proxy, signal) {
   let reqOpts;
   if (u.protocol === "https:") {
     const socket = await connectTunnel(proxy, u, signal);
-    const tlsSocket = tls.connect({ socket, servername: u.hostname });
+    // Node 26 起 servername 不许是 IP（ERR_INVALID_ARG_VALUE）；IP 目标不设 SNI。URL 里的 IPv6 带方括号。
+    const host = u.hostname.replace(/^\[|\]$/g, "");
+    let tlsSocket;
+    try {
+      tlsSocket = tls.connect(net.isIP(host) ? { socket } : { socket, servername: host });
+    } catch (err) {
+      socket.destroy(); // 否则隧道 socket 一直开着，进程/测试文件被挂住
+      throw err;
+    }
     // agent:false 会新建默认 agent 并忽略 createConnection，隧道就被绕过、直连 host:443；必须用自带 createConnection 的 agent。
     const agent = new https.Agent({ keepAlive: false });
     agent.createConnection = () => tlsSocket;
