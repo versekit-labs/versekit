@@ -15,12 +15,12 @@ import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
-import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf } from "./login-xhs.mjs";
+import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf, readCreatorId, QR_ACCOUNT_HINT } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
-import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
+import { browserReady, openAccount, closeAccount, logoutAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
 import * as service from "./service.mjs";
@@ -237,6 +237,22 @@ async function reloadQr(session) {
   setQr(session, await readQr(session.tab));
 }
 
+/**
+ * 登录成功后核对平台身份（ACC-acct-iso-02）：读出创作者 id 存到账号上；
+ * 同一个小红书号已经接在别的账号上时返回人话，调用方不得把这个账号标成正常。
+ * 读不到 id 只记日志、不阻断（没法核对，不等于串号）。
+ */
+async function bindXhsIdentity(accountId, tab, log = () => {}) {
+  const uid = await readCreatorId(tab).catch(() => null);
+  if (!uid) {
+    log(`[identity] ${accountId} 没读到创作者 id，跳过串号核对`);
+    return { ok: true, uid: null };
+  }
+  const r = recordPlatformUid(accountId, uid);
+  if (!r.ok) log(`[identity] ${accountId} 与 ${r.other.accountId} 是同一个小红书号`);
+  return r;
+}
+
 /** 备用入口：扫码失败（风控、页面改版）时页面和 CLI 都给出这两条，不让人卡住。 */
 const QR_FALLBACK = [
   { mode: "sms", label: "短信验证码登录", cli: "vk account login <id> --phone <11 位手机号>" },
@@ -294,6 +310,11 @@ async function qrStatus(accountId, account, session, log = () => {}) {
       session.loggedInAt = Date.now();
     }
     if (await sessionPersisted(session.tab)) {
+      const identity = await bindXhsIdentity(accountId, session.tab, log);
+      if (!identity.ok) {
+        await endQrSession(accountId, session);
+        return { mode: "qr", state: "failed", reason: "identity_conflict", note: identity.message, conflict: true };
+      }
       if (account.state !== "ok") setAccountState(accountId, "ok");
       await endQrSession(accountId, session);
       log(`[login.qr] ${accountId} 扫码登录成功，登录态已保存`);
@@ -496,6 +517,7 @@ function daemonHandlers(adapters, log) {
         qr: session.qr,
         startedAt: session.startedAt,
         next: "用手机小红书扫一扫这个二维码，并在手机上确认登录",
+        hint: QR_ACCOUNT_HINT,
       };
     },
 
@@ -535,6 +557,8 @@ function daemonHandlers(adapters, log) {
       // 只认页面：人在窗口里登录成功后，这里自然变成 ok，不依赖任何内存会话。
       if (await creatorLoggedIn(accountId)) {
         loginSessions.delete(accountId);
+        const identity = await bindXhsIdentity(accountId, await openAccount({ accountId, headless: true, reuse: "creator.xiaohongshu.com" }), log).catch(() => ({ ok: true }));
+        if (!identity.ok) return { state: "failed", mode: "manual", reason: "identity_conflict", note: identity.message, conflict: true };
         if (account.state !== "ok") setAccountState(accountId, "ok");
         closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => {});
         return { state: "ok", mode: "manual" };
@@ -558,6 +582,8 @@ function daemonHandlers(adapters, log) {
         await new Promise((r) => setTimeout(r, 1000));
         if (await creatorLoggedIn(accountId, tab)) {
           loginSessions.delete(accountId);
+          const identity = await bindXhsIdentity(accountId, tab, log);
+          if (!identity.ok) throw new Error(identity.message);
           // 会话 cookie 已持久化才收登录窗口；小红书若只有内存态会话，closeLoginWindow 会保留窗口。
           const closing = await closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => false);
           return { ok: true, state: "ok", next: closing ? "登录成功（登录窗口几秒后自动关闭，登录态已保存）" : "登录成功（浏览器保持登录态，不用再点验证）" };
@@ -568,6 +594,22 @@ function daemonHandlers(adapters, log) {
         if (bad) throw new Error(`登录失败：${bad}`);
       }
       throw new Error("验证码提交了，但创作平台还没放行；可能是验证码错误或需要手机端确认");
+    },
+
+    /**
+     * 退出登录（#220）：关浏览器、删这个账号自己的 profile、状态变「没连上」。
+     * 只动这一个账号；别的账号的 profile 与凭证文件不碰。
+     */
+    "account.logout": async ({ accountId }) => {
+      const account = getAccount(accountId);
+      if (!account) throw new Error(`没有这个账号：${accountId}`);
+      const session = loginSessions.get(accountId);
+      loginSessions.delete(accountId);
+      if (session?.mode === "qr") await endQrSession(accountId, session).catch(() => {});
+      const r = await logoutAccount(accountId);
+      markAccountLoggedOut(accountId);
+      log(`[logout] ${accountId} 已退出登录（浏览器资料${r.removed ? "已删除" : "本来就没有"}）`);
+      return { accountId, state: "expired", browserClosed: r.closed, profileRemoved: r.removed, next: "现在可以重新登录：vk account login " + accountId + " --qr（或 --phone / --open）" };
     },
 
     "account.login.cancel": async ({ accountId }) => {
@@ -957,6 +999,7 @@ async function cmdLoginQr(accountId) {
     qrPath = writeQrImage(accountId, start.qr);
     say(`二维码图片：${qrPath}`);
     say("用手机小红书扫一扫这张图，并在手机上确认登录（二维码过期会自动换新，路径不变）");
+    say(QR_ACCOUNT_HINT);
   } else if (start.note) say(start.note);
 
   const deadline = Date.now() + 10 * 60e3;
@@ -1020,6 +1063,14 @@ async function cmdAccount() {
       { log },
     );
     if (human) console.log(`已添加 ${platformLabelOf(platform)} ${name}（${data.id}）到账号组「${data.group.name}」\n${data.next ?? ""}`);
+    else out(data);
+    return data;
+  }
+  if (sub === "logout") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account logout <accountId>");
+    const data = await send("account.logout", { accountId }, { log });
+    if (human) console.log(`已退出登录：${accountId} 的浏览器已关闭、浏览器资料已删除，状态是「没连上」\n${data.next}`);
     else out(data);
     return data;
   }

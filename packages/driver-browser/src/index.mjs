@@ -14,7 +14,7 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
@@ -232,6 +232,43 @@ function removeMarker(profile) {
   }
 }
 
+/**
+ * 这个端口上监听的进程实际用的 `--user-data-dir`（按监听端口查 pid，再读命令行）。
+ * 查不出来返回 null——调用方一律当「对不上」处理：宁可多起一个 Chrome，也不能连到别人的号。
+ */
+export function chromeUserDataDirOnPort(port) {
+  try {
+    const pids = execFileSync("lsof", ["-nP", `-iTCP:${Number(port)}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] })
+      .split(/\s+/)
+      .filter(Boolean);
+    for (const pid of pids) {
+      const cmd = execFileSync("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+      const m = cmd.match(/--user-data-dir=(.*?)(?=\s--[a-z]|\s*$)/);
+      if (m) return m[1].trim();
+    }
+  } catch {
+    /* lsof/ps 不可用或超时：当作查不出来 */
+  }
+  return null;
+}
+
+function samePath(a, b) {
+  if (!a || !b) return false;
+  const norm = (x) => {
+    try {
+      return realpathSync(x);
+    } catch {
+      return resolve(x);
+    }
+  };
+  return norm(a) === norm(b);
+}
+
+/** 端口上的 Chrome 确实在用这个账号自己的 profile。 */
+function portBelongsToProfile(port, profile) {
+  return samePath(chromeUserDataDirOnPort(port), profile);
+}
+
 // 账号 → 实例；端口 → 账号；正在启动的账号 → Promise（同账号并发只起一次）。
 const instances = new Map();
 const claimedPorts = new Map();
@@ -290,6 +327,11 @@ async function pickPort(accountId, profile) {
       const marker = readMarker(profile);
       // 只接管「标记对得上」的实例；端口上如果住着别人，顺延，绝不借用。
       if (marker?.accountId === accountId && Number(marker.port) === port) {
+        if (!portBelongsToProfile(port, profile)) {
+          // 标记过期：端口上的 Chrome 用的不是本账号的 profile（别人的号）。不接管、清标记、换端口。
+          removeMarker(profile);
+          continue;
+        }
         return { port, adopted: true, pid: marker.pid ?? null, headless: marker.headless };
       }
       continue;
@@ -1086,6 +1128,11 @@ export async function closeAccount(accountId) {
     const marker = readMarker(profile);
     if (!marker || marker.accountId !== id || !Number.isInteger(Number(marker.port))) return false;
     const port = Number(marker.port);
+    if ((await up(port)) && !portBelongsToProfile(port, profile)) {
+      // 标记过期，端口上是别人的 Chrome：绝不关它、不按 pid 杀，只清自己的标记。
+      removeMarker(profile);
+      return false;
+    }
     try {
       await closeBrowser(port);
     } catch {
@@ -1118,6 +1165,22 @@ export async function closeAccount(accountId) {
   forget(id);
   removeMarker(instance.profile);
   return true;
+}
+
+/**
+ * 退出登录（#220）：关掉这个账号的 Chrome，再删掉它自己的 profile 目录（cookie、登录态都在里面）。
+ * 只动 state/browser/<accountId>/ 这一个目录；default 账号走自定义 VK_CHROME_PROFILE 时不删
+ * （那是用户自己指定的目录，不是我们建的）。返回 { closed, removed }。
+ */
+export async function logoutAccount(accountId) {
+  const id = requireAccountId(accountId);
+  const profile = accountProfile(id);
+  const closed = await closeAccount(id).catch(() => false);
+  const root = resolve(browserRoot());
+  if (!resolve(profile).startsWith(root + sep)) return { closed, removed: false };
+  const existed = existsSync(profile);
+  rmSync(profile, { recursive: true, force: true });
+  return { closed, removed: existed };
 }
 
 /**
@@ -1161,6 +1224,10 @@ export async function adoptOrphanAccounts() {
     if (!(await up(port))) {
       clearStaleSingleton(profile, marker.pid);
       removeMarker(profile);
+      continue;
+    }
+    if (!portBelongsToProfile(port, profile)) {
+      removeMarker(profile); // 端口被别的 profile 的 Chrome 占着：标记过期，不认领
       continue;
     }
     const instance = { accountId: name, profile, port, pid: marker.pid ?? null, tabs: new Set(), slotHeld: false, headless: marker.headless === true };

@@ -247,3 +247,35 @@ export function qrStateOf(probe) {
   if (probe.qrMode && probe.qr) return "waiting";
   return "failed";
 }
+
+// ---------------------------------------------------------------- 账号标识与扫码提示（#220）
+
+/** 扫码提示（ACC-acct-iso-04）：扫码登录的是手机 App 当前的号，不是「这个账号」。 */
+export const QR_ACCOUNT_HINT = "扫码会登录手机 App 当前的号；要接另一个号，先在 App 里切换账号，或改用短信登录";
+
+/**
+ * 读出创作者账号 id（登录后调用）。优先读创作平台自己写的 cookie `x-user-id-creator.xiaohongshu.com`，
+ * 读不到再问个人信息接口；都没有返回 null（调用方当「没法核对」，不阻断登录）。
+ * 只读 id，不碰任何会话 cookie 的值。
+ */
+export async function readCreatorId(tab) {
+  try {
+    const cookies = await tab.cookies("https://creator.xiaohongshu.com");
+    const hit = cookies.find((c) => c.name === "x-user-id-creator.xiaohongshu.com" && c.value);
+    if (hit) return String(hit.value);
+  } catch {
+    /* 读不到 cookie 就试接口 */
+  }
+  try {
+    const raw = await tab.eval(`(async () => {
+      const r = await fetch('/api/galaxy/creator/home/personal_info', { credentials: 'include' });
+      const j = await r.json();
+      const d = (j && j.data) || {};
+      return JSON.stringify(d.user_id || d.userId || d.red_num || d.redNum || null);
+    })()`);
+    const id = JSON.parse(raw);
+    return id ? String(id) : null;
+  } catch {
+    return null;
+  }
+}

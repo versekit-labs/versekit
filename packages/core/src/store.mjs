@@ -274,6 +274,79 @@ export function accountProfile(account) {
   }
 }
 
+// ------------------------------------------------------------------ 平台侧用户标识（#220）
+//
+// 登录成功后读出平台那边的用户 id（小红书 = 创作者账号 id），存在 meta 表（不改表结构）。
+// 同一个平台号接在两个账号上，等于第二个账号「直接登进了第一个号」：不标正常，就地写清楚。
+
+const UID_KEY = (accountId) => `acct_uid:${accountId}`;
+const CONFLICT_KEY = (accountId) => `acct_uid_conflict:${accountId}`;
+
+export function getPlatformUid(accountId) {
+  return open().prepare("SELECT value FROM meta WHERE key = ?").get(UID_KEY(accountId))?.value ?? null;
+}
+
+/** 这个账号当前的串号提示（人话）；没有冲突返回 null。 */
+export function getIdentityConflict(accountId) {
+  const row = open().prepare("SELECT value FROM meta WHERE key = ?").get(CONFLICT_KEY(accountId));
+  if (!row) return null;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return null;
+  }
+}
+
+export function clearPlatformIdentity(accountId) {
+  open().prepare("DELETE FROM meta WHERE key IN (?, ?)").run(UID_KEY(accountId), CONFLICT_KEY(accountId));
+}
+
+/**
+ * 记下登录后读到的平台标识。同平台（含 TikTok 两个后端）已有别的在用账号用着同一个标识 → 冲突：
+ * 账号状态压成 expired（发布会被拦），并写下人话；否则存下标识、清掉旧冲突。
+ * 返回 { ok: true } 或 { ok: false, message, other }。
+ */
+export function recordPlatformUid(accountId, uid) {
+  const account = getAccount(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`);
+  const id = requireString(String(uid ?? ""), "平台用户标识", { max: 200 });
+  const conn = open();
+  const family = backendsOf(account.platform);
+  const rows = conn
+    .prepare(`SELECT key, value FROM meta WHERE key LIKE 'acct_uid:%' AND value = ?`)
+    .all(id)
+    .map((r) => r.key.slice("acct_uid:".length))
+    .filter((other) => other !== accountId);
+  for (const otherId of rows) {
+    const other = getAccount(otherId);
+    if (!other || !family.includes(other.platform)) continue;
+    const group = other.group_id ? conn.prepare("SELECT name FROM account_group WHERE id = ?").get(other.group_id) : null;
+    const otherName = other.display_name || other.handle;
+    const label = account.platform === "xiaohongshu" ? "小红书号" : `${platformLabelOf(account.platform)} 号`;
+    const message = `这个${label}已经接在「${group?.name ?? "未分组"}」的 ${otherName} 上；要接另一个号，先点「退出登录」，再扫码或短信登录另一个号`;
+    conn
+      .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(CONFLICT_KEY(accountId), JSON.stringify({ message, otherAccountId: otherId, otherName, group: group?.name ?? null }));
+    conn.prepare("DELETE FROM meta WHERE key = ?").run(UID_KEY(accountId));
+    conn.prepare("UPDATE account SET state = 'expired' WHERE id = ?").run(accountId);
+    return { ok: false, message, other: { accountId: otherId, name: otherName, group: group?.name ?? null } };
+  }
+  conn
+    .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .run(UID_KEY(accountId), id);
+  conn.prepare("DELETE FROM meta WHERE key = ?").run(CONFLICT_KEY(accountId));
+  return { ok: true, uid: id };
+}
+
+/** 退出登录后的账号状态：没连上（expired = 要重新登录），并清掉标识与冲突。 */
+export function markAccountLoggedOut(accountId) {
+  const account = getAccount(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`);
+  clearPlatformIdentity(accountId);
+  open().prepare("UPDATE account SET state = 'expired', last_ok_at = NULL, last_checked_at = NULL WHERE id = ?").run(accountId);
+  return { accountId, state: "expired" };
+}
+
 /** 暂停账号（不再自动发）并记因：TikTok 的 spam_risk_* / reached_active_user_cap 走这里。 */
 export function pauseAccount(accountId, { banned = false } = {}) {
   open().prepare(`UPDATE account SET is_manual = 1${banned ? ", state = 'banned'" : ""} WHERE id = ?`).run(accountId);

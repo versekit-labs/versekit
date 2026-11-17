@@ -284,6 +284,17 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "account.logout",
+    summary: "退出登录：关掉这个账号的浏览器、删掉它自己的浏览器资料，状态变成没连上；之后可以重新登录另一个号（只动这一个账号）",
+    remote: false,
+    localOnly: true,
+    args: { accountId: "string" },
+    http: { method: "POST", path: "/api/accounts/:accountId/logout" },
+    cli: { usage: "vk account logout <accountId>" },
+    card: null,
+    audit: "always",
+  },
+  {
     name: "account.connect",
     summary: "TikTok 官方接口授权（Login Kit）：本机临时端口接回调、PKCE；完成后保存 token 到本机凭证目录，显示头像和昵称",
     remote: false,

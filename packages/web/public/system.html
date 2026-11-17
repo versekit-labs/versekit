@@ -61,12 +61,15 @@
   const LABEL = { xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
   const labelOf = (p) => LABEL[p] ?? p;
   const SCAN = new Set(["xiaohongshu", "douyin", "bilibili"]); // 扫码；其余是登录
+  const WEB_LOGIN = (p) => p !== "bilibili" && p !== "tiktok-api"; // 靠自己的浏览器资料保持登录的平台
+  const QR_HINT = "扫码会登录手机 App 当前的号；要接另一个号，先在 App 里切换账号，或改用短信登录。";
   const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口" };
   const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
 
   const ui = {
     accounts: [], platforms: [], today: null, groupsErr: null,
     login: {},            // accountId → { kind: "wait" | "fail", text, url }
+    logoutAsk: null,      // 正在二次确认「退出登录」的账号 id
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
@@ -143,7 +146,7 @@
     let status;
     if (lg?.kind === "wait") status = `<span class="st wait">${lg.waitLabel}</span>${lg.text ? `<span class="why">${lg.text}</span>` : ""}`;
     else if (lg?.kind === "fail") status = `<span class="st bad">没登上</span><span class="why bad">${esc(lg.text)}</span>`;
-    else status = `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>`;
+    else status = `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>${a.identityConflict ? `<span class="why bad">${esc(a.identityConflict)}</span>` : ""}`;
     const q = a.quota;
     const quota = q ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">不限</span>';
     const note = [NOTE[a.platform], a.mode === "manual" ? "仅手动跟踪" : ""].filter(Boolean).join("，");
@@ -153,6 +156,12 @@
     } else if (credsMissing(a)) act = '<span class="sub">先填下面的应用凭证</span>';
     else if (a.platform === "tiktok-api") act = `<button class="${connected(a) ? "link" : "btn pri"}" data-login="${esc(a.id)}">${connected(a) ? "重新连接" : "Connect TikTok"}</button>`;
     else act = `<button class="${st.key === "ok" ? "link" : "btn"}" data-login="${esc(a.id)}">重新登录</button>`;
+    // 退出登录：关浏览器 + 删这个账号自己的浏览器资料，之后才能扫码/短信登录另一个号（vk account logout）。
+    if (!credsMissing(a) && WEB_LOGIN(a.platform) && lg?.kind !== "wait") {
+      act += ui.logoutAsk === a.id
+        ? ` <span class="tbtns"><span class="sub">会删掉这个账号的登录资料</span><button class="btn" data-logoutyes="${esc(a.id)}">确认退出</button><button class="link" data-logoutno>算了</button></span>`
+        : ` <button class="link" data-logout="${esc(a.id)}">退出登录</button>`;
+    }
     const row = `<tr data-acc="${esc(a.id)}"><td><span class="pfn">${pfBadge(a.platform)}${esc(labelOf(a.platform))}</span></td><td class="acct">${who}</td><td>${status}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${act}</td></tr>`;
     if (!credsMissing(a)) return row;
     const c = ui.cred;
@@ -448,7 +457,7 @@
     draw();
     try {
       await post(`/api/accounts/${encodeURIComponent(id)}/login/open`, { accountId: id });
-      ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: SCAN.has(a.platform) ? "在弹出的窗口里扫码并确认，这里会自动认出来。" : "在弹出的窗口里完成登录，这里会自动认出来。" };
+      ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: SCAN.has(a.platform) ? `在弹出的窗口里扫码并确认，这里会自动认出来。${a.platform === "xiaohongshu" ? QR_HINT : ""}` : "在弹出的窗口里完成登录，这里会自动认出来。" };
       draw();
       startPoll(id);
     } catch (err) {
@@ -536,12 +545,20 @@
     else if (e.target.id === "cred-secret") { e.preventDefault(); saveCreds(); }
   });
   main.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd]");
+    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-logout],[data-logoutyes],[data-logoutno]");
     if (!b) return;
     const d = b.dataset;
     if ("sw" in d) {
       e.preventDefault();
       try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
+    } else if (d.logout) { ui.logoutAsk = d.logout; draw(); }
+    else if ("logoutno" in d) { ui.logoutAsk = null; draw(); }
+    else if (d.logoutyes) {
+      const id = d.logoutyes;
+      ui.logoutAsk = null; stopPoll(id); delete ui.login[id];
+      try { await post(`/api/accounts/${encodeURIComponent(id)}/logout`, { accountId: id }); toast("已退出登录，现在可以重新登录另一个号"); }
+      catch (err) { toast(`没退出成功：${err.message}`); }
+      await refresh();
     } else if (d.login) startLogin(d.login);
     else if (d.done) { const id = d.done; ui.login[id] = { ...ui.login[id], text: "正在检查登录状态…" }; draw(); confirm(id, { manual: true }); }
     else if (d.cancel) { stopPoll(d.cancel); delete ui.login[d.cancel]; draw(); }
