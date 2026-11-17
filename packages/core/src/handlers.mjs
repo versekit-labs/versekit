@@ -5,10 +5,11 @@
 // cannot diverge. Adapter work is queued, never awaited here: an HTTP request that waits 20
 // minutes for an upload is a timeout, not a feature.
 
-import { existsSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
+import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
-import { open, transitionPublish, enqueue, emit, DEFAULT_LANGUAGE } from "./index.mjs";
+import { open, transitionPublish, enqueue, emit, paths, DEFAULT_LANGUAGE } from "./index.mjs";
+import { hashFile, ping, pushDelivery, pullOnce } from "../../relay/src/index.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
@@ -16,7 +17,7 @@ import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules 
 import * as planModel from "./plan.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
-import { readConfig } from "./config.mjs";
+import { readConfig, updateConfig } from "./config.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
@@ -264,12 +265,199 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     return unconfirmed.length ? { unconfirmed } : {};
   }
 
-  return {
+
+  // ---------------------------------------------------------------- 云端中转（ACC-relay-02/03/04）
+  //
+  // 制作机 work.push 只管上传；发布机后台拉取入库。云端只是文件和投递清单，这里不连任何平台。
+  const RELAY_WEEK_MS = 7 * 864e5;
+  const relayConfig = () => {
+    const r = readConfig().relay ?? {};
+    const mins = Number(r.interval_minutes);
+    return {
+      url: typeof r.url === "string" && r.url ? r.url.replace(/\/+$/, "") : null,
+      pushToken: r.push_token || null,
+      pullToken: r.pull_token || null,
+      intervalMinutes: Number.isFinite(mins) && mins > 0 ? mins : 5,
+    };
+  };
+  let relayDownloading = null;
+  let relayPulling = null;
+
+  /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
+  function ingestDelivery(delivery, filePaths, inboxDir) {
+    const g = store.findGroup(delivery.group) ?? fail(`这台发布机上没有账号组「${delivery.group}」：先 vk group add ${delivery.group} 并接入账号，再让制作机重新 push`);
+    if (!store.listAccounts({ groupId: g.id }).length) fail(`账号组「${g.name}」里还没有账号，平台稿没地方放：先接入账号，再让制作机重新 push`);
+    const m = delivery.manifest ?? {};
+    const cuts = (Array.isArray(m.cuts) ? m.cuts : []).map((c) => ({
+      ...c,
+      versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => {
+        const sha = /^blob:([0-9a-f]{64})$/.exec(String(v?.asset ?? ""))?.[1];
+        const local = sha ? filePaths[sha] : null;
+        if (!local) fail(`清单引用了没有上传的文件：${v?.asset ?? "（空）"}`);
+        return { ...v, asset: local };
+      }),
+    }));
+    const source = joinPath(inboxDir, delivery.id); // 同一投递永远是同一来源，重复入库只会是更新
+    store.checkWorkPlan({ title: m.title, source, cuts });
+    const added = handlers["work.add"]({ title: m.title, source, cuts });
+    const created = [];
+    const notes = [];
+    for (const cut of added.work.cuts) {
+      const r = handlers["plan.apply"]({ cutId: cut.id, group: g.id });
+      created.push(...(r.created ?? []));
+      for (const x of r.rejected ?? []) notes.push(`${x.platform}：${x.reason}`);
+    }
+    if (!created.length && !added.work.cuts.some((c) => c.publishes?.length)) {
+      fail(`作品「${m.title}」已入库，但一条平台稿都没生成：${notes.join("；") || "账号组里没有能发的账号"}`);
+    }
+    log(`[relay] 投递 ${delivery.id} 已入库为作品 ${added.id}，${created.length} 条平台稿待确认`);
+    return { workId: added.id, drafts: created.length };
+  }
+
+  function recordRelay(id, rec) {
+    store.setRelayDelivery(id, rec);
+    const st = store.getRelayState();
+    const recent = [{ id, state: rec.state, title: rec.title ?? null, at: rec.at }, ...(st.recent ?? []).filter((r) => r.id !== id)].slice(0, 5);
+    const failures = rec.state === "failed" ? [{ id, at: rec.at, title: rec.title ?? null, message: rec.reason }, ...(st.failures ?? []).filter((f) => f.id !== id)].slice(0, 20) : st.failures ?? [];
+    store.patchRelayState({ recent, failures });
+  }
+
+  async function pullRound() {
+    if (relayPulling) return relayPulling;
+    const cfg = relayConfig();
+    if (!cfg.url || !cfg.pullToken) fail("还没有连中转：先 vk relay connect <地址> --token <拉取 token>");
+    const inboxDir = joinPath(paths().state, "relay-inbox");
+    relayPulling = (async () => {
+      try {
+        const r = await pullOnce({
+          url: cfg.url,
+          token: cfg.pullToken,
+          inboxDir,
+          log,
+          getRecord: store.getRelayDelivery,
+          record: recordRelay,
+          ingest: (d, filePaths) => ingestDelivery(d, filePaths, inboxDir),
+          onProgress: (p) => {
+            relayDownloading = p ? { ...p, title: p.title ?? null } : null;
+          },
+        });
+        const at = Date.now();
+        store.patchRelayState({ last_ok_at: at, last_error: null, pending: r.pending.length });
+        if (r.ingested.length || r.failed.length) log(`[relay] 本轮：入库 ${r.ingested.length}，失败 ${r.failed.length}，没下完 ${r.pending.length}`);
+        return { ...r, at };
+      } catch (err) {
+        store.patchRelayState({ last_error: { at: Date.now(), message: err.message } });
+        log(`[relay] 拉取没成功：${err.message}`);
+        throw err;
+      } finally {
+        relayDownloading = null;
+        relayPulling = null;
+      }
+    })();
+    return relayPulling;
+  }
+
+  function relayStatusView({ now = Date.now() } = {}) {
+    const cfg = relayConfig();
+    const st = store.getRelayState();
+    const configured = Boolean(cfg.url && cfg.pullToken);
+    const errAt = st.last_error?.at ?? 0;
+    const connection = !configured ? "not_configured" : st.last_error && errAt >= (st.last_ok_at ?? 0) ? "error" : st.last_ok_at ? "ok" : "never";
+    const d = relayDownloading;
+    return {
+      configured,
+      pushConfigured: Boolean(cfg.url && cfg.pushToken),
+      url: cfg.url,
+      intervalMinutes: cfg.intervalMinutes,
+      connection,
+      lastPullAt: st.last_ok_at ?? null,
+      lastPullAgeMs: st.last_ok_at ? Math.max(0, now - st.last_ok_at) : null,
+      lastError: st.last_error ?? null,
+      pulling: Boolean(relayPulling),
+      downloading: d ? [{ id: d.id, name: d.name, received: d.received, total: d.total, percent: d.total ? Math.floor((d.received / d.total) * 100) : 0 }] : [],
+      pending: st.pending ?? 0,
+      recent: st.recent ?? [],
+      failures: (st.failures ?? []).filter((f) => now - f.at < RELAY_WEEK_MS),
+    };
+  }
+
+  const handlers = {
     now: () => ({ ...store.statusSnapshot() }),
 
     "bootstrap": () => overview.buildBootstrap(),
 
     // 程序版本与后台自动更新（#217）。
+    // 云端中转（#226）。
+    "work.push": async ({ manifest, group }) => {
+      const cfg = relayConfig();
+      if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先 vk relay connect <地址> --token <推送 token> --push");
+      const groupName = String(group ?? "").trim();
+      if (!groupName) fail("--group 必填：要投递到发布机上的哪个账号组");
+      if (!manifest || !existsSync(manifest)) fail(`找不到清单：${manifest ?? "（没给）"}`);
+      let raw;
+      try {
+        raw = JSON.parse(readFileSync(manifest, "utf8"));
+      } catch (err) {
+        fail(`清单不是合法的 JSON：${manifest}（${err.message}）`);
+      }
+      const baseDir = dirname(resolvePath(manifest));
+      const cuts = (Array.isArray(raw?.cuts) ? raw.cuts : []).map((c) => ({
+        ...c,
+        versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, asset: typeof v?.asset === "string" && v.asset ? resolvePath(baseDir, v.asset) : v?.asset })),
+      }));
+      // 规则和 work.add 同一套：不合格当场报错，一个字节都不上传。
+      store.checkWorkPlan({ title: raw?.title, cuts });
+      const assets = [...new Set(cuts.flatMap((c) => c.versions.map((v) => v.asset)))];
+      const missing = assets.filter((a) => !existsSync(a));
+      if (missing.length) fail(`找不到成片：${missing.join("、")}（路径相对清单所在目录）`);
+      const dirs = assets.filter((a) => statSync(a).isDirectory());
+      if (dirs.length) fail(`中转目前只支持视频文件，不支持图片目录：${dirs.join("、")}`);
+
+      const files = [];
+      const bySha = new Map();
+      for (const path of assets) {
+        const sha256 = await hashFile(path);
+        files.push({ path, sha256, size: statSync(path).size, name: basename(path) });
+        bySha.set(path, sha256);
+      }
+      const wire = {
+        title: raw.title,
+        cuts: cuts.map((c) => ({ ...c, versions: c.versions.map((v) => ({ ...v, asset: `blob:${bySha.get(v.asset)}` })) })),
+      };
+      log(`[relay] 上传 ${files.length} 个文件到中转…`);
+      const delivery = await pushDelivery({ url: cfg.url, token: cfg.pushToken, group: groupName, manifest: wire, files, onProgress: () => {} });
+      const bytes = files.reduce((n, f) => n + f.size, 0);
+      return { id: delivery.id, state: delivery.state, group: groupName, files: files.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
+    },
+
+    "relay.status": () => relayStatusView(),
+
+    "relay.connect": async ({ url, token, push = false }) => {
+      const clean = String(url ?? "").trim().replace(/\/+$/, "");
+      if (!/^https?:\/\/[^\s/]+/.test(clean)) fail("中转地址要以 https:// 开头（本机测试可以用 http://127.0.0.1:端口）");
+      const t = String(token ?? "").trim();
+      if (!t) fail("缺 token：--token <token>");
+      const want = push ? "push" : "pull";
+      let warning = null;
+      try {
+        const r = await ping({ url: clean, token: t });
+        if (r.role !== want) fail(`这是${r.role === "push" ? "推送" : "拉取"} token，${push ? "制作机（--push）要用推送 token" : "发布机要用拉取 token（制作机请加 --push）"}`);
+      } catch (err) {
+        if (err.code === "unauthorized" || err.message.startsWith("这是")) fail(err.message);
+        warning = `暂时没连上中转（${err.message}），配置已写入，网络通了会自动连`;
+      }
+      updateConfig({ relay: { url: clean, [push ? "push_token" : "pull_token"]: t } });
+      try {
+        chmodSync(paths().configFile, 0o600); // 里面有 token
+      } catch {
+        /* 非 POSIX */
+      }
+      log(`[relay] 已连接 ${clean}（${push ? "推送" : "拉取"}）`);
+      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以 vk work push 了" : "已连接中转，后台服务会定时拉取（也可以 vk relay pull 立刻拉一轮）") };
+    },
+
+    "relay.pull": () => pullRound(),
+
     "update.status": () => updates.statusView(),
 
     update: async ({ check = false, auto = null, now = false } = {}) => {
@@ -819,4 +1007,5 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "event.list": ({ since = 0, limit = 100 }) => ({ rows: store.listEvents({ since, limit }) }),
   };
+  return handlers;
 }

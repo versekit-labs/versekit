@@ -404,7 +404,11 @@ export function getWork(workId) {
  * copy 是 Claude 入库时写好的各平台文案（见 normaliseCopy）；成片级打底、版本级覆盖，
  * 整理后存进每个语言版本的 meta_json.copy。
  */
-export function upsertWork({ title, source = null, cuts, meta = null }) {
+/**
+ * 清单的校验与规整：只看清单本身，不碰库、不看文件在不在。work.add 入库前用它，
+ * 制作机 `vk work push` 上传前也用它——同一套规则，不合格当场报错。
+ */
+export function checkWorkPlan({ title, source = null, cuts }) {
   const t = requireString(title, "作品标题", { max: 200 });
   if (!Array.isArray(cuts) || !cuts.length) fail("至少要有一支成片");
   const seenCuts = new Set();
@@ -431,6 +435,11 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
   });
   const src = source == null ? plan[0].versions[0].asset : requireString(source, "来源", { max: 4096 });
   const sourceKey = resolve(src);
+  return { t, plan, sourceKey };
+}
+
+export function upsertWork({ title, source = null, cuts, meta = null }) {
+  const { t, plan, sourceKey } = checkWorkPlan({ title, source, cuts });
 
   const conn = open();
   const now = Date.now();
@@ -1443,3 +1452,30 @@ export function lastHeartbeat() {
   const v = Number(open().prepare("SELECT value FROM meta WHERE key = ?").get(DAEMON_HEARTBEAT_KEY)?.value);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
+
+// ------------------------------------------------------------------ 云端中转（ACC-relay-03）
+//
+// 发布机拉取投递后「这个投递 id 入库过没有」记在 meta 表（不改 schema）：重复拉取、服务重启都不重复入库。
+// 连接状态（上次拉取时间、上次出错、最近失败）也放这里，系统页与 vk relay status 读同一份。
+
+const relayKey = (id) => `relay.delivery.${id}`;
+const RELAY_STATE_KEY = "relay.state";
+
+const putMeta = (key, value) => open().prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(value));
+const readMeta = (key) => {
+  try {
+    const row = open().prepare("SELECT value FROM meta WHERE key = ?").get(key);
+    return row ? JSON.parse(row.value) : null;
+  } catch {
+    return null;
+  }
+};
+
+export const getRelayDelivery = (id) => readMeta(relayKey(id));
+export const setRelayDelivery = (id, record) => putMeta(relayKey(id), record);
+export const getRelayState = () => readMeta(RELAY_STATE_KEY) ?? {};
+export const patchRelayState = (patch) => {
+  const next = { ...getRelayState(), ...patch };
+  putMeta(RELAY_STATE_KEY, next);
+  return next;
+};

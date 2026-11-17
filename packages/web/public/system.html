@@ -73,7 +73,7 @@
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
-    plan: null, machine: null, update: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
+    plan: null, machine: null, update: null, relay: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
   };
   const polls = new Map();
 
@@ -108,17 +108,19 @@
   /** 发布方案、发布机、最近出的问题：都来自 /api（plan.show、machine.status、run.list + 今天的问题清单）。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
-    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.problems = []; return; }
+    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; return; }
     const q = `group=${encodeURIComponent(group.id)}`;
-    const [plan, machine, runs, update] = await Promise.all([
+    const [plan, machine, runs, update, relay] = await Promise.all([
       VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
       VK.request(`/api/machine?${q}`).catch(() => null),
       VK.request(`/api/runs?state=failed&limit=100&${q}`).catch(() => null),
       VK.request("/api/update").catch(() => null),
+      VK.request("/api/relay").catch(() => null),
     ]);
     ui.plan = plan;
     ui.machine = machine;
     ui.update = update;
+    ui.relay = relay;
     // 最近 7 天、失败的发布任务；只有这条平台稿现在还停在出问题的状态才能「再试一次」。
     const since = Date.now() - 7 * 864e5;
     const bad = new Map((ui.today?.problems ?? []).map((p) => [p.publishId, p]));
@@ -246,7 +248,20 @@
         `<dt>排着要发</dt><dd>${m.queued.count} 条已确认${m.queued.nextAt ? `，最近一条 ${esc(whenText(m.queued.nextAt))}` : ""}</dd>` +
         `<dt>正在发</dt><dd>${m.running.count ? `${m.running.count} 条` : "没有"}</dd>` +
         `<dt>等你确认</dt><dd>${m.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd>`;
-    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}${updateRows()}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code>　<code>vk version</code>　<code>vk update --auto on|off</code></div></div>`;
+    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}${relayRows()}${updateRows()}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code>　<code>vk version</code>　<code>vk update --auto on|off</code>　<code>vk relay status</code></div></div>`;
+  }
+
+  /** 中转：连接状态、上次拉取、正在下载的投递和进度。没配中转就不画这一行，不占版面。 */
+  function relayRows() {
+    const r = ui.relay;
+    if (!r || !r.configured) return "";
+    const st = { ok: '<span class="st done">已连上</span>', error: '<span class="st bad">连不上</span>', never: '<span class="st">还没拉取过</span>' }[r.connection] ?? "";
+    const last = r.lastPullAt ? `上次拉取 ${esc(ago(Date.now() - r.lastPullAt))}` : "还没有拉取过";
+    const err = r.connection === "error" && r.lastError ? `<div class="sub">${esc(r.lastError.message)}</div>` : "";
+    const dl = r.downloading.length
+      ? r.downloading.map((d) => `<div>正在下载 ${esc(d.name)} <progress max="100" value="${esc(d.percent)}" aria-label="下载进度"></progress> <span class="sub">${esc(d.percent)}%</span></div>`).join("")
+      : `<span class="sub">${r.pending ? `${esc(r.pending)} 个投递还没下完，下一轮接着下` : "没有在下载的"}</span>`;
+    return `<dt>中转</dt><dd>${st} <span class="sub">${last}；每 ${esc(r.intervalMinutes)} 分钟拉一次；新作品入库后在「今天」等你确认</span>${err}</dd><dt>正在下载</dt><dd>${dl}</dd>`;
   }
 
   /** 版本、上次检查、自动更新开关；刚更新过的附上更新内容（最多 5 条提交标题）。读不到就不画，不拖垮发布机这一块。 */
@@ -297,7 +312,8 @@
     const updRow = uf && Date.now() - uf.at < 7 * 864e5
       ? `<tr><td><b>自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
       : "";
-    const rows = updRow + ui.problems.map(({ run, p }) => {
+    const relayRowsHtml = (ui.relay?.failures ?? []).map((f) => `<tr><td><b>中转投递${f.title ? `「${esc(f.title)}」` : ""}</b><span class="sub">${esc(whenText(f.at))}</span></td><td></td><td><span class="st bad">没入库</span><div class="sub">${esc(f.message)}</div></td><td class="n"></td></tr>`).join("");
+    const rows = updRow + relayRowsHtml + ui.problems.map(({ run, p }) => {
       const day = whenText(run.created_at);
       const why = p.error?.message ?? run.last_error ?? "";
       return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}"><img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +

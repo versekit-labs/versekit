@@ -16,6 +16,8 @@ export const VALUE_FLAGS = new Set([
   "--privacy", "--caption",
   // 确认时改正文和话题（#175）：都带值。
   "--body", "--tags",
+  // 云端中转（#226）：token 与数据目录都带值。
+  "--token", "--data",
 ]);
 
 /** argv（不含 node 与脚本路径）→ { flags, pos }。带值参数缺值时记为 undefined，不吞掉下一个 --flag。 */

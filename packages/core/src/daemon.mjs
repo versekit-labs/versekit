@@ -17,7 +17,7 @@ import { matchRoute, ROUTES } from "./routes.mjs";
 import { findCommand, parseArgs } from "./commands.mjs";
 import { createRunner } from "./runner.mjs";
 import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publish-flow.mjs";
-import { publishTimeoutMs } from "./config.mjs";
+import { publishTimeoutMs, readConfig } from "./config.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
@@ -635,6 +635,39 @@ export function offlineHandlers(handlers) {
 }
 
 /**
+ * 发布机后台拉取（ACC-relay-03）：每 relay.interval_minutes（默认 5）分钟向中转拉一轮待投递，
+ * 下载可续传、在后台跑，不占住守护进程的请求；每一轮都重读配置，`vk relay connect` 之后不用重启。
+ * 没配中转就什么都不做；拉取失败只记日志（状态记在 meta 里，系统页看得见），下一轮再来。
+ */
+export function startRelayPuller({ pull, log = () => {}, startDelayMs = 5e3 } = {}) {
+  let timer = null;
+  let stopped = false;
+  const schedule = (ms) => {
+    if (stopped) return;
+    timer = setTimeout(tick, ms);
+    timer.unref?.();
+  };
+  async function tick() {
+    const r = readConfig().relay ?? {};
+    const mins = Number(r.interval_minutes);
+    const next = () => schedule((Number.isFinite(mins) && mins > 0 ? mins : 5) * 60e3);
+    if (r.url && r.pull_token) {
+      try {
+        await pull();
+      } catch (err) {
+        log(`[relay] 这一轮拉取没成功：${err.message}`);
+      }
+    }
+    next();
+  }
+  schedule(startDelayMs);
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
+/**
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
@@ -723,6 +756,12 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     });
   }
 
+  // 发布机后台拉取中转的投递（#226）。拉的是自己的中转，不是平台，离线模式也照常。
+  let stopRelayPull = () => {};
+  if (typeof handlers["relay.pull"] === "function") {
+    stopRelayPull = startRelayPuller({ log, pull: () => handlers["relay.pull"](), startDelayMs: Number(process.env.VERSEKIT_RELAY_START_DELAY_MS) || 5e3 });
+  }
+
   // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
   //
   // 授权可能在守护进程启动之后才完成（用户在网页里扫码），所以这里必须是「监督式」的：
@@ -802,6 +841,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     async close() {
       stopSweeper();
       stopAutoUpdate();
+      stopRelayPull();
       if (stuckTimer) clearInterval(stuckTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);
