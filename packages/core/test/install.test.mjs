@@ -21,7 +21,9 @@ const WORK = mkdtempSync(join(platform() === "darwin" ? "/tmp" : tmpdir(), "vk-i
 const OS = platform() === "darwin" ? "darwin" : "linux";
 const CPU = arch() === "arm64" ? "arm64" : "x64";
 const BILIUP_PLAT = `${CPU === "arm64" ? "aarch64" : "x86_64"}-${OS === "darwin" ? "macos" : "linux"}`;
-const NODE_VER = "22.99.0";
+// 假 Node 的版本号取自 install.sh 里写死的默认值：脚本默认要装哪一版，测试就按那一版造包。
+const PINNED = /VERSEKIT_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
+const NODE_VER = PINNED?.[1] ?? "0.0.0";
 const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
 
 const homes = [];
@@ -314,4 +316,12 @@ test("ACC-install-02：macOS 用 LaunchAgent（RunAtLoad + KeepAlive），卸载
   assert.ok(!existsSync(plist));
   assert.notEqual(spawnSync("launchctl", ["print", `gui/${process.getuid()}/${label}`], { stdio: "ignore" }).status, 0);
   assert.equal(await status(h.port), null);
+});
+
+test("ACC-install-01：Node 版本写死为 26.x，下载地址不含浮动的 latest-*", () => {
+  const sh = readFileSync(INSTALL_SH, "utf8");
+  assert.ok(PINNED, "install.sh 里要有写死的 VERSEKIT_NODE_VERSION 默认值");
+  assert.equal(NODE_VER.split(".")[0], "26", "默认装 Node 26 LTS");
+  assert.match(sh, /https:\/\/nodejs\.org\/dist\/\$NODE_VERSION/);
+  assert.doesNotMatch(sh, /latest-v\d+\.x/);
 });

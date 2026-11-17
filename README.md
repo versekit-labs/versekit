@@ -129,7 +129,7 @@ macOS 或 Linux，一条命令（不用 sudo、不问问题，不需要先装 No
 curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash
 ```
 
-它会装好私有 Node、程序和 biliup（都在 `~/.versekit`，不动系统里已有的东西），注册成后台服务，
+它会装好私有 Node（脚本里写死的 Node 26 LTS 版本，从 nodejs.org 下载并校验 SHASUMS256）、程序和 biliup（都在 `~/.versekit`，不动系统里已有的东西），注册成后台服务，
 等控制台真的能打开后在浏览器里打开它。最后一行写明地址，**之后终端可以关**：macOS 上是 LaunchAgent，
 关终端、注销重登、重启电脑后都还在，进程崩了会被拉起。再运行一遍同一条命令就是升级，数据、账号、登录都保留。
 8787 被占用时自动换一个空闲端口；Linux 没有 `systemd --user` 时退回后台进程（重启电脑后要再运行一次安装命令）。
@@ -155,7 +155,7 @@ npm run vk -- serve         # 前台启动守护进程，打开 http://127.0.0.1
 
 安装脚本可用环境变量覆盖，在开发机上验证时用临时 `HOME`、测试服务名和非 8787 端口，别碰真实目录：
 `VERSEKIT_PREFIX`（安装目录）· `VERSEKIT_PORT` · `VERSEKIT_SERVICE_LABEL` · `VERSEKIT_SERVICE_MANAGER`（`launchd|systemd|detach`）·
-`VERSEKIT_NODE_URL` · `VERSEKIT_APP_URL` · `VERSEKIT_BILIUP_URL` · `VERSEKIT_OFFLINE=1`（服务以 `--offline` 起）· `VERSEKIT_NO_OPEN=1`。
+`VERSEKIT_NODE_VERSION`（默认写死的 v26.13.1）· `VERSEKIT_NODE_URL` · `VERSEKIT_APP_URL` · `VERSEKIT_BILIUP_URL` · `VERSEKIT_OFFLINE=1`（服务以 `--offline` 起）· `VERSEKIT_NO_OPEN=1`。
 自动化测试 `packages/core/test/install.test.mjs` 用本机假下载源跑真的 `install.sh`。
 
 第一次打开如果还没有账号，会自动落在「接入」页：四步走完即可发布，不需要先读文档。

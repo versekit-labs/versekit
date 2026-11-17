@@ -11,7 +11,8 @@
 #   VERSEKIT_PORT            控制台端口             默认 8787（被占用时自动换空闲端口）
 #   VERSEKIT_SERVICE_LABEL   服务名                 默认 com.versekit.daemon
 #   VERSEKIT_SERVICE_MANAGER 强制 launchd|systemd|detach
-#   VERSEKIT_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/latest-v22.x
+#   VERSEKIT_NODE_VERSION    Node 版本（写死，不用 latest-*）    默认 v26.13.1（Node 26 LTS）
+#   VERSEKIT_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
 #   VERSEKIT_APP_URL         versekit tarball 地址   VERSEKIT_APP_SHA256 可选校验
 #   VERSEKIT_BILIUP_URL      biliup-rs 压缩包地址    VERSEKIT_BILIUP_VERSION 默认 v0.2.4
 #   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
@@ -26,10 +27,12 @@ main() {
   # 下面这些是全局变量（不加 local）：EXIT trap 在 main 返回之后才触发，那时 local 已经没了。
   PREFIX="${VERSEKIT_PREFIX:-$HOME/.versekit}"
   local WANT_PORT
-  local NODE_URL="${VERSEKIT_NODE_URL:-https://nodejs.org/dist/latest-v22.x}"
+  # Node 版本号写死（升级 Node 时改这一行并过一遍测试），不用 latest-* 这类会漂的地址：
+  # 同一份脚本任何时候装出来的 Node 都一样，SHASUMS256 校验的也是这个确定的版本。
+  local NODE_VERSION="${VERSEKIT_NODE_VERSION:-v26.13.1}"
+  local NODE_URL="${VERSEKIT_NODE_URL:-https://nodejs.org/dist/$NODE_VERSION}"
   local APP_URL="${VERSEKIT_APP_URL:-https://codeload.github.com/versekit-labs/versekit/tar.gz/refs/heads/main}"
   local BILIUP_VERSION="${VERSEKIT_BILIUP_VERSION:-v0.2.4}"
-  local MIN_NODE_MAJOR=22 MIN_NODE_MINOR=13
   local STEP="准备"
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/versekit-install.XXXXXX")"
   SWAPPED=0 HAD_APP=0 SERVICE_TOUCHED=0 DONE=0 OLD_PORT=""
@@ -114,14 +117,9 @@ main() {
   STEP="下载 Node"
   say "准备 Node（装在 $PREFIX/node，不动系统里已有的 Node）"
   fetch "$NODE_URL/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
-  local NODE_FILE
-  NODE_FILE="$(awk -v p="-$NODE_PLAT.tar.gz" 'index($2,"node-v")==1 && substr($2,length($2)-length(p)+1)==p {print $2; exit}' "$TMP/SHASUMS256.txt")"
-  [ -n "$NODE_FILE" ] || die "$NODE_URL/SHASUMS256.txt 里没有 $NODE_PLAT 的 Node 包" "确认 VERSEKIT_NODE_URL 指向 Node 22 的 dist 目录"
-  local NODE_VER="${NODE_FILE#node-v}"; NODE_VER="${NODE_VER%%-*}"
-  local NMAJ="${NODE_VER%%.*}" NREST="${NODE_VER#*.}"; local NMIN="${NREST%%.*}"
-  if [ "$NMAJ" -lt "$MIN_NODE_MAJOR" ] || { [ "$NMAJ" -eq "$MIN_NODE_MAJOR" ] && [ "$NMIN" -lt "$MIN_NODE_MINOR" ]; }; then
-    die "Node $NODE_VER 太旧（需要 ≥ $MIN_NODE_MAJOR.${MIN_NODE_MINOR}）" "把 VERSEKIT_NODE_URL 指向 Node 22 LTS 的 dist 目录"
-  fi
+  local NODE_FILE="node-$NODE_VERSION-$NODE_PLAT.tar.gz"
+  local NODE_VER="${NODE_VERSION#v}"
+  grep -q "  $NODE_FILE\$" "$TMP/SHASUMS256.txt" || die "$NODE_URL/SHASUMS256.txt 里没有 $NODE_FILE" "确认 VERSEKIT_NODE_VERSION（$NODE_VERSION）和 VERSEKIT_NODE_URL 指向同一个官方版本目录"
   local HAVE_NODE="" NODE_STAGED=0
   if [ -x "$PREFIX/node/bin/node" ]; then HAVE_NODE="$("$PREFIX/node/bin/node" -v 2>/dev/null || true)"; fi
   if [ "$HAVE_NODE" = "v$NODE_VER" ]; then
