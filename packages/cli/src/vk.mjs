@@ -23,6 +23,7 @@ import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
 import { send, ensureDaemon } from "./client.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
+import * as service from "./service.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
 
@@ -353,6 +354,8 @@ function daemonHandlers(adapters, log) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
+    // 只读：控制台自检页看后台服务的状态；启停卸载只在本机 CLI 做。
+    service: async () => service.status(),
     "account.check": async ({ accountId }) => {
       const result = await checkAccount(adapters, accountId);
       const cookie = cookiePersistenceCheck();
@@ -809,6 +812,44 @@ async function cmdServe() {
     });
   }
   await new Promise(() => {});
+}
+
+async function cmdService() {
+  const sub = pos[1];
+  const log = (m) => console.error(m);
+  const show = (d) => {
+    if (!human) return out(d);
+    if (!d.installed) return console.log("后台服务：未安装（运行安装命令，或 vk service install）");
+    console.log(line("后台服务", `${d.label}（${d.manager}）`));
+    console.log(line("状态", d.running ? `运行中${d.pid ? `（pid ${d.pid}）` : ""}` : "已停止"));
+    console.log(line("控制台", `${d.url}${d.reachable ? "（能打开）" : "（打不开）"}`));
+    console.log(line("日志", d.log));
+  };
+  let data;
+  if (sub === "status") data = await service.status();
+  else if (sub === "start") data = await service.start();
+  else if (sub === "stop") data = await service.stop();
+  else if (sub === "restart") data = await service.restart();
+  else if (sub === "install") {
+    const port = Number(val("--port") ?? process.env.VERSEKIT_PORT ?? service.DEFAULT_PORT);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`端口不对：${val("--port")}`);
+    const offline = has("--offline") || process.env.VERSEKIT_OFFLINE === "1";
+    data = await service.install({ port, offline });
+    show(data);
+    if (!data.up) process.exitCode = 1;
+    if (data.note && human) console.log(data.note);
+    return data;
+  } else if (sub === "uninstall") {
+    data = await service.uninstall({ purge: has("--purge"), serviceOnly: has("--service-only"), log: human ? console.log : log });
+    if (human) {
+      console.log(`后台服务已卸载（${data.label}）${data.removed.length ? "：\n  " + data.removed.join("\n  ") : ""}`);
+      if (data.purged.length) console.log(`已删除数据：\n  ${data.purged.join("\n  ")}`);
+      else if (data.kept_data.length) console.log(`数据已保留：\n  ${data.kept_data.join("\n  ")}\n（要连数据一起删：vk service uninstall --purge）`);
+    } else out(data);
+    return data;
+  } else throw new Error("用法：vk service status | start | stop | restart | uninstall [--purge]");
+  show(data);
+  return data;
 }
 
 async function cmdDemo() {
@@ -1586,6 +1627,8 @@ function usage() {
       "  vk doctor [--human]",
       "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
       "  vk serve --offline [--port 8787]             # 离线模式：不访问任何平台（验收/演示用）",
+      "  vk service status|start|stop|restart   # 后台服务（关掉终端也在跑）",
+      "  vk service uninstall [--purge]            # 卸载服务和程序文件；默认保留数据，--purge 才删数据",
       "  vk demo seed                                 # 在当前 VK_HOME 造演示数据",
       "  vk commands [--human]",
       "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
@@ -1630,6 +1673,7 @@ try {
   else if (cmd === "bootstrap") await cmdBootstrap();
   else if (cmd === "serve") await cmdServe();
   else if (cmd === "demo") await cmdDemo();
+  else if (cmd === "service") await cmdService();
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();

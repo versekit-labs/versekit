@@ -26,6 +26,19 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    // 后台服务（ACC-install-04）：status / start / stop / restart / install / uninstall 由 CLI 在本机直接执行
+    // （服务停了就没有守护进程可调，和 init 同理）；HTTP 只开放只读的 status，供控制台自检页看服务有没有在跑。
+    name: "service",
+    summary: "后台服务：status | start | stop | restart | uninstall [--purge]（卸载默认保留数据）",
+    remote: false,
+    localOnly: true,
+    args: { action: "string?" },
+    http: { method: "GET", path: "/api/service" },
+    cli: { usage: "vk service status|start|stop|restart | uninstall [--purge]" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "now",
     summary: "一屏状态：账号健康 / 队列 / 通道",
     remote: true,
