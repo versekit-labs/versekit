@@ -144,10 +144,6 @@
   }
 
   async function render() {
-    // 旧流程页（add / groups / publish / runs）还是旧外壳：它们只写 <aside class="sidebar">。
-    // 导航仍只有一份——这里按同一份 NAV 填进去，避免旧页面出现「点了没反应」的空侧栏。
-    const legacy = document.querySelector("aside.sidebar");
-    if (legacy) return renderLegacySidebar(legacy);
 
     const nav = document.querySelector("nav.nav");
     if (!nav) return;
@@ -185,27 +181,6 @@
     renderGroupSwitch(nav, groups, current, pending);
     fillTodo(nav, mine);
     await renderHealth(nav, current);
-  }
-
-  function renderLegacySidebar(sidebar) {
-    const path = location.pathname;
-    // 旧页面的地址 → 新外壳里的哪一项（账号相关都归到「系统」）。
-    const key = path.startsWith("/publish")
-      ? "publish"
-      : path.startsWith("/runs") || path.startsWith("/tasks")
-        ? "runs"
-        : path.startsWith("/groups") || path.startsWith("/accounts")
-          ? "system"
-          : "today";
-    const links = NAV.map((item) => {
-      const current = item.key === key;
-      return `<a href="${item.href}"${current ? ' aria-current="page"' : ""}>${item.label}</a>`;
-    }).join("");
-    sidebar.innerHTML =
-      '<a class="brand" href="/today">versekit <span>/ vk</span></a>' +
-      '<a class="publish" href="/publish"><b>+</b> 发布内容</a>' +
-      `<nav class="nav" aria-label="主导航">${links}</nav>` +
-      '<div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>';
   }
 
   /** 页面改了账号（登录成功、接入、重新登录）后调用：侧栏摘要重新读一遍。 */

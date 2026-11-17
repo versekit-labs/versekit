@@ -126,3 +126,16 @@ export function assertPlanSlot(row, at, { now = Date.now(), config } = {}) {
   err.suggestedAt = suggestedAt;
   throw err;
 }
+
+/** 给页面和 `vk plan show` 看的：某平台生效的规则，以及它是不是还是内置默认值（没被 config 改过）。 */
+export function describeRules(platform, config = readConfig()) {
+  const r = planRules(platform, config);
+  return {
+    platform,
+    dailyCap: r.dailyCap,
+    minGapMinutes: r.minGapMinutes,
+    capIsDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap,
+    gapIsDefault: r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
+    isDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
+  };
+}

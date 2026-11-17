@@ -22,6 +22,18 @@
 .app .grpname{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .app .grpname input[type=text]{width:180px}
 .app .tbtns{display:inline-flex;gap:10px;align-items:center;justify-content:flex-end}
+/* 发布方案 / 发布机 / 平台规则 / 最近出的问题：结构照 docs/design/system.html */
+.app .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.app .kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px;margin:0}
+.app .kv dt{color:var(--ink2);font-size:13px}
+.app .kv dd{margin:0}
+.app .plan td:first-child{white-space:nowrap;font-weight:600}
+.app .pfs{display:flex;gap:10px 14px;flex-wrap:wrap}
+.app tr.planedit td{background:var(--mark-bg);border-bottom:1px solid var(--mark-line)}
+.app .pickpf{display:flex;gap:6px 16px;flex-wrap:wrap;margin:2px 0 10px}
+.app .pickpf label{display:inline-flex;gap:6px;align-items:center;min-height:32px;font-size:14px}
+.app input[type=number]{height:34px;width:72px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);color:var(--ink);font-family:inherit}
+@media (max-width:860px){.app .two{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
 <body data-page="system">
@@ -40,7 +52,9 @@
 (function () {
   const main = document.getElementById("main");
   const VK = window.VK;
-  const { esc, pfBadge, pfName } = window.VKPanel({ editing: new Set(), ver: new Map() });
+  const panel = window.VKPanel({ editing: new Set(), ver: new Map() });
+  const { esc, pfBadge, pfName, BLANK } = panel;
+  const whenText = (ms) => panel.when(ms).text;
   const toast = (m) => window.VKShell?.toast(m);
 
   // 平台在「接入账号」里的叫法：tiktok-api 是官方接口，和网页登录的 tiktok 分开说。
@@ -56,6 +70,7 @@
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
+    plan: null, machine: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
   };
   const polls = new Map();
 
@@ -82,8 +97,30 @@
     ui.accounts = accounts;
     ui.platforms = platforms;
     ui.today = today;
+    await loadSections(group);
     const taken = (p) => accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
     if (!ui.addPlatform || !platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (platforms.find((p) => !taken(p.platform)) ?? platforms[0])?.platform ?? "";
+  }
+
+  /** 发布方案、发布机、最近出的问题：都来自 /api（plan.show、machine.status、run.list + 今天的问题清单）。一块读不到不拖垮别的块。 */
+  async function loadSections(group) {
+    ui.sectionErr = null;
+    if (!group) { ui.plan = null; ui.machine = null; ui.problems = []; return; }
+    const q = `group=${encodeURIComponent(group.id)}`;
+    const [plan, machine, runs] = await Promise.all([
+      VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
+      VK.request(`/api/machine?${q}`).catch(() => null),
+      VK.request(`/api/runs?state=failed&limit=100&${q}`).catch(() => null),
+    ]);
+    ui.plan = plan;
+    ui.machine = machine;
+    // 最近 7 天、失败的发布任务；只有这条平台稿现在还停在出问题的状态才能「再试一次」。
+    const since = Date.now() - 7 * 864e5;
+    const bad = new Map((ui.today?.problems ?? []).map((p) => [p.publishId, p]));
+    ui.problems = (runs?.rows ?? [])
+      .filter((r) => r.target_type === "publish" && r.created_at >= since && bad.has(r.target_id))
+      .map((r) => ({ run: r, p: bad.get(r.target_id) }))
+      .filter((x, i, all) => all.findIndex((y) => y.p.publishId === x.p.publishId) === i);
   }
 
   async function refresh() {
@@ -151,6 +188,107 @@
       `<span class="say${ui.addBad ? " bad" : ""}" role="status">${esc(ui.addNote)}</span></div>`;
   }
 
+
+  // ── 发布方案 / 发布机 / 平台规则 / 最近出的问题 ───────────────────────────────
+  const KIND_OPTS = [["*", "成片"], ["video", "视频"], ["image", "图片"]];
+  const LANG_OPTS = [["*", "所有语言"], ["zh", "中文"], ["en", "English"]];
+  const pfn = (platform, name) => `<span class="pfn">${pfBadge(platform)}${esc(name ?? labelOf(platform))}</span>`;
+
+  function planRow(r, i) {
+    const ed = ui.planEdit;
+    const isEdit = ed && !ed.isNew && ed.i === i;
+    const cells = `<td>${esc(r.label)}</td><td><div class="pfs">${r.platforms.map((p) => pfn(p.platform, p.name)).join("") || '<span class="sub">还没有接入平台</span>'}</div></td><td class="sub">${esc(r.rhythm)}</td><td class="n"><button class="btn" data-plan="${i}">改</button></td>`;
+    return `<tr>${cells}</tr>` + (isEdit ? planEditor(r) : "");
+  }
+
+  function planEditor(r) {
+    const ed = ui.planEdit;
+    const opts = (list, cur, id, dis) => `<select id="${id}" aria-label="${id === "pe-kind" ? "成片类型" : "语言"}"${dis ? " disabled" : ""}>${list.map(([v, n]) => `<option value="${v}"${v === cur ? " selected" : ""}>${n}</option>`).join("")}</select>`;
+    const picks = ui.plan.installedPlatforms.map((p) => `<label><input type="checkbox" data-pe-pf="${esc(p.platform)}"${ed.platforms.includes(p.platform) ? " checked" : ""}> ${esc(p.name)}</label>`).join("");
+    const canRemove = !ed.isNew && ui.plan.rows.length > 1;
+    return `<tr class="planedit"><td colspan="4"><div class="sysrow" style="margin-top:0">${ed.isNew ? `<b style="font-weight:600">加一行</b>${opts(KIND_OPTS, ed.kind, "pe-kind")}${opts(LANG_OPTS, ed.language, "pe-lang")}` : `<b style="font-weight:600">${esc(r.label)}</b>`}</div>` +
+      `<div class="pickpf" role="group" aria-label="发到哪些平台">${picks}</div>` +
+      `<div class="sysrow" style="margin-top:0"><label>节奏：入库后第 <input type="number" id="pe-days" min="0" max="60" value="${ed.delayDays}" aria-label="入库后第几天起排"> 天起排</label>` +
+      `<button class="btn pri" data-plansave${ui.planBusy ? " disabled" : ""}>保存</button><button class="link" data-plancancel>取消</button>${canRemove ? '<button class="link" data-planremove>删掉这一行</button>' : ""}` +
+      `<span class="say${ui.planNote ? " bad" : ""}" role="status">${esc(ui.planNote)}</span></div></td></tr>`;
+  }
+
+  function planBlock(group) {
+    if (!group) return "";
+    const head = `<h2 class="sec" id="plan">发布方案 · ${esc(group.name)} · 哪种成片发到哪些平台、按什么节奏</h2>`;
+    if (!ui.plan) return `${head}<div class="note bad">读不到发布方案：${esc(ui.sectionErr ?? "未知错误")}</div>`;
+    const rows = ui.plan.rows.map(planRow).join("");
+    const adding = ui.planEdit?.isNew ? planEditor({ label: "" }) : "";
+    return `${head}<div class="tblwrap"><table class="plan"><thead><tr><th>成片</th><th>发到</th><th>节奏</th><th class="n"></th></tr></thead><tbody>${rows}${adding}</tbody></table></div>` +
+      `<div class="cmd">这是你自己的习惯，可以改；新作品入库时按它生成平台稿和建议时间，每条仍然要你确认，已经生成的平台稿不受影响。对应命令：<code>vk plan show</code>　<code>vk plan set --to &lt;平台&gt;</code>　${ui.planEdit?.isNew ? "" : '<button class="link" data-planadd>加一行</button>'}${ui.plan.isDefault ? "" : '<button class="link" data-planreset>恢复默认方案</button>'}</div>`;
+  }
+
+  const ago = (ms) => (ms < 90e3 ? "刚刚" : ms < 3600e3 ? `${Math.round(ms / 60e3)} 分钟前` : `${Math.round(ms / 3600e3)} 小时前`);
+
+  function machineBlock() {
+    const m = ui.machine;
+    const body = !m
+      ? '<dt>这台电脑</dt><dd><span class="st bad">读不到</span></dd>'
+      : `<dt>这台电脑</dt><dd>${m.online ? '<span class="st done">在线</span>' : '<span class="st bad">不在线</span>'} <span class="sub">${m.heartbeatAgeMs == null ? "还没有收到心跳" : `${ago(m.heartbeatAgeMs)}有心跳`}${m.online ? "" : "；终端执行 vk serve"}</span></dd>` +
+        `<dt>排着要发</dt><dd>${m.queued.count} 条已确认${m.queued.nextAt ? `，最近一条 ${esc(whenText(m.queued.nextAt))}` : ""}</dd>` +
+        `<dt>正在发</dt><dd>${m.running.count ? `${m.running.count} 条` : "没有"}</dd>` +
+        `<dt>等你确认</dt><dd>${m.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd>`;
+    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code></div></div>`;
+  }
+
+  /** 同一个数值的平台并成一行：「B站、小红书　每个账号每天最多 10 条」。 */
+  function ruleLines(rules, field, flag, text) {
+    const by = new Map();
+    for (const r of rules) {
+      const key = `${r[field]}|${r[flag]}`;
+      by.set(key, [...(by.get(key) ?? []), r]);
+    }
+    const single = by.size === 1;
+    return [...by.values()].map((g) => `<div>${single ? "" : `<span class="sub">${g.map((r) => esc(r.name)).join("、")}　</span>`}${text(g[0][field])}${g[0][flag] ? ' <span class="sub">默认值</span>' : ""}</div>`).join("");
+  }
+
+  function rulesBlock() {
+    const rules = ui.plan?.rules ?? [];
+    const rows = rules.length
+      ? `<dt>每天最多</dt><dd>${ruleLines(rules, "dailyCap", "capIsDefault", (n) => `每个账号 ${n} 条`)}</dd><dt>间隔</dt><dd>${ruleLines(rules, "minGapMinutes", "gapIsDefault", (n) => `同一个账号两条之间至少隔 ${n} 分钟`)}</dd>`
+      : "";
+    return `<div><h2 class="sec">平台规则 · 对所有人一样，不能关</h2><div class="panel"><dl class="kv"><dt>确认</dt><dd>每一条都要人确认后才会发</dd><dt>小红书</dt><dd>每条单独确认，不能批量</dd>${rows}<dt>AI 标注</dt><dd>每个平台按它的要求标注</dd></dl></div>` +
+      `<div class="cmd">你改的时间碰到规则时，会当场告诉你并给出最近的可用时间。数字改在 config.json 的 <code>plan.rules</code>，对应命令：<code>vk plan show</code></div></div>`;
+  }
+
+  const WHAT = { failed: "没发出去", blocked: "被拦下了", expired: "过了时间没确认" };
+
+  function problemsBlock(group) {
+    if (!group) return "";
+    const rows = ui.problems.map(({ run, p }) => {
+      const day = whenText(run.created_at);
+      const why = p.error?.message ?? run.last_error ?? "";
+      return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}"><img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
+        `<td>${pfn(p.platform, pfName(p.platform))}</td><td><span class="st bad">${esc(WHAT[p.state] ?? p.state)}</span><div class="sub">${esc(why)}</div></td>` +
+        `<td class="n"><button class="btn pri" data-retry="${esc(p.publishId)}"${ui.retrying.has(p.publishId) ? " disabled" : ""}>再试一次</button></td></tr>`;
+    }).join("");
+    return `<h2 class="sec" id="problems">最近出的问题</h2>` +
+      (rows ? `<div class="tblwrap"><table><tbody>${rows}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>') +
+      `<div class="cmd">对应命令：<code>vk runs --failed</code>　手机上的通知和确认都在飞书里。</div>`;
+  }
+
+  async function savePlanRow() {
+    const ed = ui.planEdit;
+    ui.planNote = "";
+    if (!ed.platforms.length) { ui.planNote = "至少选一个平台"; return draw(); }
+    const days = Number(ed.delayDays);
+    if (!Number.isInteger(days) || days < 0 || days > 60) { ui.planNote = "天数要是 0 到 60 的整数"; return draw(); }
+    ui.planBusy = true; draw();
+    try {
+      await post("/api/plan", { group: VK.current().id, kind: ed.kind, language: ed.language, platforms: ed.platforms, delayDays: days });
+      ui.planEdit = null; ui.planBusy = false;
+      toast("发布方案已保存，新作品按它生成平台稿");
+      await refresh();
+    } catch (err) {
+      ui.planBusy = false; ui.planNote = err.message; draw();
+    }
+  }
+
   function draw() {
     const group = VK.current();
     const pending = {};
@@ -182,7 +320,10 @@
   <h2 class="sec" id="accounts">账号${group ? ` · ${esc(group.name)}` : ""}</h2>
   ${accountsBlock}
   ${group ? addRow(group) : ""}
-  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account add &lt;平台&gt; --group &lt;组&gt; --name &lt;名字&gt;</code>　<code>vk account login &lt;账号 id&gt; --open</code>　<code>vk account credentials tiktok</code>　登录在这台电脑上完成，凭证只存在本机。</div>`;
+  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account add &lt;平台&gt; --group &lt;组&gt; --name &lt;名字&gt;</code>　<code>vk account login &lt;账号 id&gt; --open</code>　<code>vk account credentials tiktok</code>　登录在这台电脑上完成，凭证只存在本机。</div>
+  ${planBlock(group)}
+  ${group ? `<div class="two">${machineBlock()}${rulesBlock()}</div>` : ""}
+  ${problemsBlock(group)}`;
   }
 
   // ── 登录（就地完成，不跳旧页面）──────────────────────────────────────────
@@ -346,8 +487,19 @@
     else if (t.id === "ng-name") ui.newGroupName = t.value;
     else if (t.id === "cred-key") ui.cred.key = t.value;
     else if (t.id === "cred-secret") ui.cred.secret = t.value;
+    else if (t.id === "pe-days" && ui.planEdit) ui.planEdit.delayDays = t.value;
   });
-  main.addEventListener("change", (e) => { if (e.target.id === "add-platform") ui.addPlatform = e.target.value; });
+  main.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.id === "add-platform") ui.addPlatform = t.value;
+    else if (t.id === "pe-kind" && ui.planEdit) ui.planEdit.kind = t.value;
+    else if (t.id === "pe-lang" && ui.planEdit) ui.planEdit.language = t.value;
+    else if (t.dataset?.pePf && ui.planEdit) {
+      const set = new Set(ui.planEdit.platforms);
+      if (t.checked) set.add(t.dataset.pePf); else set.delete(t.dataset.pePf);
+      ui.planEdit.platforms = [...set];
+    }
+  });
   main.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     if (e.target.id === "add-name") { e.preventDefault(); addAccount(); }
@@ -356,7 +508,7 @@
     else if (e.target.id === "cred-secret") { e.preventDefault(); saveCreds(); }
   });
   main.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel]");
+    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry]");
     if (!b) return;
     const d = b.dataset;
     if ("sw" in d) {
@@ -373,6 +525,30 @@
       const name = ui.newGroupName.trim();
       if (!name) { ui.groupNote = "请填账号组名称"; return draw(); }
       if (await groupAction(() => VK.addGroup(name), `已新建「${name}」并切到它`)) { location.reload(); }
+    } else if (d.plan != null) {
+      const r = ui.plan.rows[Number(d.plan)];
+      ui.planNote = "";
+      ui.planEdit = { i: Number(d.plan), kind: r.kind, language: r.language, platforms: r.platforms.map((p) => p.platform).filter((p) => ui.plan.installedPlatforms.some((x) => x.platform === p)), delayDays: r.delayDays };
+      draw();
+    } else if ("planadd" in d) {
+      ui.planNote = "";
+      ui.planEdit = { isNew: true, kind: "video", language: "*", platforms: ui.plan.groupPlatforms.map((p) => p.platform), delayDays: 0 };
+      draw();
+    } else if ("plancancel" in d) { ui.planEdit = null; ui.planNote = ""; draw(); }
+    else if ("plansave" in d) savePlanRow();
+    else if ("planremove" in d) {
+      const ed = ui.planEdit;
+      try { await post("/api/plan", { group: VK.current().id, kind: ed.kind, language: ed.language, remove: true }); ui.planEdit = null; toast("已删掉这一行"); await refresh(); }
+      catch (err) { ui.planNote = err.message; draw(); }
+    } else if ("planreset" in d) {
+      try { await post("/api/plan/reset", { group: VK.current().id }); ui.planEdit = null; toast("已恢复默认方案"); await refresh(); }
+      catch (err) { toast(`没恢复：${err.message}`); }
+    } else if (d.retry) {
+      ui.retrying.add(d.retry); draw();
+      try { await post(`/api/publishes/${encodeURIComponent(d.retry)}/retry`, { publishId: d.retry }); toast("正在重试"); }
+      catch (err) { toast(`没重试成功：${err.message}`); }
+      ui.retrying.delete(d.retry);
+      await refresh();
     } else if (d.rename) { ui.renaming = d.rename; ui.groupNote = ""; draw(); document.getElementById("rename-input")?.select(); }
     else if ("renamecancel" in d) { ui.renaming = null; draw(); }
     else if (d.renamesave) {
@@ -392,6 +568,7 @@
       const hash = location.hash.slice(1);
       if (hash === "add") { const row = document.getElementById("addrow"); row?.scrollIntoView({ block: "center" }); document.getElementById("add-name")?.focus(); }
       else if (hash === "groups") document.getElementById("groups")?.scrollIntoView();
+      else if (hash === "problems" || hash === "plan") document.getElementById(hash)?.scrollIntoView();
     })
     .catch((err) => { main.innerHTML = `<div class="hd"><h1>系统</h1></div><div class="note bad">读不到数据：${esc(err.message)}（守护进程在跑吗？终端执行 vk serve）</div>`; });
 })();

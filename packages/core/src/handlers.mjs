@@ -12,9 +12,11 @@ import { open, transitionPublish, enqueue, emit, DEFAULT_LANGUAGE } from "./inde
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
-import { assertPlanSlot, planRules, takenTimes, nearestAvailable } from "./plan-rules.mjs";
+import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules } from "./plan-rules.mjs";
+import * as planModel from "./plan.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
+import { readConfig } from "./config.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
@@ -34,6 +36,9 @@ const platformList = (to) => {
   if (!clean.length) fail("至少要指定一个平台：--to tiktok,bilibili");
   return clean;
 };
+
+/** 守护进程每 30 秒写一次心跳；超过这个时间没动静就当发布机不在线。 */
+const HEARTBEAT_STALE_MS = 90e3;
 
 const RETRYABLE_STATES = new Set(["failed", "blocked", "expired", "notify_pending", "draft_pending"]);
 
@@ -133,6 +138,34 @@ export function loginHint(platform, accountId) {
 
 export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
+  /** 方案里能选的平台：已安装的适配器；离线模式不装适配器，退回矩阵里的平台名，方案照样能看能改。 */
+  const knownPlatforms = () => (byPlatform.size ? [...byPlatform.keys()] : overview.MATRIX_COLUMNS.map((c) => c.platform));
+
+  /** 发布方案的读模型：存过的行，或默认行；平台名展开成「组里已接入的平台」。 */
+  function planView(scope) {
+    const saved = scope ? store.getGroupPlan(scope.id) : null;
+    const rows = planModel.normalizeRows(saved ?? [planModel.DEFAULT_ROW]);
+    const accounts = scope ? store.listAccounts({ groupId: scope.id }) : [];
+    const connected = [...new Set(accounts.map((a) => a.platform))];
+    const platformsOfRow = (r) => (r.platforms == null ? connected : r.platforms);
+    const config = readConfig();
+    return {
+      group: scope ? { id: scope.id, name: scope.name } : null,
+      isDefault: !saved,
+      rows: rows.map((r) => ({
+        kind: r.kind,
+        language: r.language,
+        label: planModel.rowLabel(r),
+        platformList: r.platforms,
+        platforms: platformsOfRow(r).map((p) => ({ platform: p, name: platformLabel(p), connected: connected.includes(p) })),
+        delayDays: r.delayDays,
+        rhythm: saved ? planModel.rhythmLabel(r.delayDays) : "每支成片发到所有接入的平台（默认方案）",
+      })),
+      groupPlatforms: connected.map((p) => ({ platform: p, name: platformLabel(p) })),
+      installedPlatforms: knownPlatforms().map((p) => ({ platform: p, name: platformLabel(p) })),
+      rules: [...new Set([...(connected.length ? connected : knownPlatforms())])].map((p) => ({ ...describeRules(p, config), name: platformLabel(p) })),
+    };
+  }
   /** 进行中的 TikTok 授权会话，按账号。 */
   const connectSessions = new Map();
 
@@ -481,6 +514,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!versions.length) fail(`成片「${cut.title}」没有语言版本，没有素材可发：先用 vk work add 补上`);
       const version = versions.find((v) => v.language === "zh") ?? versions[0];
       const scope = group ? requireGroup(group) : store.currentGroup();
+      const planKind = assetSetOf(version.asset_path).kind;
+      const savedPlan = scope ? store.getGroupPlan(scope.id) : null;
+      const planRow = savedPlan
+        ? planModel.matchRow(planModel.normalizeRows(savedPlan), { kind: planKind, language: version.language }) ??
+          fail(`发布方案里没有「${planModel.KIND_LABEL[planKind] ?? "成片"} · ${planModel.languageLabel(version.language)}」这一行，不知道发到哪些平台：vk plan set --kind ${planKind ?? "video"} --lang ${version.language} --to <平台> 加上，或 vk plan reset 恢复默认`)
+        : null;
 
       let targets;
       if (accounts != null) {
@@ -497,6 +536,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       } else {
         targets = store.listAccounts({ groupId: scope?.id ?? null });
         if (!targets.length) fail(`${scope ? `账号组「${scope.name}」里` : ""}还没有账号：先 vk account add <platform> --name 主号 --group <组>`);
+        // 发布方案（ACC-v2-sys-08）：存过方案的组按方案挑平台；没存过就是默认方案（所有账号）。
+        if (planRow) {
+          targets = targets.filter((a) => planModel.rowCovers(planRow, a));
+          if (!targets.length) fail(`发布方案「${planModel.rowLabel(planRow)}」发到 ${planRow.platforms.join("、")}，但${scope ? `账号组「${scope.name}」里` : "这里"}还没有这些平台的账号：vk plan set 改方案，或先接入账号`);
+        }
       }
 
       const versionCopy = (() => {
@@ -544,7 +588,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         }
         // 建议时间：从现在起离「一分钟后」最近、守平台规则（每日上限、最小间隔）的时间。
         const rules = planRules(account.platform);
-        const suggestedAt = nearestAvailable(now + 60e3, takenTimes(account.id, ""), rules, now);
+        const wanted = now + 60e3 + (accounts == null && planRow ? planRow.delayDays * 86400e3 : 0);
+        const suggestedAt = nearestAvailable(wanted, takenTimes(account.id, ""), rules, now);
         if (suggestedAt == null) {
           reject(`近期排不进去：${account.platform} 这个账号已排满（每日上限 ${rules.dailyCap} 条，最小间隔 ${rules.minGapMinutes} 分钟）`);
           continue;
@@ -569,6 +614,58 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         skipped,
         rejected,
         next: created.length ? `确认后才会发：vk publish approve --cut ${cut.id}（小红书逐条：vk publish approve --publish <id>）` : null,
+      };
+    },
+
+    /** 发布方案（ACC-v2-sys-08）：当前账号组的方案行 + 组里已接入的平台 + 生效的平台规则。 */
+    "plan.show": ({ group = null } = {}) => planView(group ? requireGroup(group) : store.currentGroup()),
+
+    "plan.set": ({ kind = "*", language = "*", platforms = null, delayDays = 0, remove = false, group = null }) => {
+      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先 vk group add <名字>"));
+      if (!planModel.PLAN_KINDS.includes(kind)) fail(`成片类型只能是 video、image 或 *，收到：${kind}`);
+      const lang = String(language).trim() || "*";
+      const current = planModel.normalizeRows(store.getGroupPlan(scope.id) ?? [planModel.DEFAULT_ROW]);
+      const same = (r) => r.kind === kind && r.language === lang;
+      if (remove) {
+        if (!current.some(same)) fail(`发布方案里没有「${planModel.rowLabel({ kind, language: lang })}」这一行`);
+        const next = current.filter((r) => !same(r));
+        if (!next.length) fail("方案至少要留一行：不想要自定义方案就 vk plan reset");
+        store.setGroupPlan(scope.id, next);
+        return planView(scope);
+      }
+      const list = [...new Set((Array.isArray(platforms) ? platforms : String(platforms ?? "").split(",")).map((x) => String(x).trim()).filter(Boolean))];
+      if (!list.length) fail("要发到哪些平台？--to 写平台名，如 bilibili,xiaohongshu（vk platforms 能看到已安装的）");
+      for (const p of list) if (!knownPlatforms().includes(p)) fail(`没有 ${p} 适配器（已安装：${knownPlatforms().join("、")}）`);
+      if (!Number.isInteger(delayDays) || delayDays < 0 || delayDays > planModel.MAX_DELAY_DAYS) fail(`节奏的天数要是 0 到 ${planModel.MAX_DELAY_DAYS} 的整数`);
+      const row = { kind, language: lang, platforms: list, delayDays };
+      const at = current.findIndex(same);
+      store.setGroupPlan(scope.id, at < 0 ? [...current, row] : current.map((r, i) => (i === at ? row : r)));
+      log(`[handlers] plan.set ${scope.name}：${planModel.rowLabel(row)} → ${list.join(",")}`);
+      return planView(scope);
+    },
+
+    "plan.reset": ({ group = null } = {}) => {
+      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先 vk group add <名字>"));
+      store.setGroupPlan(scope.id, null);
+      return planView(scope);
+    },
+
+    /** 发布机：心跳 + 排着要发 / 正在发 / 等你确认，数字与「今天」同源（buildToday）。 */
+    "machine.status": ({ group = null } = {}) => {
+      const g = group ? requireGroup(group) : store.currentGroup();
+      const today = overview.buildToday({ groupId: g?.id ?? null });
+      const running = today.scheduled.filter((r) => r.state !== "queued");
+      const queued = today.scheduled.filter((r) => r.state === "queued");
+      const heartbeatAt = store.lastHeartbeat();
+      const now = Date.now();
+      return {
+        group: g ? { id: g.id, name: g.name } : null,
+        heartbeatAt,
+        heartbeatAgeMs: heartbeatAt ? Math.max(0, now - heartbeatAt) : null,
+        online: heartbeatAt != null && now - heartbeatAt < HEARTBEAT_STALE_MS,
+        queued: { count: queued.length, nextAt: queued.find((r) => r.scheduledAt != null)?.scheduledAt ?? null },
+        running: { count: running.length },
+        awaiting: { count: today.awaiting.reduce((n, w) => n + w.cuts.reduce((m, c) => m + c.publishes.length, 0), 0) },
       };
     },
 

@@ -20,7 +20,7 @@ import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publ
 import { publishTimeoutMs } from "./config.mjs";
 import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
-import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished } from "./store.mjs";
+import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
 import { verifyApproval, applyApproval } from "./approval.mjs";
 
@@ -43,7 +43,7 @@ const MIME = {
  *
  * v2 外壳（#148）：四个页面——今天、作品（含详情）、数据、系统。旧的账号墙、总览、矩阵、
  * 日历不再有页面；账号管理并入系统页，发布计划按 PRD 不再单独成页（在「今天」里看接下来要发的）。
- * 登录 / 添加账号 / 发布台 / 任务日志这几条旧流程这一轮先留着，从系统页进。
+ * 登录 / 添加账号 / 账号组 / 任务日志的旧页面已删除（#209），地址见下面的跳转表。
  */
 const PAGE_ALIASES = new Map([
   ["/", "today.html"],
@@ -52,12 +52,8 @@ const PAGE_ALIASES = new Map([
   ["/work", "work.html"],
   ["/data", "data.html"],
   ["/system", "system.html"],
-  // 旧流程：文件仍在，路径不变，从系统页给入口。
   ["/accounts", "system.html"],
   ["/plan", "today.html"],
-  ["/publish", "publish.html"],
-  ["/runs", "runs.html"],
-  ["/tasks", "runs.html"],
 ]);
 
 /**
@@ -70,6 +66,12 @@ const LEGACY_REDIRECTS = new Map([
   ["/add.html", "/system#add"],
   ["/groups", "/system#groups"],
   ["/groups.html", "/system#groups"],
+  // 发布台、任务页（ACC-v2-sys-10）：发布内容在 vk publish / 今天，任务失败在系统页「最近出的问题」。
+  ["/publish", "/today"],
+  ["/publish.html", "/today"],
+  ["/runs", "/system#problems"],
+  ["/runs.html", "/system#problems"],
+  ["/tasks", "/system#problems"],
 ]);
 
 /** 静态页只服务 web/public 里的文件；任何越界路径都当 404，不做「聪明」的路径修正。 */
@@ -77,7 +79,7 @@ function staticFile(webRoot, pathname) {
   const clean = pathname.replace(/\/+$/, "") || "/";
   let rel = clean === "/" ? (PAGE_ALIASES.get("/") ?? "index.html") : clean.replace(/^\/+/, "");
   if (!rel || rel.includes("\0")) return null;
-  // 干净 URL：/groups → groups.html（文件存在才映射），账号页用上面的显式别名。
+  // 干净 URL：/works → works.html（文件存在才映射），账号页用上面的显式别名。
   if (!extname(rel)) {
     const alias = PAGE_ALIASES.get(clean);
     if (alias) rel = alias;
@@ -675,6 +677,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
 
   let stopSweeper = () => {};
   let stuckTimer = null;
+  let heartbeatTimer = null;
   if (runQueue) {
     runner.loop();
     stopSweeper = startCheckSweeper({ log, offline });
@@ -693,6 +696,18 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     sweep();
     stuckTimer = setInterval(sweep, 30e3);
     stuckTimer.unref?.();
+
+    // 发布机心跳：系统页「发布机」块靠它判断在线（meta.daemon_heartbeat，30 秒一次）。
+    const beat = () => {
+      try {
+        recordHeartbeat();
+      } catch (err) {
+        log(`[daemon] 写心跳失败：${err.message}`);
+      }
+    };
+    beat();
+    heartbeatTimer = setInterval(beat, 30e3);
+    heartbeatTimer.unref?.();
   }
 
   // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
@@ -774,6 +789,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     async close() {
       stopSweeper();
       if (stuckTimer) clearInterval(stuckTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);
       if (channelTimer) clearInterval(channelTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);
