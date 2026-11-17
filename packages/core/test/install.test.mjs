@@ -335,3 +335,66 @@ test("ACC-install-01：Node 版本写死为 26.x，下载地址不含浮动的 l
   assert.match(sh, /https:\/\/nodejs\.org\/dist\/\$NODE_VERSION/);
   assert.doesNotMatch(sh, /latest-v\d+\.x/);
 });
+
+test("ACC-install-06：安装输出有「正在…」进度提示，非 tty 时不刷进度条", { timeout: 120000 }, async () => {
+  const h = await newHome();
+  const r = await install(h);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  for (const re of [/下载 Node v\S+（约 \d+MB/, /校验并解压 Node……/, /下载 versekit 程序（约 \d+MB/, /解压 versekit……/, /下载 biliup（约 \d+MB/, /初始化数据库.*……/, /等控制台起来.*……/]) {
+    assert.match(r.stdout, re);
+  }
+  assert.doesNotMatch(r.stderr, /#{5,}/, "非 tty 不应输出 curl 进度条");
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+});
+
+test("ACC-install-06：export-ignore 之后的程序包 ≤ 5MB，只含运行需要的文件，且 vk init / doctor / 控制台照常", { timeout: 120000 }, async () => {
+  // 用临时 index 把工作区（含未提交的 .gitattributes）打成与 GitHub 源码包等价的归档。
+  const idx = join(WORK, "slim.index");
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  const git = (args, opts = {}) => {
+    const r = spawnSync("git", args, { cwd: ROOT, env, encoding: "utf8", maxBuffer: 1 << 28, ...opts });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  git(["add", "-A"]);
+  const tree = git(["write-tree"]).trim();
+  const out = join(WORK, "slim.tar");
+  git(["archive", "-o", out, tree]);
+  const gz = spawnSync("gzip", ["-kf", out]);
+  assert.equal(gz.status, 0);
+  const size = readFileSync(`${out}.gz`).length;
+  assert.ok(size <= 5 * 1024 * 1024, `程序包 ${size} 字节，超过 5MB`);
+
+  const names = spawnSync("tar", ["-tf", out], { encoding: "utf8", maxBuffer: 1 << 28 }).stdout.split("\n").filter(Boolean);
+  for (const bad of [".claude/", ".impeccable/", "docs/", "assets/", "site/", "bin/", ".github/"]) {
+    assert.ok(!names.some((n) => n.startsWith(bad)), `不该打进包：${bad}`);
+  }
+  assert.ok(!names.some((n) => /^packages\/[^/]+\/test\//.test(n)), "各包 test 不该打进包");
+  for (const need of ["package.json", "packages/cli/src/vk.mjs", "packages/core/src/schema.sql", "scripts/demo-seed.mjs"]) {
+    assert.ok(names.includes(need), `缺运行必需文件 ${need}`);
+  }
+  assert.ok(names.some((n) => n.startsWith("packages/web/public/")), "控制台静态页要在包里");
+
+  // 解压后在临时 HOME 里真跑：vk init → doctor → serve（控制台各页 200）。
+  const dir = join(WORK, "slim-x");
+  mkdirSync(dir, { recursive: true });
+  tar(["-xf", out, "-C", dir]);
+  const h = await newHome();
+  const vk = join(dir, "packages/cli/src/vk.mjs");
+  const run = (args) => spawnSync(process.execPath, ["--no-warnings", vk, ...args], { env: h.env, encoding: "utf8", cwd: dir });
+  const init = run(["init"]);
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+  const doc = run(["doctor"]);
+  assert.ok(doc.stdout.trim().startsWith("{") || doc.stdout.length > 0, doc.stderr);
+  const srv = spawn(process.execPath, ["--no-warnings", vk, "serve", "--offline", "--port", String(h.port)], { env: h.env, cwd: dir, stdio: "ignore" });
+  try {
+    let code = null;
+    for (let i = 0; i < 40 && code !== 200; i++) {
+      code = await status(h.port, "/today");
+      if (code !== 200) await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.equal(code, 200, "瘦身包里的控制台 /today 应返回 200");
+  } finally {
+    srv.kill();
+  }
+});

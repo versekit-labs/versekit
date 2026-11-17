@@ -1,0 +1,21 @@
+# 安装包瘦身（ACC-install-06）：GitHub 源码包（codeload tarball）遵守 export-ignore。
+# 运行只需要 packages/（不含各包 test）、scripts/demo-seed.mjs（vk demo）、package.json、LICENSE、README。
+.claude export-ignore
+.impeccable export-ignore
+.pi export-ignore
+.github export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+docs export-ignore
+assets export-ignore
+site export-ignore
+bin export-ignore
+AGENTS.md export-ignore
+DESIGN.md export-ignore
+PRODUCT.md export-ignore
+skills-lock.json export-ignore
+scripts/ci export-ignore
+scripts/design-check.mjs export-ignore
+scripts/design-accept.mjs export-ignore
+scripts/seed-plan.mjs export-ignore
+packages/*/test export-ignore
