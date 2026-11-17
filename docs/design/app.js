@@ -138,6 +138,8 @@ function workState(w) {
 }
 const listeners = []; const changed = () => listeners.forEach((f) => f());
 
+// 侧栏底部第一行：有问题只说有几个要处理，全正常才说几个正常（一行说完，不折行）
+function setAccHealth(total, bad) { const el = document.querySelector('[data-acc-health]'); if (el) el.innerHTML = bad ? `<span class="dot bad"></span>${bad} 个账号要处理` : `<span class="dot"></span>${total} 个账号登录正常`; }
 // ---------- 外壳：导航写在每个页面的 HTML 里，这里只填待办数和底部的状态
 function initShell() {
   const nav = document.querySelector('nav.nav');
@@ -151,7 +153,7 @@ function initShell() {
   document.addEventListener('click', (e) => { if (!grp.contains(e.target)) grp.open = false; });
   nav.querySelector('.brand').after(grp);
   const acc = new Set(allPubs().map((r) => r.x.pf)).size;
-  nav.append($(`<div class="health"><div><span class="dot"></span>${acc} 个账号登录正常</div><div><span class="dot"></span>发布机在线</div><div><span class="dot"></span>今天还能发：小红书 1 条</div></div>`));
+  nav.append($(`<div class="health"><div data-acc-health><span class="dot"></span>${acc} 个账号登录正常</div><div><span class="dot"></span>发布机在线</div><div><span class="dot"></span>今天还能发：小红书 1 条</div></div>`));
   const upd = () => { const b = nav.querySelector('[data-todo]'); const n = todoCount(); b.textContent = n; b.hidden = !n; };
   listeners.push(upd); upd();
 }

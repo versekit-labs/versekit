@@ -3,11 +3,27 @@
 <link rel="stylesheet" href="app.css">
 <style>
 .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px}
+.kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px;align-items:baseline}
 .kv dt{color:var(--ink2);font-size:13px}
 .kv dd{margin:0}
+.kv .link{margin-left:6px}
+.notes{margin:4px 0 2px;padding-left:18px;font-size:13px;color:var(--ink2)}
 .plan td:first-child{white-space:nowrap;font-weight:600}
 .pfs{display:flex;gap:10px 14px;flex-wrap:wrap}
+/* 操作列：文字链接和按钮排在一行，靠右 */
+.acts{display:inline-flex;gap:14px;align-items:center;justify-content:flex-end;white-space:nowrap}
+/* 行内展开：这一行需要多说一句或多填一项时，在它下面展开，不弹窗 */
+tr.has-sub td{border-bottom:0}
+tr.subrow td{padding-top:0}
+.subin{display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--hover);font-size:13px}
+.subin p{margin:0;flex:1 1 320px;max-width:60em}
+.cmd code{white-space:nowrap}
+.subin .acts{margin-left:auto}
+.subin.bad{background:var(--bad-bg);border-color:var(--bad-line)}
+.subin.bad p{color:var(--bad)}
+.subin input{flex:1 1 180px;max-width:260px;height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0}
+.addrow select{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);max-width:100%}
+.addrow input{width:100%;max-width:220px}
 @media (max-width:860px){.two{grid-template-columns:minmax(0,1fr)}}
 </style></head>
 <body><div class="app">
@@ -22,43 +38,117 @@
 initShell();
 const main = document.getElementById('main');
 // 账号、规则、发布方案都是演示数据。规则里的数字是默认值，还没最后确定。
+// #acc=states：状态样张，一张表里摆出要处理的各种状态。#add=none / #add=full：接入账号那一行的另外两种样子。
+const STATES = HASH.acc === 'states';
+// via：web = 在登录窗口里登录；api = 官方接口授权；repo = 不用登录
+// state：ok 正常 / expired 要重新登录 / failed 没登上 / conflict 登录到了别的号 / off 没登录 / nocred 缺应用凭证 / noauth 还没授权
+// step（进行中的那一步）：pre 登录前的说明 / wait 等你登录 / logout 退出确认 / cred 填应用凭证
+const A = (k, name, left, cap, note, via = 'web', state = 'ok', step = null) => ({ k, name, left, cap, note, via, state, step });
 const ACC = SIMPLE
-  ? [['xhs', '露营小记', 1, 1, '逐条单独确认'], ['dy', '露营小记', 2, 3, ''], ['bili', '露营小记', 1, 2, '']]
-  : [['xhs', 'AssureLane 出海合规', 1, 1, '逐条单独确认'], ['dy', 'AssureLane', 3, 3, ''], ['sph', 'AssureLane', 2, 2, ''], ['bili', 'AssureLane', 2, 2, '发完归入合集「出海合规」'],
-    ['web', 'assurelane.ai', null, null, '提交到 trustbridge 仓库'], ['tk', 'assurelane', 2, 2, '走官方接口'], ['yt', 'AssureLane', 3, 3, '走官方接口']];
+  ? [A('xhs', '露营小记', 1, 1, '逐条单独确认'), A('dy', '露营小记', 2, 3, ''), A('bili', '露营小记', 1, 2, '')]
+  : STATES
+    ? [A('xhs', 'AssureLane 出海合规', 1, 1, '逐条单独确认', 'web', 'conflict'), A('dy', 'AssureLane', 3, 3, '', 'web', 'expired'), A('sph', 'AssureLane', 2, 2, '', 'web', 'expired', 'wait'), A('bili', 'AssureLane', 2, 2, '发完归入合集「出海合规」', 'web', 'failed'),
+      A('web', 'assurelane.ai', null, null, '提交到 trustbridge 仓库', 'repo'), A('tk', 'assurelane', 2, 2, '走官方接口', 'api', 'nocred'), A('yt', 'AssureLane', 3, 3, '走官方接口', 'api')]
+    : [A('xhs', 'AssureLane 出海合规', 1, 1, '逐条单独确认'), A('dy', 'AssureLane', 3, 3, ''), A('sph', 'AssureLane', 2, 2, ''), A('bili', 'AssureLane', 2, 2, '发完归入合集「出海合规」'),
+      A('web', 'assurelane.ai', null, null, '提交到 trustbridge 仓库', 'repo'), A('tk', 'assurelane', 2, 2, '走官方接口', 'api'), A('yt', 'AssureLane', 3, 3, '走官方接口', 'api')];
+// 这台电脑上别的组接了哪些平台：同平台再登录时，登录前先说清楚会登进哪个号
+const OTHER = SIMPLE ? { name: 'AssureLane', pfs: { xhs: 'AssureLane 出海合规', dy: 'AssureLane', sph: 'AssureLane', bili: 'AssureLane' } } : { name: '露营小记', pfs: { xhs: '露营小记', dy: '露营小记', bili: '露营小记' } };
+const OTHER_PFS = SIMPLE ? ['xhs', 'dy', 'sph', 'bili', 'web', 'tk', 'yt'] : ['xhs', 'dy', 'bili'];
 const PLAN = SIMPLE
   ? [['视频', ['xhs', 'dy', 'bili'], '每支成片发到所有接入的平台（默认方案）']]
   : [['长片 · 中文', ['xhs', 'dy', 'sph', 'bili', 'web'], '先发'], ['长片 · English', ['tk', 'yt'], '中文版发出后第二天'], ['短片 · 中文', ['xhs', 'dy', 'sph'], '长片之后，隔一天一支'], ['短片 · English', ['tk', 'yt'], '跟着中文版，第二天']];
-let relogin = null;
+const NOTES = ['系统页：侧栏的发布机状态和真实心跳一致', '接入账号的下拉框只列能接的平台', '发布方案可以按成片分别改', '最近出的问题只留能再试的', '后台服务会自己检查更新'];
+let autoUpdate = true, notesOpen = false;
+const names = (ks) => ks.map((k) => PF[k][1]).join('、');
+const needs = () => ACC.filter((a) => a.via !== 'repo' && a.state !== 'ok').length;
+const acct = (k) => ACC.find((a) => a.k === k);
+const B = (act, k, label, cls = 'btn') => `<button class="${cls}" data-act="${act}" data-k="${k}">${label}</button>`;
+
+function loginCell(a) {
+  if (a.step === 'wait') return a.via === 'api' ? '<span class="st wait">等你授权</span> <span class="sub">授权页已在浏览器里打开</span>' : '<span class="st wait">等你登录</span> <span class="sub">登录窗口已打开</span>';
+  return { ok: '<span class="st done">正常</span> <span class="sub">今天 07:10 检查过</span>', expired: '<span class="st bad">要重新登录</span> <span class="sub">今天 06:39 检查过</span>', failed: '<span class="st bad">没登上</span> <span class="sub">登录窗口关了，还没登进去</span>',
+    conflict: '<span class="st bad">登录到了别的号</span>', off: '<span class="st wait">没登录</span>', nocred: '<span class="st wait">缺应用凭证</span>', noauth: '<span class="st wait">还没授权</span>' }[a.state];
+}
+// 操作的轻重跟状态走：正常 → 文字链接；要你处理 → 描边按钮；进行中的下一步 → 墨色实心
+function actCell(a) {
+  const k = a.k;
+  if (a.via === 'repo') return '';
+  if (a.step === 'wait') return `<span class="acts">${B('cancel', k, '取消', 'link')}${B('done', k, a.via === 'api' ? '我授权好了' : '我登录好了', 'btn pri')}</span>`;
+  if (a.step || a.state === 'conflict') return '';
+  return `<span class="acts">${{ ok: a.via === 'api' ? B('login', k, '重新授权', 'link') : B('logout', k, '退出登录', 'link') + B('login', k, '重新登录', 'link'), expired: B('login', k, '重新登录'), failed: B('login', k, '再试一次'), off: B('login', k, '登录'), nocred: B('cred', k, '填应用凭证'), noauth: B('login', k, `Connect ${PF[k][1]}`) }[a.state]}</span>`;
+}
+function subRow(a) {
+  const k = a.k, pf = PF[k][1]; let cls = '', body = '';
+  if (a.step === 'pre') body = `<p>这台电脑上已经接了一个${pf}号（「${OTHER.name}」的 @${esc(OTHER.pfs[k])}）。登录窗口里登进哪个号，接进来的就是哪个号：扫码登录的是手机 App 当前的号，要接另一个号，先在 App 里切换账号，或在登录窗口里改用短信登录。</p><span class="acts">${B('cancel', k, '取消', 'link')}${B('go', k, '知道了，开始登录', 'btn pri')}</span>`;
+  else if (a.step === 'logout') { const n = upcoming().filter((r) => r.x.pf === k).length; body = `<p>退出后会清掉这个账号在这台电脑上的登录数据，要重新登录才能发。${n ? `<b>这个账号还有 ${n} 条排着要发，退出后不会发。</b>` : ''}</p><span class="acts">${B('cancel', k, '取消', 'link')}${B('logout-ok', k, '退出登录')}</span>`; }
+  else if (a.step === 'cred') body = `<p>填 ${pf} 开发者后台里这个应用的凭证。只存在这台电脑上，保存后不再显示 secret。</p><input type="text" placeholder="client key" aria-label="client key" autocomplete="off"><input type="password" placeholder="client secret" aria-label="client secret" autocomplete="off"><span class="acts">${B('cancel', k, '取消', 'link')}${B('save', k, '保存', 'btn pri')}</span>`;
+  else if (a.state === 'conflict') { cls = ' bad'; body = `<p>这个${pf}号已经接在「${OTHER.name}」的 @${esc(OTHER.pfs[k])} 上，没有算登录成功。要接另一个号，先退出登录，再登录另一个号。</p><span class="acts">${B('logout-ok', k, '退出登录，换一个号')}</span>`; }
+  return body ? `<tr class="subrow"><td colspan="6"><div class="subin${cls}">${body}</div></td></tr>` : '';
+}
+function addRow() {
+  const free = HASH.add === 'full' ? [] : Object.keys(PF).filter((k) => !acct(k));
+  if (HASH.add === 'none') return '<tr><td colspan="6" class="sub">还没有装任何平台，装好后在这里接入账号。看有哪些平台：<code>vk platforms</code></td></tr>';
+  if (!free.length) return `<tr><td colspan="6" class="sub">这个组能接的平台都接上了。一个组里每个平台接一个号；要接第二个号，新建一个账号组。</td></tr>`;
+  return `<tr class="addrow"><td><select aria-label="要接入的平台">${free.map((k) => `<option value="${k}">${PF[k][1]}</option>`).join('')}</select></td><td><input type="text" placeholder="账号名（平台上的名字）" aria-label="账号名"></td><td colspan="3" class="sub">接入后当场登录，归到「${GROUP.name}」。</td><td class="n">${B('add', '', '接入账号')}</td></tr>`;
+}
 function draw() {
-  const up = upcoming(); const iss = issues();
+  const up = upcoming(); const iss = issues(); const todo = iss.length + needs() + (STATES ? 1 : 0);
+  setAccHealth(ACC.length, needs());
+  const demoHash = [SIMPLE && 'g=camp', !STATES && 'acc=states'].filter(Boolean).join('&');
   main.innerHTML = `
-  <div class="hd"><h1>系统</h1><span class="sub">${iss.length ? `有 ${iss.length} 件事要处理` : '一切正常'}</span><span class="demo r">演示数据</span></div>
+  <div class="hd"><h1>系统</h1><span class="sub">${todo ? `有 ${todo} 件事要处理` : '一切正常'}</span><span class="demo r">演示数据 · <a class="link" href="system.html${demoHash ? '#' + demoHash : ''}" data-sw>${STATES ? '回到全部正常' : '看账号的各种状态'}</a></span></div>
   <h2 class="sec" style="margin-top:0">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>
-  <div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${GROUPS.map((g) => { const n = g === GROUP ? todoCount() : (g.id === 'main' ? MAIN_TODO : 1); return `<tr><td><b style="font-weight:600">${g.name}</b></td><td class="sub">${g.sub}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td><td class="n">${g === GROUP ? '<span class="sub">当前</span>' : `<a class="btn" href="system.html${g.q}" data-sw>切过去</a>`}</td></tr>`; }).join('')}</tbody></table></div>
-  <div class="cmd">对应命令：<code>vk group list</code>　<code>vk group add &lt;名字&gt;</code>　<code>vk group use &lt;名字&gt;</code>　飞书卡片标题会带上账号组的名字。<button class="link" data-newg>新建账号组</button></div>
+  <div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${GROUPS.map((g) => { const n = g === GROUP ? todoCount() : (g.id === 'main' ? MAIN_TODO : 1); const ks = g === GROUP ? ACC.map((a) => a.k) : OTHER_PFS; return `<tr><td><b style="font-weight:600">${g.name}</b></td><td>${ks.length} 个 <span class="sub">· ${names(ks)}</span></td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td><td class="n"><span class="acts"><button class="link" data-rename>改名</button>${g === GROUP ? '<span class="sub">当前</span>' : `<a class="btn" href="system.html${g.q}" data-sw>切过去</a>`}</span></td></tr>`; }).join('')}</tbody></table></div>
+  <div class="cmd">对应命令：<code>vk group list</code>　<code>vk group add &lt;名字&gt;</code>　<code>vk group use &lt;名字&gt;</code>　<code>vk group rename &lt;组&gt; &lt;新名字&gt;</code>　飞书卡片标题会带上账号组的名字。<button class="link" data-newg>新建账号组</button></div>
   <h2 class="sec">账号 · ${GROUP.name}</h2>
-  <div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ACC.map(([k, name, left, cap, note]) => `<tr><td>${pfn(k)}</td><td>${esc(name)}</td><td>${relogin === k ? '<span class="st wait">等你扫码</span>' : `<span class="st done">正常</span> <span class="sub">今天 07:10 检查过</span>`}</td><td>${cap == null ? '<span class="sub">不限</span>' : `${left} 条 <span class="sub">每天最多 ${cap} 条</span>`}</td><td class="sub">${note}</td><td class="n">${k === 'web' ? '' : `<button class="${relogin === k ? 'btn pri' : 'link'}" data-re="${k}">${relogin === k ? '我扫好了' : '重新登录'}</button>`}</td></tr>`).join('')}</tbody></table></div>
-  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account login &lt;平台&gt;</code>　登录在发布机上完成；二维码会同时发到飞书。</div>
+  <div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ACC.map((a) => { const sub = subRow(a); return `<tr${sub ? ' class="has-sub"' : ''}><td>${pfn(a.k)}</td><td>${esc(a.name)}</td><td>${loginCell(a)}</td><td>${a.cap == null ? '<span class="sub">不限</span>' : a.state !== 'ok' ? '<span class="sub">现在发不了</span>' : `${a.left} 条 <span class="sub">每天最多 ${a.cap} 条</span>`}</td><td class="sub">${a.note}</td><td class="n">${actCell(a)}</td></tr>${sub}`; }).join('')}${addRow()}</tbody></table></div>
+  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account add &lt;平台&gt; --group &lt;组&gt; --name &lt;名字&gt;</code>　<code>vk account login &lt;账号 id&gt; --open</code>　<code>vk account logout &lt;账号 id&gt;</code>　<code>vk account credentials tiktok</code>　登录在这台电脑上完成，登录数据只存在本机。</div>
 
   <h2 class="sec">发布方案 · ${GROUP.name} · 哪种成片发到哪些平台、按什么节奏</h2>
   <div class="tblwrap"><table class="plan"><thead><tr><th>成片</th><th>发到</th><th>节奏</th><th class="n"></th></tr></thead><tbody>${PLAN.map(([n, ps, rh], i) => `<tr><td>${n}</td><td><div class="pfs">${ps.map(pfn).join('')}</div></td><td class="sub">${rh}</td><td class="n"><button class="btn" data-plan="${i}">改</button></td></tr>`).join('')}</tbody></table></div>
   <div class="cmd">这是你自己的习惯，可以改；新作品入库时按它生成平台稿和建议时间，每条仍然要你确认。对应命令：<code>vk plan show</code></div>
 
   <div class="two">
-    <div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv"><dt>这台电脑</dt><dd><span class="st done">在线</span> <span class="sub">1 分钟前有心跳</span></dd><dt>排着要发</dt><dd>${up.length} 条已确认${up.length ? `，最近一条 ${when(up[0].x.at).text}` : ''}</dd><dt>正在发</dt><dd>没有</dd><dt>等你确认</dt><dd>${WORKS.reduce((n, w) => n + pendingOf(w).length, 0)} 条 <span class="sub">没确认的到时间也不会发</span></dd></dl></div>
-      <div class="cmd">对应命令：<code>vk doctor --human</code></div></div>
+    <div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv"><dt>这台电脑</dt><dd><span class="st done">在线</span> <span class="sub">1 分钟前有心跳</span></dd><dt>排着要发</dt><dd>${up.length} 条已确认${up.length ? `，最近一条 ${when(up[0].x.at).text}` : ''}</dd><dt>正在发</dt><dd>没有</dd><dt>等你确认</dt><dd>${WORKS.reduce((n, w) => n + pendingOf(w).length, 0)} 条 <span class="sub">没确认的到时间也不会发</span></dd>
+      <dt>版本</dt><dd>${STATES ? '0.9.1 · 7437841' : '0.9.2 · 09768ab'} <span class="sub">今天 07:00 检查过，${STATES ? '新版本没装上' : '已是最新'}</span></dd>
+      <dt>自动更新</dt><dd>${autoUpdate ? '开着 <span class="sub">空闲时才更新，不打断发布和登录</span>' : '关着 <span class="sub">有新版本也不会自己装</span>'}<button class="link" data-auto>${autoUpdate ? '关掉' : '打开'}</button></dd>
+      ${STATES ? '' : `<dt>刚更新</dt><dd>已更新到 0.9.2 <span class="sub">今天 03:10</span><button class="link" data-notes aria-expanded="${notesOpen}">${notesOpen ? '收起' : '看更新了什么'}</button>${notesOpen ? `<ul class="notes">${NOTES.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}</dd>`}</dl></div>
+      <div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code>　<code>vk version</code>　<code>vk update --check</code>　<code>vk update --auto on|off</code></div></div>
     <div><h2 class="sec">平台规则 · 对所有人一样，不能关</h2><div class="panel"><dl class="kv"><dt>确认</dt><dd>每一条都要人确认后才会发</dd><dt>小红书</dt><dd>每条单独确认，不能批量</dd><dt>间隔</dt><dd>同一个平台两条之间至少隔 4 小时 <span class="sub">默认值</span></dd><dt>AI 标注</dt><dd>每个平台按它的要求标注</dd></dl></div>
       <div class="cmd">你改的时间碰到规则时，会当场告诉你并给出最近的可用时间。</div></div>
   </div>
 
   <h2 class="sec">最近出的问题</h2>
-  ${iss.length ? `<div class="tblwrap"><table><tbody>${iss.map((r, i) => `<tr><td><a class="wcell" href="work.html#id=${r.w.id}&cut=${r.c.id}"><img class="cv" src="${r.w.cover}" width="48" height="36" alt=""><span><b>${esc(r.w.title)}</b><span class="sub">${esc(r.c.name)} · ${when(r.x.at).day}</span></span></a></td><td>${pfn(r.x.pf)}</td><td><span class="st bad">${esc(r.x.issue.what)}</span><div class="sub">${esc(r.x.issue.why)}</div></td><td class="n"><button class="btn pri" data-p="${i}">再试一次</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>'}
+  ${iss.length || STATES ? `<div class="tblwrap"><table><tbody>${STATES ? '<tr><td><b style="font-weight:600;display:block">versekit 自动更新</b><span class="sub">今天 03:10</span></td><td></td><td><span class="st bad">自动更新失败，已回到 0.9.1</span><div class="sub">新版本启动后 60 秒内没有响应。这台电脑照常能发，下次检查时会再试。</div></td><td class="n"></td></tr>' : ''}${iss.map((r, i) => `<tr><td><a class="wcell" href="work.html#id=${r.w.id}&cut=${r.c.id}"><img class="cv" src="${r.w.cover}" width="48" height="36" alt=""><span><b>${esc(r.w.title)}</b><span class="sub">${esc(r.c.name)} · ${when(r.x.at).day}</span></span></a></td><td>${pfn(r.x.pf)}</td><td><span class="st bad">${esc(r.x.issue.what)}</span><div class="sub">${esc(r.x.issue.why)}</div></td><td class="n"><button class="btn" data-p="${i}">再试一次</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>'}
   <div class="cmd">对应命令：<code>vk runs --failed</code>　手机上的通知和确认都在飞书里：<a class="link" href="feishu.html">看飞书卡片长什么样</a></div>`;
 }
-main.addEventListener('click', (e) => { if (e.target.closest('[data-sw]')) { setTimeout(() => location.reload(), 0); return; } if (e.target.closest('main [data-newg]')) { toast('原型里不能建；实现后在这里建，或用 vk group add'); return; } const b = e.target.closest('[data-re],[data-plan],[data-p]'); if (!b) return; const ds = b.dataset;
-  if (ds.re) { if (relogin === ds.re) { relogin = null; toast('登录正常'); } else { relogin = ds.re; toast(`二维码已发到飞书，用${PF[ds.re][1]} App 扫`); } draw(); }
-  else if (ds.plan) toast('原型里不能改；实现后在这里改，或用 vk plan edit');
-  else { issues()[+ds.p].x.issue.done = true; toast('正在重试'); changed(); } });
+// 开始登录：这台电脑已经接过同平台的另一个号（且是在登录窗口里登录的），先说清楚再开窗口
+function startLogin(a) { a.step = a.via === 'web' && OTHER.pfs[a.k] ? 'pre' : 'wait'; if (a.step === 'wait') opened(a); }
+function opened(a) { toast(a.via === 'api' ? '授权页已在浏览器里打开' : `${PF[a.k][1]}的登录窗口已打开`); }
+main.addEventListener('click', (e) => {
+  if (e.target.closest('[data-sw]')) { setTimeout(() => location.reload(), 0); return; }
+  if (e.target.closest('main [data-newg]')) { toast('原型里不能建；实现后在这里建，或用 vk group add'); return; }
+  if (e.target.closest('[data-rename]')) { toast('原型里不能改；实现后在这里改，或用 vk group rename'); return; }
+  if (e.target.closest('[data-auto]')) { autoUpdate = !autoUpdate; toast(autoUpdate ? '自动更新已打开' : '自动更新已关掉'); draw(); return; }
+  if (e.target.closest('[data-notes]')) { notesOpen = !notesOpen; draw(); return; }
+  const b = e.target.closest('[data-act],[data-plan],[data-p]'); if (!b) return; const ds = b.dataset;
+  if (ds.plan) { toast('原型里不能改；实现后在这里改，或用 vk plan edit'); return; }
+  if (ds.p) { issues()[+ds.p].x.issue.done = true; toast('正在重试'); changed(); return; }
+  if (ds.act === 'add') {
+    const row = b.closest('tr'), k = row.querySelector('select').value, inp = row.querySelector('input'), name = inp.value.trim();
+    if (!name) { inp.focus(); toast('先填账号名'); return; }
+    const api = k === 'tk' || k === 'yt'; const a = A(k, name, 2, 2, api ? '走官方接口' : '', api ? 'api' : 'web', api ? 'noauth' : 'off'); ACC.push(a); startLogin(a); draw(); return;
+  }
+  const a = acct(ds.k);
+  if (ds.act === 'login') startLogin(a);
+  else if (ds.act === 'go') { a.step = 'wait'; opened(a); }
+  else if (ds.act === 'cancel') a.step = null;
+  else if (ds.act === 'done') { a.step = null; a.state = 'ok'; toast(`${PF[a.k][1]}登录正常`); }
+  else if (ds.act === 'logout') a.step = 'logout';
+  else if (ds.act === 'logout-ok') { a.step = null; a.state = 'off'; toast(`已退出${PF[a.k][1]}的登录`); }
+  else if (ds.act === 'cred') a.step = 'cred';
+  else if (ds.act === 'save') { a.step = null; a.state = 'noauth'; toast('应用凭证已保存'); }
+  draw();
+});
 listeners.push(draw); draw();
 </script></body></html>
