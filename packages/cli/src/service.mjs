@@ -185,13 +185,25 @@ function launchdLoaded(label) {
   return { loaded: true, running: /state = running/.test(r.stdout), pid: pid ? Number(pid) : null };
 }
 
-function launchdBootout(label) {
+/** bootout 是异步的：命令返回时服务可能还在卸载中，必须等到 launchctl print 查不到才算拆干净。 */
+async function launchdBootout(label, timeoutMs = 15000) {
   if (!launchdLoaded(label).loaded) return;
   run("launchctl", ["bootout", guiTarget(label)]);
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (!launchdLoaded(label).loaded) return;
+    await sleep(150);
+  }
 }
 
-function launchdBootstrap(label) {
-  const r = run("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath(label)]);
+async function launchdBootstrap(label) {
+  // 刚 bootout 完立刻 bootstrap 偶尔会 EIO（5）/ 已加载（37），短暂重试。
+  let r;
+  for (let i = 0; i < 20; i++) {
+    r = run("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath(label)]);
+    if (r.status === 0 || launchdLoaded(label).loaded) return;
+    await sleep(300);
+  }
   if (r.status !== 0) {
     throw new Error(`launchctl bootstrap 失败：${(r.stderr || r.stdout).trim() || `退出码 ${r.status}`}（需要在登录后的图形会话里运行；SSH 登录请先在本机桌面登录一次）`);
   }
@@ -287,8 +299,8 @@ export async function install({ port = DEFAULT_PORT, offline = false, waitMs = 3
     const file = plistPath(label);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, renderPlist({ label, port, offline, env }));
-    launchdBootout(label);
-    launchdBootstrap(label);
+    await launchdBootout(label);
+    await launchdBootstrap(label);
   } else if (manager === "systemd") {
     const file = unitPath(label);
     mkdirSync(dirname(file), { recursive: true });
@@ -308,7 +320,7 @@ export async function install({ port = DEFAULT_PORT, offline = false, waitMs = 3
 }
 
 async function stopInternal(meta) {
-  if (meta.manager === "launchd") launchdBootout(meta.label);
+  if (meta.manager === "launchd") await launchdBootout(meta.label);
   else if (meta.manager === "systemd") run("systemctl", ["--user", "stop", unitName(meta.label)]);
   else await detachStop();
   if (meta.port) await waitDown(meta.port);
@@ -325,7 +337,7 @@ export async function start() {
   if (meta.manager === "launchd") {
     if (!launchdLoaded(meta.label).loaded) {
       if (!existsSync(plistPath(meta.label))) throw new Error(`找不到 ${plistPath(meta.label)}：重新运行安装命令`);
-      launchdBootstrap(meta.label);
+      await launchdBootstrap(meta.label);
     }
   } else if (meta.manager === "systemd") {
     const r = run("systemctl", ["--user", "start", unitName(meta.label)]);
@@ -385,7 +397,7 @@ export async function uninstall({ purge = false, serviceOnly = false, log = () =
 
   if (meta) await stopInternal(meta);
   if (manager === "launchd") {
-    launchdBootout(label);
+    await launchdBootout(label);
     if (existsSync(plistPath(label))) {
       rmSync(plistPath(label), { force: true });
       removed.push(plistPath(label));

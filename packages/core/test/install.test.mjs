@@ -309,6 +309,16 @@ test("ACC-install-02：macOS 用 LaunchAgent（RunAtLoad + KeepAlive），卸载
     const loaded = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${label}`], { encoding: "utf8" });
     assert.equal(loaded.status, 0, "launchctl print 应显示已加载");
     assert.equal(await status(h.port), 200);
+    // 服务正在运行时 restart：必须真的重启回来（bootout 异步，曾导致重启后服务消失）
+    const before = JSON.parse((await sh(h, vkOf(h), ["service", "status"])).stdout).pid;
+    const t0 = Date.now();
+    const re = JSON.parse((await sh(h, vkOf(h), ["service", "restart"])).stdout);
+    assert.equal(re.running, true);
+    assert.equal(re.loaded, true);
+    assert.equal(re.reachable, true);
+    assert.notEqual(re.pid, before, "restart 应换新进程");
+    assert.ok(Date.now() - t0 < 25000, "restart 不该拖到超时");
+    assert.equal(await status(h.port), 200);
   } finally {
     const u = await sh(h, vkOf(h), ["service", "uninstall"]);
     assert.equal(u.code, 0, u.stdout + u.stderr);
