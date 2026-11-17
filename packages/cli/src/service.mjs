@@ -8,12 +8,13 @@
 // 所有路径、服务名、端口都能用环境变量覆盖，开发机上用测试服务名 + 临时 HOME 就不会碰真实环境。
 
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync, mkdtempSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { request } from "node:http";
-import { paths } from "../../core/src/index.mjs";
+import { paths, emit } from "../../core/src/index.mjs";
+import * as updates from "../../core/src/update.mjs";
 
 export const DEFAULT_LABEL = "com.versekit.daemon";
 export const DEFAULT_PORT = 8787;
@@ -443,4 +444,176 @@ export async function uninstall({ purge = false, serviceOnly = false, log = () =
     }
   }
   return { ok: true, manager, label, removed, purged, kept_data: !purge && !serviceOnly ? dataDirs() : [] };
+}
+
+// ---------------------------------------------------------------- 后台自动更新（#217）
+//
+// 流程：查最新提交 → 下载新包 → 用新包里的 install.sh 非交互升级（Node、biliup 的版本变化也跟着升，
+// 不另写一套下载/替换逻辑）→ 60 秒内服务重新起来且 /api 通过自检 → 否则退回 app.prev 并留事件。
+// install.sh 自己在「起不来」时会回滚；这里补的是「起来了但不健康」那一类，所以 VERSEKIT_UPDATE=1 让它
+// 把 app.prev 留给我们。
+
+export const HEALTH_PATH = "/api/now";
+export const HEALTH_TIMEOUT_MS = 60e3;
+/** 开发机上验证「新包起来了但不健康」时可以缩短；默认 60 秒（ACC-update-04）。 */
+const healthTimeoutMs = (env) => Number(env.VERSEKIT_UPDATE_HEALTH_TIMEOUT_MS) || HEALTH_TIMEOUT_MS;
+
+const lockFile = () => join(paths().state, "update.lock");
+
+function takeLock() {
+  mkdirSync(paths().state, { recursive: true, mode: 0o700 });
+  try {
+    const pid = Number(readFileSync(lockFile(), "utf8").trim());
+    if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && pidAlive(pid)) throw new Error("已经有一次更新在进行，等它结束");
+  } catch (err) {
+    if (err.message.startsWith("已经有")) throw err;
+  }
+  writeFileSync(lockFile(), String(process.pid), { mode: 0o600 });
+}
+
+async function download(url, file) {
+  const res = await fetch(url, { headers: { "User-Agent": "versekit-updater" }, signal: AbortSignal.timeout(120e3) });
+  if (!res.ok) throw new Error(`下载新版本失败：${url} 返回 ${res.status}`);
+  writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+}
+
+function runInstall(script, env, log) {
+  return new Promise((resolve) => {
+    const child = spawn("bash", [script], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("error", (err) => resolve({ code: 1, stdout, stderr: `${stderr}${err.message}` }));
+    child.on("close", (code) => {
+      for (const l of `${stdout}${stderr}`.split("\n").filter(Boolean)) log(`  [install.sh] ${l}`);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+async function waitHealthy(port, timeoutMs) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if ((await probe(port, HEALTH_PATH)) === 200 && (await probe(port, "/today")) === 200) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+/** 新版本起来了却不健康：把旧程序放回去，重新注册并启动服务。 */
+async function restorePrev(layout, port, offline, env) {
+  const prev = join(layout.prefix, "app.prev");
+  if (!existsSync(prev)) throw new Error("app.prev 不见了，没法自动退回（重新运行安装命令即可）");
+  const meta = readMeta();
+  if (meta) await stopInternal(meta);
+  rmSync(layout.app, { recursive: true, force: true });
+  renameSync(prev, layout.app);
+  return install({ port, offline, env });
+}
+
+/**
+ * 更新一次。`now` 为 true 时调用方已经决定不看空闲（CLI --now / 守护进程已判过）。
+ * 返回 { updated, message, ... }；失败时已经退回旧版本，返回 { ok:false, rolledBack:true, message }，不抛。
+ */
+export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
+  const layout = installLayout(env);
+  if (!layout.installed) throw new Error("这份程序不是用安装命令装出来的（在源码目录里直接跑），没法自动更新：用 git pull");
+  const meta = readMeta();
+  const current = updates.buildInfo();
+  const check = await updates.checkLatest({ current, env });
+  if (check.upToDate) return { ok: true, updated: false, message: "已是最新", version: current.version, commit: current.commit };
+
+  takeLock();
+  const port = meta?.port ?? DEFAULT_PORT;
+  const offline = Boolean(meta?.offline);
+  const work = mkdtempSync(join(layout.prefix, ".update-"));
+  updates.patchState({ in_progress: { since: Date.now(), to: check.latest } });
+  const oldLabel = `${current.version}${current.short ? `（${current.short}）` : ""}`;
+  const failed = (reason, extra = {}) => {
+    const message = `自动更新失败，已回到 ${oldLabel}：${reason}`;
+    emit({ type: "update.failed", severity: "warn", payload: { from: current.commit, to: check.latest, from_version: current.version, reason, message } });
+    updates.patchState({ last_failure: { at: Date.now(), from: current.commit, to: check.latest, from_version: current.version, reason, message } });
+    log(message);
+    return { ok: false, updated: false, rolledBack: true, message, reason, ...extra };
+  };
+  try {
+    log(`有新版本：${check.message}，开始更新（${current.short ?? "未知"} → ${updates.shortCommit(check.latest)}）`);
+    const tarball = join(work, "app.tar.gz");
+    const src = join(work, "src");
+    const url = env.VERSEKIT_APP_URL || `https://codeload.github.com/versekit-labs/versekit/tar.gz/${check.latest}`;
+    try {
+      await download(url, tarball);
+      mkdirSync(src);
+      const t = run("tar", ["-xzf", tarball, "-C", src, "--strip-components=1"]);
+      if (t.status !== 0) throw new Error(`新程序包解压失败：${(t.stderr || "").trim()}`);
+      if (!existsSync(join(src, "install.sh"))) throw new Error("新程序包里没有 install.sh");
+    } catch (err) {
+      return failed(err.message);
+    }
+
+    const installEnv = {
+      ...env,
+      VERSEKIT_UPDATE: "1",
+      VERSEKIT_NO_OPEN: "1",
+      VERSEKIT_PREFIX: layout.prefix,
+      VERSEKIT_APP_URL: pathToFileURL(tarball).href,
+      VERSEKIT_APP_COMMIT: check.latest,
+      VERSEKIT_PORT: String(port),
+      VERSEKIT_SERVICE_LABEL: meta?.label ?? labelOf(env),
+      ...(meta?.manager ? { VERSEKIT_SERVICE_MANAGER: meta.manager } : {}),
+    };
+    delete installEnv.VERSEKIT_APP_SHA256;
+    if (offline) installEnv.VERSEKIT_OFFLINE = "1";
+    else delete installEnv.VERSEKIT_OFFLINE;
+
+    const r = await runInstall(join(src, "install.sh"), installEnv, log);
+    if (r.code !== 0) {
+      // install.sh 在失败时自己回滚（旧程序放回、旧服务重新注册）。
+      const why = /原因：(.*)/.exec(r.stderr)?.[1]?.trim() || r.stderr.trim().split("\n").pop() || `install.sh 退出码 ${r.code}`;
+      return failed(why);
+    }
+
+    if (!(await waitHealthy(port, healthTimeoutMs(env)))) {
+      const back = await restorePrev(layout, port, offline, env).catch((err) => ({ up: false, error: err.message }));
+      return failed(`新版本起来后 ${Math.round(healthTimeoutMs(env) / 1000)} 秒内没通过自检（${HEALTH_PATH}）${back.up ? "" : `；退回时服务也没起来：${back.error ?? "请运行 vk service status 看看"}`}`, { restored: Boolean(back.up) });
+    }
+
+    rmSync(join(layout.prefix, "app.prev"), { recursive: true, force: true });
+    const now = updates.buildInfo({ root: `${layout.app}/` });
+    updates.patchState({
+      last_update: { at: Date.now(), from: current.commit, from_version: current.version, to: now.commit ?? check.latest, version: now.version, commits: check.commits },
+      last_failure: null,
+    });
+    const message = `已更新到 ${now.version}${now.short ? ` · ${now.short}` : ""}（数据、账号、登录都保留）`;
+    log(message);
+    return { ok: true, updated: true, message, version: now.version, commit: now.commit, commits: check.commits };
+  } finally {
+    updates.patchState({ in_progress: null });
+    rmSync(work, { recursive: true, force: true });
+    rmSync(lockFile(), { force: true });
+  }
+}
+
+/**
+ * 守护进程里要更新时用：另起一个脱离守护进程的 `vk update`，因为更新会停掉守护进程本身。
+ * systemd 会把整个 cgroup 一起杀掉，所以那种情况用 systemd-run 让它出来单独成一个 unit。
+ */
+export function startDetachedUpdate({ env = process.env } = {}) {
+  const layout = installLayout(env);
+  if (!layout.installed) throw new Error("这份程序不是用安装命令装出来的，没法自动更新");
+  mkdirSync(paths().state, { recursive: true, mode: 0o700 });
+  const fd = openSync(paths().log, "a", 0o600);
+  const args = [process.execPath, CLI, "update", "--now"];
+  const childEnv = { ...process.env, ...serviceEnvVars(env) };
+  let child;
+  const viaSystemd = readMeta()?.manager === "systemd" && run("systemd-run", ["--version"]).status === 0;
+  if (viaSystemd) {
+    child = spawn("systemd-run", ["--user", "--collect", `--unit=versekit-update-${Date.now()}`, ...args], { detached: true, stdio: ["ignore", fd, fd], env: childEnv });
+  } else {
+    child = spawn(args[0], args.slice(1), { detached: true, stdio: ["ignore", fd, fd], env: childEnv });
+  }
+  child.unref();
+  closeSync(fd);
+  return { started: true, pid: child.pid, message: "已开始更新：服务会短暂重启，几十秒后回来；结果看系统页「发布机」或 vk version" };
 }

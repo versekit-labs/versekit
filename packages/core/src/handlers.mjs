@@ -20,6 +20,7 @@ import { readConfig } from "./config.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
+import * as updates from "./update.mjs";
 
 const fail = (message) => {
   throw new Error(message);
@@ -136,7 +137,11 @@ export function loginHint(platform, accountId) {
   return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
 }
 
-export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null } = {}) {
+/**
+ * `updater`：{ apply({ now }) } 由 CLI 那一层给（更新要动服务和程序目录，不在内核里）；
+ * `loginsOpen()`：守护进程里还开着的登录窗口数。
+ */
+export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0 } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   /** 方案里能选的平台：已安装的适配器；离线模式不装适配器，退回矩阵里的平台名，方案照样能看能改。 */
   const knownPlatforms = () => (byPlatform.size ? [...byPlatform.keys()] : overview.MATRIX_COLUMNS.map((c) => c.platform));
@@ -263,6 +268,29 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     now: () => ({ ...store.statusSnapshot() }),
 
     "bootstrap": () => overview.buildBootstrap(),
+
+    // 程序版本与后台自动更新（#217）。
+    "update.status": () => updates.statusView(),
+
+    update: async ({ check = false, auto = null, now = false } = {}) => {
+      if (auto != null && auto !== "") {
+        if (!["on", "off"].includes(String(auto))) fail("--auto 只能是 on 或 off");
+        const cfg = updates.setAuto(auto === "on");
+        log(`[update] 后台自动更新已${cfg.auto ? "打开" : "关闭"}`);
+        return { auto: cfg.auto, intervalHours: cfg.intervalHours, message: cfg.auto ? "后台自动更新：开（空闲时更新，失败自动退回）" : "后台自动更新：关（想更新时运行 vk update）" };
+      }
+      if (check) {
+        try {
+          return await updates.recordCheck();
+        } catch (err) {
+          fail(`没能查到最新版本：${err.message}（网络问题，稍后再试）`);
+        }
+      }
+      if (!updater) fail("这个守护进程不能自己更新：在终端运行 vk update");
+      const idle = updates.idleState({ loginsOpen: loginsOpen() });
+      if (!idle.idle && !now) fail(`现在不适合更新：${idle.reason}。等忙完再试，或加 --now 强制更新`);
+      return updater.apply({ now });
+    },
 
     "account.list": ({ group } = {}) => {
       // 账号页与总览新鲜度面板共用 overview.listAccountViews 的同一份对象（ACC-overview-02）。

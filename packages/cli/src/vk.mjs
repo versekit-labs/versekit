@@ -24,6 +24,7 @@ import { browserReady, openAccount, closeAccount, closeAllAccounts, adoptOrphanA
 import { send, ensureDaemon } from "./client.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
 import * as service from "./service.mjs";
+import * as updates from "../../core/src/update.mjs";
 
 const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
 
@@ -165,6 +166,16 @@ let subscriptionCache = null;
 // 网页登录会话：验证码要跨两次请求，标签页得留在内存里。
 // 只放进程内存，不落库；daemon 重启就失效，这是有意的（验证码是一次性的）。
 const loginSessions = new Map();
+
+/** 还开着的登录窗口数（后台自动更新要等它们结束）；开了太久没动静的当作已被丢下。 */
+function activeLogins(now = Date.now()) {
+  let n = 0;
+  for (const s of loginSessions.values()) {
+    const at = s.startedAt ?? s.openedAt ?? s.sentAt ?? now;
+    if (now - at < updates.LOGIN_STALE_MS) n += 1;
+  }
+  return n;
+}
 
 /** 创作平台的登录页（所有登录动作都在这个域名下；www.xiaohongshu.com 的扫码会话进不了这里）。 */
 async function creatorLoginTab(accountId, { fresh = false } = {}) {
@@ -347,7 +358,14 @@ async function qrStatus(accountId, account, session, log = () => {}) {
 }
 
 function daemonHandlers(adapters, log) {
-  const core = createCoreHandlers({ adapters, log, doctor: doctorReport });
+  const core = createCoreHandlers({
+    adapters,
+    log,
+    doctor: doctorReport,
+    // 更新要停掉守护进程本身，所以交给脱离它的 `vk update --now`（#217）。
+    updater: { apply: async () => service.startDetachedUpdate() },
+    loginsOpen: activeLogins,
+  });
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
   // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
   const adapterOf = (platform) => adapters.find((a) => a.platform === platform)?.adapter ?? null;
@@ -784,7 +802,9 @@ async function cmdServe() {
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
-  const daemon = await startDaemon({ handlers, log, port, host, channels: offline ? [] : [channelFeishu], doctor: doctorReport, offline });
+  // 后台自动更新只在「用安装命令装出来的」程序上有意义；源码目录里（开发）不启动。
+  const autoUpdate = service.installLayout().installed ? { apply: async () => service.startDetachedUpdate(), busy: activeLogins } : null;
+  const daemon = await startDaemon({ handlers, log, port, host, channels: offline ? [] : [channelFeishu], doctor: doctorReport, offline, autoUpdate });
   if (offline) log("离线模式：不会访问任何平台");
 
   const web = `http://127.0.0.1:${daemon.port}`;
@@ -850,6 +870,37 @@ async function cmdService() {
   } else throw new Error("用法：vk service status | start | stop | restart | uninstall [--purge]");
   show(data);
   return data;
+}
+
+/** vk version：版本号 + 短提交号 + 安装时间（ACC-update-01）。 */
+async function cmdVersion() {
+  const v = updates.statusView();
+  if (has("--json")) return out(v);
+  console.log(updates.versionLine(updates.buildInfo()));
+  console.log(line("自动更新", v.auto ? `开（每 ${v.intervalHours} 小时检查一次，空闲时更新）` : "关（vk update --auto on 打开）"));
+  if (v.lastCheckAt) console.log(line("上次检查", `${new Date(v.lastCheckAt).toLocaleString()}：${v.lastCheck?.message ?? ""}`));
+  if (v.lastFailure) console.log(line("最近失败", v.lastFailure.message));
+}
+
+/** vk update [--check] [--auto on|off] [--now]（ACC-update-02）：检查 / 开关走和 HTTP 同一个 handler，更新在本进程里做。 */
+async function cmdUpdate() {
+  const core = createCoreHandlers({});
+  // --auto 不在 argv.mjs 的带值参数表里，on|off 就是紧跟在 update 后面的位置参数。
+  const auto = has("--auto") ? pos[1] : undefined;
+  if (has("--auto") && !["on", "off"].includes(auto)) throw new Error("用法：vk update --auto on|off");
+  if (auto != null || has("--check")) {
+    const r = await core.update({ check: has("--check"), auto: auto ?? null });
+    if (human || auto != null) console.log(r.message);
+    else out(r);
+    return r;
+  }
+  const idle = updates.idleState();
+  if (!idle.idle && !has("--now")) throw new Error(`现在不适合更新：${idle.reason}。等忙完再试，或加 --now 强制更新`);
+  const r = await service.applyUpdate({ log: (m) => console.error(m) });
+  if (human) console.log(r.message);
+  else out(r);
+  if (!r.ok) process.exitCode = 1;
+  return r;
 }
 
 async function cmdDemo() {
@@ -1718,6 +1769,8 @@ function usage() {
       "  vk schedule list [--group <g>] [--from <日期>] [--to <日期>] | move <workId> --at <时间> [--force] | cancel <workId>",
       "  vk platforms | runs [--state failed] [--group <组>] | events [--since <ms>]",
       "  vk setup [--json] | vk channel bind feishu | test feishu",
+      "  vk version [--json]                                     版本号 + 提交号 + 安装时间 + 自动更新状态",
+      "  vk update [--check] [--auto on|off] [--now]             更新程序：--check 只看有没有新版本；--auto 开关后台自动更新（空闲时更新，失败自动退回）",
       "  vk --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
@@ -1740,6 +1793,8 @@ try {
   else if (cmd === "serve") await cmdServe();
   else if (cmd === "demo") await cmdDemo();
   else if (cmd === "service") await cmdService();
+  else if (cmd === "version") await cmdVersion();
+  else if (cmd === "update") await cmdUpdate();
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
