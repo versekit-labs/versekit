@@ -22,6 +22,7 @@ import { startCheckSweeper } from "./scheduler.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
+import { startAutoUpdate } from "./update.mjs";
 import { verifyApproval, applyApproval } from "./approval.mjs";
 
 const MAX_BODY = 1 << 20;
@@ -637,7 +638,7 @@ export function offlineHandlers(handlers) {
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null, offline = false } = {}) {
+export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null, offline = false, autoUpdate = null } = {}) {
   if (offline) {
     // 离线：不跑队列、不排体检/采集、不接飞书；handler 全部过一遍拦截。
     runQueue = false;
@@ -708,6 +709,18 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     beat();
     heartbeatTimer = setInterval(beat, 30e3);
     heartbeatTimer.unref?.();
+  }
+
+  // 后台自动更新（#217）：启动后不久查一次，之后每 update.interval_hours 小时一次，只在空闲时更新。
+  // 离线模式不联网，除非明确指了 VERSEKIT_UPDATE_API（开发机上对着本地假服务器验证）。
+  let stopAutoUpdate = () => {};
+  if (autoUpdate && (!offline || process.env.VERSEKIT_UPDATE_API)) {
+    stopAutoUpdate = startAutoUpdate({
+      log,
+      apply: autoUpdate.apply,
+      busy: autoUpdate.busy,
+      startDelayMs: Number(process.env.VERSEKIT_UPDATE_START_DELAY_MS) || 30e3,
+    });
   }
 
   // 通道：投递待发事件 + 订阅按钮回执。任何一步失败都只记日志，不拖垮内核。
@@ -788,6 +801,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     socketPath,
     async close() {
       stopSweeper();
+      stopAutoUpdate();
       if (stuckTimer) clearInterval(stuckTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (deliveryTimer) clearInterval(deliveryTimer);

@@ -413,6 +413,30 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    // 后台自动更新（#217）。看：版本 + 提交号 + 安装时间、上次检查、自动更新开关、上次更新内容与失败。
+    name: "update.status",
+    summary: "程序版本（版本号 + 提交号 + 安装时间）与自动更新状态：上次检查、开关、上次更新了什么、上次失败",
+    remote: false,
+    args: {},
+    http: { method: "GET", path: "/api/update" },
+    cli: { usage: "vk version [--json]" },
+    card: null,
+    audit: "never",
+  },
+  {
+    // 做：--check 只比较提交并说人话；--auto on|off 开关后台自动更新；都不带就更新（下载新包、用新包里的
+    // install.sh 非交互升级，保留 app.prev，数据不动；失败自动退回）。HTTP 上的「更新」交给脱离守护进程的 vk update 去做。
+    name: "update",
+    summary: "更新程序：--check 只看有没有新版本；--auto on|off 开关后台自动更新；不带参数就更新（失败自动退回旧版本，数据保留）",
+    remote: false,
+    localOnly: true,
+    args: { check: "boolean?", auto: "string?", now: "boolean?" },
+    http: { method: "POST", path: "/api/update" },
+    cli: { usage: "vk update [--check] [--auto on|off] [--now]" },
+    card: null,
+    audit: "always",
+  },
+  {
     name: "publish.list",
     summary: "列出发布（按状态/平台筛选）",
     remote: false,

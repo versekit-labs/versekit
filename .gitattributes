@@ -19,3 +19,7 @@ scripts/design-check.mjs export-ignore
 scripts/design-accept.mjs export-ignore
 scripts/seed-plan.mjs export-ignore
 packages/*/test export-ignore
+
+# 程序知道自己是哪个提交（ACC-update-01）：GitHub 源码包里 install.sh 的 APP_COMMIT_STAMP 会被替换成提交号，
+# install.sh 装的时候把它写进 <prefix>/app/.versekit-build.json。
+install.sh export-subst

@@ -70,7 +70,7 @@
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
-    plan: null, machine: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
+    plan: null, machine: null, update: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
   };
   const polls = new Map();
 
@@ -105,15 +105,17 @@
   /** 发布方案、发布机、最近出的问题：都来自 /api（plan.show、machine.status、run.list + 今天的问题清单）。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
-    if (!group) { ui.plan = null; ui.machine = null; ui.problems = []; return; }
+    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.problems = []; return; }
     const q = `group=${encodeURIComponent(group.id)}`;
-    const [plan, machine, runs] = await Promise.all([
+    const [plan, machine, runs, update] = await Promise.all([
       VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
       VK.request(`/api/machine?${q}`).catch(() => null),
       VK.request(`/api/runs?state=failed&limit=100&${q}`).catch(() => null),
+      VK.request("/api/update").catch(() => null),
     ]);
     ui.plan = plan;
     ui.machine = machine;
+    ui.update = update;
     // 最近 7 天、失败的发布任务；只有这条平台稿现在还停在出问题的状态才能「再试一次」。
     const since = Date.now() - 7 * 864e5;
     const bad = new Map((ui.today?.problems ?? []).map((p) => [p.publishId, p]));
@@ -235,7 +237,27 @@
         `<dt>排着要发</dt><dd>${m.queued.count} 条已确认${m.queued.nextAt ? `，最近一条 ${esc(whenText(m.queued.nextAt))}` : ""}</dd>` +
         `<dt>正在发</dt><dd>${m.running.count ? `${m.running.count} 条` : "没有"}</dd>` +
         `<dt>等你确认</dt><dd>${m.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd>`;
-    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code></div></div>`;
+    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}${updateRows()}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code>　<code>vk version</code>　<code>vk update --auto on|off</code></div></div>`;
+  }
+
+  /** 版本、上次检查、自动更新开关；刚更新过的附上更新内容（最多 5 条提交标题）。读不到就不画，不拖垮发布机这一块。 */
+  const RECENT_UPDATE_MS = 3 * 864e5;
+  function updateRows() {
+    const u = ui.update;
+    if (!u) return "";
+    const ver = `${esc(u.version)}${u.short ? ` · <code>${esc(u.short)}</code>` : ""}`;
+    const at = u.installedAt ? `<span class="sub">安装于 ${esc(whenText(Date.parse(u.installedAt)))}</span>` : "";
+    const checked = u.lastCheckAt
+      ? `${esc(ago(Date.now() - u.lastCheckAt))} <span class="sub">${esc(u.lastCheck?.message ?? "")}</span>`
+      : `<span class="sub">还没检查过${u.auto ? "（服务启动后很快会查一次）" : ""}</span>`;
+    const lu = u.lastUpdate;
+    const fresh = lu && Date.now() - lu.at < RECENT_UPDATE_MS
+      ? `<dt>刚更新过</dt><dd>已更新到 ${esc(lu.version)}（${esc(whenText(lu.at))}）${(lu.commits ?? []).length ? `<ul class="sub" style="margin:6px 0 0;padding-left:18px">${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}</dd>`
+      : "";
+    return `<dt>版本</dt><dd>${ver} ${at}</dd>` +
+      `<dt>上次检查</dt><dd>${checked}</dd>` +
+      `<dt>自动更新</dt><dd><span class="st ${u.auto ? "done" : "bad"}">${u.auto ? "开" : "关"}</span> <span class="sub">${u.auto ? `每 ${esc(u.intervalHours)} 小时检查，只在空闲时更新，失败自动退回` : "不会自动更新；想更新时运行 vk update"}</span> ` +
+      `<button class="link" data-autoupd="${u.auto ? "off" : "on"}"${ui.updBusy ? " disabled" : ""}>${u.auto ? "关闭" : "打开"}</button></dd>${fresh}`;
   }
 
   /** 同一个数值的平台并成一行：「B站、小红书　每个账号每天最多 10 条」。 */
@@ -262,7 +284,11 @@
 
   function problemsBlock(group) {
     if (!group) return "";
-    const rows = ui.problems.map(({ run, p }) => {
+    const uf = ui.update?.lastFailure;
+    const updRow = uf && Date.now() - uf.at < 7 * 864e5
+      ? `<tr><td><b>自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
+      : "";
+    const rows = updRow + ui.problems.map(({ run, p }) => {
       const day = whenText(run.created_at);
       const why = p.error?.message ?? run.last_error ?? "";
       return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}"><img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
@@ -510,7 +536,7 @@
     else if (e.target.id === "cred-secret") { e.preventDefault(); saveCreds(); }
   });
   main.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry]");
+    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd]");
     if (!b) return;
     const d = b.dataset;
     if ("sw" in d) {
@@ -545,6 +571,12 @@
     } else if ("planreset" in d) {
       try { await post("/api/plan/reset", { group: VK.current().id }); ui.planEdit = null; toast("已恢复默认方案"); await refresh(); }
       catch (err) { toast(`没恢复：${err.message}`); }
+    } else if (d.autoupd) {
+      ui.updBusy = true; draw();
+      try { await post("/api/update", { auto: d.autoupd }); toast(d.autoupd === "on" ? "已打开后台自动更新" : "已关闭后台自动更新"); }
+      catch (err) { toast(`没切过去：${err.message}`); }
+      ui.updBusy = false;
+      await refresh();
     } else if (d.retry) {
       ui.retrying.add(d.retry); draw();
       try { await post(`/api/publishes/${encodeURIComponent(d.retry)}/retry`, { publishId: d.retry }); toast("正在重试"); }

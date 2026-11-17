@@ -17,7 +17,14 @@
 #   VERSEKIT_BILIUP_URL      biliup-rs 压缩包地址    VERSEKIT_BILIUP_VERSION 默认 v0.2.4
 #   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
 #   VERSEKIT_NO_OPEN=1       不自动打开浏览器
+#   VERSEKIT_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
+#   VERSEKIT_UPDATE=1        后台自动更新（vk update）用：不动 PATH 配置、不开浏览器，升完保留 app.prev
+#                            给更新程序做「起来后自检、不行就退回」，由它自己清掉
 #   VK_HOME                  数据目录的 HOME（和 vk 本身一致）
+
+# 提交号：GitHub 源码包（git archive）会把这一行的占位符替换成 40 位提交号（见 .gitattributes 的 export-subst）。
+# 直接从 raw 地址拿到的脚本里它没被替换，下面只认 40 位十六进制，所以不会误读。
+APP_COMMIT_STAMP='$Format:%H$'
 
 # 整个脚本包在 main 里、最后一行才调用：下载被截断时不会执行半截脚本；
 # 也避免子命令读 stdin 把管道里后面的脚本吃掉。
@@ -159,6 +166,10 @@ main() {
     die "下载下来的不是 versekit（没有 packages/cli/src/vk.mjs）" "确认 VERSEKIT_APP_URL 指向仓库的源码 tarball"
   local NEW_VERSION
   NEW_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$TMP/app-x/package.json" | head -1)"
+  # 程序知道自己是哪个提交（ACC-update-01）：写进程序目录，vk version / 系统页读它。
+  local APP_COMMIT="${VERSEKIT_APP_COMMIT:-}"
+  [ -n "$APP_COMMIT" ] || APP_COMMIT="$(sed -n "s/^APP_COMMIT_STAMP='\([0-9a-f]\{40\}\)'.*/\1/p" "$TMP/app-x/install.sh" 2>/dev/null | head -1 || true)"
+  printf '{\n  "commit": "%s",\n  "version": "%s",\n  "installed_at": "%s"\n}\n' "$APP_COMMIT" "$NEW_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMP/app-x/.versekit-build.json"
 
   # ------------------------------------------------------------ 3. biliup
   STEP="下载 biliup"
@@ -237,6 +248,7 @@ EOF
 
   # ------------------------------------------------------------ 5. PATH 与收尾
   STEP="配置 PATH"
+  local UPDATING=0; [ "${VERSEKIT_UPDATE:-}" = 1 ] && UPDATING=1
   add_path_block() { # add_path_block <rc 文件>
     local rc="$1"
     mkdir -p "$(dirname "$rc")"
@@ -253,21 +265,22 @@ EOF
     bash) if [ "$OS" = darwin ]; then RC_FILE="$HOME/.bash_profile"; else RC_FILE="$HOME/.bashrc"; fi ;;
     fish)
       RC_FILE=""
-      mkdir -p "$HOME/.config/fish/conf.d"
-      printf '# 由 versekit 安装脚本添加；vk service uninstall 会删掉这个文件\nfish_add_path "%s/bin"\n' "$PREFIX" >"$HOME/.config/fish/conf.d/versekit.fish"
+      [ "$UPDATING" = 1 ] || { mkdir -p "$HOME/.config/fish/conf.d"
+      printf '# 由 versekit 安装脚本添加；vk service uninstall 会删掉这个文件\nfish_add_path "%s/bin"\n' "$PREFIX" >"$HOME/.config/fish/conf.d/versekit.fish"; }
       ;;
     *) RC_FILE="$HOME/.profile" ;;
   esac
-  [ -z "$RC_FILE" ] || add_path_block "$RC_FILE"
+  [ -z "$RC_FILE" ] || [ "$UPDATING" = 1 ] || add_path_block "$RC_FILE"
 
   STEP="打开控制台"
   local URL="http://127.0.0.1:$PORT"
-  if [ "${VERSEKIT_NO_OPEN:-}" != 1 ]; then
+  if [ "${VERSEKIT_NO_OPEN:-}" != 1 ] && [ "$UPDATING" != 1 ]; then
     if [ "$OS" = darwin ]; then open "$URL" >/dev/null 2>&1 || true
     elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true; fi
   fi
 
-  rm -rf "$PREFIX/app.prev"
+  # 后台更新要在「新版本起来后自检」通过之后才丢掉旧程序，所以那种情况留给更新程序清。
+  [ "$UPDATING" = 1 ] || rm -rf "$PREFIX/app.prev"
   DONE=1
   if [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_VERSION:-未知} → ${NEW_VERSION:-未知}（数据、账号、登录都保留）"
   else say "已安装 ${NEW_VERSION:-未知}"; fi

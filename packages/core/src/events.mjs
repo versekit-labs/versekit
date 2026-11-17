@@ -48,6 +48,9 @@ export const EVENTS = {
   "digest.daily": { severity: "info", required: false, card: "digest" },
   "metric.milestone": { severity: "info", required: false, card: null },
 
+  // 后台自动更新没成功、已经退回旧版本（#217）：留在系统页「最近出的问题」，不发手机通知（更新是后台的事）。
+  "update.failed": { severity: "warn", required: false, internal: true },
+
   "system.alive": { severity: "info", required: false, internal: true },
   "system.dead": { severity: "critical", required: true, card: "system" },
 
