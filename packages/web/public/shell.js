@@ -107,10 +107,16 @@
   async function renderHealth(nav, current) {
     let accounts = [];
     let failed = null;
+    let machine = null; // 与系统页「发布机」同源：GET /api/machine（machine.status）
     try {
       accounts = current ? await window.VK.groupAccounts(current.id) : [];
     } catch (err) {
       failed = err;
+    }
+    try {
+      machine = await window.VK.request(`/api/machine${current ? `?group=${encodeURIComponent(current.id)}` : ""}`);
+    } catch {
+      machine = null;
     }
     const ok = accounts.filter((a) => window.VK.loginState(a).key === "ok").length;
     const bad = accounts.length - ok;
@@ -121,7 +127,9 @@
           `<div><span class="dot${bad ? " bad" : ""}"></span>${
             accounts.length ? `${ok} 个账号登录正常${bad ? `，${bad} 个要处理` : ""}` : "还没有接入账号"
           }</div>`,
-          `<div><span class="dot"></span>发布机在线</div>`,
+          machine?.online
+            ? `<div><span class="dot"></span>发布机在线</div>`
+            : `<div><span class="dot bad"></span>${machine ? "发布机不在线" : "读不到发布机状态"}</div>`,
           ...(accounts.length ? [`<div><span class="dot"></span>今天还能发 ${left} 条</div>`] : []),
         ];
     nav.querySelector(".health")?.remove();

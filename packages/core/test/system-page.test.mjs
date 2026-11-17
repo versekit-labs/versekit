@@ -172,4 +172,55 @@ test("不需要应用凭证的平台说人话，不崩；空值拒绝", () => {
   assert.throws(() => handlers["account.credentials"]({ platform: "tiktok-api", clientKey: "  ", clientSecret: "s" }), /都要填/);
 });
 
+// ── ACC-v2-sys-11 / 12：侧栏发布机状态与接入下拉框文案 ─────────────────────────
+
+test("ACC-v2-sys-11 没有心跳时 machine.status 说不在线；侧栏与系统页读同一份，不再写死「发布机在线」", () => {
+  const m = handlers["machine.status"]({ group: group() });
+  assert.equal(m.online, false, "没有心跳就是不在线");
+  assert.equal(m.heartbeatAgeMs, null);
+  const shell = readFileSync(new URL("../../web/public/shell.js", import.meta.url), "utf8");
+  assert.match(shell, /\/api\/machine/, "侧栏读 machine.status");
+  assert.match(shell, /machine\?\.online/, "按 online 决定显示");
+  assert.match(shell, /dot bad[^`]*发布机不在线/, "不在线显示红点「发布机不在线」");
+  assert.doesNotMatch(shell, /`<div><span class="dot"><\/span>发布机在线<\/div>`,\s*\.\.\./, "不能无条件写死在线");
+});
+
+test("ACC-v2-sys-12 接入下拉框：没装适配器 / 都接上了 / 还有可接的，三种文案分开", () => {
+  const html = readFileSync(new URL("../../web/public/system.html", import.meta.url), "utf8");
+  assert.match(html, /没有已安装的平台/);
+  assert.match(html, /这个组的平台都接上了/);
+  assert.match(html, /allTaken/, "全部已接入时单独判断并禁用按钮");
+  assert.match(html, /ui\.addBusy \|\| none \|\| allTaken/, "都接上时禁用「接入账号」");
+});
+
+// 渲染 addRow，按浏览器规则算「下拉框折叠后可见的选中项」：取最后一个带 selected 的，否则第一个未禁用的，再否则第一个。
+function renderAddRow(ui) {
+  const html = readFileSync(new URL("../../web/public/system.html", import.meta.url), "utf8");
+  const m = html.match(/function addRow\(group\) \{[\s\S]*?\n  \}\n/);
+  assert.ok(m, "找得到 addRow");
+  const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const fn = new Function("ui", "esc", "labelOf", "TIKTOK_FAMILY", `${m[0]}; return addRow("g1");`);
+  const out = fn(ui, esc, (p) => ({ bilibili: "B站", xiaohongshu: "小红书" })[p] ?? p, ["tiktok", "tiktok-api"]);
+  const sel = out.match(/<select[^>]*>([\s\S]*?)<\/select>/);
+  const opts = [...sel[1].matchAll(/<option([^>]*)>([^<]*)<\/option>/g)].map((o) => ({ selected: /\bselected\b/.test(o[1]), disabled: /\bdisabled\b/.test(o[1]), text: o[2] }));
+  const shown = [...opts].reverse().find((o) => o.selected) ?? opts.find((o) => !o.disabled) ?? opts[0];
+  return { shown: shown.text, selectDisabled: /<select[^>]*disabled/.test(out), btnDisabled: /<button[^>]*data-add[^>]*disabled/.test(out) };
+}
+
+test("ACC-v2-sys-12 渲染后：都接上时下拉框可见文字是「这个组的平台都接上了」，按钮禁用", () => {
+  const platforms = [{ platform: "bilibili" }, { platform: "xiaohongshu" }];
+  const r = renderAddRow({ platforms, accounts: [{ platform: "bilibili" }, { platform: "xiaohongshu" }], addPlatform: "bilibili", addName: "", addNote: "" });
+  assert.equal(r.shown, "这个组的平台都接上了");
+  assert.ok(r.selectDisabled && r.btnDisabled);
+});
+
+test("ACC-v2-sys-12 渲染后：没装适配器 / 还有可接的", () => {
+  const none = renderAddRow({ platforms: [], accounts: [], addPlatform: "", addName: "", addNote: "" });
+  assert.equal(none.shown, "没有已安装的平台");
+  assert.ok(none.btnDisabled);
+  const some = renderAddRow({ platforms: [{ platform: "bilibili" }, { platform: "xiaohongshu" }], accounts: [{ platform: "bilibili" }], addPlatform: "bilibili", addName: "", addNote: "" });
+  assert.equal(some.shown, "小红书", "选中项已接入（disabled）时落到第一个可接的");
+  assert.ok(!some.selectDisabled && !some.btnDisabled);
+});
+
 after(() => {});
