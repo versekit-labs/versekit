@@ -6,24 +6,22 @@
 <title>系统 · versekit</title>
 <link rel="stylesheet" href="/app.css">
 <style>
-.legacy{display:flex;flex-direction:column;gap:0;margin-top:14px;max-width:720px}
-.legacy a{display:flex;align-items:center;gap:12px;min-height:52px;padding:10px 16px;border-bottom:1px solid var(--line2);text-decoration:none;color:var(--ink)}
-.legacy a:last-child{border-bottom:0}
-.legacy a:hover{background:var(--hover)}
-.legacy b{font-weight:600;display:block}
-.legacy .sub{display:block}
-.legacy .go{margin-left:auto;color:var(--ink2);font-size:13px;flex:none}
-.tk{max-width:720px;margin-top:14px;padding:16px 18px}
-.tk .who{display:flex;align-items:center;gap:14px;min-height:56px}
-.tk .av{width:48px;height:48px;border-radius:50%;background:var(--side);border:1px solid var(--line);flex:none;object-fit:cover;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--ink2)}
-.tk .nick{font-size:16px;font-weight:700;overflow-wrap:anywhere}
-.tk .meta{font-size:13px;color:var(--ink2);overflow-wrap:anywhere}
-.tk .go{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.tk .say{margin-top:12px;font-size:13px;color:var(--ink2);line-height:1.6;max-width:62ch}
-.tk .say.bad{color:var(--bad);font-weight:600}
-.tk .say a{color:var(--ink)}
-.tk .add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
-.tk .add input{flex:1 1 220px}
+/* 系统页：账号组与账号。结构照 docs/design/system.html，只补设计稿里没有的「接入账号」「应用凭证」两行。 */
+.app .sysrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.app .sysrow select{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font:inherit;font-size:14px;background:var(--paper);color:var(--ink);min-width:0}
+.app .sysrow input[type=text],.app .sysrow input[type=password]{width:220px}
+.app .sysrow .say{flex:1 1 100%;font-size:13px;color:var(--ink2);line-height:1.6}
+.app input[type=password]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0;color:var(--ink);font-family:inherit}
+.app .say.bad,.app .why.bad{color:var(--bad);font-weight:600}
+.app td .why{display:block;font-size:12px;color:var(--ink2);margin-top:2px;max-width:46ch;white-space:normal;line-height:1.5}
+.app td .why a{color:var(--ink)}
+.app tr.credrow td{background:var(--mark-bg);border-bottom:1px solid var(--mark-line)}
+.app tr.credrow .sysrow{margin-top:0}
+.app .av{width:20px;height:20px;border-radius:50%;object-fit:cover;vertical-align:-5px;margin-right:6px;background:var(--side)}
+.app .acct{white-space:nowrap}
+.app .grpname{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.app .grpname input[type=text]{width:180px}
+.app .tbtns{display:inline-flex;gap:10px;align-items:center;justify-content:flex-end}
 </style>
 </head>
 <body data-page="system">
@@ -33,119 +31,369 @@
     <a class="nv" href="works.html" data-key="works">作品</a>
     <a class="nv" href="data.html" data-key="data">数据</a>
     <a class="nv" href="system.html" data-key="system" aria-current="page">系统</a></nav>
-  <main id="main">
-    <div class="hd"><h1>系统</h1><span class="sub" id="sub">账号组、账号登录、发布机、平台规则。</span></div>
-    <section class="wip" aria-label="还没做">
-      <h3>这一页还没做</h3>
-      <p>系统页要把账号组、每个组的账号与登录状态、今天还能发几条、平台规则和发布方案放在一起；
-        这些读的是 <code>vk group list</code> / <code>vk account list</code> / <code>vk doctor --human</code> 的同一份结果。</p>
-      <div class="cmd">对应命令：<code>vk group list</code>　<code>vk account list</code>　<code>vk doctor --human</code></div>
-    </section>
-
-    <h2 class="sec">TikTok（官方接口）</h2>
-    <div class="panel tk" id="tk" aria-label="TikTok 官方接口账号"><div class="meta">正在读账号…</div></div>
-    <div class="cmd">对应命令：<code>vk account connect &lt;账号&gt;</code>　<code>vk account creator &lt;账号&gt;</code>　令牌只存在这台电脑上。</div>
-
-    <h2 class="sec">现在还能用的旧流程</h2>
-    <div class="panel legacy" aria-label="旧流程入口">
-      <a href="/groups.html"><span><b>账号组</b><span class="sub">新建组、切换当前组</span></span><span class="go">打开 →</span></a>
-      <a href="/accounts/add"><span><b>添加账号与登录</b><span class="sub">选平台、扫码或授权登录、重新登录</span></span><span class="go">打开 →</span></a>
-      <a href="/publish"><span><b>发布台</b><span class="sub">上传素材、选平台、预演一次发布</span></span><span class="go">打开 →</span></a>
-      <a href="/runs"><span><b>任务与日志</b><span class="sub">失败的发布在哪里、为什么失败、重试</span></span><span class="go">打开 →</span></a>
-    </div>
-    <div class="cmd">这几页还是旧外壳，这一轮先留着；系统页做完后它们会并进来。</div>
-  </main>
+  <main id="main"><div class="loading">正在读账号组和账号…</div></main>
 </div>
 <script src="/api.js"></script>
+<script src="/panel.js"></script>
 <script src="/shell.js"></script>
 <script>
-(async function () {
-  const sub = document.getElementById("sub");
-  try {
-    await window.VK.ready();
-    const current = window.VK.current();
-    if (current) sub.textContent = `${current.name} · 账号组、账号登录、发布机、平台规则。`;
-  } catch (err) {
-    sub.textContent = `读不到账号组：${err.message}`;
-  }
-})();
-
-// ── TikTok 官方接口：Connect TikTok（Login Kit）──────────────────────────────
-// 授权由守护进程在本机临时端口接回调；这里只负责：登记账号 → 打开授权链接 → 等结果 → 显示头像和昵称。
 (function () {
-  const box = document.getElementById("tk");
+  const main = document.getElementById("main");
   const VK = window.VK;
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const ui = { account: null, note: "", bad: false, url: null, busy: false };
+  const { esc, pfBadge, pfName } = window.VKPanel({ editing: new Set(), ver: new Map() });
+  const toast = (m) => window.VKShell?.toast(m);
 
+  // 平台在「接入账号」里的叫法：tiktok-api 是官方接口，和网页登录的 tiktok 分开说。
+  const LABEL = { xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
+  const labelOf = (p) => LABEL[p] ?? p;
+  const SCAN = new Set(["xiaohongshu", "douyin", "bilibili"]); // 扫码；其余是登录
+  const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口" };
+  const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
+
+  const ui = {
+    accounts: [], platforms: [], today: null, groupsErr: null,
+    login: {},            // accountId → { kind: "wait" | "fail", text, url }
+    renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
+    addPlatform: "", addName: "", addBusy: false, addNote: "",
+    cred: { key: "", secret: "", busy: false, note: "", bad: false },
+  };
+  const polls = new Map();
+
+  const stamp = (ms) => {
+    if (!ms) return "还没检查过";
+    const d = new Date(ms), now = new Date();
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+    return `${days <= 0 ? "今天" : days === 1 ? "昨天" : `${days} 天前`} ${hm} 检查过`;
+  };
+
+  const platformInfo = (p) => ui.platforms.find((x) => x.platform === p) ?? null;
+  const credsMissing = (a) => a.platform === "tiktok-api" && platformInfo("tiktok-api")?.credentials?.configured === false;
+  const connected = (a) => Boolean(a.credential_ref && a.state === "ok");
+
+  // ── 读数据 ─────────────────────────────────────────────────────────────
   async function load() {
-    await VK.ready();
-    const current = VK.current();
-    const list = (await VK.request("/api/accounts")).accounts ?? [];
-    ui.account = list.find((a) => a.platform === "tiktok-api" && (!current || a.groupId === current.id) && !a.removed_at) ?? null;
+    const group = VK.current();
+    const [accounts, platforms, today] = await Promise.all([
+      group ? VK.groupAccounts(group.id) : [],
+      VK.request("/api/platforms").then((d) => d.platforms ?? []).catch(() => []),
+      group ? VK.today().catch(() => null) : null,
+    ]);
+    ui.accounts = accounts;
+    ui.platforms = platforms;
+    ui.today = today;
+    const taken = (p) => accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
+    if (!ui.addPlatform || !platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (platforms.find((p) => !taken(p.platform)) ?? platforms[0])?.platform ?? "";
   }
 
-  const connected = (a) => Boolean(a && a.credential_ref && a.state === "ok");
+  async function refresh() {
+    await VK.bootstrap({ force: true });
+    await load();
+    draw();
+    window.VKShell?.refreshHealth();
+  }
+
+  // ── 画页面 ─────────────────────────────────────────────────────────────
+  function accountRow(a) {
+    const st = VK.loginState(a);
+    const lg = ui.login[a.id];
+    const name = a.display_name || a.handle;
+    const who = a.avatar_url && connected(a)
+      ? `<img class="av" src="${esc(a.avatar_url)}" alt="" width="20" height="20" referrerpolicy="no-referrer">${esc(name)}`
+      : esc(name);
+    let status;
+    if (lg?.kind === "wait") status = `<span class="st wait">${lg.waitLabel}</span>${lg.text ? `<span class="why">${lg.text}</span>` : ""}`;
+    else if (lg?.kind === "fail") status = `<span class="st bad">没登上</span><span class="why bad">${esc(lg.text)}</span>`;
+    else status = `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>`;
+    const q = a.quota;
+    const quota = q ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">不限</span>';
+    const note = [NOTE[a.platform], a.mode === "manual" ? "仅手动跟踪" : ""].filter(Boolean).join("，");
+    let act;
+    if (lg?.kind === "wait") {
+      act = a.platform === "tiktok-api" ? "" : `<span class="tbtns"><button class="link" data-cancel="${esc(a.id)}">取消</button><button class="btn pri" data-done="${esc(a.id)}">${SCAN.has(a.platform) ? "我扫好了" : "我登录好了"}</button></span>`;
+    } else if (credsMissing(a)) act = '<span class="sub">先填下面的应用凭证</span>';
+    else if (a.platform === "tiktok-api") act = `<button class="${connected(a) ? "link" : "btn pri"}" data-login="${esc(a.id)}">${connected(a) ? "重新连接" : "Connect TikTok"}</button>`;
+    else act = `<button class="${st.key === "ok" ? "link" : "btn"}" data-login="${esc(a.id)}">重新登录</button>`;
+    const row = `<tr data-acc="${esc(a.id)}"><td><span class="pfn">${pfBadge(a.platform)}${esc(labelOf(a.platform))}</span></td><td class="acct">${who}</td><td>${status}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${act}</td></tr>`;
+    if (!credsMissing(a)) return row;
+    const c = ui.cred;
+    return row + `<tr class="credrow"><td colspan="6"><form class="sysrow" data-credform onsubmit="return false"><b style="font-weight:600">TikTok 官方接口还没有应用凭证</b>` +
+      `<input type="text" id="cred-key" placeholder="client key" aria-label="client key" autocomplete="off" value="${esc(c.key)}">` +
+      `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
+      `<button class="btn pri" data-credsave${c.busy ? " disabled" : ""}>保存</button>` +
+      `<span class="say${c.bad ? " bad" : ""}" role="status">${esc(c.note) || "在 TikTok 开发者后台的应用里复制。保存在这台电脑的 config.json（权限 600），不会回显，也不进日志。"}</span></form></td></tr>`;
+  }
+
+  function groupRows(pending) {
+    const accountsOf = (id) => (VK.snapshot()?.accounts ?? []).filter((a) => a.groupId === id);
+    return VK.groups().map((g) => {
+      const isCur = g.id === VK.current()?.id;
+      const mine = ui.today ? ui.today.awaiting.length + ui.today.problems.length : 0;
+      const n = isCur ? mine : Number(pending[g.id] ?? 0);
+      const accs = accountsOf(g.id);
+      const names = accs.length ? `${accs.length} 个 · <span class="sub">${accs.map((a) => esc(pfName(a.platform))).join("、")}</span>` : '<span class="sub">还没有账号</span>';
+      const nameCell = ui.renaming === g.id
+        ? `<div class="grpname"><input type="text" id="rename-input" value="${esc(g.name)}" aria-label="新名字" maxlength="60"><button class="btn pri" data-renamesave="${esc(g.id)}">保存</button><button class="link" data-renamecancel>取消</button></div>`
+        : `<b style="font-weight:600">${esc(g.name)}</b>`;
+      const act = isCur ? '<span class="sub">当前</span>' : `<a class="btn" href="/system" data-sw="${esc(g.id)}">切过去</a>`;
+      return `<tr><td>${nameCell}</td><td>${names}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td>` +
+        `<td class="n"><span class="tbtns">${ui.renaming === g.id ? "" : `<button class="link" data-rename="${esc(g.id)}">改名</button>`}${act}</span></td></tr>`;
+    }).join("");
+  }
+
+  function addRow(group) {
+    const taken = (p) => ui.accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
+    const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
+    const none = !ui.platforms.length;
+    return `<div class="sysrow" id="addrow"><select id="add-platform" aria-label="平台"${none ? " disabled" : ""}>${opts || "<option>没有已安装的平台</option>"}</select>` +
+      `<input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}">` +
+      `<button class="btn pri" data-add${ui.addBusy || none || !group ? " disabled" : ""}>接入账号</button>` +
+      `<span class="say${ui.addBad ? " bad" : ""}" role="status">${esc(ui.addNote)}</span></div>`;
+  }
 
   function draw() {
-    const a = ui.account;
-    const say = ui.note ? `<div class="say ${ui.bad ? "bad" : ""}" role="status">${ui.note}</div>` : "";
-    if (!a) {
-      box.innerHTML = `<div class="meta">还没有 TikTok 账号。填你的 TikTok 用户名，再点 Connect TikTok，在 TikTok 页面登录并同意即可。</div>` +
-        `<div class="add"><input class="input" id="tk-handle" type="text" placeholder="@你的用户名" aria-label="TikTok 用户名" autocomplete="off">` +
-        `<button class="btn pri" type="button" id="tk-connect"${ui.busy ? " disabled" : ""}>Connect TikTok</button></div>${say}`;
-      return;
+    const group = VK.current();
+    const pending = {};
+    for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
+    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok").length + (ui.today?.problems?.length ?? 0);
+    const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
+
+    const groupsBlock = VK.groups().length
+      ? `<div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${groupRows(pending)}</tbody></table></div>`
+      : '<div class="panel empty">还没有账号组。账号组是一套平台账号，有自己的作品、待办、数据和发布方案；先建一个，再接入账号。</div>';
+    const newGroup = ui.newGroup || !VK.groups().length
+      ? `<div class="sysrow"><input type="text" id="ng-name" placeholder="账号组名字" aria-label="账号组名字" maxlength="60" value="${esc(ui.newGroupName)}"><button class="btn pri" data-ngsave${ui.groupBusy ? " disabled" : ""}>创建</button><button class="link" data-ngcancel>取消</button><span class="say bad" role="status">${esc(ui.groupNote)}</span></div>` : "";
+
+    let accountsBlock = "";
+    if (!group) {
+      accountsBlock = '<div class="panel empty">先建一个账号组，账号才有地方放。</div>';
+    } else {
+      accountsBlock = ui.accounts.length
+        ? `<div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ui.accounts.map(accountRow).join("")}</tbody></table></div>`
+        : '<div class="panel empty">这个账号组还没有账号。在下面选一个平台、填账号名，接入第一个。</div>';
     }
-    const name = a.display_name || a.handle;
-    const avatar = a.avatar_url
-      ? `<img class="av" src="${esc(a.avatar_url)}" alt="${esc(name)} 的头像" width="48" height="48" referrerpolicy="no-referrer">`
-      : `<span class="av" aria-hidden="true">${esc(String(name).replace(/^@/, "").slice(0, 1).toUpperCase())}</span>`;
-    const ok = connected(a);
-    box.innerHTML = `<div class="who">${ok ? avatar : '<span class="av" aria-hidden="true">T</span>'}` +
-      `<div><div class="nick">${ok ? esc(name) : "TikTok"}</div>` +
-      `<div class="meta">${ok ? `${esc(a.handle)} · 已连接，用官方接口发布` : `${esc(a.handle)} · 还没连接`}</div></div>` +
-      `<div class="go"><button class="btn ${ok ? "" : "pri"}" type="button" id="tk-connect"${ui.busy ? " disabled" : ""}>${ok ? "重新连接" : "Connect TikTok"}</button></div></div>${say}`;
+
+    main.innerHTML = `
+  <div class="hd"><h1>系统</h1><span class="sub" id="sub">${sub}</span></div>
+  <h2 class="sec" id="groups" style="margin-top:0">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>
+  ${groupsBlock}
+  ${newGroup}
+  <div class="cmd">对应命令：<code>vk group list</code>　<code>vk group add &lt;名字&gt;</code>　<code>vk group use &lt;名字&gt;</code>　<code>vk group rename &lt;组&gt; &lt;新名字&gt;</code>　飞书卡片标题会带上账号组的名字。${ui.newGroup || !VK.groups().length ? "" : '<button class="link" data-newg>新建账号组</button>'}</div>
+  <h2 class="sec" id="accounts">账号${group ? ` · ${esc(group.name)}` : ""}</h2>
+  ${accountsBlock}
+  ${group ? addRow(group) : ""}
+  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account add &lt;平台&gt; --group &lt;组&gt; --name &lt;名字&gt;</code>　<code>vk account login &lt;账号 id&gt; --open</code>　<code>vk account credentials tiktok</code>　登录在这台电脑上完成，凭证只存在本机。</div>`;
   }
 
-  async function connect() {
-    if (ui.busy) return;
-    ui.busy = true; ui.bad = false; ui.url = null;
+  // ── 登录（就地完成，不跳旧页面）──────────────────────────────────────────
+  const post = (path, body) => VK.request(path, { method: "POST", body });
+  const acc = (id) => ui.accounts.find((a) => a.id === id);
+
+  function stopPoll(id) {
+    const t = polls.get(id);
+    if (t) clearInterval(t);
+    polls.delete(id);
+  }
+  const fail = (id, text) => { stopPoll(id); ui.login[id] = { kind: "fail", text }; draw(); };
+  const waitLabelOf = (platform) => (SCAN.has(platform) ? "等你扫码" : "等你登录");
+
+  async function succeed(id) {
+    stopPoll(id);
+    delete ui.login[id];
+    toast("登录正常");
+    await refresh();
+  }
+
+  /** account.check：适配器真实检查（B站 = biliup renew）。只有 ok 才算登上。 */
+  async function confirm(id, { manual = false } = {}) {
+    const a = acc(id);
+    const label = a?.platform === "bilibili" ? "biliup" : "平台";
     try {
-      if (!ui.account) {
-        const handle = (document.getElementById("tk-handle")?.value ?? "").trim();
-        if (!handle) throw new Error("先填 TikTok 用户名");
-        const group = VK.current();
-        if (!group) throw new Error("先建一个账号组");
-        await VK.request("/api/accounts", { method: "POST", body: { platform: "tiktok-api", name: handle.replace(/^@/, ""), handle: handle.startsWith("@") ? handle : "@" + handle, group: group.id } });
-        await load();
+      const r = await post(`/api/accounts/${encodeURIComponent(id)}/check`, { accountId: id });
+      if (r.state === "ok") return succeed(id), true;
+      if (r.skipped) { if (manual) fail(id, "这个平台还没有自动检查，没法确认登录；可以在「今天」里发一条试试。"); return false; }
+      const reason = { expiring: "已登录，但凭证快过期了，请重新登录一次", expired: manual ? "还没检测到登录：先在打开的窗口里完成登录" : `登录信息已保存，但${label}校验没通过`, banned: "账号在平台上被限制，需要先在平台侧处理" }[r.state] ?? `当前状态：${r.state}`;
+      if (manual && r.state === "expired") { ui.login[id] = { ...ui.login[id], text: esc(reason) }; draw(); return false; }
+      fail(id, `${reason}${r.detail ? `（${r.detail}）` : ""}。点「重新登录」再来一次。`);
+    } catch (err) {
+      fail(id, `检查失败：${err.message}。点「重新登录」再来一次。`);
+    }
+    return false;
+  }
+
+  let confirming = new Set();
+  async function pollOnce(id) {
+    try {
+      const r = await post(`/api/accounts/${encodeURIComponent(id)}/login/status`, { accountId: id });
+      if (r.state === "ok") {
+        if (confirming.has(id)) return;
+        confirming.add(id);
+        try {
+          // 拿到 cookie 不等于能用：统一再过一遍 account.check，通过才显示正常。
+          if (acc(id)?.platform === "bilibili") await confirm(id); else await succeed(id);
+        } finally { confirming.delete(id); }
+        return;
       }
-      const id = ui.account.id;
-      ui.note = "正在准备授权链接…"; draw();
-      let r = await VK.request(`/api/accounts/${encodeURIComponent(id)}/connect`, { method: "POST", body: { accountId: id } });
+      if (r.state === "idle" || r.state === "failed") fail(id, r.note ?? "没有检测到登录完成：点「重新登录」再试。");
+    } catch {
+      /* 轮询里的瞬时错误不打断；超时由 startPoll 兜底 */
+    }
+  }
+
+  function startPoll(id) {
+    stopPoll(id);
+    let ticks = 0; // 2 秒一次，最多认 5 分钟
+    polls.set(id, setInterval(() => {
+      if (++ticks > 150) return fail(id, "5 分钟内没有检测到登录完成：点「重新登录」再试。");
+      pollOnce(id);
+    }, 2000));
+  }
+
+  async function connectTikTok(id) {
+    ui.login[id] = { kind: "wait", waitLabel: "等你登录", text: "正在准备授权链接…" };
+    draw();
+    try {
+      let r = await post(`/api/accounts/${encodeURIComponent(id)}/connect`, { accountId: id });
       if (r.state === "waiting") {
-        ui.url = r.url;
-        ui.note = `请在新打开的 TikTok 页面登录并同意授权；没有弹出就 <a href="${esc(r.url)}" target="_blank" rel="noopener">点这里打开授权页</a>。授权完成后这里会自动显示头像和昵称。`;
+        ui.login[id] = { kind: "wait", waitLabel: "等你登录", text: `在新打开的 TikTok 页面登录并同意授权；没弹出就 <a href="${esc(r.url)}" target="_blank" rel="noopener">点这里打开授权页</a>。` };
         draw();
         window.open(r.url, "_blank", "noopener");
-        // 同一账号再调一次 = 等结果（长轮询，最多等 20 秒一轮）。
         for (let i = 0; i < 30 && r.state === "waiting"; i++) {
-          r = await VK.request(`/api/accounts/${encodeURIComponent(id)}/connect`, { method: "POST", body: { accountId: id, timeoutMs: 20000 } });
+          if (ui.login[id]?.kind !== "wait") return; // 被取消
+          r = await post(`/api/accounts/${encodeURIComponent(id)}/connect`, { accountId: id, timeoutMs: 20000 });
         }
       }
-      if (r.state !== "connected") throw new Error("等了很久还没有授权完成：再点一次 Connect TikTok 重新开始");
-      await load();
-      ui.note = "已连接。以后在「今天」里确认 TikTok 稿子时，可以选隐私级别后直接发布，或送到 TikTok 草稿箱。";
+      if (r.state !== "connected") throw new Error("等了很久还没有授权完成");
+      await succeed(id);
     } catch (err) {
-      ui.bad = true;
-      ui.note = `没连上：${esc(err.message)}`;
-    } finally {
-      ui.busy = false;
-      draw();
+      fail(id, `没连上：${err.message}。点「重新连接」再来一次。`);
     }
   }
 
-  box.addEventListener("click", (e) => { if (e.target.closest("#tk-connect")) connect(); });
-  load().then(draw, (err) => { box.innerHTML = `<div class="say bad">读不到账号：${esc(err.message)}</div>`; });
+  async function startLogin(id) {
+    const a = acc(id);
+    if (!a) return;
+    if (a.platform === "tiktok-api") return connectTikTok(id);
+    if (!platformInfo(a.platform)) return fail(id, `没有安装 ${labelOf(a.platform)} 适配器（packages/adapter-${a.platform}），账号已登记但没法登录。`);
+    ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: "正在打开登录窗口…" };
+    draw();
+    try {
+      await post(`/api/accounts/${encodeURIComponent(id)}/login/open`, { accountId: id });
+      ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: SCAN.has(a.platform) ? "在弹出的窗口里扫码并确认，这里会自动认出来。" : "在弹出的窗口里完成登录，这里会自动认出来。" };
+      draw();
+      startPoll(id);
+    } catch (err) {
+      fail(id, `打不开登录窗口：${err.message}`);
+    }
+  }
+
+  // ── 接入账号 / 账号组 / 应用凭证 ───────────────────────────────────────────
+  async function addAccount() {
+    const group = VK.current();
+    const name = ui.addName.trim();
+    const say = (t, bad = true) => { ui.addNote = t; ui.addBad = bad; draw(); };
+    if (!ui.addPlatform) return say("先选一个平台");
+    if (!name) return say("请填账号名：同一平台可以用它区分不同账号");
+    if (name.toLocaleLowerCase() === String(group.name).trim().toLocaleLowerCase()) return say("别把账号组名当账号名：请填平台上的账号名");
+    if (ui.accounts.some((a) => String(a.handle ?? a.display_name ?? "").replace(/^@/, "").toLocaleLowerCase() === name.replace(/^@/, "").toLocaleLowerCase())) return say(`这个组里已经有叫「${name}」的账号，两个平台同名会分不清，换一个名字。`);
+    ui.addBusy = true; ui.addNote = ""; draw();
+    try {
+      const isTk = ui.addPlatform === "tiktok-api";
+      const body = { platform: ui.addPlatform, name: isTk ? name.replace(/^@/, "") : name, group: group.id, ...(isTk ? { handle: name.startsWith("@") ? name : `@${name}` } : {}) };
+      const r = await post("/api/accounts", body);
+      ui.addName = ""; ui.addBusy = false; ui.addNote = ""; ui.addBad = false;
+      await refresh();
+      if (r.existed) return toast("这个账号已经在组里了");
+      await startLogin(r.id);
+    } catch (err) {
+      ui.addBusy = false;
+      say(`${err.message}（换号要先 vk account remove 旧账号）`);
+    }
+  }
+
+  async function groupAction(fn, okMsg) {
+    ui.groupBusy = true; ui.groupNote = ""; draw();
+    try {
+      await fn();
+      ui.groupBusy = false;
+      if (okMsg) toast(okMsg);
+      return true;
+    } catch (err) {
+      ui.groupBusy = false; ui.groupNote = err.message; draw();
+      return false;
+    }
+  }
+
+  async function saveCreds() {
+    const c = ui.cred;
+    c.bad = false; c.note = "";
+    if (!c.key.trim() || !c.secret.trim()) { c.bad = true; c.note = "client key 和 client secret 都要填"; return draw(); }
+    c.busy = true; draw();
+    try {
+      await post("/api/platforms/tiktok-api/credentials", { platform: "tiktok-api", clientKey: c.key.trim(), clientSecret: c.secret.trim() });
+      c.key = ""; c.secret = ""; c.busy = false; c.note = "";
+      toast("应用凭证已保存，可以 Connect 了");
+      await refresh();
+    } catch (err) {
+      c.busy = false; c.bad = true; c.note = `没保存：${err.message}`; draw();
+    }
+  }
+
+  // ── 事件 ────────────────────────────────────────────────────────────────
+  main.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.id === "add-name") ui.addName = t.value;
+    else if (t.id === "ng-name") ui.newGroupName = t.value;
+    else if (t.id === "cred-key") ui.cred.key = t.value;
+    else if (t.id === "cred-secret") ui.cred.secret = t.value;
+  });
+  main.addEventListener("change", (e) => { if (e.target.id === "add-platform") ui.addPlatform = e.target.value; });
+  main.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (e.target.id === "add-name") { e.preventDefault(); addAccount(); }
+    else if (e.target.id === "ng-name") { e.preventDefault(); main.querySelector("[data-ngsave]")?.click(); }
+    else if (e.target.id === "rename-input") { e.preventDefault(); main.querySelector("[data-renamesave]")?.click(); }
+    else if (e.target.id === "cred-secret") { e.preventDefault(); saveCreds(); }
+  });
+  main.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel]");
+    if (!b) return;
+    const d = b.dataset;
+    if ("sw" in d) {
+      e.preventDefault();
+      try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
+    } else if (d.login) startLogin(d.login);
+    else if (d.done) { const id = d.done; ui.login[id] = { ...ui.login[id], text: "正在检查登录状态…" }; draw(); confirm(id, { manual: true }); }
+    else if (d.cancel) { stopPoll(d.cancel); delete ui.login[d.cancel]; draw(); }
+    else if ("add" in d) addAccount();
+    else if ("credsave" in d) saveCreds();
+    else if ("newg" in d) { ui.newGroup = true; draw(); document.getElementById("ng-name")?.focus(); }
+    else if ("ngcancel" in d) { ui.newGroup = false; ui.groupNote = ""; ui.newGroupName = ""; draw(); }
+    else if ("ngsave" in d) {
+      const name = ui.newGroupName.trim();
+      if (!name) { ui.groupNote = "请填账号组名称"; return draw(); }
+      if (await groupAction(() => VK.addGroup(name), `已新建「${name}」并切到它`)) { location.reload(); }
+    } else if (d.rename) { ui.renaming = d.rename; ui.groupNote = ""; draw(); document.getElementById("rename-input")?.select(); }
+    else if ("renamecancel" in d) { ui.renaming = null; draw(); }
+    else if (d.renamesave) {
+      const name = document.getElementById("rename-input")?.value.trim();
+      if (!name) return toast("组名不能为空");
+      if (await groupAction(() => VK.renameGroup(d.renamesave, name), "已改名")) { ui.renaming = null; await refresh(); }
+    }
+  });
+
+  // ── 启动 ────────────────────────────────────────────────────────────────
+  VK.ready()
+    .then(load)
+    .then(() => {
+      draw();
+      const params = new URLSearchParams(location.search);
+      if (params.get("platform") && ui.platforms.some((p) => p.platform === params.get("platform"))) { ui.addPlatform = params.get("platform"); draw(); }
+      const hash = location.hash.slice(1);
+      if (hash === "add") { const row = document.getElementById("addrow"); row?.scrollIntoView({ block: "center" }); document.getElementById("add-name")?.focus(); }
+      else if (hash === "groups") document.getElementById("groups")?.scrollIntoView();
+    })
+    .catch((err) => { main.innerHTML = `<div class="hd"><h1>系统</h1></div><div class="note bad">读不到数据：${esc(err.message)}（守护进程在跑吗？终端执行 vk serve）</div>`; });
 })();
 </script>
 </body>

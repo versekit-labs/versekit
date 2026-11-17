@@ -20,7 +20,7 @@ import { resolvePublishCopy } from "../../core/src/publish-flow.mjs";
 import { callApi, fetchWithBackoff, classifyError, PauseError, PAUSE_CODES } from "./api.mjs";
 import { connect, ensureAccessToken, fetchProfile, REFRESH_EXPIRING_MS } from "./auth.mjs";
 import { mp4DurationSeconds } from "./mp4.mjs";
-import { clientCredentials, MISSING_CLIENT_HINT, PLATFORM } from "./settings.mjs";
+import { clientCredentials, credentialStatus, saveClientCredentials, MISSING_CLIENT_HINT, PLATFORM } from "./settings.mjs";
 
 export { PAUSE_CODES, PauseError };
 
@@ -333,4 +333,6 @@ export default {
   connect: connectAccount,
   creatorInfo,
   fetchProfile,
+  /** 应用凭证：状态（不含 secret）与保存；core 的 account.credentials 命令只通过它们读写。 */
+  credentials: { status: credentialStatus, save: saveClientCredentials },
 };

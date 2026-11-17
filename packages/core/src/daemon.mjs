@@ -54,11 +54,22 @@ const PAGE_ALIASES = new Map([
   ["/system", "system.html"],
   // 旧流程：文件仍在，路径不变，从系统页给入口。
   ["/accounts", "system.html"],
-  ["/accounts/add", "add.html"],
   ["/plan", "today.html"],
   ["/publish", "publish.html"],
   ["/runs", "runs.html"],
   ["/tasks", "runs.html"],
+]);
+
+/**
+ * 旧地址跳到系统页对应位置（ACC-v2-sys-07）：接入账号和账号组都并进了 /system，
+ * 书签、旧页面里的链接、飞书卡片里的老链接都不该 404。302 而不是 301：目标是页面内锚点，别被浏览器永久缓存。
+ */
+const LEGACY_REDIRECTS = new Map([
+  ["/accounts/add", "/system#add"],
+  ["/add", "/system#add"],
+  ["/add.html", "/system#add"],
+  ["/groups", "/system#groups"],
+  ["/groups.html", "/system#groups"],
 ]);
 
 /** 静态页只服务 web/public 里的文件；任何越界路径都当 404，不做「聪明」的路径修正。 */
@@ -509,6 +520,13 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
 
     // 浏览器打开的是本地控制台；/api/* 之外只有静态页。
     if ((req.method === "GET" || req.method === "HEAD") && !pathname.startsWith("/api/")) {
+      const moved = LEGACY_REDIRECTS.get(pathname.replace(/\/+$/, "") || "/");
+      if (moved) {
+        const search = url.search && !moved.includes("?") ? url.search : "";
+        const [path, hash = ""] = moved.split("#");
+        res.writeHead(302, { location: `${path}${search}${hash ? `#${hash}` : ""}` });
+        return res.end();
+      }
       const file = staticFile(webRoot, pathname);
       if (file) return serveStatic(res, file);
       return send(res, 404, { ok: false, error: { code: "not_found", message: `没有这个文件：${pathname}` } });

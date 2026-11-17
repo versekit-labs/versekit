@@ -53,13 +53,13 @@
 
   /**
    * 账号组切换：收起时是「名字 + 一行说明」，展开是组列表（当前组标"当前"，
-   * 别的组有待办时带数字）和"新建账号组"（旧流程 groups.html 还在，直接给过去）。
+   * 别的组有待办时带数字）和"新建账号组"（账号组管理在系统页）。
    */
   function renderGroupSwitch(nav, groups, current, pending) {
     if (!current) {
       // 还没建组：不假装有一个组，指向选组/建组页。
       const empty = el(
-        `<a class="grp-empty" href="/groups.html">还没有账号组 · 去建一个</a>`,
+        `<a class="grp-empty" href="/system#groups">还没有账号组 · 去建一个</a>`,
       );
       nav.querySelector(".brand")?.after(empty);
       return;
@@ -70,7 +70,7 @@
       .map((group) => {
         const isCurrent = group.id === current.id;
         const count = isCurrent ? 0 : Number(pending[group.id] ?? 0);
-        return `<a href="/groups.html" data-group="${esc(group.id)}"${isCurrent ? ' aria-current="true"' : ""}><span><b>${esc(
+        return `<a href="/system#groups" data-group="${esc(group.id)}"${isCurrent ? ' aria-current="true"' : ""}><span><b>${esc(
           group.name,
         )}</b><small>${isCurrent ? "当前组" : count ? `${count} 件事等你` : "没有等你处理的"}</small></span>${groupBadge(group, count)}</a>`;
       })
@@ -78,7 +78,7 @@
     const box = el(
       `<details class="grp"><summary aria-label="账号组：${esc(current.name)}，点开切换"><span><b>${esc(
         current.name,
-      )}</b><small>${esc(sub)}</small></span></summary><div class="menu">${menu}<a class="btn" href="/groups.html">新建账号组</a></div></details>`,
+      )}</b><small>${esc(sub)}</small></span></summary><div class="menu">${menu}<a class="btn" href="/system#groups">新建账号组</a></div></details>`,
     );
     box.addEventListener("click", async (event) => {
       const link = event.target.closest("a[data-group]");
@@ -100,17 +100,32 @@
     nav.querySelector(".brand")?.after(box);
   }
 
-  function renderHealth(nav, accounts, current) {
-    const mine = current ? accounts.filter((account) => account.groupId === current.id) : [];
-    const ok = mine.filter((account) => account.state === "ok").length;
-    const bad = mine.length - ok;
-    const lines = [
-      `<div><span class="dot${bad ? " bad" : ""}"></span>${
-        mine.length ? `${ok} 个账号登录正常${bad ? `，${bad} 个要重新登录` : ""}` : "还没有接入账号"
-      }</div>`,
-      `<div><span class="dot"></span>发布机在线</div>`,
-    ];
-    const health = el(`<div class="health"></div>`);
+  /**
+   * 侧栏底部摘要：几个账号登录正常、发布机在线、今天还能发几条。
+   * 读 account.list 的同一份结果（与系统页账号表同源），所以两处不会各说各话。
+   */
+  async function renderHealth(nav, current) {
+    let accounts = [];
+    let failed = null;
+    try {
+      accounts = current ? await window.VK.groupAccounts(current.id) : [];
+    } catch (err) {
+      failed = err;
+    }
+    const ok = accounts.filter((a) => window.VK.loginState(a).key === "ok").length;
+    const bad = accounts.length - ok;
+    const left = accounts.reduce((n, a) => n + (a.quota?.left ?? 0), 0);
+    const lines = failed
+      ? [`<div><span class="dot bad"></span>读不到账号状态</div>`]
+      : [
+          `<div><span class="dot${bad ? " bad" : ""}"></span>${
+            accounts.length ? `${ok} 个账号登录正常${bad ? `，${bad} 个要处理` : ""}` : "还没有接入账号"
+          }</div>`,
+          `<div><span class="dot"></span>发布机在线</div>`,
+          ...(accounts.length ? [`<div><span class="dot"></span>今天还能发 ${left} 条</div>`] : []),
+        ];
+    nav.querySelector(".health")?.remove();
+    const health = el(`<div class="health" data-health></div>`);
     health.innerHTML = lines.join("");
     nav.append(health);
   }
@@ -169,7 +184,7 @@
 
     renderGroupSwitch(nav, groups, current, pending);
     fillTodo(nav, mine);
-    renderHealth(nav, VK.snapshot()?.accounts ?? [], current);
+    await renderHealth(nav, current);
   }
 
   function renderLegacySidebar(sidebar) {
@@ -193,7 +208,15 @@
       '<div class="local"><strong><i></i>本地运行中</strong>凭证与数据只在这台电脑</div>';
   }
 
-  window.VKShell = { render, NAV, toast, pageKey };
+  /** 页面改了账号（登录成功、接入、重新登录）后调用：侧栏摘要重新读一遍。 */
+  async function refreshHealth() {
+    const nav = document.querySelector("nav.nav");
+    if (!nav || !window.VK) return;
+    await window.VK.bootstrap({ force: true }).catch(() => {});
+    await renderHealth(nav, window.VK.current());
+  }
+
+  window.VKShell = { render, NAV, toast, pageKey, refreshHealth };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render);
   else render();
 })();

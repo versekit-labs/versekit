@@ -9,7 +9,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { paths } from "../../core/src/index.mjs";
-import { readConfig } from "../../core/src/config.mjs";
+import { readConfig, updateConfig } from "../../core/src/config.mjs";
 
 export const SCOPES = ["user.info.basic", "video.publish", "video.upload"];
 export const PLATFORM = "tiktok-api";
@@ -25,6 +25,33 @@ export function clientCredentials() {
     clientKey: process.env.TIKTOK_CLIENT_KEY || cfg.client_key || null,
     clientSecret: process.env.TIKTOK_CLIENT_SECRET || cfg.client_secret || null,
   };
+}
+
+/**
+ * 应用凭证的来源与是否齐全。只返回「有没有、从哪来、client key 是什么」，**永远不返回 secret**：
+ * 这个结果会原样进 HTTP 响应，页面据此决定显示「填凭证」还是「Connect」。
+ */
+export function credentialStatus() {
+  const cfg = readConfig().tiktok ?? {};
+  const pick = (envName, field) => (process.env[envName] ? "env" : cfg[field] ? "config" : null);
+  const keySource = pick("TIKTOK_CLIENT_KEY", "client_key");
+  const secretSource = pick("TIKTOK_CLIENT_SECRET", "client_secret");
+  const { clientKey } = clientCredentials();
+  return { configured: Boolean(keySource && secretSource), clientKey: clientKey ?? null, hasSecret: Boolean(secretSource), source: secretSource ?? keySource };
+}
+
+/**
+ * 把应用凭证写进本机 config.json 的 tiktok.client_key / tiktok.client_secret（文件 0600，
+ * writeConfig 保证）。环境变量仍然优先，所以这里写了也可能被环境变量盖住——状态里的 source 会说清楚。
+ * 返回值是 credentialStatus()，不含 secret。
+ */
+export function saveClientCredentials({ clientKey, clientSecret } = {}) {
+  const key = String(clientKey ?? "").trim();
+  const secret = String(clientSecret ?? "").trim();
+  if (!key || !secret) throw new Error("client key 和 client secret 都要填");
+  if (/\s/.test(key) || /\s/.test(secret)) throw new Error("client key / client secret 里不能有空格或换行：检查是不是复制多了");
+  updateConfig({ tiktok: { client_key: key, client_secret: secret } });
+  return credentialStatus();
 }
 
 export const MISSING_CLIENT_HINT =
