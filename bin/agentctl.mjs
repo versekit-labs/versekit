@@ -29,7 +29,7 @@
 // **不把"有活要干"当成失败**——那会让 cron/循环误判。
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -450,9 +450,70 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
   return { ...withPull, blocked: state === "blocked" };
 }
 
+// ---------------------------------------------------------------- worktree 对账（ACC-harness-lane-02）
+
+/**
+ * 本项目里没被 lane 登记的 worktree：只列不删（删由协调器/人决定）。
+ * list：`orca worktree list --json` 的 result.worktrees；registered：lane-N.worktree 里的路径；
+ * selfPath：当前仓库路径，用来确定"本项目"（同 repoId）并排除自己和主 worktree。
+ */
+function unregisteredWorktrees(list, { registered = [], selfPath = "", acceptancePath = "" } = {}) {
+  const norm = (p) => {
+    const t = String(p ?? "").replace(/\/+$/, "");
+    try { return realpathSync(t); } catch { return t; }
+  };
+  const known = new Set(registered.map(norm));
+  if (acceptancePath) known.add(norm(acceptancePath)); // 验收 worktree 不算未登记
+  const self = list.find((w) => norm(w.path) === norm(selfPath));
+  const repoId = self?.repoId;
+  return list
+    .filter((w) => !w.isMainWorktree && !w.isBare && !w.isArchived)
+    .filter((w) => !/^(refs\/heads\/)?coord\//.test(String(w.branch ?? ""))) // 协调器 worktree
+    .filter((w) => (repoId ? w.repoId === repoId : true))
+    .filter((w) => norm(w.path) !== norm(selfPath) && !known.has(norm(w.path)))
+    .map((w) => ({ path: w.path, branch: String(w.branch ?? "").replace(/^refs\/heads\//, ""), name: w.displayName ?? "" }));
+}
+
+/** 验收 worktree 路径：环境变量 ACCEPTANCE_WT 优先，否则读 .orca-kit/cycle.env；只认 path:<绝对路径>。 */
+function acceptanceWorktreePath() {
+  let v = process.env.ACCEPTANCE_WT;
+  if (!v) {
+    try {
+      const m = readFileSync(join(ROOT, ".orca-kit/cycle.env"), "utf8").match(/^ACCEPTANCE_WT=(.*)$/m);
+      v = m?.[1]?.trim();
+    } catch { /* 没有配置文件 */ }
+  }
+  return v?.startsWith("path:") ? v.slice(5) : "";
+}
+
+function laneRegisteredPaths(stateDir) {
+  const dir = join(stateDir, "lanes");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => /^lane-\d+\.worktree$/.test(f))
+    .map((f) => readFileSync(join(dir, f), "utf8").trim())
+    .filter(Boolean);
+}
+
+/** 读 orca 的 worktree 列表；orca 不可用时返回 null（对账是附加信息，不能拖垮 tick）。 */
+function collectUnregisteredWorktrees() {
+  try {
+    const stateDir = process.env.STATE_DIR || join(homedir(), ".orca/versekit-state");
+    const out = execFileSync("orca", ["worktree", "list", "--json", "--limit", "200"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 15000,
+    });
+    const list = JSON.parse(out)?.result?.worktrees ?? [];
+    return unregisteredWorktrees(list, { registered: laneRegisteredPaths(stateDir), selfPath: realpathSync(ROOT), acceptancePath: acceptanceWorktreePath() });
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------- 输出
 
-function render({ repo, rows, quota, verbose, transitions = [], applied = false }) {
+function render({ repo, rows, quota, verbose, transitions = [], applied = false, strayWorktrees = null }) {
   const stamp = new Date().toISOString().replace("T", " ").slice(0, 16);
   const lines = [];
   lines.push(`agentctl tick   ${repo.full}   ${stamp} UTC`);
@@ -496,6 +557,11 @@ function render({ repo, rows, quota, verbose, transitions = [], applied = false 
       const tail = t.why ? `  （${t.why}）` : "";
       lines.push(`   ${mark} #${t.number}  ${t.from} → ${t.to}${tail}`);
     }
+  }
+  if (strayWorktrees?.length) {
+    lines.push("");
+    lines.push(`  未登记的 worktree ${strayWorktrees.length} 个（只列不删，确认没用后 orca worktree rm）：`);
+    for (const w of strayWorktrees) lines.push(`   · ${w.path}  ${w.branch}`);
   }
   return lines.join("\n");
 }
@@ -1688,13 +1754,14 @@ async function main(argv) {
   // 即使不加 --apply 也走一遍（dryRun），这样输出里能看到"本轮会改什么"——
   // 只读观察和真实执行共用同一条代码路径，避免"演练和实战不一样"。
   const transitions = await applyTransitions(repo, rows, { dryRun: !apply });
+  const strayWorktrees = collectUnregisteredWorktrees();
 
   if (json) {
     process.stdout.write(
-      JSON.stringify({ repo: repo.full, quota: board.quota, rows, transitions, applied: apply }, null, 2) + "\n",
+      JSON.stringify({ repo: repo.full, quota: board.quota, rows, transitions, applied: apply, strayWorktrees }, null, 2) + "\n",
     );
   } else {
-    process.stdout.write(render({ repo, rows, quota: board.quota, verbose, transitions, applied: apply }) + "\n");
+    process.stdout.write(render({ repo, rows, quota: board.quota, verbose, transitions, applied: apply, strayWorktrees }) + "\n");
   }
 
   const failed = transitions.filter((t) => t.status === "failed");
@@ -1723,6 +1790,7 @@ if (invokedDirectly) {
 }
 
 export {
+  unregisteredWorktrees,
   TRANSITIONS,
   canTransition,
   issueAccIds,
