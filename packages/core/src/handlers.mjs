@@ -297,7 +297,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       // TikTok 官方接口的账号带上头像（授权时从 user.info.basic 取得，界面要显示）。
       const stamp = (list) =>
         list.map((a) => {
-          const view = { ...withCheckStatus(a), quota: quotaToday(a) };
+          const conflict = store.getIdentityConflict(a.id);
+          const view = { ...withCheckStatus(a), quota: quotaToday(a), ...(conflict ? { identityConflict: conflict.message } : {}) };
           const profile = store.accountProfile(a);
           return profile ? { ...view, avatar_url: profile.avatarUrl } : view;
         });

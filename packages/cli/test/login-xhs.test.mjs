@@ -188,3 +188,21 @@ test("pageLoggedIn：控制台页面算登录成功，登录页不算", { skip: 
     await shut(tab);
   }
 });
+
+// #220：创作者 id 读取 + 扫码提示（ACC-acct-iso-02 / 04）
+test("ACC-acct-iso-04：扫码提示写明扫的是手机 App 当前的号", async () => {
+  const { QR_ACCOUNT_HINT } = await import("../src/login-xhs.mjs");
+  assert.match(QR_ACCOUNT_HINT, /扫码会登录手机 App 当前的号；要接另一个号，先在 App 里切换账号，或改用短信登录/);
+});
+
+test("ACC-acct-iso-02：readCreatorId 先读创作平台 cookie，读不到再问接口，都没有给 null", async () => {
+  const { readCreatorId } = await import("../src/login-xhs.mjs");
+  const viaCookie = { cookies: async () => [{ name: "x-user-id-creator.xiaohongshu.com", value: "u-1" }], eval: async () => { throw new Error("不该走到接口"); } };
+  assert.equal(await readCreatorId(viaCookie), "u-1");
+  const viaApi = { cookies: async () => [], eval: async () => JSON.stringify("u-2") };
+  assert.equal(await readCreatorId(viaApi), "u-2");
+  const none = { cookies: async () => [], eval: async () => JSON.stringify(null) };
+  assert.equal(await readCreatorId(none), null);
+  const broken = { cookies: async () => { throw new Error("x"); }, eval: async () => { throw new Error("y"); } };
+  assert.equal(await readCreatorId(broken), null);
+});
