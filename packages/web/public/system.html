@@ -180,11 +180,11 @@
 
   function addRow(group) {
     const taken = (p) => ui.accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
-    const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
+    const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
     const none = !ui.platforms.length;
     const allTaken = !none && ui.platforms.every((p) => taken(p.platform));
     const empty = none ? "没有已安装的平台" : "这个组的平台都接上了";
-    return `<div class="sysrow" id="addrow"><select id="add-platform" aria-label="平台"${none || allTaken ? " disabled" : ""}>${none ? `<option>${empty}</option>` : allTaken ? `<option>${empty}</option>${opts}` : opts}</select>` +
+    return `<div class="sysrow" id="addrow"><select id="add-platform" aria-label="平台"${none || allTaken ? " disabled" : ""}>${none || allTaken ? `<option value="" selected>${empty}</option>` : opts}</select>` +
       `<input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}">` +
       `<button class="btn pri" data-add${ui.addBusy || none || allTaken || !group ? " disabled" : ""}>接入账号</button>` +
       `<span class="say${ui.addBad ? " bad" : ""}" role="status">${esc(ui.addNote)}</span></div>`;
