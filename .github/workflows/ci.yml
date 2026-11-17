@@ -50,6 +50,19 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
 
+  # Node 26 单独一个 job：不改名「test / npm test」，免得动到分支保护里的必过检查名（#197）。
+  test-node26:
+    name: test / npm test (node 26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+      - name: npm test（Node 26）
+        run: npm test
+
   parity:
     name: parity / 命令表 = 路由 = 卡片 = CLI
     runs-on: ubuntu-latest
