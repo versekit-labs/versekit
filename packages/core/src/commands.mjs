@@ -295,6 +295,18 @@ export const COMMANDS = [
     audit: "always",
   },
   {
+    name: "account.credentials",
+    summary: "保存某个平台的应用凭证（目前只有 TikTok 官方接口：client key / client secret，写进本机 config.json，权限 600；环境变量仍优先）",
+    remote: false,
+    localOnly: true,
+    args: { platform: "string", clientKey: "string", clientSecret: "string" },
+    http: { method: "POST", path: "/api/platforms/:platform/credentials" },
+    cli: { usage: "vk account credentials tiktok --client-key <key> [--client-secret <secret>]（secret 也可从 stdin 或 TIKTOK_CLIENT_SECRET 读）" },
+    card: null,
+    // 不审计：command_audit 会把 args 原样写进库，而这里的 args 里有 secret。保存动作留一条不含凭证的事件。
+    audit: "never",
+  },
+  {
     name: "account.creator",
     summary: "查询这个 TikTok 账号现在的发帖设置（creator_info）：可选隐私级别、评论/合拍/拼接是否允许、最长时长",
     remote: false,

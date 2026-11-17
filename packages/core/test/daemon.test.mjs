@@ -182,9 +182,12 @@ test("v2 四个页面都能打开，侧栏四项顺序与设计稿一致，没�
   }
 
   // 还没做的页面要有空状态，不能是一片空白或者一句看不懂的话。（作品与作品详情 #149 已做完，不在此列。）
-  for (const path of ["/data", "/system"]) {
+  for (const path of ["/data"]) {
     assert.match(await (await fetch(`${base}${path}`)).text(), /这一页还没做/, `${path} 要显示「还没做」的空状态`);
   }
+  // 系统页（#208）已经做成真的：不再有「还没做」，也不带原型演示数据与旧流程入口卡片。
+  const system = await (await fetch(`${base}/system`)).text();
+  assert.doesNotMatch(system, /这一页还没做|现在还能用的旧流程|演示数据/, "/system 不能再说「还没做」");
 
   // 设计闸门按设计稿文件名取页面：两个名字都要能打开。
   for (const path of ["/today.html", "/works.html", "/work.html", "/data.html", "/system.html"]) {
@@ -209,12 +212,12 @@ test("静态目录之外的文件一律 404（不许用 .. 读仓库）", async 
   assert.equal((await fetch(`${base}/nope.html`)).status, 404);
 });
 
-test("应用外壳：选组页与 api.js 由守护进程托管，数据只从 /api 来", async () => {
-  const page = await fetch(`${base}/groups.html`);
+test("应用外壳：系统页与 api.js 由守护进程托管，数据只从 /api 来", async () => {
+  const page = await fetch(`${base}/system`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type"), /text\/html/);
   const html = await page.text();
-  assert.match(html, /src="\/api\.js"/, "选组页必须由 api.js 拉真实快照");
+  assert.match(html, /src="\/api\.js"/, "系统页必须由 api.js 拉真实快照");
   assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
 
   const api = await fetch(`${base}/api.js`);
@@ -231,22 +234,32 @@ test("应用外壳：选组页与 api.js 由守护进程托管，数据只从 /a
   assert.match(indexHtml, /\/api\/today|VK\.today/, "今天页必须读 /api/today");
 });
 
-test("账号与旧流程仍在：添加账号、账号组、发布台、任务页能打开，旧页面不再冒充新页面", async () => {
-  // 账号与登录的流程这一轮先留在旧页面上（#148 的「不可动」），从系统页给入口。
-  for (const path of ["/accounts/add", "/groups", "/groups.html", "/publish", "/runs", "/tasks"]) {
+test("旧地址不 404：/accounts/add、/groups 跳到系统页对应位置（ACC-v2-sys-07）", async () => {
+  const MOVED = { "/accounts/add": "/system#add", "/add.html": "/system#add", "/groups": "/system#groups", "/groups.html": "/system#groups" };
+  for (const [path, to] of Object.entries(MOVED)) {
+    const res = await fetch(`${base}${path}`, { redirect: "manual" });
+    assert.equal(res.status, 302, `${path} 应该跳转而不是 404`);
+    assert.equal(res.headers.get("location"), to);
+  }
+  // 查询串带过去：/accounts/add?platform=bilibili 还能预选平台。
+  const q = await fetch(`${base}/accounts/add?platform=bilibili`, { redirect: "manual" });
+  assert.equal(q.headers.get("location"), "/system?platform=bilibili#add");
+  // 跟着跳转落在系统页，由 api.js 拉真实数据；接入账号、账号组都在这一页里。
+  const system = await fetch(`${base}/accounts/add`);
+  assert.equal(system.status, 200);
+  const html = await system.text();
+  assert.match(html, /data-page="system"/);
+  assert.match(html, /id="addrow"|addrow/, "系统页要有「接入账号」");
+  assert.match(html, /data-ngsave/, "系统页要能新建账号组");
+  assert.match(html, /\/api\/accounts/, "账号从 /api 来");
+  assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
+
+  // 发布台、任务页仍是旧流程，这一轮先留着。
+  for (const path of ["/publish", "/runs", "/tasks"]) {
     const res = await fetch(`${base}${path}`);
     assert.equal(res.status, 200, `${path} 应该返回页面`);
-    assert.match(res.headers.get("content-type"), /text\/html/, `${path} 必须是 HTML`);
-    const html = await res.text();
-    assert.match(html, /src="\/api\.js"/, "页面必须由 api.js 拉真实快照");
-    assert.doesNotMatch(html, /src=["'][^"']*store\.js/, "不能引用原型 store.js 的假数据");
+    assert.match(await res.text(), /src="\/api\.js"/, "页面必须由 api.js 拉真实快照");
   }
-
-  const add = await (await fetch(`${base}/accounts/add`)).text();
-  assert.match(add, /id="platform-grid"/, "添加页要有平台选择网格");
-  assert.match(add, /id="group-name"/, "添加页要显示锁定的账号组");
-  assert.match(add, /VK\.addAccount|account\.add/, "完成后走命令 account.add");
-  assert.match(add, /\/api\/accounts/, "占用者读命令 account.list --group 的 occupants");
 
   // /accounts 不再返回旧账号墙：它落到系统页（账号管理并入系统）。旧页面文件本身已经删除。
   const accounts = await fetch(`${base}/accounts`);

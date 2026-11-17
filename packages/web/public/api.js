@@ -211,7 +211,7 @@
   }
 
   /** 日常页面入口守卫：没有当前组时落到选组页，而不是渲染一个空壳。 */
-  function requireGroup({ entry = "/groups.html" } = {}) {
+  function requireGroup({ entry = "/system#groups" } = {}) {
     if (current()) return current();
     location.replace(entry);
     return null;
@@ -445,7 +445,31 @@
     return request(`/api/publishes/${encodeURIComponent(publishId)}/retry`, { method: "POST", body: { publishId } });
   }
 
+  /**
+   * 账号的登录状态，对人展示的唯一一份说法（系统页账号表与侧栏底部摘要共用，所以两处数字不会不一样）。
+   * 读的是 account.list 的 displayState：ok 超过 24 小时没检查会变成 unconfirmed（待确认），不再显示「正常」。
+   * key: ok 正常 · unconfirmed 待确认 · relogin 要重新登录 · down 没连上
+   */
+  function loginState(account) {
+    const state = account?.displayState ?? account?.state ?? "unknown";
+    if (state === "ok") return { key: "ok", label: "正常", cls: "done" };
+    if (state === "unconfirmed") return { key: "unconfirmed", label: "待确认", cls: "wait" };
+    if (state === "expiring" || state === "expired") return { key: "relogin", label: "要重新登录", cls: "bad" };
+    if (state === "banned") return { key: "relogin", label: "被平台限制", cls: "bad" };
+    return { key: "down", label: "没连上", cls: "bad" };
+  }
+
+  /** 一个账号组的账号（account.list --group）：带 displayState、lastCheckedAt、quota（今天还能发）。 */
+  async function groupAccounts(groupId) {
+    const id = groupId ?? current()?.id;
+    if (!id) return [];
+    const data = await request("/api/accounts" + query({ group: id }));
+    return data.accounts ?? [];
+  }
+
   VK.request = request;
+  VK.loginState = loginState;
+  VK.groupAccounts = groupAccounts;
   VK.bootstrap = bootstrap;
   VK.ready = ready;
   VK.snapshot = () => snapshot;

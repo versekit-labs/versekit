@@ -84,6 +84,19 @@ function assertAssetSupported(asset, platforms, byPlatform) {
   fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或从 --to 里去掉 ${excluded}（这条没有创建）`);
 }
 
+/**
+ * 「今天还能发几条」：生效的 daily_cap（plan-rules，平台覆盖 > 默认）减去这个账号今天已发和已排的条数。
+ * 口径与确认时的规则检查是同一份（takenTimes + 本机时区的自然日），不是写死的数字。
+ */
+export function quotaToday(account, now = Date.now()) {
+  const { dailyCap } = planRules(account.platform);
+  const d = new Date(now);
+  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const to = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+  const used = takenTimes(account.id, "").filter((t) => t >= from && t < to).length;
+  return { cap: dailyCap, used, left: Math.max(0, dailyCap - used) };
+}
+
 /** 「正常」只在最近 24 小时内真实检查过才成立；更久没查就是「待确认」（ACC-account-09）。 */
 export const CHECK_STALE_AFTER_MS = 24 * 3600e3;
 
@@ -223,7 +236,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       // TikTok 官方接口的账号带上头像（授权时从 user.info.basic 取得，界面要显示）。
       const stamp = (list) =>
         list.map((a) => {
-          const view = withCheckStatus(a);
+          const view = { ...withCheckStatus(a), quota: quotaToday(a) };
           const profile = store.accountProfile(a);
           return profile ? { ...view, avatar_url: profile.avatarUrl } : view;
         });
@@ -320,8 +333,26 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         // 发布台据此在选素材时提前提示；null = 适配器没声明，页面不猜。
         assetTypes: a.assetTypes ?? null,
         ready: a.adapter.ready(),
+        // 需要应用凭证的平台（目前只有 TikTok 官方接口）：页面据此决定先填凭证还是直接授权。不含 secret。
+        credentials: a.adapter.credentials?.status?.() ?? null,
       })),
     }),
+
+    "account.credentials": ({ platform, clientKey, clientSecret }) => {
+      const adapter = byPlatform.get(platform)?.adapter;
+      if (typeof adapter?.credentials?.save !== "function") fail(`${store.platformLabelOf(platform)} 不需要应用凭证：账号直接登录即可`);
+      let status;
+      try {
+        status = adapter.credentials.save({ clientKey, clientSecret });
+      } catch (err) {
+        // 错误信息里不带凭证本身。
+        fail(err.message);
+      }
+      // 事件与日志只记「谁的凭证被保存了、从哪来」，不记 key / secret。
+      emit({ type: "account.credentials_saved", payload: { platform, source: status.source } });
+      log(`[credentials] ${platform} 应用凭证已保存`);
+      return { platform, ...status };
+    },
 
     "account.add": ({ platform, name, handle, credentialRef, group }) => {
       // 命令层 args 已把 group 标成必填；这里再挡一次，直接调 handler 的调用方也不能绕过。

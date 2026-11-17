@@ -33,6 +33,9 @@ export const EVENTS = {
   // 改组名只影响显示名，不影响任何发布；留痕是为了以后能解释「这组以前叫什么」。
   "group.renamed": { severity: "info", required: false, internal: true },
 
+  // 保存平台应用凭证（#208）：只记平台与来源，绝不进 key / secret。
+  "account.credentials_saved": { severity: "info", required: false, internal: true },
+
   // 一个作品出现第一条待确认平台稿时发一次（#150，dedupe_key=work:<id>:awaiting_confirm）。
   // 卡片里的成片数、平台稿数在投递那一刻按当前状态算，不读 payload：为了等一批平台稿建完，通道会晚一点再发。
   "work.awaiting_confirm": { severity: "info", required: false, card: "work" },
