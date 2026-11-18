@@ -1,0 +1,6 @@
+vk.fangyouxi.cn {
+	# 成片可能很大：不压缩、不缓冲，上传/下载都直通（断点续传靠 Range / 偏移）
+	reverse_proxy 127.0.0.1:8790 {
+		flush_interval -1
+	}
+}

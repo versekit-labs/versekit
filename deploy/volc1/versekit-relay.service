@@ -1,0 +1,23 @@
+[Unit]
+Description=versekit relay (vk relay serve) — 制作机 → 发布机的投递中转
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=versekit
+Group=versekit
+# VK_HOME 下放 config.json（里面有 push/pull token，权限 600）和中转数据目录
+Environment=VK_HOME=/var/lib/versekit-relay
+ExecStart=/usr/local/bin/node /opt/versekit/packages/cli/src/vk.mjs relay serve --port 8790
+Restart=on-failure
+RestartSec=5
+# 只监听 127.0.0.1:8790，HTTPS 由 Caddy 提供
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/versekit-relay
+
+[Install]
+WantedBy=multi-user.target
