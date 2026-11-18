@@ -38,7 +38,7 @@ const normHandle = (handle) => String(handle ?? "").replace(/^@/, "").trim().toL
 
 export function accountUnusableReason(account) {
   if (account.state === "expired") {
-    return `${account.platform} ${handleLabel(account.handle)} 已失效（登录过期）：先 vk account reauth ${account.id}`;
+    return `${account.platform} ${handleLabel(account.handle)} 已失效（登录过期）：先到系统页重新登录`;
   }
   if (account.state === "banned") {
     return `${account.platform} ${handleLabel(account.handle)} 已失效（被平台封禁）：换号或申诉解封后再发`;
@@ -46,8 +46,8 @@ export function accountUnusableReason(account) {
   return null;
 }
 
-const fail = (message) => {
-  throw new Error(message);
+const fail = (message, hint) => {
+  throw Object.assign(new Error(message), hint ? { hint } : {});
 };
 
 const requireString = (value, field, { max = 500 } = {}) => {
@@ -105,7 +105,7 @@ export function addGroup({ name }) {
  *  重名与新建组同一套规则：名字唯一，撞到自己不算冲突（幂等改名）。 */
 export function renameGroup({ id, name }) {
   const target = findGroup(id);
-  if (!target) fail(`没有这个账号组：${id}（先 vk group list 看看有哪些）`);
+  if (!target) fail(`没有这个账号组：${id}（在系统页的账号组里看有哪些）`, "vk group list");
   const n = requireString(name, "组名", { max: 64 });
   if (n === target.name) return { id: target.id, name: n, changed: false };
   const clash = open().prepare("SELECT id FROM account_group WHERE name = ? AND id != ?").get(n, target.id);
@@ -123,7 +123,7 @@ export function currentGroup() {
 
 export function useGroup(ref) {
   const group = findGroup(ref);
-  if (!group) fail(`没有这个账号组：${ref}（先 vk group add <名字>）`);
+  if (!group) fail(`没有这个账号组：${ref}（先到系统页建一个）`, "vk group add <名字>");
   open()
     .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run(CURRENT_GROUP_KEY, group.id);
@@ -153,7 +153,7 @@ export function occupantOf(groupId, platform) {
 export function addAccount({ platform, handle, displayName = null, credentialRef = null, groupId = null }) {
   const p = requireString(platform, "platform", { max: 32 });
   const h = requireString(handle, "handle", { max: 200 });
-  if (!groupId) fail("account.add 必须带 --group：先 vk group add <名字> 建组，或 vk group list 看已有的组");
+  if (!groupId) fail("接入账号要先选账号组：先建一个账号组，或在已有的组里接入", "vk group add <名字>");
   const group = open().prepare("SELECT id, name FROM account_group WHERE id = ?").get(groupId);
   if (!group) fail(`没有这个账号组：${groupId}`);
 
@@ -165,11 +165,11 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
       .all(...family, p);
     const same = others.find((a) => normHandle(a.handle) === normHandle(h));
     if (same) {
-      fail(`${handleLabel(h)} 已经用「${BACKEND_LABEL[same.platform]}」接入 TikTok（${same.id}）：同一个账号不能同时挂两个后端；要换，先运行 vk account remove ${same.id}`);
+      fail(`${handleLabel(h)} 已经用「${BACKEND_LABEL[same.platform]}」接入 TikTok（${same.id}）：同一个账号不能同时挂两个后端；要换，先到系统页退出并移除旧账号`, `vk account remove ${same.id}`);
     }
     const slot = others.find((a) => a.group_id === groupId);
     if (slot) {
-      fail(`账号组「${group.name}」的 TikTok 已被 ${handleLabel(slot.handle)} 占用（${slot.id}，${BACKEND_LABEL[slot.platform]}）：一个组每个平台只能有一个；要换号或换后端，先运行 vk account remove ${slot.id}`);
+      fail(`账号组「${group.name}」的 TikTok 已被 ${handleLabel(slot.handle)} 占用（${slot.id}，${BACKEND_LABEL[slot.platform]}）：一个组每个平台只能有一个；要换号或换后端，先到系统页移除旧账号`, `vk account remove ${slot.id}`);
     }
   }
 
@@ -185,7 +185,7 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
   const taken = occupantOf(groupId, p);
   if (taken) {
     const who = taken.display_name && taken.display_name !== taken.handle ? `${taken.handle}（${taken.display_name}）` : taken.handle;
-    fail(`账号组「${group.name}」的 ${p} 已被 ${who} 占用（${taken.id}）：一个组每个平台只能有一个；要换号，先运行 vk account remove ${taken.id}`);
+    fail(`账号组「${group.name}」的 ${p} 已被 ${who} 占用（${taken.id}）：一个组每个平台只能有一个；要换号，先到系统页移除旧账号`, `vk account remove ${taken.id}`);
   }
 
   // 同一个 handle 之前被移除过：复活那一行，保留它的发布历史，不造一个"新账号"把旧数据割裂。
@@ -887,7 +887,7 @@ export function listWorks({ limit = 100 } = {}) {
 /** 按 id 找作品；找不到时抛带下一步的错。 */
 export function showWork(workId) {
   const work = getWork(workId);
-  if (!work) fail(`没有这个作品：${workId}（先 vk work list 看看有哪些）`);
+  if (!work) fail(`没有这个作品：${workId}（到作品页看有哪些）`, "vk work list");
   return workView(work);
 }
 
@@ -1270,7 +1270,7 @@ const confirmRows = (where, ...params) =>
 
 function requireCut(cutId) {
   const cut = open().prepare("SELECT id, work_id, title FROM cut WHERE id = ?").get(cutId);
-  if (!cut) fail(`没有这支成片：${cutId}（vk work show <作品 id> 能看到成片 id）`);
+  if (!cut) fail(`没有这支成片：${cutId}（到作品页看有哪些成片）`, "vk work show <作品 id>");
   return cut;
 }
 
@@ -1303,7 +1303,7 @@ export function missingPlatformSettings(row) {
   const o = asObj(row.overrides_json);
   if (o.draft === true || row.mode === "draft") return null;
   if (typeof o.tiktok?.privacy_level === "string" && o.tiktok.privacy_level) return null;
-  return `TikTok 发布前要先选隐私级别，没选不会发：vk publish edit ${row.id} --privacy <级别>（可选项以 TikTok 返回为准，先看 vk account creator ${row.account_id}）；想送草稿箱就用 vk publish edit ${row.id} --draft`;
+  return `TikTok 发布前要先选隐私级别，没选不会发：在这条的详情里选一个隐私级别（可选项以 TikTok 返回为准），想送草稿箱就选草稿箱`;
 }
 
 /** 人确认了：进队列，按建议时间（或现在）发。mode=manual 的只记跟踪，不排 run。 */
@@ -1351,7 +1351,7 @@ function inTransaction(fn) {
  *  · 给 publishId：只确认这一条（小红书「按建议时间发」走这里）。
  */
 export function approvePublishes({ cutId = null, publishId = null, when = "scheduled", now = Date.now() } = {}) {
-  if (Boolean(cutId) === Boolean(publishId)) fail("确认要指定一支成片（--cut）或一条平台稿（--publish），二选一");
+  if (Boolean(cutId) === Boolean(publishId)) fail("确认要指定一支成片或一条平台稿，二选一");
   if (!["scheduled", "now"].includes(when)) fail(`发布方式只能是 scheduled（预约发）或 now（现在发），收到：${when}`);
   const immediate = when === "now";
   if (publishId) {
@@ -1374,7 +1374,7 @@ export function approvePublishes({ cutId = null, publishId = null, when = "sched
   if (!batch.length) {
     if (incomplete.length) fail(`成片「${cut.title}」还不能确认：${incomplete.map((x) => x.reason).join("；")}`);
     if (perItem.length) {
-      fail(`成片「${cut.title}」只剩 ${perItem.map(label).join("、")} 要逐条决定：vk publish approve --publish ${perItem[0].publishId}（或 now / manual）`);
+      fail(`成片「${cut.title}」只剩 ${perItem.map(label).join("、")} 要逐条决定：到今天页逐条确认`, `vk publish approve --publish ${perItem[0].publishId}`);
     }
     fail(`成片「${cut.title}」没有等确认的平台稿`);
   }
@@ -1425,7 +1425,7 @@ export function skipCut({ cutId }) {
   const rows = all.filter((r) => r.state === "pending_confirm");
   if (!rows.length) {
     if (all.some((r) => r.state === "skipped")) return { cutId, title: cut.title, skipped: [], already: true };
-    fail(`成片「${cut.title}」没有等确认的平台稿可以跳过（已确认的请用 vk schedule cancel）`);
+    fail(`成片「${cut.title}」没有等确认的平台稿可以跳过（已确认的请在排期里取消）`);
   }
   const skipped = inTransaction(() =>
     rows.map((r) => {
@@ -1460,7 +1460,7 @@ export function editPublish({
   const tiktokFields = { privacy, comment, duet, stitch, caption, draft };
   const touchesTiktok = Object.values(tiktokFields).some((v) => v != null);
   if (title == null && at == null && body == null && tags == null && !touchesTiktok) {
-    fail("要改什么？给 title、body、tags 或 at（至少一个）；TikTok 平台稿还可以改 --privacy / --comment / --duet / --stitch / --caption / --draft");
+    fail("要改什么？给 title、body、tags 或 at（至少一个）；TikTok 平台稿还可以改隐私级别、评论、合拍、拼接、说明或草稿");
   }
   if (touchesTiktok && row.platform !== TIKTOK_API) {
     fail(`隐私级别、评论/合拍/拼接开关、文案和送草稿箱只适用于 TikTok 官方接口的平台稿；这条是 ${row.platform}，只能改标题和时间`);
@@ -1501,7 +1501,7 @@ export function editPublish({
     if (privacy != null) {
       // 不在这里枚举合法级别：可选项只来自 TikTok 的 creator_info，发布时由适配器对照。
       const level = requireString(privacy, "隐私级别", { max: 64 });
-      if (!/^[A-Z_]+$/.test(level)) fail(`隐私级别要写 TikTok 返回的原样名字（如 SELF_ONLY），收到「${level}」；可选项见 vk account creator ${row.account_id}`);
+      if (!/^[A-Z_]+$/.test(level)) fail(`隐私级别要写 TikTok 返回的原样名字（如 SELF_ONLY），收到「${level}」；可选项以 TikTok 返回为准`);
       changes.privacy = { from: t.privacy_level ?? null, to: level };
       t.privacy_level = level;
     }

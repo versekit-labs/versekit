@@ -166,7 +166,7 @@
       (results
         ? `<div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${results}</tbody></table></div><div class="sub" style="padding-top:8px"><a class="link" href="data.html">看全部 →</a></div>`
         : '<div class="panel empty">发布满 24 小时后，这里会出现每条和平时的对比。</div>') +
-      `<div class="cmd">对应命令：<code>vk today</code>　没确认的到时间也不会发；小红书每条单独确认。</div>`;
+      `<div class="cmd">没确认的到时间也不会发；小红书每条单独确认。</div>`;
 
     for (const video of main.querySelectorAll("video[data-media]")) {
       video.addEventListener("error", () => {
@@ -242,7 +242,7 @@
     await refresh();
   } catch (err) {
     main.innerHTML = `<div class="hd"><h1>今天</h1></div><div class="panel empty">读不到今天的待办：${esc(err.message)}</div>` +
-      `<div class="cmd">守护进程没起？在电脑上运行 <code>vk serve --open</code>。</div>`;
+      `<div class="cmd">后台服务没在运行？重新打开 versekit 应用，或到「系统」里看这台电脑的状态。</div>`;
   }
 })();
 </script>

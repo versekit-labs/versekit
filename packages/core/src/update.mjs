@@ -230,7 +230,7 @@ export function startAutoUpdate({ apply, busy = () => 0, log = () => {}, startDe
       if (r.upToDate) return next();
       const state = readState();
       if (state.last_failure?.to === r.latest) {
-        log(`[update] ${shortCommit(r.latest)} 上次自动更新失败过，不再自动重试（手动 vk update 可以再试）`);
+        log(`[update] ${shortCommit(r.latest)} 上次自动更新失败过，不再自动重试（在系统页点「现在更新」可以再试）`);
         return next();
       }
       const idle = idleState({ now: now(), loginsOpen: busy() });

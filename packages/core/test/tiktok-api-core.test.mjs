@@ -45,7 +45,7 @@ test("互斥：同一个 handle 已挂浏览器后端，再挂官方接口要拒
 test("互斥：同一个组里 TikTok 只有一个槽位，换后端要先移除", () => {
   const g = group();
   const a = account("tiktok", "@slot-a", g);
-  assert.throws(() => account("tiktok-api", "@slot-b", g), /TikTok 已被 @slot-a 占用.*先运行 vk account remove/);
+  assert.throws(() => account("tiktok-api", "@slot-b", g), /TikTok 已被 @slot-a 占用/);
   store.removeAccount(a.id);
   assert.doesNotThrow(() => account("tiktok-api", "@slot-b", g), "移除后可以换后端");
 });
@@ -84,7 +84,7 @@ test("对人展示的平台名都是 TikTok", () => {
 test("确认前必须选隐私级别：approve / now 拒绝并给人话；选了才放行", () => {
   const acc = account("tiktok-api", "@approve");
   const id = pub(acc.id);
-  assert.throws(() => store.approvePublishes({ publishId: id }), /TikTok 发布前要先选隐私级别，没选不会发.*vk publish edit .* --privacy/s);
+  assert.throws(() => store.approvePublishes({ publishId: id }), /TikTok 发布前要先选隐私级别，没选不会发/);
   assert.throws(() => store.publishNow({ publishId: id }), /没选不会发/);
   assert.equal(core.open().prepare("SELECT state FROM publish WHERE id=?").get(id).state, "pending_confirm");
   store.editPublish({ publishId: id, privacy: "SELF_ONLY" });

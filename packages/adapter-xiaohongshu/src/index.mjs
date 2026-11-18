@@ -108,7 +108,7 @@ export function planNote(row) {
 
   if (!title) throw new AdapterError("asset_invalid", "小红书标题为空");
   if ([...title].length > MAX_TITLE) {
-    throw new AdapterError("asset_invalid", `小红书标题超过 ${MAX_TITLE} 字（现在是 ${[...title].length} 字）：用 --title 指定更短的标题`);
+    throw new AdapterError("asset_invalid", `小红书标题超过 ${MAX_TITLE} 字（现在是 ${[...title].length} 字）：换一个更短的标题`);
   }
   if (body.length > MAX_BODY) throw new AdapterError("asset_invalid", `小红书正文超过 ${MAX_BODY} 字（现在是 ${body.length} 字）`);
   if (tags.length > MAX_TAGS) throw new AdapterError("asset_invalid", `小红书话题最多 ${MAX_TAGS} 个`);

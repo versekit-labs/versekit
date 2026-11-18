@@ -5,6 +5,7 @@
 // cannot diverge. Adapter work is queued, never awaited here: an HTTP request that waits 20
 // minutes for an upload is a timeout, not a feature.
 
+import { hostname } from "node:os";
 import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
@@ -23,11 +24,12 @@ import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
 import * as updates from "./update.mjs";
 
-const fail = (message) => {
-  throw new Error(message);
+/** 报错的文字是给页面看的人话；命令提示放 hint，只给命令行（页面收到的错误体不带 hint）。 */
+const fail = (message, hint) => {
+  throw Object.assign(new Error(message), hint ? { hint } : {});
 };
 
-const requireGroup = (ref) => store.findGroup(ref) ?? fail(`没有这个账号组：${ref}（先 vk group list 看看有哪些）`);
+const requireGroup = (ref) => store.findGroup(ref) ?? fail(`没有这个账号组：${ref}（在系统页的账号组里看有哪些）`, "vk group list");
 
 const titleOf = (asset) => basename(asset, extname(asset)) || "未命名";
 
@@ -35,7 +37,7 @@ const titleOf = (asset) => basename(asset, extname(asset)) || "未命名";
 const platformList = (to) => {
   const list = Array.isArray(to) ? to : String(to ?? "").split(",");
   const clean = [...new Set(list.map((p) => String(p).trim()).filter(Boolean))];
-  if (!clean.length) fail("至少要指定一个平台：--to tiktok,bilibili");
+  if (!clean.length) fail("至少要选一个要发到的平台，如 tiktok、bilibili", "--to tiktok,bilibili");
   return clean;
 };
 
@@ -88,7 +90,7 @@ function assertAssetSupported(asset, platforms, byPlatform) {
     .map(({ platform, types }) => `${platformLabel(platform)}目前只能发${types.map((t) => ASSET_KIND_LABEL[t]).join("、")}`)
     .join("；");
   const excluded = refused.map(({ platform }) => platform).join("、");
-  fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或从 --to 里去掉 ${excluded}（这条没有创建）`);
+  fail(`${detail}，选的是${label}素材「${basename(asset)}」：换成${alternative}，或把 ${excluded} 从要发的平台里去掉（这条没有创建）`);
 }
 
 /**
@@ -120,7 +122,7 @@ export function withCheckStatus(account, now = Date.now()) {
     checkStaleAfterMs: CHECK_STALE_AFTER_MS,
     displayState: stale ? "unconfirmed" : account.state,
     displayStateLabel: stale ? "待确认" : null,
-    ...(stale ? { checkHint: `超过 24 小时没有检查登录：vk account check ${account.id}` } : {}),
+    ...(stale ? { checkHint: "超过 24 小时没有检查登录，在系统页重新检查一次" } : {}),
   };
 }
 
@@ -189,16 +191,16 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       // account.add 在 #21 起要求必填 --group，所以缺号提示也带上组名；没有当前组时退回通用提示。
       const { accounts, missing, unusable, blocked } = store.accountsForPlatforms(platforms, { groupId });
       if (missing.length) {
-        fail(`${scope}没有 ${missing.join("、")} 账号：先 vk account add ${missing[0]} --name 主号${selectedGroup ? ` --group ${selectedGroup.name}` : " --group <组>"}`);
+        fail(`${scope}没有 ${missing.join("、")} 账号：先到系统页接入这个平台的账号`, `vk account add ${missing[0]} --name 主号 --group ${selectedGroup ? selectedGroup.name : "<组>"}`);
       }
       // 已失效的账号不可选，而且必须说清为什么：静默跳过等于「以为发了，其实没发」。
       // 只有「这个平台一个可用号都没有」才拦下整单；同平台还有可用号时，失效号只是不选它。
       if (blocked.length) {
         const reasons = unusable.filter((u) => blocked.includes(u.platform)).map((u) => u.reason);
-        fail(`这些账号已失效，不能选：${reasons.join("；")}。换可用账号，或从 --to 里去掉这些平台`);
+        fail(`这些账号已失效，不能选：${reasons.join("；")}。换可用账号，或把这些平台去掉`, `vk account reauth ${unusable.find((u) => blocked.includes(u.platform))?.accountId ?? "<账号 id>"}`);
       }
       const noAdapter = platforms.filter((p) => !byPlatform.has(p));
-      if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：装 packages/adapter-${noAdapter[0]}`);
+      if (noAdapter.length) fail(`没有 ${noAdapter.join("、")} 适配器：这个平台的组件没装好`, `packages/adapter-${noAdapter[0]}`);
 
       // 素材类型 × 平台能力在写任何行之前就拦下（ACC-publish-04）；dry-run 同样适用——
       // 预演的意义就是提前看到「这条真发会怎样」。
@@ -260,7 +262,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       .filter((a) => a && store.UNUSABLE_ACCOUNT_STATES.includes(a.state));
     if (dead.length) {
       const reasons = dead.map((a) => store.accountUnusableReason(a));
-      fail(`发布前检查发现账号已掉线，不能发布：${reasons.join("；")}。请先重新登录（vk account reauth <id>），这条没有创建`);
+      fail(`发布前检查发现账号已掉线，不能发布：${reasons.join("；")}。请先到系统页重新登录，这条没有创建`, "vk account reauth <账号 id>");
     }
     return unconfirmed.length ? { unconfirmed } : {};
   }
@@ -287,7 +289,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
   /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
   function ingestDelivery(delivery, filePaths, inboxDir) {
-    const g = store.findGroup(delivery.group) ?? fail(`这台发布机上没有账号组「${delivery.group}」：先 vk group add ${delivery.group} 并接入账号，再让制作机重新 push`);
+    const g = store.findGroup(delivery.group) ?? fail(`这台发布机上没有账号组「${delivery.group}」：先到系统页建同名的账号组并接入账号，再让制作机重新送一次`, `vk group add ${delivery.group}`);
     if (!store.listAccounts({ groupId: g.id }).length) fail(`账号组「${g.name}」里还没有账号，平台稿没地方放：先接入账号，再让制作机重新 push`);
     const m = delivery.manifest ?? {};
     const cuts = (Array.isArray(m.cuts) ? m.cuts : []).map((c) => ({
@@ -327,7 +329,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   async function pullRound() {
     if (relayPulling) return relayPulling;
     const cfg = relayConfig();
-    if (!cfg.url || !cfg.pullToken) fail("还没有连中转：先 vk relay connect <地址> --token <拉取 token>");
+    if (!cfg.url || !cfg.pullToken) fail("还没有连中转：先到系统页的设备里接入", "vk relay connect <地址> --token <拉取 token>");
     const inboxDir = joinPath(paths().state, "relay-inbox");
     relayRound = { startedAt: Date.now(), finishedAt: null, total: 0, items: [] };
     relayPulling = (async () => {
@@ -408,9 +410,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     // 云端中转（#226）。
     "work.push": async ({ manifest, group }) => {
       const cfg = relayConfig();
-      if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先 vk relay connect <地址> --token <推送 token> --push");
+      if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先到系统页的设备里接入", "vk relay connect <地址> --token <推送 token> --push");
       const groupName = String(group ?? "").trim();
-      if (!groupName) fail("--group 必填：要投递到发布机上的哪个账号组");
+      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>");
       if (!manifest || !existsSync(manifest)) fail(`找不到清单：${manifest ?? "（没给）"}`);
       let raw;
       try {
@@ -454,12 +456,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const clean = String(url ?? "").trim().replace(/\/+$/, "");
       if (!/^https?:\/\/[^\s/]+/.test(clean)) fail("中转地址要以 https:// 开头（本机测试可以用 http://127.0.0.1:端口）");
       const t = String(token ?? "").trim();
-      if (!t) fail("缺 token：--token <token>");
+      if (!t) fail("缺令牌：把中转给你的令牌填上", "--token <token>");
       const want = push ? "push" : "pull";
       let warning = null;
       try {
         const r = await ping({ url: clean, token: t });
-        if (r.role !== want) fail(`这是${r.role === "push" ? "推送" : "拉取"} token，${push ? "制作机（--push）要用推送 token" : "发布机要用拉取 token（制作机请加 --push）"}`);
+        if (r.role !== want) fail(`这是${r.role === "push" ? "推送" : "拉取"}令牌，${push ? "制作机要用推送令牌" : "发布机要用拉取令牌"}`);
       } catch (err) {
         if (err.code === "unauthorized" || err.message.startsWith("这是")) fail(err.message);
         warning = `暂时没连上中转（${err.message}），配置已写入，网络通了会自动连`;
@@ -471,7 +473,17 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         /* 非 POSIX */
       }
       log(`[relay] 已连接 ${clean}（${push ? "推送" : "拉取"}）`);
-      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以 vk work push 了" : "已连接中转，后台服务会自动拉取（也可以 vk relay pull 立刻拉一轮）；成片大的话下载要几分钟，vk relay pull 会显示进度") };
+      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以送作品了" : "已连接中转，后台会自动拉取（也可以在系统页立刻拉一轮）；成片大的话下载要几分钟，进度在系统页能看到") };
+    },
+
+    "relay.disconnect": () => {
+      const cfg = readConfig().relay ?? {};
+      if (!cfg.url) fail("本来就没有连中转");
+      // 只清「怎么连」：地址和两个令牌；拉取间隔等偏好留着，下次接入不用重填。
+      updateConfig({ relay: { url: null, pull_token: null, push_token: null } });
+      store.patchRelayState({ pending: 0 });
+      log(`[relay] 已断开 ${cfg.url}`);
+      return { disconnected: true, message: "已断开中转，已经入库的作品不受影响" };
     },
 
     "relay.pull": () => pullRound(),
@@ -480,10 +492,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     update: async ({ check = false, auto = null, now = false } = {}) => {
       if (auto != null && auto !== "") {
-        if (!["on", "off"].includes(String(auto))) fail("--auto 只能是 on 或 off");
+        if (!["on", "off"].includes(String(auto))) fail("自动更新只能是开或关");
         const cfg = updates.setAuto(auto === "on");
         log(`[update] 后台自动更新已${cfg.auto ? "打开" : "关闭"}`);
-        return { auto: cfg.auto, intervalHours: cfg.intervalHours, message: cfg.auto ? "后台自动更新：开（空闲时更新，失败自动退回）" : "后台自动更新：关（想更新时运行 vk update）" };
+        return { auto: cfg.auto, intervalHours: cfg.intervalHours, message: cfg.auto ? "后台自动更新：开（空闲时更新，失败自动退回）" : "后台自动更新：关（想更新时在系统页点「现在更新」）" };
       }
       if (check) {
         try {
@@ -492,9 +504,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           fail(`没能查到最新版本：${err.message}（网络问题，稍后再试）`);
         }
       }
-      if (!updater) fail("这个守护进程不能自己更新：在终端运行 vk update");
+      if (!updater) fail("这份程序不能自己更新：它不是用安装包装出来的");
       const idle = updates.idleState({ loginsOpen: loginsOpen() });
-      if (!idle.idle && !now) fail(`现在不适合更新：${idle.reason}。等忙完再试，或加 --now 强制更新`);
+      if (!idle.idle && !now) fail(`现在不适合更新：${idle.reason}。等忙完再试`);
       return updater.apply({ now });
     },
 
@@ -523,7 +535,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       let plan;
       if (cuts) {
         if (asset) fail("work.add：给了 cuts 就不要再给单个素材路径");
-        if (!title) fail("work.add：多支成片的作品必须有标题（--title 或清单里的 title）");
+        if (!title) fail("多支成片的作品必须有标题");
         plan = { title, source, cuts };
       } else {
         if (!asset) fail("work.add 要么给一个素材路径，要么给 cuts 清单");
@@ -624,7 +636,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "account.add": ({ platform, name, handle, credentialRef, group }) => {
       // 命令层 args 已把 group 标成必填；这里再挡一次，直接调 handler 的调用方也不能绕过。
-      if (!group) fail("account.add 必须带 --group：先 vk group add <名字> 建组，或 vk group list 看已有的组");
+      if (!group) fail("接入账号要先选账号组：先建一个账号组，或在已有的组里接入", "vk group add <名字>");
       const g = requireGroup(group);
       const result = store.addAccount({
         platform,
@@ -656,7 +668,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!account) fail(`没有这个账号：${accountId}`);
       const adapter = byPlatform.get(account.platform)?.adapter;
       if (typeof adapter?.connect !== "function") {
-        fail(`${store.platformLabelOf(account.platform)} 账号不需要这种授权；请用 vk account reauth ${accountId}`);
+        fail(`${store.platformLabelOf(account.platform)} 账号不需要这种授权，在系统页点「重新登录」`, `vk account reauth ${accountId}`);
       }
       let session = connectSessions.get(accountId);
       const fresh = !session;
@@ -711,7 +723,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const account = store.getAccount(accountId);
       if (!account) fail(`没有这个账号：${accountId}`);
       const adapter = byPlatform.get(account.platform);
-      if (!adapter) fail(`没有 ${account.platform} 适配器，先安装 packages/adapter-${account.platform}`);
+      if (!adapter) fail(`没有 ${account.platform} 适配器：这个平台的组件没装好`, `packages/adapter-${account.platform}`);
       if (account.platform === "bilibili") {
         return { accountId, started: false, next: `在电脑上运行：biliup -u ${account.credential_ref ?? "<cookies.json>"} login，选「浏览器登录」` };
       }
@@ -744,37 +756,37 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "plan.apply": ({ cutId, accounts = null, group = null }) => {
       const conn = open();
       const cut = conn.prepare("SELECT * FROM cut WHERE id = ?").get(cutId);
-      if (!cut) fail(`没有这支成片：${cutId}（vk work show <workId> 能看到每支成片的 id）`);
+      if (!cut) fail(`没有这支成片：${cutId}（到作品页看有哪些成片）`);
       const versions = conn.prepare("SELECT * FROM cut_version WHERE cut_id = ? ORDER BY rowid").all(cut.id);
-      if (!versions.length) fail(`成片「${cut.title}」没有语言版本，没有素材可发：先用 vk work add 补上`);
+      if (!versions.length) fail(`成片「${cut.title}」没有语言版本，没有素材可发：先把素材补进作品`);
       const version = versions.find((v) => v.language === "zh") ?? versions[0];
       const scope = group ? requireGroup(group) : store.currentGroup();
       const planKind = assetSetOf(version.asset_path).kind;
       const savedPlan = scope ? store.getGroupPlan(scope.id) : null;
       const planRow = savedPlan
         ? planModel.matchRow(planModel.normalizeRows(savedPlan), { kind: planKind, language: version.language }) ??
-          fail(`发布方案里没有「${planModel.KIND_LABEL[planKind] ?? "成片"} · ${planModel.languageLabel(version.language)}」这一行，不知道发到哪些平台：vk plan set --kind ${planKind ?? "video"} --lang ${version.language} --to <平台> 加上，或 vk plan reset 恢复默认`)
+          fail(`发布方案里没有「${planModel.KIND_LABEL[planKind] ?? "成片"} · ${planModel.languageLabel(version.language)}」这一行，不知道发到哪些平台：到系统页的发布方案里加上这一行，或恢复默认方案`)
         : null;
 
       let targets;
       if (accounts != null) {
         const refs = [...new Set((Array.isArray(accounts) ? accounts : String(accounts).split(",")).map((x) => String(x).trim()).filter(Boolean))];
-        if (!refs.length) fail("--accounts 是空的：写账号 id，或这个组里的平台名（如 bilibili）");
+        if (!refs.length) fail("没有选账号：写账号 id，或这个组里的平台名（如 bilibili）");
         const pool = store.listAccounts({ groupId: scope?.id ?? null });
         targets = refs.map(
           (ref) =>
             pool.find((a) => a.id === ref) ??
             pool.find((a) => store.copyPlatformOf(a.platform) === store.copyPlatformOf(ref)) ??
-            fail(`${scope ? `账号组「${scope.name}」里` : ""}没有账号「${ref}」（写账号 id，或这个组里的平台名；vk account list 可查）`),
+            fail(`${scope ? `账号组「${scope.name}」里` : ""}没有账号「${ref}」（写账号 id，或这个组里的平台名；账号列表在系统页）`),
         );
         targets = [...new Map(targets.map((a) => [a.id, a])).values()];
       } else {
         targets = store.listAccounts({ groupId: scope?.id ?? null });
-        if (!targets.length) fail(`${scope ? `账号组「${scope.name}」里` : ""}还没有账号：先 vk account add <platform> --name 主号 --group <组>`);
+        if (!targets.length) fail(`${scope ? `账号组「${scope.name}」里` : ""}还没有账号：先到系统页接入账号`);
         // 发布方案（ACC-v2-sys-08）：存过方案的组按方案挑平台；没存过就是默认方案（所有账号）。
         if (planRow) {
           targets = targets.filter((a) => planModel.rowCovers(planRow, a));
-          if (!targets.length) fail(`发布方案「${planModel.rowLabel(planRow)}」发到 ${planRow.platforms.join("、")}，但${scope ? `账号组「${scope.name}」里` : "这里"}还没有这些平台的账号：vk plan set 改方案，或先接入账号`);
+          if (!targets.length) fail(`发布方案「${planModel.rowLabel(planRow)}」发到 ${planRow.platforms.join("、")}，但${scope ? `账号组「${scope.name}」里` : "这里"}还没有这些平台的账号：到系统页改发布方案，或先接入账号`);
         }
       }
 
@@ -861,7 +873,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "plan.show": ({ group = null } = {}) => planView(group ? requireGroup(group) : store.currentGroup()),
 
     "plan.set": ({ kind = "*", language = "*", platforms = null, delayDays = 0, remove = false, group = null }) => {
-      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先 vk group add <名字>"));
+      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先到系统页建一个", "vk group add <名字>"));
       if (!planModel.PLAN_KINDS.includes(kind)) fail(`成片类型只能是 video、image 或 *，收到：${kind}`);
       const lang = String(language).trim() || "*";
       const current = planModel.normalizeRows(store.getGroupPlan(scope.id) ?? [planModel.DEFAULT_ROW]);
@@ -869,12 +881,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (remove) {
         if (!current.some(same)) fail(`发布方案里没有「${planModel.rowLabel({ kind, language: lang })}」这一行`);
         const next = current.filter((r) => !same(r));
-        if (!next.length) fail("方案至少要留一行：不想要自定义方案就 vk plan reset");
+        if (!next.length) fail("方案至少要留一行：不想要自定义方案就恢复默认方案", "vk plan reset");
         store.setGroupPlan(scope.id, next);
         return planView(scope);
       }
       const list = [...new Set((Array.isArray(platforms) ? platforms : String(platforms ?? "").split(",")).map((x) => String(x).trim()).filter(Boolean))];
-      if (!list.length) fail("要发到哪些平台？--to 写平台名，如 bilibili,xiaohongshu（vk platforms 能看到已安装的）");
+      if (!list.length) fail("要发到哪些平台？写平台名，如 bilibili、xiaohongshu（系统页能看到已安装的）");
       for (const p of list) if (!knownPlatforms().includes(p)) fail(`没有 ${p} 适配器（已安装：${knownPlatforms().join("、")}）`);
       if (!Number.isInteger(delayDays) || delayDays < 0 || delayDays > planModel.MAX_DELAY_DAYS) fail(`节奏的天数要是 0 到 ${planModel.MAX_DELAY_DAYS} 的整数`);
       const row = { kind, language: lang, platforms: list, delayDays };
@@ -885,7 +897,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     "plan.reset": ({ group = null } = {}) => {
-      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先 vk group add <名字>"));
+      const scope = group ? requireGroup(group) : (store.currentGroup() ?? fail("还没有账号组：先到系统页建一个"));
       store.setGroupPlan(scope.id, null);
       return planView(scope);
     },
@@ -900,6 +912,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const now = Date.now();
       return {
         group: g ? { id: g.id, name: g.name } : null,
+        name: hostname(),
         heartbeatAt,
         heartbeatAgeMs: heartbeatAt ? Math.max(0, now - heartbeatAt) : null,
         online: heartbeatAt != null && now - heartbeatAt < HEARTBEAT_STALE_MS,

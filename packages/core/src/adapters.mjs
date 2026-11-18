@@ -159,7 +159,10 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
     const platform = platformOf(publishId);
     if (!platform) throw new Error(`找不到发布 ${publishId}，或它的账号没有平台`);
     const adapter = byPlatform.get(platform);
-    if (!adapter) throw new Error(`没有 ${platform} 适配器（装 packages/adapter-${platform}）`);
+    if (!adapter) throw Object.assign(
+      new Error(`没有 ${platform} 适配器：这个平台的组件没装好`),
+      { hint: `packages/adapter-${platform}` }, // 给命令行看的提示，页面收不到
+    );
     return adapter;
   };
 
@@ -191,7 +194,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       if (adapter.adapter.respectsPause) {
         const acc = open().prepare("SELECT is_manual FROM account WHERE id = ?").get(row.account_id);
         if (acc?.is_manual) {
-          const message = `账号 ${row.handle} 已被暂停自动发布（TikTok 风控或用户上限）：这条没有发；确认没问题后 vk account mode ${row.account_id} auto 恢复，再重新确认`;
+          const message = `账号 ${row.handle} 已被暂停自动发布（TikTok 风控或用户上限）：这条没有发；确认没问题后到系统页恢复自动发布，再重新确认`;
           transitionPublish(publishId, "notify_pending", { reason: "account_paused", patch: { fallback_reason: "risk_control", error_message: message.slice(0, 500) } });
           emit({
             type: "publish.needs_human",

@@ -615,5 +615,5 @@ export function startDetachedUpdate({ env = process.env } = {}) {
   }
   child.unref();
   closeSync(fd);
-  return { started: true, pid: child.pid, message: "已开始更新：服务会短暂重启，几十秒后回来；结果看系统页「发布机」或 vk version" };
+  return { started: true, pid: child.pid, message: "已开始更新：服务会短暂重启，几十秒后回来；结果看系统页「设备」里这台电脑的版本" };
 }

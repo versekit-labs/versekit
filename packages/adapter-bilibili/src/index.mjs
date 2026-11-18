@@ -236,7 +236,7 @@ export default {
     minScheduleLeadMs: MIN_SCHEDULE_MS,
   },
   ready() {
-    if (!hasBiliup()) return "B站 未配置：没有安装 biliup（cargo install biliup-cli 或下载 release）";
+    if (!hasBiliup()) return "B站 未配置：这台电脑上没有装 B站 的投稿组件";
     return null;
   },
   // 页面扫码：开有头窗口 → 人扫码 → 适配器把 cookie 写成 biliup 的 cookies 文件。

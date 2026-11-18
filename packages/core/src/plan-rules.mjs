@@ -120,7 +120,7 @@ export function assertPlanSlot(row, at, { now = Date.now(), config } = {}) {
     v.reason === "daily_cap"
       ? `${row.platform} 这个账号那天已经排了 ${v.count} 条，每日上限 ${rules.dailyCap} 条`
       : `和 ${fmt(v.conflictAt)} 那条隔得太近，最小间隔 ${rules.minGapMinutes} 分钟`;
-  const hint = suggestedAt != null ? `最近的可用时间：${fmt(suggestedAt)}（--at ${new Date(suggestedAt).toISOString()}）` : "近期没有可用时间";
+  const hint = suggestedAt != null ? `最近的可用时间：${fmt(suggestedAt)}` : "近期没有可用时间";
   const err = new Error(`改的时间违反平台规则：${why}。${hint}`);
   err.code = v.reason === "daily_cap" ? "plan_daily_cap" : "plan_min_gap";
   err.suggestedAt = suggestedAt;

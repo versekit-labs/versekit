@@ -97,7 +97,7 @@ test("ACC-relay-02 没配中转时 push 说人话；connect 校验 token 种类�
   await assert.rejects(maker["work.push"]({ manifest: m, group: "主号组" }), /还没有配置中转/);
 
   // 拉取 token 当推送 token 用：拒绝
-  await assert.rejects(maker["relay.connect"]({ url, token: PULL, push: true }), /拉取 token/);
+  await assert.rejects(maker["relay.connect"]({ url, token: PULL, push: true }), /拉取令牌/);
   await assert.rejects(maker["relay.connect"]({ url, token: "wrong", push: true }), /不认这个 token/);
   assert.equal(readConfig().relay, undefined, "没连成功就不写配置");
 
@@ -120,7 +120,7 @@ test("ACC-relay-02 清单不合格当场报错、不上传（云端一个字节�
     [join(ROOT, "src", "nope.json"), /找不到清单/],
   ];
   for (const [manifest, re] of cases) await assert.rejects(maker["work.push"]({ manifest, group: "主号组" }), re);
-  await assert.rejects(maker["work.push"]({ manifest: manifestFile("ok.json", goodDoc()), group: " " }), /--group/);
+  await assert.rejects(maker["work.push"]({ manifest: manifestFile("ok.json", goodDoc()), group: " " }), /账号组/);
   assert.deepEqual([cloudBlobs().length, cloudDeliveries().length], before);
 });
 
@@ -143,7 +143,7 @@ test("ACC-relay-03 发布机 connect 后 pull：下载、核对、入库，平�
   as(PUBLISHER);
   assert.equal(publisher["relay.status"]().connection, "not_configured");
   await assert.rejects(publisher["relay.pull"](), /还没有连中转/);
-  await assert.rejects(publisher["relay.connect"]({ url, token: PUSH }), /推送 token/);
+  await assert.rejects(publisher["relay.connect"]({ url, token: PUSH }), /推送令牌/);
   await publisher["relay.connect"]({ url, token: PULL });
 
   const r = await publisher["relay.pull"]();
@@ -342,5 +342,5 @@ test("ACC-relay-04 系统页「发布机」一块显示中转，「最近出的�
   assert.match(html, /上次拉取/);
   assert.match(html, /正在下载/);
   assert.match(html, /ui\.relay\?\.failures/);
-  assert.match(html, /vk relay status/);
+  assert.doesNotMatch(html, /vk relay/, "界面上不写命令（ACC-v3-nocli-01）");
 });

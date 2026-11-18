@@ -96,7 +96,7 @@ export function validateAgainstCreator(settings, creator, { durationSec = null }
   if (!settings.privacyLevel) {
     throw new AdapterError(
       "platform_reject",
-      `还没选 TikTok 隐私级别，没有发布：先 vk publish edit <平台稿> --privacy <级别>（这个账号现在可选：${options.join(" / ") || "无"}）`,
+      `还没选 TikTok 隐私级别，没有发布：先给这条选一个隐私级别（这个账号现在可选：${options.join(" / ") || "无"}）`,
     );
   }
   if (!options.includes(settings.privacyLevel)) {
@@ -301,7 +301,7 @@ async function check({ accountId } = {}) {
   const { record } = await ensureAccessToken(credentialRefOf(accountId));
   const refreshExpiresAt = record.refresh_expires_at ?? null;
   if (refreshExpiresAt && refreshExpiresAt - Date.now() < REFRESH_EXPIRING_MS) {
-    return { state: "expiring", expiresAt: refreshExpiresAt, detail: "TikTok 授权一周内到期：到期前 vk account connect 重新授权" };
+    return { state: "expiring", expiresAt: refreshExpiresAt, detail: "TikTok 授权一周内到期：到期前到系统页重新授权" };
   }
   return { state: "ok", ...(refreshExpiresAt ? { expiresAt: refreshExpiresAt } : {}) };
 }

@@ -6,24 +6,40 @@
 <title>系统 · versekit</title>
 <link rel="stylesheet" href="/app.css">
 <style>
-/* 系统页：账号组与账号。结构照 docs/design/system.html，只补设计稿里没有的「接入账号」「应用凭证」两行。 */
+/* 系统页：账号 / 发布方案 / 设备 三个分段。结构照 docs/design/system.html（v3）。 */
+.app .tabs{margin:0 0 6px}
 .app .sysrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
-.app .sysrow select{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font:inherit;font-size:14px;background:var(--paper);color:var(--ink);min-width:0}
+.app .sysrow select,.app .addrow select{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font:inherit;font-size:14px;background:var(--paper);color:var(--ink);min-width:0}
 .app .sysrow input[type=text],.app .sysrow input[type=password]{width:220px}
 .app .sysrow .say{flex:1 1 100%;font-size:13px;color:var(--ink2);line-height:1.6}
-.app input[type=password]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0;color:var(--ink);font-family:inherit}
+.app input[type=password],.app input[type=tel]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0;color:var(--ink);font-family:inherit}
 .app .say.bad,.app .why.bad{color:var(--bad);font-weight:600}
 .app td .why{display:block;font-size:12px;color:var(--ink2);margin-top:2px;max-width:46ch;white-space:normal;line-height:1.5}
-.app td .why a{color:var(--ink)}
-.app tr.credrow td{background:var(--mark-bg);border-bottom:1px solid var(--mark-line)}
-.app tr.credrow .sysrow{margin-top:0}
 .app .av{width:20px;height:20px;border-radius:50%;object-fit:cover;vertical-align:-5px;margin-right:6px;background:var(--side)}
 .app .acct{white-space:nowrap}
-.app .grpname{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.app .grpname input[type=text]{width:180px}
-.app .tbtns{display:inline-flex;gap:10px;align-items:center;justify-content:flex-end}
-/* 发布方案 / 发布机 / 平台规则 / 最近出的问题：结构照 docs/design/system.html */
-.app .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.app .grpname,.app .rn{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.app .grpname input[type=text],.app .rn input{width:180px}
+.app .acts{display:inline-flex;gap:14px;align-items:center;justify-content:flex-end;white-space:nowrap}
+.app td b.nm{font-weight:600;display:block}
+/* 行内展开：这一行需要多说一句或多做一步时，在它下面展开，不弹窗 */
+.app tr.has-sub td{border-bottom:0}
+.app tr.subrow td{padding-top:0}
+.app .subin{display:flex;gap:10px 16px;align-items:center;flex-wrap:wrap;padding:12px;border:1px solid var(--line);border-radius:var(--r);background:var(--hover);font-size:13px;white-space:normal}
+.app .subin p{margin:0;flex:1 1 320px;max-width:60em}
+.app .subin .acts{margin-left:auto}
+.app .subin.bad{background:var(--bad-bg);border-color:var(--bad-line)}
+.app .subin.bad p{color:var(--bad)}
+.app .subin.wait{background:var(--mark-bg);border-color:var(--mark-line)}
+.app .subin input{flex:1 1 180px;max-width:260px}
+.app .subin .how{flex:1 1 280px;display:grid;gap:4px;min-width:0}
+.app .subin .how b{font-size:14px;font-weight:600}
+.app .subin .how .alt{display:flex;gap:4px 16px;flex-wrap:wrap}
+.app .subin ul{margin:0;padding-left:18px}
+.app .qr{width:132px;height:132px;flex:none;border:1px dashed var(--ctl);border-radius:var(--r);background:var(--paper);display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;color:var(--ink2);padding:0;overflow:hidden}
+.app .qr img{width:100%;height:100%;object-fit:contain;display:block}
+.app .qr.old{border-color:var(--bad-line);color:var(--bad)}
+.app .addrow input[type=text]{width:100%;max-width:220px}
+.app .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
 .app .kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px;margin:0}
 .app .kv dt{color:var(--ink2);font-size:13px}
 .app .kv dd{margin:0}
@@ -33,7 +49,9 @@
 .app .pickpf{display:flex;gap:6px 16px;flex-wrap:wrap;margin:2px 0 10px}
 .app .pickpf label{display:inline-flex;gap:6px;align-items:center;min-height:32px;font-size:14px}
 .app input[type=number]{height:34px;width:72px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);color:var(--ink);font-family:inherit}
-@media (max-width:860px){.app .two{grid-template-columns:minmax(0,1fr)}}
+.app .dev td:nth-child(1),.app .dev td:nth-child(2){white-space:nowrap}
+.app .dev td:nth-child(4){min-width:200px}
+@media (max-width:860px){.app .subin .acts{margin-left:0}}
 </style>
 </head>
 <body data-page="system">
@@ -60,20 +78,33 @@
   // 平台在「接入账号」里的叫法：tiktok-api 是官方接口，和网页登录的 tiktok 分开说。
   const LABEL = { xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
   const labelOf = (p) => LABEL[p] ?? p;
-  const SCAN = new Set(["xiaohongshu", "douyin", "bilibili"]); // 扫码；其余是登录
   const WEB_LOGIN = (p) => p !== "bilibili" && p !== "tiktok-api"; // 靠自己的浏览器资料保持登录的平台
-  const QR_HINT = "扫码会登录手机 App 当前的号；要接另一个号，先在 App 里切换账号，或改用短信登录。";
+  // 发布机能在后台替你取二维码、发短信验证码的平台；其余平台只有「在发布机上打开登录窗口」。
+  const HEADLESS = new Set(["xiaohongshu"]);
+  const QR_HINT = "扫码登录的是手机 App 当前的号；要接另一个号，先在 App 里切换账号，或者改用短信验证码。";
   const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口" };
   const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
+  const TABS = [["accounts", "账号"], ["plan", "发布方案"], ["devices", "设备"]];
+  const OFFLINE_SAY = "发布机不在线，登录要它在线";
+  const HASH0 = new URLSearchParams(location.hash.slice(1));
+  const POLL_MS = Math.max(100, Number(HASH0.get("pollms")) || 2000); // 轮询间隔；验收脚本可以用 #pollms= 调快
 
+  const HASH = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+  const LEGACY_TAB = { plan: "plan", groups: "accounts", add: "accounts", problems: "accounts" };
   const ui = {
+    tab: TABS.some(([k]) => k === HASH.tab) ? HASH.tab : (LEGACY_TAB[location.hash.slice(1)] ?? "accounts"),
     accounts: [], platforms: [], covers: new Map(), today: null, groupsErr: null,
-    login: {},            // accountId → { kind: "wait" | "fail", text, url }
+    // accountId → { step: qr | scanned | qrold | sms1 | sms2 | win | auth | fail, qr, text, masked }
+    login: {},
     logoutAsk: null,      // 正在二次确认「退出登录」的账号 id
+    credOpen: null,       // 展开「填应用凭证」的账号 id
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
     plan: null, machine: null, update: null, relay: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
+    notesOpen: false, upd: null, updNote: "", updBusy: false,
+    relayForm: null,      // { url, token, busy, note }：接入中转
+    relayAsk: false,      // 正在二次确认「断开中转」
   };
   const polls = new Map();
 
@@ -88,6 +119,8 @@
   const platformInfo = (p) => ui.platforms.find((x) => x.platform === p) ?? null;
   const credsMissing = (a) => a.platform === "tiktok-api" && platformInfo("tiktok-api")?.credentials?.configured === false;
   const connected = (a) => Boolean(a.credential_ref && a.state === "ok");
+  const machineName = () => ui.machine?.name || "这台电脑";
+  const publisherOffline = () => Boolean(ui.machine) && !ui.machine.online;
 
   // ── 读数据 ─────────────────────────────────────────────────────────────
   async function load() {
@@ -107,7 +140,7 @@
     if (!ui.addPlatform || !platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (platforms.find((p) => !taken(p.platform)) ?? platforms[0])?.platform ?? "";
   }
 
-  /** 发布方案、发布机、最近出的问题：都来自 /api（plan.show、machine.status、run.list + 今天的问题清单）。一块读不到不拖垮别的块。 */
+  /** 发布方案、发布机、更新、中转、最近出的问题：都来自 /api。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
     if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; return; }
@@ -139,7 +172,68 @@
     window.VKShell?.refreshHealth();
   }
 
-  // ── 画页面 ─────────────────────────────────────────────────────────────
+  // ── 画页面：账号 ─────────────────────────────────────────────────────────
+  const pfn = (platform, name) => `<span class="pfn">${pfBadge(platform)}${esc(name ?? labelOf(platform))}</span>`;
+  const B = (attrs, text, cls = "btn", extra = "") => `<button class="${cls}" ${attrs}${extra}>${text}</button>`;
+  const subRow = (cols, html, cls = "") => `<tr class="subrow"><td colspan="${cols}"><div class="subin${cls ? ` ${cls}` : ""}">${html}</div></td></tr>`;
+
+  /** 这一行的登录状态词和颜色：正常 / 要重新登录 / 登录到了别的号 / 等你扫码 / 二维码过期了 / 缺应用凭证。 */
+  function statusCell(a, st, lg) {
+    if (lg) {
+      const w = {
+        qr: ["wait", "等你扫码"], scanned: ["wait", "已扫码，在手机上点确认"], qrold: ["bad", "二维码过期了"],
+        sms1: ["wait", "等你登录"], sms2: ["wait", "等你填验证码"], win: ["wait", "等你登录"], auth: ["wait", "等你登录"], fail: ["bad", "没登上"],
+      }[lg.step] ?? ["wait", "等你登录"];
+      return `<span class="st ${w[0]}">${w[1]}</span>`;
+    }
+    if (credsMissing(a)) return '<span class="st wait">缺应用凭证</span>';
+    if (a.identityConflict) return '<span class="st bad">登录到了别的号</span>';
+    return `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>`;
+  }
+
+  function accountActions(a, st, lg) {
+    if (lg || a.identityConflict) return "";
+    const off = publisherOffline();
+    const dis = off ? ` disabled title="${OFFLINE_SAY}"` : "";
+    let html;
+    if (credsMissing(a)) return B(`data-credopen="${esc(a.id)}"`, "填应用凭证");
+    if (a.platform === "tiktok-api") html = B(`data-login="${esc(a.id)}"`, connected(a) ? "重新授权" : "Connect TikTok", connected(a) ? "link" : "btn", dis);
+    else if (st.key === "ok") html = (WEB_LOGIN(a.platform) ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, "重新登录", "link", dis);
+    else html = (WEB_LOGIN(a.platform) && st.key !== "down" ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, st.key === "down" ? "登录" : "重新登录", "btn", dis);
+    return `<span class="acts">${html}</span>${off ? `<div class="sub">${OFFLINE_SAY}</div>` : ""}`;
+  }
+
+  function loginSub(a, lg) {
+    const id = esc(a.id), pf = labelOf(a.platform), m = esc(machineName());
+    const cancel = B(`data-cancel="${id}"`, "取消", "link");
+    const headless = HEADLESS.has(a.platform);
+    const sms = headless ? B(`data-loginmode="sms" data-id="${id}"`, "改用短信验证码", "link") : "";
+    const qr = headless ? B(`data-loginmode="qr" data-id="${id}"`, "改用扫码", "link") : "";
+    const win = B(`data-loginmode="win" data-id="${id}"`, "在发布机上打开登录窗口", "link");
+    const alt = (...xs) => `<span class="alt">${xs.filter(Boolean).join("")}${cancel}</span>`;
+    const box = (inner, cls = "") => `<div class="qr${cls ? ` ${cls}` : ""}">${inner}</div>`;
+    switch (lg.step) {
+      case "qr":
+        return subRow(6, `${box(lg.qr ? `<img src="${esc(lg.qr)}" alt="登录二维码">` : esc(lg.text || "正在取二维码…"))}<div class="how"><b>用${esc(pf)} App 扫这个码</b><span class="sub">二维码是发布机「${m}」取回来的，几分钟内有效。登录数据只存在那台电脑上，这个服务拿不到。${esc(QR_HINT)}${lg.note ? ` ${esc(lg.note)}` : ""}</span>${alt(sms, win)}</div>`);
+      case "scanned":
+        return subRow(6, `${box("已扫码")}<div class="how"><b>在手机上点「确认登录」</b><span class="sub">点完这里会自己变成正常，不用回来按什么。</span>${alt()}</div>`);
+      case "qrold":
+        return subRow(6, `${box("二维码<br>过期了", "old")}<div class="how"><b>二维码过期了</b><span class="sub">超过几分钟没有扫。</span><span class="alt">${B(`data-loginmode="qr" data-id="${id}"`, "换一个")}${sms}${cancel}</span></div>`);
+      case "sms1":
+        return subRow(6, `<div class="how"><b>用短信验证码登录${esc(pf)}</b><span class="sub">手机号只用来登录这一次，不会存下来。</span>${lg.text ? `<span class="say bad" role="status">${esc(lg.text)}</span>` : ""}${alt(qr, win)}</div><input type="tel" id="sms-phone" inputmode="numeric" placeholder="手机号" aria-label="手机号" autocomplete="off" maxlength="11">${B(`data-smssend="${id}"`, "发验证码", "btn pri", lg.busy ? " disabled" : "")}`);
+      case "sms2":
+        return subRow(6, `<div class="how"><b>填收到的验证码</b><span class="sub">已发到 ${esc(lg.masked)}。</span>${lg.text ? `<span class="${lg.bad ? "say bad" : "sub"}" role="status">${esc(lg.text)}</span>` : ""}${alt(B(`data-smsresend="${id}"`, "重发", "link"))}</div><input type="text" id="sms-code" inputmode="numeric" placeholder="验证码" aria-label="验证码" autocomplete="one-time-code" maxlength="8">${B(`data-smsgo="${id}"`, "登录", "btn pri", lg.busy ? " disabled" : "")}`);
+      case "win":
+        return subRow(6, `<div class="how"><b>到「${m}」前面，在打开的窗口里登录${esc(pf)}</b><span class="sub">${esc(lg.text || "登录窗口已经在那台电脑上打开。登录完回到这里点一下。")}</span>${alt(qr)}</div>${B(`data-done="${id}"`, "我登录好了", "btn pri")}`);
+      case "auth":
+        return subRow(6, `<div class="how"><b>在新打开的标签页里同意授权</b><span class="sub">${esc(pf)} 的授权页已经在新标签页打开。同意之后这里会自己变成正常。${lg.url ? ` 没弹出就 <a href="${esc(lg.url)}" target="_blank" rel="noopener">点这里打开授权页</a>。` : ""}</span>${alt()}</div>`);
+      case "fail":
+        return subRow(6, `<p>${esc(lg.text)}</p><span class="acts">${cancel}</span>`, "bad");
+      default:
+        return "";
+    }
+  }
+
   function accountRow(a) {
     const st = VK.loginState(a);
     const lg = ui.login[a.id];
@@ -147,33 +241,33 @@
     const who = a.avatar_url && connected(a)
       ? `<img class="av" src="${esc(a.avatar_url)}" alt="" width="20" height="20" referrerpolicy="no-referrer">${esc(name)}`
       : esc(name);
-    let status;
-    if (lg?.kind === "wait") status = `<span class="st wait">${lg.waitLabel}</span>${lg.text ? `<span class="why">${lg.text}</span>` : ""}`;
-    else if (lg?.kind === "fail") status = `<span class="st bad">没登上</span><span class="why bad">${esc(lg.text)}</span>`;
-    else status = `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>${a.identityConflict ? `<span class="why bad">${esc(a.identityConflict)}</span>` : ""}`;
     const q = a.quota;
-    const quota = q ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">不限</span>';
+    const sendable = !lg && !credsMissing(a) && !a.identityConflict && st.key === "ok";
+    const quota = !q ? '<span class="sub">不限</span>' : sendable ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">现在发不了</span>';
     const note = [NOTE[a.platform], a.mode === "manual" ? "仅手动跟踪" : ""].filter(Boolean).join("，");
-    let act;
-    if (lg?.kind === "wait") {
-      act = a.platform === "tiktok-api" ? "" : `<span class="tbtns"><button class="link" data-cancel="${esc(a.id)}">取消</button><button class="btn pri" data-done="${esc(a.id)}">${SCAN.has(a.platform) ? "我扫好了" : "我登录好了"}</button></span>`;
-    } else if (credsMissing(a)) act = '<span class="sub">先填下面的应用凭证</span>';
-    else if (a.platform === "tiktok-api") act = `<button class="${connected(a) ? "link" : "btn"}" data-login="${esc(a.id)}">${connected(a) ? "重新连接" : "Connect TikTok"}</button>`;
-    else act = `<button class="${st.key === "ok" ? "link" : "btn"}" data-login="${esc(a.id)}">重新登录</button>`;
-    // 退出登录：关浏览器 + 删这个账号自己的浏览器资料，之后才能扫码/短信登录另一个号（vk account logout）。
-    if (!credsMissing(a) && WEB_LOGIN(a.platform) && lg?.kind !== "wait") {
-      act += ui.logoutAsk === a.id
-        ? ` <span class="tbtns"><span class="sub">会删掉这个账号的登录资料</span><button class="btn" data-logoutyes="${esc(a.id)}">确认退出</button><button class="link" data-logoutno>算了</button></span>`
-        : ` <button class="link" data-logout="${esc(a.id)}">退出登录</button>`;
+
+    let sub = "";
+    if (ui.logoutAsk === a.id) {
+      sub = subRow(6, `<p>退出后会清掉这个账号在发布机「${esc(machineName())}」上的登录数据，要重新登录才能发；排着要发的这个账号的内容，退出后不会发。</p><span class="acts">${B("data-logoutno", "取消", "link")}${B(`data-logoutyes="${esc(a.id)}"`, "退出登录")}</span>`);
+    } else if (lg) sub = loginSub(a, lg);
+    else if (credsMissing(a) && ui.credOpen === a.id) {
+      const c = ui.cred;
+      sub = subRow(6, `<p>填 TikTok 开发者后台里这个应用的凭证。它保存在发布机上，不会回显，也不进日志。</p>` +
+        `<input type="text" id="cred-key" placeholder="client key" aria-label="client key" autocomplete="off" value="${esc(c.key)}">` +
+        `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
+        `<span class="acts">${B("data-credcancel", "取消", "link")}${B("data-credsave", "保存", "btn pri", c.busy ? " disabled" : "")}</span>` +
+        (c.note ? `<span class="${c.bad ? "say bad" : "sub"}" role="status" style="flex:1 1 100%">${esc(c.note)}</span>` : ""), "wait");
+    } else if (a.identityConflict) {
+      sub = subRow(6, `<p>${esc(a.identityConflict)}</p><span class="acts">${B(`data-logoutyes="${esc(a.id)}"`, "退出登录，换一个号")}</span>`, "bad");
     }
-    const row = `<tr data-acc="${esc(a.id)}"><td><span class="pfn">${pfBadge(a.platform)}${esc(labelOf(a.platform))}</span></td><td class="acct">${who}</td><td>${status}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${act}</td></tr>`;
-    if (!credsMissing(a)) return row;
-    const c = ui.cred;
-    return row + `<tr class="credrow"><td colspan="6"><form class="sysrow" data-credform onsubmit="return false"><b style="font-weight:600">TikTok 官方接口还没有应用凭证</b>` +
-      `<input type="text" id="cred-key" placeholder="client key" aria-label="client key" autocomplete="off" value="${esc(c.key)}">` +
-      `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
-      `<button class="btn" data-credsave${c.busy ? " disabled" : ""}>保存</button>` +
-      `<span class="say${c.bad ? " bad" : ""}" role="status">${esc(c.note) || "在 TikTok 开发者后台的应用里复制。保存在这台电脑的 config.json（权限 600），不会回显，也不进日志。"}</span></form></td></tr>`;
+    const row = `<tr${sub ? ' class="has-sub"' : ""} data-acc="${esc(a.id)}"><td>${pfn(a.platform)}</td><td class="acct">${who}</td><td>${statusCell(a, st, lg)}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${accountActions(a, st, lg)}</td></tr>`;
+    return row + sub;
+  }
+
+  function nameCell(g) {
+    return ui.renaming === g.id
+      ? `<div class="grpname"><input type="text" id="rename-input" value="${esc(g.name)}" aria-label="新名字" maxlength="60"><button class="btn" data-renamesave="${esc(g.id)}">保存</button><button class="link" data-renamecancel>取消</button></div>`
+      : `<b class="nm">${esc(g.name)}</b>`;
   }
 
   function groupRows(pending) {
@@ -183,33 +277,51 @@
       const mine = ui.today ? ui.today.awaiting.length + ui.today.problems.length : 0;
       const n = isCur ? mine : Number(pending[g.id] ?? 0);
       const accs = accountsOf(g.id);
-      const names = accs.length ? `${accs.length} 个 · <span class="sub">${accs.map((a) => esc(pfName(a.platform))).join("、")}</span>` : '<span class="sub">还没有账号</span>';
-      const nameCell = ui.renaming === g.id
-        ? `<div class="grpname"><input type="text" id="rename-input" value="${esc(g.name)}" aria-label="新名字" maxlength="60"><button class="btn" data-renamesave="${esc(g.id)}">保存</button><button class="link" data-renamecancel>取消</button></div>`
-        : `<b style="font-weight:600">${esc(g.name)}</b>`;
+      const names = accs.length ? `${accs.length} 个 <span class="sub">· ${accs.map((a) => esc(pfName(a.platform))).join("、")}</span>` : '<span class="sub">还没有账号</span>';
       const act = isCur ? '<span class="sub">当前</span>' : `<a class="btn" href="/system" data-sw="${esc(g.id)}">切过去</a>`;
-      return `<tr><td>${nameCell}</td><td>${names}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td>` +
-        `<td class="n"><span class="tbtns">${ui.renaming === g.id ? "" : `<button class="link" data-rename="${esc(g.id)}">改名</button>`}${act}</span></td></tr>`;
+      return `<tr><td>${nameCell(g)}</td><td>${names}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td>` +
+        `<td class="n"><span class="acts">${ui.renaming === g.id ? "" : `<button class="link" data-rename="${esc(g.id)}">改名</button>`}${act}</span></td></tr>`;
     }).join("");
   }
 
-  function addRow(group) {
-    const taken = (p) => ui.accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
-    const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
-    const none = !ui.platforms.length;
-    const allTaken = !none && ui.platforms.every((p) => taken(p.platform));
-    const empty = none ? "没有已安装的平台" : "这个组的平台都接上了";
-    return `<div class="sysrow" id="addrow"><select id="add-platform" aria-label="平台"${none || allTaken ? " disabled" : ""}>${none || allTaken ? `<option value="" selected>${empty}</option>` : opts}</select>` +
-      `<input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}">` +
-      `<button class="btn" data-add${ui.addBusy || none || allTaken || !group ? " disabled" : ""}>接入账号</button>` +
-      `<span class="say${ui.addBad ? " bad" : ""}" role="status">${esc(ui.addNote)}</span></div>`;
+  /** 新建账号组：放在表格最后一行，点开就地填名字。 */
+  function newGroupRow() {
+    if (ui.newGroup || !VK.groups().length) {
+      return `<tr class="addrow"><td><input type="text" id="ng-name" placeholder="新账号组的名字" aria-label="新账号组的名字" maxlength="60" value="${esc(ui.newGroupName)}"></td><td colspan="2" class="sub">${ui.groupNote ? `<span class="say bad" role="status">${esc(ui.groupNote)}</span>` : "建好后切过去，再接入这一套平台账号。飞书卡片标题会带上账号组的名字。"}</td>` +
+        `<td class="n"><span class="acts">${VK.groups().length ? B("data-ngcancel", "取消", "link") : ""}${B("data-ngsave", "建好", "btn", ui.groupBusy ? " disabled" : "")}</span></td></tr>`;
+    }
+    return '<tr><td colspan="4"><button class="link" data-newg>新建账号组</button></td></tr>';
   }
 
+  /** 接入账号：表格的最后一行。 */
+  function addRow(group) {
+    const taken = (p) => ui.accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
+    const none = !ui.platforms.length;
+    const allTaken = !none && ui.platforms.every((p) => taken(p.platform));
+    if (none) return '<tr><td colspan="6" class="sub">没有已安装的平台。</td></tr>';
+    if (allTaken) return '<tr><td colspan="6" class="sub">这个组能接的平台都接上了。一个组里每个平台接一个号；要接第二个号，新建一个账号组。</td></tr>';
+    const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
+    return `<tr class="addrow" id="addrow"><td><select id="add-platform" aria-label="要接入的平台">${opts}</select></td>` +
+      `<td><input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}"></td>` +
+      `<td colspan="3" class="sub"><span class="say${ui.addBad ? " bad" : ""}" role="status">${ui.addNote ? esc(ui.addNote) : `接入后当场登录，归到「${esc(group.name)}」。`}</span></td>` +
+      `<td class="n">${B("data-add", "接入账号", "btn", ui.addBusy || !group ? " disabled" : "")}</td></tr>`;
+  }
 
-  // ── 发布方案 / 发布机 / 平台规则 / 最近出的问题 ───────────────────────────────
+  function tabAccounts(group, pending) {
+    const groupsTable = `<div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${groupRows(pending)}${newGroupRow()}</tbody></table></div>`;
+    if (!group) {
+      return `<h2 class="sec">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>${groupsTable}<div class="panel empty" style="margin-top:12px">先建一个账号组，账号才有地方放。</div>`;
+    }
+    const where = publisherOffline() ? `<span class="st bad" style="margin-left:10px">${OFFLINE_SAY}</span>` : `在发布机「${esc(machineName())}」上登录和发布`;
+    const accountsTable = `<div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ui.accounts.map(accountRow).join("")}${addRow(group)}</tbody></table></div>`;
+    return `<h2 class="sec">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>${groupsTable}` +
+      `<h2 class="sec" id="accounts">账号 · ${esc(group.name)} · ${where}</h2>${accountsTable}` +
+      `<div class="cmd">平台的登录数据只存在你自己的发布机上，这个服务拿不到。手机上的通知和确认都在飞书里。</div>`;
+  }
+
+  // ── 画页面：发布方案与平台规则 ───────────────────────────────────────────
   const KIND_OPTS = [["*", "成片"], ["video", "视频"], ["image", "图片"]];
   const LANG_OPTS = [["*", "所有语言"], ["zh", "中文"], ["en", "English"]];
-  const pfn = (platform, name) => `<span class="pfn">${pfBadge(platform)}${esc(name ?? labelOf(platform))}</span>`;
 
   function planRow(r, i) {
     const ed = ui.planEdit;
@@ -231,59 +343,12 @@
   }
 
   function planBlock(group) {
-    if (!group) return "";
     const head = `<h2 class="sec" id="plan">发布方案 · ${esc(group.name)} · 哪种成片发到哪些平台、按什么节奏</h2>`;
     if (!ui.plan) return `${head}<div class="note bad">读不到发布方案：${esc(ui.sectionErr ?? "未知错误")}</div>`;
     const rows = ui.plan.rows.map(planRow).join("");
     const adding = ui.planEdit?.isNew ? planEditor({ label: "" }) : "";
     return `${head}<div class="tblwrap"><table class="plan"><thead><tr><th>成片</th><th>发到</th><th>节奏</th><th class="n"></th></tr></thead><tbody>${rows}${adding}</tbody></table></div>` +
-      `<div class="cmd">这是你自己的习惯，可以改；新作品入库时按它生成平台稿和建议时间，每条仍然要你确认，已经生成的平台稿不受影响。对应命令：<code>vk plan show</code>　<code>vk plan set --to &lt;平台&gt;</code>　${ui.planEdit?.isNew ? "" : '<button class="link" data-planadd>加一行</button>'}${ui.plan.isDefault ? "" : '<button class="link" data-planreset>恢复默认方案</button>'}</div>`;
-  }
-
-  const ago = (ms) => (ms < 90e3 ? "刚刚" : ms < 3600e3 ? `${Math.round(ms / 60e3)} 分钟前` : `${Math.round(ms / 3600e3)} 小时前`);
-
-  function machineBlock() {
-    const m = ui.machine;
-    const body = !m
-      ? '<dt>这台电脑</dt><dd><span class="st bad">读不到</span></dd>'
-      : `<dt>这台电脑</dt><dd>${m.online ? '<span class="st done">在线</span>' : '<span class="st bad">不在线</span>'} <span class="sub">${m.heartbeatAgeMs == null ? "还没有收到心跳" : `${ago(m.heartbeatAgeMs)}有心跳`}${m.online ? "" : "；终端执行 vk serve"}</span></dd>` +
-        `<dt>排着要发</dt><dd>${m.queued.count} 条已确认${m.queued.nextAt ? `，最近一条 ${esc(whenText(m.queued.nextAt))}` : ""}</dd>` +
-        `<dt>正在发</dt><dd>${m.running.count ? `${m.running.count} 条` : "没有"}</dd>` +
-        `<dt>等你确认</dt><dd>${m.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd>`;
-    return `<div><h2 class="sec">发布机</h2><div class="panel"><dl class="kv">${body}${relayRows()}${updateRows()}</dl></div><div class="cmd">对应命令：<code>vk machine</code>　<code>vk doctor --human</code>　<code>vk version</code>　<code>vk update --auto on|off</code>　<code>vk relay status</code></div></div>`;
-  }
-
-  /** 中转：连接状态、上次拉取、正在下载的投递和进度。没配中转就不画这一行，不占版面。 */
-  function relayRows() {
-    const r = ui.relay;
-    if (!r || !r.configured) return "";
-    const st = { ok: '<span class="st done">已连上</span>', error: '<span class="st bad">连不上</span>', never: '<span class="st">还没拉取过</span>' }[r.connection] ?? "";
-    const last = r.lastPullAt ? `上次拉取 ${esc(ago(Date.now() - r.lastPullAt))}` : "还没有拉取过";
-    const err = r.connection === "error" && r.lastError ? `<div class="sub">${esc(r.lastError.message)}</div>` : "";
-    const dl = r.downloading.length
-      ? r.downloading.map((d) => `<div>正在下载 ${esc(d.name)} <progress max="100" value="${esc(d.percent)}" aria-label="下载进度"></progress> <span class="sub">${esc(d.percent)}%</span></div>`).join("")
-      : `<span class="sub">${r.pending ? `${esc(r.pending)} 个投递还没下完，下一轮接着下` : "没有在下载的"}</span>`;
-    return `<dt>中转</dt><dd>${st} <span class="sub">${last}；每 ${esc(r.intervalMinutes)} 分钟拉一次；新作品入库后在「今天」等你确认</span>${err}</dd><dt>正在下载</dt><dd>${dl}</dd>`;
-  }
-
-  /** 版本、上次检查、自动更新开关；刚更新过的附上更新内容（最多 5 条提交标题）。读不到就不画，不拖垮发布机这一块。 */
-  const RECENT_UPDATE_MS = 3 * 864e5;
-  function updateRows() {
-    const u = ui.update;
-    if (!u) return "";
-    const ver = `<code>${esc(u.display ?? `${u.version}+${u.short ?? "未知提交"}`)}</code>`;
-    const at = u.installedAt ? `<span class="sub">安装于 ${esc(whenText(Date.parse(u.installedAt)))}</span>` : "";
-    const checked = u.lastCheckAt
-      ? `${esc(ago(Date.now() - u.lastCheckAt))} <span class="sub">${esc(u.lastCheck?.message ?? "")}</span>`
-      : `<span class="sub">还没检查过${u.auto ? "（服务启动后很快会查一次）" : ""}</span>`;
-    const lu = u.lastUpdate;
-    const fresh = lu && Date.now() - lu.at < RECENT_UPDATE_MS
-      ? `<dt>刚更新过</dt><dd>已更新到 ${esc(lu.display ?? lu.version)}（${esc(whenText(lu.at))}）${(lu.commits ?? []).length ? `<ul class="sub" style="margin:6px 0 0;padding-left:18px">${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}</dd>`
-      : "";
-    return `<dt>版本</dt><dd>${ver} ${at}</dd>` +
-      `<dt>上次检查</dt><dd>${checked}</dd>` +
-      `<dt>自动更新</dt><dd><span class="st ${u.auto ? "done" : "bad"}">${u.auto ? "开" : "关"}</span> <span class="sub">${u.auto ? `每 ${esc(u.intervalHours)} 小时检查，只在空闲时更新，失败自动退回` : "不会自动更新；想更新时运行 vk update"}</span> ` +
-      `<button class="link" data-autoupd="${u.auto ? "off" : "on"}"${ui.updBusy ? " disabled" : ""}>${u.auto ? "关闭" : "打开"}</button></dd>${fresh}`;
+      `<div class="cmd">这是你自己的习惯，可以改；新作品入库时按它生成平台稿和建议时间，每条仍然要你确认，已经生成的平台稿不受影响。${ui.planEdit?.isNew ? "" : '<button class="link" data-planadd>加一行</button>'}${ui.plan.isDefault ? "" : '<button class="link" data-planreset>恢复默认方案</button>'}</div>`;
   }
 
   /** 同一个数值的平台并成一行：「B站、小红书　每个账号每天最多 10 条」。 */
@@ -302,19 +367,105 @@
     const rows = rules.length
       ? `<dt>每天最多</dt><dd>${ruleLines(rules, "dailyCap", "capIsDefault", (n) => `每个账号 ${n} 条`)}</dd><dt>间隔</dt><dd>${ruleLines(rules, "minGapMinutes", "gapIsDefault", (n) => `同一个账号两条之间至少隔 ${n} 分钟`)}</dd>`
       : "";
-    return `<div><h2 class="sec">平台规则 · 对所有人一样，不能关</h2><div class="panel"><dl class="kv"><dt>确认</dt><dd>每一条都要人确认后才会发</dd><dt>小红书</dt><dd>每条单独确认，不能批量</dd>${rows}<dt>AI 标注</dt><dd>每个平台按它的要求标注</dd></dl></div>` +
-      `<div class="cmd">你改的时间碰到规则时，会当场告诉你并给出最近的可用时间。数字改在 config.json 的 <code>plan.rules</code>，对应命令：<code>vk plan show</code></div></div>`;
+    return `<h2 class="sec">平台规则 · 对所有人一样，不能关</h2><div class="panel"><dl class="kv"><dt>确认</dt><dd>每一条都要人确认后才会发</dd><dt>小红书</dt><dd>每条单独确认，不能批量</dd>${rows}<dt>AI 标注</dt><dd>每个平台按它的要求标注</dd></dl></div>` +
+      `<div class="cmd">你改的时间碰到规则时，会当场告诉你并给出最近的可用时间。</div>`;
   }
 
+  function tabPlan(group) {
+    return group ? planBlock(group) + rulesBlock() : '<div class="panel empty">先建一个账号组，再设发布方案。</div>';
+  }
+
+  // ── 画页面：设备（发布机、中转、版本与更新）─────────────────────────────────
+  const ago = (ms) => (ms < 90e3 ? "刚刚" : ms < 3600e3 ? `${Math.round(ms / 60e3)} 分钟前` : `${Math.round(ms / 3600e3)} 小时前`);
+  const RECENT_UPDATE_MS = 3 * 864e5;
+
+  /** 中转：连接状态、上次拉取、正在下载的投递和进度。没配中转就不画。 */
+  function relayRows() {
+    const r = ui.relay;
+    if (!r || !r.configured) return "";
+    const st = { ok: '<span class="st done">中转已连上</span>', error: '<span class="st bad">中转连不上</span>', never: '<span class="st">中转还没拉取过</span>' }[r.connection] ?? "";
+    const last = r.lastPullAt ? `上次拉取 ${esc(ago(Date.now() - r.lastPullAt))}` : "还没有拉取过";
+    const err = r.connection === "error" && r.lastError ? `<div class="sub">${esc(r.lastError.message)}</div>` : "";
+    const dl = r.downloading.length
+      ? r.downloading.map((d) => `<div>正在下载 ${esc(d.name)} <progress max="100" value="${esc(d.percent)}" aria-label="下载进度"></progress> <span class="sub">${esc(d.percent)}%</span></div>`).join("")
+      : r.pending ? `<div class="sub">${esc(r.pending)} 个投递还没下完，下一轮接着下</div>` : "";
+    return `<div style="margin-top:8px">${st}<div class="sub">${last}；每 ${esc(r.intervalMinutes)} 分钟拉一次；新作品入库后在「今天」等你确认</div>${err}${dl}</div>`;
+  }
+
+  function versionCell() {
+    const u = ui.update;
+    if (!u) return '<span class="sub">读不到版本</span>';
+    const ver = `<span class="mono">${esc(u.display ?? `${u.version}+${u.short ?? "未知提交"}`)}</span>`;
+    if (ui.upd) return `${ver}<div class="sub">服务会短暂重启，几十秒后回来</div>`;
+    const behind = u.lastCheck && !u.lastCheck.up_to_date;
+    const latest = u.lastCheck?.up_to_date;
+    const lu = u.lastUpdate;
+    const hasNotes = lu && Date.now() - lu.at < RECENT_UPDATE_MS && (lu.commits ?? []).length;
+    const state = behind ? `<span class="sub">${esc(u.lastCheck.message || "有新版本")}</span>`
+      : latest ? `<span class="sub">已是最新</span>${hasNotes ? ` <button class="link" data-notes aria-expanded="${ui.notesOpen}">${ui.notesOpen ? "收起" : "看更新了什么"}</button>` : ""}`
+      : '<span class="sub">还没检查过</span>';
+    const checked = u.lastCheckAt ? `<div class="sub">上次检查 ${esc(ago(Date.now() - u.lastCheckAt))}</div>` : "";
+    const auto = `<div class="sub">自动更新${u.auto ? "开着" : "关着"} <button class="link" data-autoupd="${u.auto ? "off" : "on"}"${ui.updBusy ? " disabled" : ""}>${u.auto ? "关掉" : "打开"}</button>${u.auto ? `　每 ${esc(u.intervalHours)} 小时检查，只在空闲时更新，失败自动退回` : ""}</div>`;
+    return `${ver} ${state}${checked}${auto}`;
+  }
+
+  function deviceRow() {
+    const m = ui.machine;
+    const u = ui.update;
+    const online = m?.online;
+    const status = ui.upd ? '<span class="st">正在更新…</span>'
+      : !m ? '<span class="st bad">读不到</span>'
+      : online ? `<span class="st done">在线</span><div class="sub">${esc(ago(m.heartbeatAgeMs ?? 0))}还连着</div>`
+      : `<span class="st bad">不在线</span><div class="sub">${m.heartbeatAgeMs == null ? "还没有收到心跳" : `${esc(ago(m.heartbeatAgeMs))}有心跳`}</div>`;
+    const accountsN = (VK.snapshot()?.accounts ?? []).length;
+    const behind = u?.lastCheck && !u.lastCheck.up_to_date;
+    let act = "";
+    if (!ui.upd && u) {
+      const dis = !online ? ' disabled title="这台电脑不在线，上线后才能更新"' : "";
+      act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? '<div class="sub">这台电脑不在线，上线后才能更新</div>' : ""}`;
+    }
+    const lu = ui.update?.lastUpdate;
+    const notes = ui.notesOpen && lu?.commits?.length
+      ? subRow(5, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
+      : "";
+    const updMsg = ui.upd ? subRow(5, `<p role="status">正在更新到最新版本，更新时这台电脑的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
+      : ui.updNote ? subRow(5, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
+    const sub = updMsg || notes;
+    return `<tr${sub ? ' class="has-sub"' : ""}><td><b class="nm">${esc(machineName())}</b><span class="sub">发布机 · 这台电脑</span></td>` +
+      `<td>${status}${relayRows()}</td><td>${accountsN ? `${accountsN} 个` : '<span class="sub">没有</span>'}</td><td>${versionCell()}</td><td class="n">${act}</td></tr>${sub}`;
+  }
+
+  /** 接入 / 断开中转：放在设备表的最后一行。 */
+  function relayAction() {
+    const r = ui.relay;
+    if (ui.relayAsk) return subRow(5, `<p>断开后这台电脑不再拉取制作机送来的作品，已经入库的作品不受影响。</p><span class="acts">${B("data-relayno", "取消", "link")}${B("data-relayoff", "断开")}</span>`);
+    if (r?.configured) return `<tr><td colspan="5"><button class="link" data-relayask>断开中转</button> <span class="sub">制作机送来的作品经中转交给这台发布机</span></td></tr>`;
+    const f = ui.relayForm;
+    if (!f) return '<tr><td colspan="5"><button class="link" data-relayadd>接入中转</button> <span class="sub">让别的电脑上做好的作品送到这台发布机</span></td></tr>';
+    return subRow(5, `<div class="how"><b>接入中转</b><span class="sub">填中转的地址和它给你的拉取令牌。令牌只保存在发布机上，不会回显。</span>${f.note ? `<span class="say bad" role="status">${esc(f.note)}</span>` : ""}</div>` +
+      `<input type="text" id="relay-url" placeholder="中转地址" aria-label="中转地址" autocomplete="off" value="${esc(f.url)}">` +
+      `<input type="password" id="relay-token" placeholder="拉取令牌" aria-label="拉取令牌" autocomplete="new-password" value="${esc(f.token)}">` +
+      `<span class="acts">${B("data-relaycancel", "取消", "link")}${B("data-relaysave", "接入", "btn pri", f.busy ? " disabled" : "")}</span>`);
+  }
+
+  function tabDevices() {
+    return `<h2 class="sec">发布机 · 你的平台账号在这台电脑上登录和发布，登录数据只存在它上面</h2>` +
+      `<div class="tblwrap"><table class="dev"><thead><tr><th>电脑</th><th>状态</th><th>账号</th><th>版本</th><th class="n"></th></tr></thead><tbody>${deviceRow()}${relayAction()}</tbody></table></div>` +
+      `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>` +
+      (ui.machine ? `<h2 class="sec">这台发布机现在</h2><div class="panel"><dl class="kv"><dt>排着要发</dt><dd>${ui.machine.queued.count} 条已确认${ui.machine.queued.nextAt ? `，最近一条 ${esc(whenText(ui.machine.queued.nextAt))}` : ""}</dd>` +
+        `<dt>正在发</dt><dd>${ui.machine.running.count ? `${ui.machine.running.count} 条` : "没有"}</dd><dt>等你确认</dt><dd>${ui.machine.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd></dl></div>` : "");
+  }
+
+  // ── 最近出的问题（在分段上面）──────────────────────────────────────────────
   const WHAT = { failed: "没发出去", blocked: "被拦下了", expired: "过了时间没确认" };
 
   function problemsBlock(group) {
     if (!group) return "";
     const uf = ui.update?.lastFailure;
     const updRow = uf && Date.now() - uf.at < 7 * 864e5
-      ? `<tr><td><b>自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
+      ? `<tr><td><b class="nm">自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功，已回到原版本</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
       : "";
-    const relayRowsHtml = (ui.relay?.failures ?? []).map((f) => `<tr><td><b>中转投递${f.title ? `「${esc(f.title)}」` : ""}</b><span class="sub">${esc(whenText(f.at))}</span></td><td></td><td><span class="st bad">没入库</span><div class="sub">${esc(f.message)}</div></td><td class="n"></td></tr>`).join("");
+    const relayRowsHtml = (ui.relay?.failures ?? []).map((f) => `<tr><td><b class="nm">中转投递${f.title ? `「${esc(f.title)}」` : ""}</b><span class="sub">${esc(whenText(f.at))}</span></td><td></td><td><span class="st bad">没入库</span><div class="sub">${esc(f.message)}</div></td><td class="n"></td></tr>`).join("");
     const rows = updRow + relayRowsHtml + ui.problems.map(({ run, p }) => {
       const day = whenText(run.created_at);
       const why = p.error?.message ?? run.last_error ?? "";
@@ -322,9 +473,10 @@
         `<td>${pfn(p.platform, pfName(p.platform))}</td><td><span class="st bad">${esc(WHAT[p.state] ?? p.state)}</span><div class="sub">${esc(why)}</div></td>` +
         `<td class="n"><button class="btn" data-retry="${esc(p.publishId)}"${ui.retrying.has(p.publishId) ? " disabled" : ""}>再试一次</button></td></tr>`;
     }).join("");
-    return `<h2 class="sec" id="problems">最近出的问题</h2>` +
-      (rows ? `<div class="tblwrap"><table><tbody>${rows}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>') +
-      `<div class="cmd">对应命令：<code>vk runs --failed</code>　手机上的通知和确认都在飞书里。</div>`;
+    // 没出过问题就不占版面（照设计稿）：这一块只在有事时出现。
+    if (!rows) return "";
+    return `<h2 class="sec" id="problems" style="margin-top:0">最近出的问题</h2>` +
+      `<div class="tblwrap"><table><tbody>${rows}</tbody></table></div>`;
   }
 
   async function savePlanRow() {
@@ -348,50 +500,38 @@
     const group = VK.current();
     const pending = {};
     for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
-    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok").length + (ui.today?.problems?.length ?? 0);
+    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + (ui.today?.problems?.length ?? 0);
     const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
-
-    const groupsBlock = VK.groups().length
-      ? `<div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${groupRows(pending)}</tbody></table></div>`
-      : '<div class="panel empty">还没有账号组。账号组是一套平台账号，有自己的作品、待办、数据和发布方案；先建一个，再接入账号。</div>';
-    const newGroup = ui.newGroup || !VK.groups().length
-      ? `<div class="sysrow"><input type="text" id="ng-name" placeholder="账号组名字" aria-label="账号组名字" maxlength="60" value="${esc(ui.newGroupName)}"><button class="btn" data-ngsave${ui.groupBusy ? " disabled" : ""}>创建</button><button class="link" data-ngcancel>取消</button><span class="say bad" role="status">${esc(ui.groupNote)}</span></div>` : "";
-
-    let accountsBlock = "";
-    if (!group) {
-      accountsBlock = '<div class="panel empty">先建一个账号组，账号才有地方放。</div>';
-    } else {
-      accountsBlock = ui.accounts.length
-        ? `<div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ui.accounts.map(accountRow).join("")}</tbody></table></div>`
-        : '<div class="panel empty">这个账号组还没有账号。在下面选一个平台、填账号名，接入第一个。</div>';
-    }
-
+    const behind = ui.update?.lastCheck && !ui.update.lastCheck.up_to_date;
+    const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0);
+    const counts = { accounts: group ? ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length : 0, plan: 0, devices: devN };
+    const tabs = `<div class="seg tabs" role="group" aria-label="系统的哪一部分">${TABS.map(([k, n]) => `<button data-tab="${k}" aria-pressed="${k === ui.tab}">${n}${counts[k] ? ` ${counts[k]}` : ""}</button>`).join("")}</div>`;
+    const body = { accounts: () => tabAccounts(group, pending), plan: () => tabPlan(group), devices: tabDevices }[ui.tab]();
+    // 重画前记住正在打字的输入框，重画后放回去，不丢字。
+    const act = document.activeElement;
+    const keep = act && main.contains(act) && act.id ? { id: act.id, s: act.selectionStart, e: act.selectionEnd } : null;
     main.innerHTML = `
   <div class="hd"><h1>系统</h1><span class="sub" id="sub">${sub}</span></div>
-  <h2 class="sec" id="groups" style="margin-top:0">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>
-  ${groupsBlock}
-  ${newGroup}
-  <div class="cmd">对应命令：<code>vk group list</code>　<code>vk group add &lt;名字&gt;</code>　<code>vk group use &lt;名字&gt;</code>　<code>vk group rename &lt;组&gt; &lt;新名字&gt;</code>　飞书卡片标题会带上账号组的名字。${ui.newGroup || !VK.groups().length ? "" : '<button class="link" data-newg>新建账号组</button>'}</div>
-  <h2 class="sec" id="accounts">账号${group ? ` · ${esc(group.name)}` : ""}</h2>
-  ${accountsBlock}
-  ${group ? addRow(group) : ""}
-  <div class="cmd">对应命令：<code>vk account list</code>　<code>vk account add &lt;平台&gt; --group &lt;组&gt; --name &lt;名字&gt;</code>　<code>vk account login &lt;账号 id&gt; --open</code>　<code>vk account credentials tiktok</code>　登录在这台电脑上完成，凭证只存在本机。</div>
-  ${planBlock(group)}
-  ${group ? `<div class="two">${machineBlock()}${rulesBlock()}</div>` : ""}
-  ${problemsBlock(group)}`;
+  ${problemsBlock(group)}
+  <div style="margin-top:22px">${tabs}</div>
+  ${body}`;
+    if (keep) {
+      const el = document.getElementById(keep.id);
+      if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch { /* 有的输入框没有光标 */ } }
+    }
   }
 
   // ── 登录（就地完成，不跳旧页面）──────────────────────────────────────────
   const post = (path, body) => VK.request(path, { method: "POST", body });
   const acc = (id) => ui.accounts.find((a) => a.id === id);
+  const accPath = (id, what) => `/api/accounts/${encodeURIComponent(id)}/${what}`;
 
   function stopPoll(id) {
     const t = polls.get(id);
     if (t) clearInterval(t);
     polls.delete(id);
   }
-  const fail = (id, text) => { stopPoll(id); ui.login[id] = { kind: "fail", text }; draw(); };
-  const waitLabelOf = (platform) => (SCAN.has(platform) ? "等你扫码" : "等你登录");
+  const fail = (id, text) => { stopPoll(id); ui.login[id] = { step: "fail", text }; draw(); };
 
   async function succeed(id) {
     stopPoll(id);
@@ -400,16 +540,16 @@
     await refresh();
   }
 
-  /** account.check：适配器真实检查（B站 = biliup renew）。只有 ok 才算登上。 */
+  /** account.check：适配器真实检查（B站走自己的续期检查）。只有 ok 才算登上。 */
   async function confirm(id, { manual = false } = {}) {
     const a = acc(id);
-    const label = a?.platform === "bilibili" ? "biliup" : "平台";
+    const label = a?.platform === "bilibili" ? "B站" : "平台";
     try {
-      const r = await post(`/api/accounts/${encodeURIComponent(id)}/check`, { accountId: id });
+      const r = await post(accPath(id, "check"), { accountId: id });
       if (r.state === "ok") return succeed(id), true;
       if (r.skipped) { if (manual) fail(id, "这个平台还没有自动检查，没法确认登录；可以在「今天」里发一条试试。"); return false; }
-      const reason = { expiring: "已登录，但凭证快过期了，请重新登录一次", expired: manual ? "还没检测到登录：先在打开的窗口里完成登录" : `登录信息已保存，但${label}校验没通过`, banned: "账号在平台上被限制，需要先在平台侧处理" }[r.state] ?? `当前状态：${r.state}`;
-      if (manual && r.state === "expired") { ui.login[id] = { ...ui.login[id], text: esc(reason) }; draw(); return false; }
+      const reason = { expiring: "已登录，但凭证快过期了，请重新登录一次", expired: manual ? "还没检测到登录：先在打开的窗口里完成登录" : `登录信息已保存，但${label}校验没通过`, banned: "账号在平台上被限制，需要先在平台侧处理" }[r.state] ?? "登录状态不对";
+      if (manual && r.state === "expired") { ui.login[id] = { ...ui.login[id], text: reason }; draw(); return false; }
       fail(id, `${reason}${r.detail ? `（${r.detail}）` : ""}。点「重新登录」再来一次。`);
     } catch (err) {
       fail(id, `检查失败：${err.message}。点「重新登录」再来一次。`);
@@ -418,16 +558,30 @@
   }
 
   let confirming = new Set();
+  /** 扫码和窗口登录共用的轮询：状态自己从「等你扫码」走到「已扫码」再到正常，不需要人点按钮。 */
   async function pollOnce(id) {
     try {
-      const r = await post(`/api/accounts/${encodeURIComponent(id)}/login/status`, { accountId: id });
+      const r = await post(accPath(id, "login/status"), { accountId: id });
+      const cur = ui.login[id];
+      if (!cur) return;
       if (r.state === "ok") {
         if (confirming.has(id)) return;
         confirming.add(id);
         try {
-          // 拿到 cookie 不等于能用：统一再过一遍 account.check，通过才显示正常。
+          // 拿到 cookie 不等于能用：B站再过一遍检查，通过才显示正常。
           if (acc(id)?.platform === "bilibili") await confirm(id); else await succeed(id);
         } finally { confirming.delete(id); }
+        return;
+      }
+      if (cur.step === "qr" || cur.step === "scanned" || cur.step === "qrold") {
+        if (r.state === "scanned") { if (cur.step !== "scanned") { ui.login[id] = { step: "scanned" }; draw(); } return; }
+        if (r.state === "expired") { stopPoll(id); ui.login[id] = { step: "qrold" }; draw(); return; }
+        if (r.state === "waiting") {
+          const qr = r.qr ?? cur.qr;
+          if (qr !== cur.qr || cur.step !== "qr" || r.refreshed) { ui.login[id] = { step: "qr", qr, note: r.refreshed ? "二维码过期了，已自动换成新的，请重新扫码。" : "" }; draw(); }
+          return;
+        }
+        if (r.state === "failed" || r.state === "idle") return fail(id, r.note ?? "没有检测到登录完成：点「重新登录」再试。");
         return;
       }
       if (r.state === "idle" || r.state === "failed") fail(id, r.note ?? "没有检测到登录完成：点「重新登录」再试。");
@@ -438,25 +592,26 @@
 
   function startPoll(id) {
     stopPoll(id);
-    let ticks = 0; // 2 秒一次，最多认 5 分钟
+    let ticks = 0; // 默认 2 秒一次，最多认 10 分钟
+    const maxTicks = Math.round(600e3 / POLL_MS);
     polls.set(id, setInterval(() => {
-      if (++ticks > 150) return fail(id, "5 分钟内没有检测到登录完成：点「重新登录」再试。");
+      if (++ticks > maxTicks) return fail(id, "10 分钟内没有检测到登录完成：点「重新登录」再试。");
       pollOnce(id);
-    }, 2000));
+    }, POLL_MS));
   }
 
   async function connectTikTok(id) {
-    ui.login[id] = { kind: "wait", waitLabel: "等你登录", text: "正在准备授权链接…" };
+    ui.login[id] = { step: "auth", url: null };
     draw();
     try {
-      let r = await post(`/api/accounts/${encodeURIComponent(id)}/connect`, { accountId: id });
+      let r = await post(accPath(id, "connect"), { accountId: id });
       if (r.state === "waiting") {
-        ui.login[id] = { kind: "wait", waitLabel: "等你登录", text: `在新打开的 TikTok 页面登录并同意授权；没弹出就 <a href="${esc(r.url)}" target="_blank" rel="noopener">点这里打开授权页</a>。` };
+        ui.login[id] = { step: "auth", url: r.url };
         draw();
         window.open(r.url, "_blank", "noopener");
         for (let i = 0; i < 30 && r.state === "waiting"; i++) {
-          if (ui.login[id]?.kind !== "wait") return; // 被取消
-          r = await post(`/api/accounts/${encodeURIComponent(id)}/connect`, { accountId: id, timeoutMs: 20000 });
+          if (ui.login[id]?.step !== "auth") return; // 被取消
+          r = await post(accPath(id, "connect"), { accountId: id, timeoutMs: 20000 });
         }
       }
       if (r.state !== "connected") throw new Error("等了很久还没有授权完成");
@@ -466,20 +621,82 @@
     }
   }
 
-  async function startLogin(id) {
-    const a = acc(id);
-    if (!a) return;
-    if (a.platform === "tiktok-api") return connectTikTok(id);
-    if (!platformInfo(a.platform)) return fail(id, `没有安装 ${labelOf(a.platform)} 适配器（packages/adapter-${a.platform}），账号已登记但没法登录。`);
-    ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: "正在打开登录窗口…" };
+  /** 扫码：二维码由发布机取回，显示在账号那一行下面。 */
+  async function startQr(id) {
+    stopPoll(id);
+    ui.login[id] = { step: "qr", qr: null, text: "正在取二维码…" };
     draw();
     try {
-      await post(`/api/accounts/${encodeURIComponent(id)}/login/open`, { accountId: id });
-      ui.login[id] = { kind: "wait", waitLabel: waitLabelOf(a.platform), text: SCAN.has(a.platform) ? `在弹出的窗口里扫码并确认，这里会自动认出来。${a.platform === "xiaohongshu" ? QR_HINT : ""}` : "在弹出的窗口里完成登录，这里会自动认出来。" };
+      const r = await post(accPath(id, "login/qr"), { accountId: id });
+      if (r.state === "failed") return fail(id, r.note ?? "取不到二维码：可以改用短信验证码，或在发布机上打开登录窗口。");
+      ui.login[id] = { step: "qr", qr: r.qr ?? null, text: r.qr ? "" : (r.note ?? "正在确认登录…") };
+      draw();
+      startPoll(id);
+    } catch (err) {
+      fail(id, `取不到二维码：${err.message}`);
+    }
+  }
+
+  /** 在发布机上打开登录窗口：第三种方式，只有这种方式要人回来点一下。 */
+  async function startWindow(id) {
+    const a = acc(id);
+    stopPoll(id);
+    ui.login[id] = { step: "win", text: "正在打开登录窗口…" };
+    draw();
+    try {
+      await post(accPath(id, "login/open"), { accountId: id });
+      ui.login[id] = { step: "win", text: `登录窗口已经在发布机「${machineName()}」上打开。${a?.platform === "xiaohongshu" ? QR_HINT : "登录完这里会自动认出来；认不出来就点右边的按钮。"}` };
       draw();
       startPoll(id);
     } catch (err) {
       fail(id, `打不开登录窗口：${err.message}`);
+    }
+  }
+
+  async function startLogin(id, method) {
+    const a = acc(id);
+    if (!a) return;
+    if (publisherOffline()) return toast(OFFLINE_SAY);
+    if (a.platform === "tiktok-api") return connectTikTok(id);
+    if (!platformInfo(a.platform)) return fail(id, `这台电脑上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
+    const how = method ?? (HEADLESS.has(a.platform) ? "qr" : "win");
+    if (how === "qr") return startQr(id);
+    if (how === "sms") { stopPoll(id); ui.login[id] = { step: "sms1" }; draw(); document.getElementById("sms-phone")?.focus(); return; }
+    return startWindow(id);
+  }
+
+  /** 短信：手机号和验证码只经过这个页面的输入框，转给发布机；不存、不进地址栏、不写进页面状态。 */
+  async function smsSend(id, resend = false) {
+    const lg = ui.login[id];
+    if (resend) {
+      try { await post(accPath(id, "login/resend"), { accountId: id }); ui.login[id] = { ...lg, text: "新验证码已发送，用最新一条。", bad: false }; }
+      catch (err) { ui.login[id] = { ...lg, text: err.message, bad: true }; }
+      return draw();
+    }
+    const phone = (document.getElementById("sms-phone")?.value ?? "").trim();
+    if (!/^\d{11}$/.test(phone)) { ui.login[id] = { ...lg, text: "手机号要填 11 位数字" }; return draw(); }
+    ui.login[id] = { ...lg, busy: true, text: "" }; draw();
+    try {
+      await post(accPath(id, "login/start"), { accountId: id, phone });
+      ui.login[id] = { step: "sms2", masked: `${phone.slice(0, 3)}****${phone.slice(-4)}` };
+    } catch (err) {
+      ui.login[id] = { step: "sms1", text: err.message };
+    }
+    draw();
+    document.getElementById(ui.login[id]?.step === "sms2" ? "sms-code" : "sms-phone")?.focus();
+  }
+
+  async function smsVerify(id) {
+    const lg = ui.login[id];
+    const code = (document.getElementById("sms-code")?.value ?? "").trim();
+    if (!/^\d{4,8}$/.test(code)) { ui.login[id] = { ...lg, text: "验证码是 4–8 位数字", bad: true }; return draw(); }
+    ui.login[id] = { ...lg, busy: true, text: "正在登录…", bad: false }; draw();
+    try {
+      await post(accPath(id, "login/verify"), { accountId: id, code });
+      await succeed(id);
+    } catch (err) {
+      ui.login[id] = { ...lg, busy: false, text: err.message, bad: true };
+      draw();
     }
   }
 
@@ -503,7 +720,7 @@
       await startLogin(r.id);
     } catch (err) {
       ui.addBusy = false;
-      say(`${err.message}（换号要先 vk account remove 旧账号）`);
+      say(`${err.message}（换号要先退出登录，再把旧账号移走）`);
     }
   }
 
@@ -527,12 +744,40 @@
     c.busy = true; draw();
     try {
       await post("/api/platforms/tiktok-api/credentials", { platform: "tiktok-api", clientKey: c.key.trim(), clientSecret: c.secret.trim() });
-      c.key = ""; c.secret = ""; c.busy = false; c.note = "";
+      c.key = ""; c.secret = ""; c.busy = false; c.note = ""; ui.credOpen = null;
       toast("应用凭证已保存，可以 Connect 了");
       await refresh();
     } catch (err) {
       c.busy = false; c.bad = true; c.note = `没保存：${err.message}`; draw();
     }
+  }
+
+  // ── 现在更新 / 自动更新 ──────────────────────────────────────────────────
+  /** 点了之后这一行显示「正在更新…」；服务会重启，所以轮询时读不到是正常的，回来后看版本变没变。 */
+  async function updateNow() {
+    const u = ui.update;
+    ui.updNote = "";
+    ui.upd = { from: u?.commit ?? u?.display ?? null, since: Date.now() };
+    draw();
+    try {
+      await post("/api/update", {});
+    } catch (err) {
+      ui.upd = null; ui.updNote = err.message; return draw();
+    }
+    let ticks = 0, reads = 0;
+    const timer = setInterval(async () => {
+      ticks++;
+      let s = null;
+      try { s = await VK.request("/api/update"); reads++; } catch { /* 服务正在重启 */ }
+      const done = (fn) => { clearInterval(timer); ui.upd = null; fn?.(); refresh(); };
+      if (s) {
+        const changed = (s.commit ?? s.display) !== ui.upd?.from;
+        if (changed) return done(() => toast(`已更新到 ${s.display}`));
+        if (s.lastFailure && s.lastFailure.at >= (ui.upd?.since ?? 0)) return done(() => toast("没更新成功，已回到原来的版本；原因在「最近出的问题」里"));
+        if (!s.inProgress && reads >= 4) return done(() => { ui.updNote = "没有更新：已经是最新版本，或者现在不能更新。"; });
+      }
+      if (ticks > Math.round(270e3 / (POLL_MS * 1.5))) done(() => { ui.updNote = "更新还没完成，过一会儿回来看版本有没有变。"; });
+    }, POLL_MS * 1.5);
   }
 
   // ── 事件 ────────────────────────────────────────────────────────────────
@@ -542,6 +787,8 @@
     else if (t.id === "ng-name") ui.newGroupName = t.value;
     else if (t.id === "cred-key") ui.cred.key = t.value;
     else if (t.id === "cred-secret") ui.cred.secret = t.value;
+    else if (t.id === "relay-url" && ui.relayForm) ui.relayForm.url = t.value;
+    else if (t.id === "relay-token" && ui.relayForm) ui.relayForm.token = t.value;
     else if (t.id === "pe-days" && ui.planEdit) ui.planEdit.delayDays = t.value;
   });
   main.addEventListener("change", (e) => {
@@ -557,16 +804,25 @@
   });
   main.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
-    if (e.target.id === "add-name") { e.preventDefault(); addAccount(); }
-    else if (e.target.id === "ng-name") { e.preventDefault(); main.querySelector("[data-ngsave]")?.click(); }
-    else if (e.target.id === "rename-input") { e.preventDefault(); main.querySelector("[data-renamesave]")?.click(); }
-    else if (e.target.id === "cred-secret") { e.preventDefault(); saveCreds(); }
+    const id = e.target.id;
+    if (id === "add-name") { e.preventDefault(); addAccount(); }
+    else if (id === "ng-name") { e.preventDefault(); main.querySelector("[data-ngsave]")?.click(); }
+    else if (id === "rename-input") { e.preventDefault(); main.querySelector("[data-renamesave]")?.click(); }
+    else if (id === "cred-secret") { e.preventDefault(); saveCreds(); }
+    else if (id === "sms-phone") { e.preventDefault(); main.querySelector("[data-smssend]")?.click(); }
+    else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
+    else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno]";
   main.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-sw],[data-login],[data-done],[data-cancel],[data-add],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-logout],[data-logoutyes],[data-logoutno]");
+    const b = e.target.closest(CLICKABLE);
     if (!b) return;
     const d = b.dataset;
-    if ("sw" in d) {
+    if (d.tab) {
+      ui.tab = d.tab;
+      history.replaceState(null, "", `#tab=${ui.tab}`);
+      draw();
+    } else if ("sw" in d) {
       e.preventDefault();
       try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
     } else if (d.logout) { ui.logoutAsk = d.logout; draw(); }
@@ -574,13 +830,23 @@
     else if (d.logoutyes) {
       const id = d.logoutyes;
       ui.logoutAsk = null; stopPoll(id); delete ui.login[id];
-      try { await post(`/api/accounts/${encodeURIComponent(id)}/logout`, { accountId: id }); toast("已退出登录，现在可以重新登录另一个号"); }
+      try { await post(accPath(id, "logout"), { accountId: id }); toast("已退出登录，现在可以重新登录另一个号"); }
       catch (err) { toast(`没退出成功：${err.message}`); }
       await refresh();
     } else if (d.login) startLogin(d.login);
+    else if (d.loginmode) startLogin(d.id, d.loginmode);
+    else if (d.smssend) smsSend(d.smssend);
+    else if (d.smsresend) smsSend(d.smsresend, true);
+    else if (d.smsgo) smsVerify(d.smsgo);
     else if (d.done) { const id = d.done; ui.login[id] = { ...ui.login[id], text: "正在检查登录状态…" }; draw(); confirm(id, { manual: true }); }
-    else if (d.cancel) { stopPoll(d.cancel); delete ui.login[d.cancel]; draw(); }
+    else if (d.cancel) {
+      const id = d.cancel;
+      stopPoll(id); delete ui.login[id]; draw();
+      post(accPath(id, "login/cancel"), { accountId: id }).catch(() => {});
+    }
     else if ("add" in d) addAccount();
+    else if (d.credopen) { ui.credOpen = d.credopen; ui.cred.note = ""; draw(); document.getElementById("cred-key")?.focus(); }
+    else if ("credcancel" in d) { ui.credOpen = null; draw(); }
     else if ("credsave" in d) saveCreds();
     else if ("newg" in d) { ui.newGroup = true; draw(); document.getElementById("ng-name")?.focus(); }
     else if ("ngcancel" in d) { ui.newGroup = false; ui.groupNote = ""; ui.newGroupName = ""; draw(); }
@@ -612,6 +878,29 @@
       catch (err) { toast(`没切过去：${err.message}`); }
       ui.updBusy = false;
       await refresh();
+    } else if ("updnow" in d) updateNow();
+    else if ("updnoteok" in d) { ui.updNote = ""; draw(); }
+    else if ("notes" in d) { ui.notesOpen = !ui.notesOpen; draw(); }
+    else if ("relayadd" in d) { ui.relayForm = { url: "", token: "", busy: false, note: "" }; draw(); document.getElementById("relay-url")?.focus(); }
+    else if ("relaycancel" in d) { ui.relayForm = null; draw(); }
+    else if ("relaysave" in d) {
+      const f = ui.relayForm;
+      if (!f.url.trim() || !f.token.trim()) { f.note = "地址和令牌都要填"; return draw(); }
+      f.busy = true; f.note = ""; draw();
+      try {
+        const r = await post("/api/relay/connect", { url: f.url.trim(), token: f.token.trim() });
+        ui.relayForm = null;
+        toast(r.warning ? "已保存，但暂时没连上中转，网络通了会自动连" : "已接入中转，作品送来后在「今天」等你确认");
+        await refresh();
+      } catch (err) { f.busy = false; f.note = err.message; draw(); }
+    }
+    else if ("relayask" in d) { ui.relayAsk = true; draw(); }
+    else if ("relayno" in d) { ui.relayAsk = false; draw(); }
+    else if ("relayoff" in d) {
+      ui.relayAsk = false;
+      try { await post("/api/relay/disconnect", {}); toast("已断开中转，已经入库的作品不受影响"); }
+      catch (err) { toast(`没断开：${err.message}`); }
+      await refresh();
     } else if (d.retry) {
       ui.retrying.add(d.retry); draw();
       try { await post(`/api/publishes/${encodeURIComponent(d.retry)}/retry`, { publishId: d.retry }); toast("正在重试"); }
@@ -635,11 +924,10 @@
       const params = new URLSearchParams(location.search);
       if (params.get("platform") && ui.platforms.some((p) => p.platform === params.get("platform"))) { ui.addPlatform = params.get("platform"); draw(); }
       const hash = location.hash.slice(1);
-      if (hash === "add") { const row = document.getElementById("addrow"); row?.scrollIntoView({ block: "center" }); document.getElementById("add-name")?.focus(); }
-      else if (hash === "groups") document.getElementById("groups")?.scrollIntoView();
-      else if (hash === "problems" || hash === "plan") document.getElementById(hash)?.scrollIntoView();
+      if (hash === "add") { document.getElementById("addrow")?.scrollIntoView({ block: "center" }); document.getElementById("add-name")?.focus(); }
+      else if (hash === "problems") document.getElementById("problems")?.scrollIntoView();
     })
-    .catch((err) => { main.innerHTML = `<div class="hd"><h1>系统</h1></div><div class="note bad">读不到数据：${esc(err.message)}（守护进程在跑吗？终端执行 vk serve）</div>`; });
+    .catch((err) => { main.innerHTML = `<div class="hd"><h1>系统</h1></div><div class="note bad">读不到数据：${esc(err.message)}。后台服务可能没在运行。</div>`; });
 })();
 </script>
 </body>

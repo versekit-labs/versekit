@@ -64,7 +64,7 @@ export const ERROR_CODES = {
   network_unreachable: {
     // 网络或代理问题：稍后重试有意义，但要让人知道该去查代理变量，而不是只看到 fetch failed。
     retryable: true,
-    human: "连不上平台：网络或代理有问题，请检查 HTTPS_PROXY / ALL_PROXY / NO_PROXY",
+    human: "连不上平台：网络或代理有问题，请检查网络和代理设置",
     action: "check_network",
   },
   unknown: {

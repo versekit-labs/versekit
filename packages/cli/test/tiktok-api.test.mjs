@@ -131,7 +131,7 @@ test("隐私级别没选：vk publish approve 拒绝并给人话，没有进队�
   const r = await vk(["publish", "approve", "--publish", id]);
   assert.notEqual(r.code, 0);
   assert.match(errorText(r), /TikTok 发布前要先选隐私级别，没选不会发/);
-  assert.match(errorText(r), /vk publish edit .* --privacy/);
+  assert.doesNotMatch(errorText(r), /vk publish/, "报错是人话，不带命令");
   assert.equal(store.getPublish(id).state, "pending_confirm");
   const now = await vk(["publish", "now", id]);
   assert.notEqual(now.code, 0);

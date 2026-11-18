@@ -181,13 +181,13 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
     }
   }
   if (mockKeychainEnabled(env)) {
-    return { ok: true, detail: "登录会被保存（账号 Chrome 以 --use-mock-keychain 启动，不依赖钥匙串）" };
+    return { ok: true, detail: "登录会被保存（账号浏览器不依赖钥匙串）" };
   }
   if (session === "Background") {
     return {
       ok: false,
       detail: "登录不会被保存：当前是后台会话，Chrome 读不到钥匙串里的 Chrome Safe Storage，cookie 无法加密就不写盘，Chrome 一重启就掉线",
-      next: "取消环境变量 VK_CHROME_MOCK_KEYCHAIN=0 后重启守护进程（vk serve）",
+      next: "关掉 VK_CHROME_MOCK_KEYCHAIN=0 的设置后重启服务",
     };
   }
   return { ok: true, detail: "登录会被保存（依赖系统钥匙串；已关闭 mock keychain）" };
