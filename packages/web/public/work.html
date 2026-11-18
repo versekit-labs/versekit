@@ -37,8 +37,9 @@
   const main = document.getElementById("main");
   const params = new URLSearchParams(location.search);
   const id = params.get("id");
-  const state = { work: null, cutId: params.get("cut"), editing: new Set(), opened: new Set(), ver: new Map() };
-  const { esc, pfBadge, pfName, when, fmt, ratioText, ratioCls, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
+  const state = { work: null, cutId: params.get("cut"), opened: new Set(), ver: new Map() };
+  const panel = window.VKPanel(state);
+  const { esc, pfBadge, pfName, when, fmt, ratioText, ratioCls, pending, cutHasPending, fallback, confirmPanel, cutSteps } = panel;
 
   const PROBLEM = new Set(["failed", "blocked", "expired"]);
   const PUBLISHED = new Set(["published", "published_limited"]);
@@ -51,7 +52,6 @@
 
   async function load({ advance = false } = {}) {
     state.work = (await VK.work(id)).work;
-    state.editing.clear();
     const prefer = advance ? (state.work.cuts.find(cutHasPending)?.id ?? state.cutId) : state.cutId;
     state.cutId = pickCut(state.work, prefer);
     render();
@@ -76,7 +76,7 @@
     for (const p of cut.publishes) {
       const name = pfName(p.platform);
       if (PUBLISHED.has(p.state) && p.publishedAt != null) ev.push([p.publishedAt, `${name} 已发布`, false]);
-      else if (p.state === "queued" && p.scheduledAt != null) ev.push([p.scheduledAt, `${name} 已确认，到时间发`, false]);
+      else if (p.state === "queued" && p.scheduledAt != null) ev.push([p.scheduledAt, p.scheduledAt <= Date.now() ? `${name} 已确认，正在发` : `${name} 已确认，到时间发`, false]);
       else if (PROBLEM.has(p.state)) ev.push([p.scheduledAt ?? work.createdAt, `${name} 没发出去`, true]);
     }
     return ev.sort((a, b) => a[0] - b[0]);
@@ -130,7 +130,7 @@
 
     for (const video of main.querySelectorAll("video[data-media]")) {
       video.addEventListener("error", () => {
-        video.outerHTML = fallback(video.dataset.label || "这支成片", "这个文件在这台电脑上读不到，或浏览器不能播放它");
+        video.outerHTML = fallback(video.dataset.label || "这支成片", "成片文件读不到");
       }, { once: true });
     }
   }
@@ -151,25 +151,12 @@
   }
 
   main.addEventListener("click", (event) => {
-    const el = event.target.closest("[data-cut],[data-edit],[data-more],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver]");
+    const el = event.target.closest("[data-cut],[data-more],[data-skip],[data-solo],[data-retry],[data-ver]");
     if (!el) return;
     const d = el.dataset;
-    if (d.cut) { state.cutId = d.cut; render(); return; }
-    if (d.edit) { state.editing.add(d.edit); render(); return; }
+    if (d.cut) { if (d.cut !== state.cutId && panel.guard()) return; state.cutId = d.cut; render(); return; }
     if (d.more) { state.opened.has(d.more) ? state.opened.delete(d.more) : state.opened.add(d.more); render(); return; }
-    if (d.save) {
-      const pub = d.save;
-      const title = main.querySelector(`[data-title="${pub}"]`)?.value ?? null;
-      const at = main.querySelector(`[data-at="${pub}"]`)?.value ?? null;
-      // 正文、话题只在改过时才传：没动就不写进这条平台稿，免得把入库时的文案固定住。
-      const changed = (sel) => { const f = main.querySelector(sel); return f && f.value !== f.defaultValue ? f.value : null; };
-      const body = changed(`[data-body="${pub}"]`);
-      const tags = changed(`[data-tags="${pub}"]`);
-      act(async () => { await VK.editPublish(pub, { title, at: at || null, body, tags }); state.editing.delete(pub); state.opened.add(pub); }, "改好了，确认时按新的发");
-      return;
-    }
     if (d.ver) { const [cutId, versionId] = d.ver.split(":"); state.ver.set(cutId, versionId); render(); return; }
-    if (d.confirm) { act(() => VK.approveCut(d.confirm), "已确认，会按时间发", { advance: true }); return; }
     if (d.skip) { act(() => VK.skipCut(d.skip), "好，这支先不发", { advance: true }); return; }
     if (d.retry) { act(() => VK.retryPublish(d.retry), "正在重试"); return; }
     if (d.solo && d.pub) {
@@ -179,6 +166,12 @@
     }
   });
 
+  panel.bind({
+    render: () => render(),
+    reload: () => load(),
+    act: (fn, msg, opts) => act(fn, msg, opts),
+    current: () => ({ work: state.work, cut: state.work?.cuts.find((c) => c.id === state.cutId) ?? state.work?.cuts[0] ?? null }),
+  });
   if (!id) {
     main.innerHTML = `<div class="hd"><h1>作品详情</h1></div><a class="crumb" href="/works">← 作品</a><div class="panel empty">没指定作品。<a class="link" href="/works">去作品列表挑一个 →</a></div>`;
     return;
