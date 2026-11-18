@@ -390,15 +390,23 @@ export function showWorkInScope(workId, groupId) {
   return { ...work, cuts, status: deriveStatus(cuts.flatMap((c) => c.publishes.map((p) => p.state))) };
 }
 
-/** stats 行补上 24 小时播放与倍数；行里没有 accountId / publishedAt，这里按 publishId 查回来。 */
+/**
+ * stats 行补上 24 小时播放与倍数，以及数据页要的「是哪个作品的哪支成片」（ACC-v3-fid-02）。
+ * 行里没有 accountId / publishedAt，这里按 publishId 查回来；只往行上加字段，不改已有字段的含义。
+ */
 export function statsWithBaseline(rows) {
   if (!rows.length) return rows;
   const conn = open();
-  const get = conn.prepare("SELECT account_id AS accountId, published_at AS publishedAt FROM publish WHERE id = ?");
+  const get = conn.prepare(
+    `SELECT p.account_id AS accountId, p.published_at AS publishedAt, p.work_id AS workId, p.cut_id AS cutId,
+            c.title AS cutTitle,
+            (SELECT COUNT(*) FROM cut WHERE work_id = p.work_id) AS cutCount
+       FROM publish p LEFT JOIN cut c ON c.id = p.cut_id WHERE p.id = ?`,
+  );
   const enriched = withBaselines(
     rows.map((r) => ({ ...r, publishId: r.publishId, ...(get.get(r.publishId) ?? { accountId: null, publishedAt: null }) })),
   );
-  return enriched.map(({ accountId, publishedAt, ...row }) => ({ ...row, publishedAt })); // accountId 是内部键，不外泄
+  return enriched.map(({ accountId, ...row }) => row); // accountId 是内部键，不外泄
 }
 
 // ------------------------------------------------------------------ vk today（ACC-v2-today-01）

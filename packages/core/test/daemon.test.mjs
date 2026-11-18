@@ -237,10 +237,12 @@ test("v2 四个页面都能打开，侧栏四项顺序与设计稿一致，没�
     assert.equal((nav.match(/aria-current="page"/g) ?? []).length, 1, `${path} 的当前页标记必须正好一处`);
   }
 
-  // 还没做的页面要有空状态，不能是一片空白或者一句看不懂的话。（作品与作品详情 #149 已做完，不在此列。）
-  for (const path of ["/data"]) {
-    assert.match(await (await fetch(`${base}${path}`)).text(), /这一页还没做/, `${path} 要显示「还没做」的空状态`);
-  }
+  // 数据页（ACC-v3-fid-02）已做完：不再是占位，读真实的 stats.works，点图 / 值得说的 / 每一条都在页面里。
+  const dataPage = await (await fetch(`${base}/data`)).text();
+  assert.doesNotMatch(dataPage, /这一页还没做|vk stats --since/, "/data 不能再是写给开发者的占位面板");
+  assert.match(dataPage, /VK\.stats\(\)/, "/data 要读 stats.works");
+  assert.match(dataPage, /这段时间值得说的/);
+  assert.match(dataPage, /每一条/);
   // 系统页（#208）已经做成真的：不再有「还没做」，也不带原型演示数据与旧流程入口卡片。
   const system = await (await fetch(`${base}/system`)).text();
   assert.doesNotMatch(system, /这一页还没做|现在还能用的旧流程|演示数据/, "/system 不能再说「还没做」");
