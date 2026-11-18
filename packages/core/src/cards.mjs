@@ -403,7 +403,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
 /** 小红书单独确认：三个按钮，各对应一条真命令（按建议时间发 / 现在发 / 我自己发）。 */
 export function buildXhsCard({ publishId, workTitle, cutTitle, title, body = "", tags = [], at, assetNote = null, quotaLeft = null, groupName = null, now = Date.now(), cardKey = `xhs:${publishId}:${now}` }) {
   const when = formatWhen(at, now);
-  const facts = [assetNote, Number.isFinite(at) ? `建议 ${when} 发` : "还没排时间", Number.isInteger(quotaLeft) ? `今天还能发 ${quotaLeft} 条` : null].filter(Boolean);
+  const facts = [assetNote, Number.isFinite(at) ? `建议 ${when} 发` : "还没定时间", Number.isInteger(quotaLeft) ? `今天还能发 ${quotaLeft} 条` : null].filter(Boolean);
   const half = (label, cmd) => ({
     tag: "column",
     width: "weighted",

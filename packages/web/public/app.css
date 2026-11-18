@@ -275,6 +275,7 @@ video.cv{pointer-events:none}
 .eh .sm.own{color:var(--ink)}
 .eh .tm{font-weight:600;white-space:nowrap}
 .eh .tm.bad{color:var(--bad)}
+.prow .tm.unset,.eh .tm.unset{color:var(--ink2);font-weight:400}
 .eh::after{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink2);border-bottom:1.5px solid var(--ink2);transform:rotate(45deg);margin-top:-3px}
 .eh[aria-expanded=true]::after{transform:rotate(225deg);margin-top:3px}
 .eb{padding:2px 12px 14px 42px;display:grid;gap:6px}

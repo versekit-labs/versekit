@@ -310,6 +310,7 @@ window.VKPanel = function createPanel(state) {
       const ts = q(`[data-tsum="${CSS.escape(id)}"]`);
       ts.textContent = mine.length ? "有要处理的" : d.at == null ? "还没定时间" : when(d.at).text;
       ts.classList.toggle("bad", mine.length > 0);
+      ts.classList.toggle("unset", !mine.length && d.at == null);
       if (!ed.open.has(id)) continue;
       for (const [f] of FIELDS) {
         const own = d.own[f] != null;
@@ -565,7 +566,7 @@ window.VKPanel = function createPanel(state) {
       return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform)}` +
         `<span class="nm">${esc(name)}</span>` +
         `<button class="ti tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}" title="${esc(p.title)}">${esc(p.title)}${late}</button>` +
-        `<span class="tm">${esc(tm)}</span>${rowState(p)}${isOpen(p.id) ? detHtml(p) : ""}</div>`;
+        `<span class="tm${!sendingNow(p) && p.scheduledAt == null && !isPub ? " unset" : ""}">${esc(tm)}</span>${rowState(p)}${isOpen(p.id) ? detHtml(p) : ""}</div>`;
     }).join("");
 
     const soloBlocks = solo.map((p) => {
@@ -581,7 +582,7 @@ window.VKPanel = function createPanel(state) {
       const editBtn = isEditable(p)
         ? `<button class="link" type="button" style="margin-left:auto" data-ed="start" data-arg="${esc(p.id)}" aria-label="改小红书的内容或时间">改</button>` : "";
       const late = p.shifted && p.state === "pending_confirm" ? ` · 原定${esc(when(p.originalAt).text)}，已顺延` : "";
-      const head = `<div class="ti">${esc(p.title)}</div><div class="sub">${esc(w.text)} 发${late}</div>` +
+      const head = `<div class="ti">${esc(p.title)}</div><div class="sub">${p.scheduledAt == null ? "还没定时间" : esc(w.text) + " 发"}${late}</div>` +
         `<button class="tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}">${isOpen(p.id) ? "收起正文和话题" : "看正文和话题"}</button>${isOpen(p.id) ? detHtml(p) : ""}`;
       return `<div class="solo"><div class="sh">${pfBadge("xiaohongshu")}小红书 · 每条都要你单独确认${editBtn}</div>${head}${acts}</div>`;
     }).join("");
