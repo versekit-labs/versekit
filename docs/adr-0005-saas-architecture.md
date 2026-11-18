@@ -138,7 +138,8 @@ ALTER TABLE publish ADD COLUMN suggested_at INTEGER;   -- 发布方案给的建�
 
 - 「不能是过去的时间」只在 `timing='at'` 且用户**改了时间**时检查。只改文案的保存不带时间，也就不会因为时间报错。
 - 建议时间过了而还没确认：读的时候按平台规则重新给出最近可用时间，并带上「原定…」；不要求用户去改一个已经过去的时间。
-- 一次保存是一条命令、一个事务：`cut.edit { versionId, rev, common?, platforms: [{ publishId, title?, body?, tags?, follow?: [字段], timing?, at? }] }`。`rev` 对不上就拒绝并说明「刚被别处改过」。现有 `publish.edit` 保留给飞书卡片和 CLI，内部走同一个函数。
+- 现在发还是预约发**只在确认时整批选**（`publish.confirm` 带 `timing`），编辑不改它（所有者 2026-11-18 定：没有混合状态）。现在发也要照样过每日上限、最小间隔、出口位置和登录状态，过不了就不发并说明原因。
+- 一次保存是一条命令、一个事务：`cut.edit { versionId, rev, common?, platforms: [{ publishId, title?, body?, tags?, follow?: [字段], at? }] }`。`rev` 对不上就拒绝并说明「刚被别处改过」。现有 `publish.edit` 保留给飞书卡片和 CLI，内部走同一个函数。
 
 **设备与出口位置**（在 `control.db`）
 

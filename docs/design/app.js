@@ -224,7 +224,8 @@ function confirmPanel(work, cut, opts = {}) {
       ? `<video controls preload="none" poster="${cut.poster}" src="${cut.versions[ver][1]}"></video>`
       : `<img class="poster" src="${cut.poster}" alt="${esc(cut.name)}的封面">`;
     const anyOpen = cut.pubs.some((x) => x.state === 'pending');
-    const nowN = batch.filter((x) => x.timing === 'now').length; const mode = !nowN ? 'at' : nowN === batch.length ? 'now' : 'mix';
+    // 现在发还是预约发只在这里整批选（所有者 2026-11-18 定），编辑里只改时间，所以没有混合状态
+    const mode = batch.length && batch.every((x) => x.timing === 'now') ? 'now' : 'at';
     const held = cut.pubs.filter((x) => paused(x.pf) && (x.state === 'pending' || x.state === 'confirmed'));
     const late = (x) => (x.was && x.timing === 'at' && x.state === 'pending' ? `<span class="sub"> · 原定${when(x.was).text}，已顺延</span>` : '');
     el.innerHTML = `
@@ -251,7 +252,7 @@ function confirmPanel(work, cut, opts = {}) {
         return `<div class="solo"><div class="sh">${pf('xhs')}小红书 · 每条都要你单独确认${x.state === 'pending' ? '<button class="link" style="margin-left:auto" data-edit="' + i + '" aria-label="改小红书的内容或时间">改</button>' : ''}</div><div class="ti">${esc(x.title)}</div><div class="sub">${esc(x.note || '竖屏 · 封面 3:4')}${x.was && x.state === 'pending' ? ` · 原定${when(x.was).text}，已过，顺延到${w.text}` : ''}</div><button class="tog" type="button" data-more="${i}" aria-expanded="${opened.has(i)}">${opened.has(i) ? '收起正文和话题' : '看正文和话题'}</button>${opened.has(i) ? detHtml(x) : ''}${body}</div>`;
       }).join('')}
       ${batch.length
-        ? `<div class="cfoot"><span class="hint">${held.length ? '暂停的平台要等位置处理完才会发。' : mode === 'now' ? '确认后马上开始发。' : mode === 'mix' ? `${nowN} 条现在发，其余按时间发。` : '没确认的到时间也不会发。'}</span><button class="link" data-skipcut>${one ? '先不发' : '这支先不发'}</button><span class="seg" role="group" aria-label="什么时候发"><button data-mode="at" aria-pressed="${mode === 'at'}">预约发</button><button data-mode="now" aria-pressed="${mode === 'now'}">现在发</button></span><button class="btn pri lg" data-confirm>确认这 ${batch.length} 条，${mode === 'now' ? '现在发' : mode === 'mix' ? '开始发' : '按时间发'}</button></div>`
+        ? `<div class="cfoot"><span class="hint">${held.length ? '暂停的平台要等位置处理完才会发。' : mode === 'now' ? '确认后马上开始发。' : '没确认的到时间也不会发。'}</span><button class="link" data-skipcut>${one ? '先不发' : '这支先不发'}</button><span class="seg" role="group" aria-label="什么时候发"><button data-mode="at" aria-pressed="${mode === 'at'}">预约发</button><button data-mode="now" aria-pressed="${mode === 'now'}">现在发</button></span><button class="btn pri lg" data-confirm>确认这 ${batch.length} 条，${mode === 'now' ? '现在发' : '按时间发'}</button></div>`
         : cut.skipped ? '<div class="cfoot"><div class="done-note">这支先不发。以后可以在作品里再确认。</div></div>'
         : rest.some((x) => x.state === 'confirmed') ? `<div class="cfoot"><div class="done-note">${one ? '' : esc(cut.name) + '的 '}${rest.filter((x) => x.state === 'confirmed').length} 条已确认，${rest.some((x) => x.state === 'confirmed' && x.timing === 'at') ? '会按时间发' : '正在发'}。</div></div>` : ''}`;
   };
@@ -270,7 +271,7 @@ function confirmPanel(work, cut, opts = {}) {
     Object.entries(ed.common).forEach(([L, v]) => FIELDS.forEach(([f]) => { if (!same(f, v[f], f === 'tags' ? tagStr(cut.common[L].tags) : cut.common[L][f])) n++; }));
     ed.pubs.forEach((d, i) => { const x = cut.pubs[i];
       FIELDS.forEach(([f]) => { const was = x.own[f] == null ? null : f === 'tags' ? tagStr(x.own[f]) : x.own[f]; const now = d.own[f] ?? null; if ((was == null) !== (now == null) || (was != null && !same(f, was, now))) n++; });
-      if (d.timing !== x.timing || (d.timing === 'at' && d.at !== x.at)) n++; });
+      if (d.at !== x.at) n++; });
     return n;
   };
   // 超过平台限制、时间过了、碰到平台规则：当场说，不等到保存
@@ -278,7 +279,7 @@ function confirmPanel(work, cut, opts = {}) {
   const titleErr = (i) => { const x = cut.pubs[i]; const v = val(i, 'title'); if (v === x.title) return ''; const lim = LIM[x.pf]?.title; const n = [...v].length;
     return !v.trim() ? (ed.pubs.get(i).own.title != null ? `${PF[x.pf][1]}的标题不能是空的。` : '') : lim && n > lim ? `${PF[x.pf][1]}的标题最多 ${lim} 字，现在 ${n} 字。` : ''; };
   const timeErr = (i) => {
-    const d = ed.pubs.get(i); const x = cut.pubs[i]; if (d.timing === 'now' || (d.timing === x.timing && d.at === x.at)) return null;
+    const d = ed.pubs.get(i); const x = cut.pubs[i]; if (d.at === x.at) return null;
     if (!d.at || d.at < NOW) return { msg: '这个时间已经过了。', use: nextSlot(d.at) };
     if (x.pf === 'xhs' && allPubs().some((r) => r.x !== x && r.x.pf === 'xhs' && r.x.state !== 'published' && r.x.state !== 'skip' && r.x.at.slice(0, 10) === d.at.slice(0, 10))) {
       let day = d.at.slice(0, 10); do day = dayAdd(day, 1); while (allPubs().some((r) => r.x !== x && r.x.pf === 'xhs' && r.x.at.slice(0, 10) === day));
@@ -288,8 +289,7 @@ function confirmPanel(work, cut, opts = {}) {
   };
   const errAt = () => [...ed.pubs.keys()].filter((i) => titleErr(i) || timeErr(i));
   const errCount = () => errAt().reduce((n, i) => n + (titleErr(i) ? 1 : 0) + (timeErr(i) ? 1 : 0), 0) + Object.values(ed.common).filter((v) => !v.title.trim()).length;
-  // 已确认的改成「现在发」：保存就等于马上发，按钮上要写出来
-  const nowConf = () => [...ed.pubs.keys()].filter((i) => cut.pubs[i].state === 'confirmed' && ed.pubs.get(i).timing === 'now');
+
   const sumOf = (i) => { const own = FIELDS.filter(([f]) => ed.pubs.get(i).own[f] != null).map(([, n]) => n); return own.length ? `${own.join('、')}是单独写的` : '和通用一样'; };
 
   const renderEdit = () => {
@@ -303,8 +303,9 @@ function confirmPanel(work, cut, opts = {}) {
       <div class="rows">${g.map((i) => { const x = cut.pubs[i]; const d = ed.pubs.get(i); const name = PF[x.pf][1]; const open = ed.open.has(i);
         return `<div class="erow"><button class="eh" type="button" data-open="${i}" aria-expanded="${open}">${pf(x.pf)}<span class="nm">${name}</span><span class="sm" data-sum="${i}"></span><span class="tm" data-tsum="${i}"></span></button>
           ${open ? `<div class="eb">${FIELDS.map(([f, n]) => `<div class="fl"><label class="lab" for="p${i}-${f}">${n}</label><span class="fs" data-fs="${i}:${f}"></span><button class="link" type="button" data-follow="${i}:${f}">改回跟通用</button></div>${f === 'body' ? `<textarea id="p${i}-${f}" data-pf="${i}:${f}">${esc(val(i, f))}</textarea>` : `<input type="text" id="p${i}-${f}" data-pf="${i}:${f}" value="${esc(val(i, f))}">`}${f === 'title' ? `<div data-perr="${i}"></div>` : ''}`).join('')}
-            <div class="fl"><span class="lab">什么时候发</span></div>
-            <div class="tmr">${x.solo && x.state === 'pending' ? '<span class="sub">小红书在确认时选现在发还是按时间发，这里只改时间：</span>' : `<span class="seg" role="group" aria-label="${name}什么时候发"><button data-tm="${i}:at" aria-pressed="${d.timing === 'at'}">预约发</button><button data-tm="${i}:now" aria-pressed="${d.timing === 'now'}">现在发</button></span>`}${d.timing === 'at' ? `<input type="datetime-local" data-at="${i}" min="${NOW}" value="${d.at}" aria-label="${name} 发布时间">` : '<span class="sub">确认后马上发，不用定时间</span>'}</div><div data-terr="${i}"></div></div>` : ''}</div>`; }).join('')}</div>
+            <div class="fl"><label class="lab" for="p${i}-at">按时间发的话，什么时候发</label></div>
+            <div class="tmr"><input type="datetime-local" id="p${i}-at" data-at="${i}" min="${NOW}" value="${d.at}"><span class="sub" data-trel="${i}">${when(d.at).text}</span></div><div data-terr="${i}"></div></div>` : ''}</div>`; }).join('')}</div>
+      <p class="sub" style="margin:8px 0 0">现在发还是按时间发，在确认时选${cut.pubs.some((x) => x.solo && x.state === 'pending') ? '（小红书逐条单独选）' : ''}；这里只改时间。</p>
       <div class="cfoot" data-efoot></div>`;
     sync();
   };
@@ -317,25 +318,25 @@ function confirmPanel(work, cut, opts = {}) {
     const over = keys.filter((i) => ed.pubs.get(i).own.title == null && titleErr(i));
     el.querySelector('[data-cerr]').innerHTML = (ed.common[ed.L].title.trim() ? '' : '<div class="err">通用标题不能是空的。</div>') + over.map((i) => `<div class="err">${titleErr(i)}<button class="link" type="button" data-own="${i}:title">给${PF[cut.pubs[i].pf][1]}单独写一个</button></div>`).join('');
     keys.forEach((i) => { const d = ed.pubs.get(i); const sm = el.querySelector(`[data-sum="${i}"]`); sm.textContent = sumOf(i); sm.classList.toggle('own', FIELDS.some(([f]) => d.own[f] != null));
-      const ts = el.querySelector(`[data-tsum="${i}"]`); ts.textContent = titleErr(i) || timeErr(i) ? '有要处理的' : tmText(d.timing, d.at); ts.classList.toggle('bad', !!(titleErr(i) || timeErr(i)));
+      const ts = el.querySelector(`[data-tsum="${i}"]`); ts.textContent = titleErr(i) || timeErr(i) ? '有要处理的' : tmText(d.timing, d.at); ts.classList.toggle('bad', !!(titleErr(i) || timeErr(i))); const tr = el.querySelector(`[data-trel="${i}"]`); if (tr) tr.textContent = d.at ? when(d.at).text : '';
       if (!ed.open.has(i)) return;
       FIELDS.forEach(([f]) => { const own = d.own[f] != null; const fs = el.querySelector(`[data-fs="${i}:${f}"]`); fs.textContent = own ? '单独写的' : '跟通用'; fs.classList.toggle('own', own);
         el.querySelector(`[data-follow="${i}:${f}"]`).hidden = !own;
         const inp = el.querySelector(`[data-pf="${i}:${f}"]`); inp.classList.toggle('fol', !own); if (!own && document.activeElement !== inp) inp.value = val(i, f); });
       const te = titleErr(i); el.querySelector(`[data-perr="${i}"]`).innerHTML = te && d.own.title != null ? `<div class="err">${te}</div>` : '';
       const tm = timeErr(i); el.querySelector(`[data-terr="${i}"]`).innerHTML = tm ? `<div class="err">${tm.msg}最近能排 ${when(tm.use).text}。<button class="link" type="button" data-use="${i}:${tm.use}">用这个时间</button></div>` : ''; });
-    const n = dirty(); const bad = errCount(); const conf = [...ed.pubs.keys()].some((i) => cut.pubs[i].state === 'confirmed'); const nc = nowConf();
+    const n = dirty(); const bad = errCount(); const conf = [...ed.pubs.keys()].some((i) => cut.pubs[i].state === 'confirmed');
     el.querySelectorAll('[data-lang]').forEach((b) => { const k = errAt().filter((i) => cut.pubs[i].L === b.dataset.lang).length; b.textContent = b.dataset.lang + (k ? ` · ${k} 处要处理` : ''); });
     el.querySelector('[data-efoot]').innerHTML = ed.ask
       ? `<span class="ask">放弃这 ${n} 处改动？</span><button class="btn" data-keep>接着改</button><button class="btn" data-drop>放弃改动</button>`
-      : `<span class="hint">${bad ? `<span class="err">还有 ${bad} 处要先处理。<button class="link" type="button" data-goerr>带我去</button></span>` : nc.length ? `${nc.map((i) => PF[cut.pubs[i].pf][1]).join('、')}已经确认过，改成了现在发：保存后马上发。` : n ? `改了 ${n} 处。${conf ? '已确认的仍按原来的时间发。' : '保存后还要你确认才会发。'}` : '还没有改动。'}</span><button class="link" data-cancel>取消</button><button class="btn pri lg" data-savee ${!n || bad ? 'disabled' : ''}>${nc.length && !bad ? `保存，${nc.length} 条现在就发` : '保存改动'}</button>`;
+      : `<span class="hint">${bad ? `<span class="err">还有 ${bad} 处要先处理。<button class="link" type="button" data-goerr>带我去</button></span>` : n ? `改了 ${n} 处。${conf ? '已确认的仍按原来的时间发。' : '保存后还要你确认才会发。'}` : '还没有改动。'}</span><button class="link" data-cancel>取消</button><button class="btn pri lg" data-savee ${!n || bad ? 'disabled' : ''}>保存改动</button>`;
   };
   const save = () => {
     const changed0 = Object.entries(ed.common).filter(([L, v]) => FIELDS.some(([f]) => !same(f, v[f], f === 'tags' ? tagStr(cut.common[L].tags) : cut.common[L][f]))).map(([L]) => L);
     const kept = [...ed.pubs.keys()].filter((i) => changed0.includes(cut.pubs[i].L) && FIELDS.some(([f]) => ed.pubs.get(i).own[f] != null));
     const n = dirty();
     Object.entries(ed.common).forEach(([L, v]) => Object.assign(cut.common[L], { title: v.title, body: v.body.trim(), tags: tagList(v.tags) }));
-    ed.pubs.forEach((d, i) => { const x = cut.pubs[i]; x.own = { ...d.own, ...(d.own.tags != null ? { tags: tagList(d.own.tags) } : {}) }; if (d.timing !== x.timing || d.at !== x.at) delete x.was; x.timing = d.timing; if (d.timing === 'at') x.at = d.at; });
+    ed.pubs.forEach((d, i) => { const x = cut.pubs[i]; x.own = { ...d.own, ...(d.own.tags != null ? { tags: tagList(d.own.tags) } : {}) }; if (d.at !== x.at) { delete x.was; x.at = d.at; } });
     toast(changed0.length && kept.length ? `改好了。${kept.map((i) => PF[cut.pubs[i].pf][1]).join('、')}有单独写的，那部分没变` : `改好了 ${n} 处`);
     ed = null; changed();
   };
@@ -356,7 +357,6 @@ function confirmPanel(work, cut, opts = {}) {
       else if (ds.open) { const i = +ds.open; ed.open.has(i) ? ed.open.delete(i) : ed.open.add(i); }
       else if (ds.follow) { const [i, f] = ds.follow.split(':'); delete ed.pubs.get(+i).own[f]; }
       else if (ds.own) { const [i, f] = ds.own.split(':'); ed.pubs.get(+i).own[f] = ed.common[ed.L][f]; ed.open.add(+i); renderEdit(); el.querySelector(`[data-pf="${i}:${f}"]`).focus(); return; }
-      else if (ds.tm) { const [i, m] = ds.tm.split(':'); const d = ed.pubs.get(+i); d.timing = m; if (m === 'at' && d.at < NOW) d.at = nextSlot(d.at); }
       else if (ds.use) { const [i, ...at] = ds.use.split(':'); ed.pubs.get(+i).at = at.join(':'); }
       else if ('goerr' in ds) { const i = errAt()[0]; if (i == null) { ed.L = Object.keys(ed.common).find((L) => !ed.common[L].title.trim()); renderEdit(); el.querySelector('[data-cf=title]').focus(); return; } ed.L = cut.pubs[i].L; ed.open.add(i); renderEdit(); el.querySelector(`[data-open="${i}"]`).scrollIntoView({ block: 'center' }); return; }
       else if ('cancel' in ds) return cancel();
