@@ -522,14 +522,14 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
   const meta = readMeta();
   const current = updates.buildInfo();
   const check = await updates.checkLatest({ current, env });
-  if (check.upToDate) return { ok: true, updated: false, message: "已是最新", version: current.version, commit: current.commit };
+  if (check.upToDate) return { ok: true, updated: false, message: "已是最新", version: current.version, display: updates.displayVersion(current), commit: current.commit };
 
   takeLock();
   const port = meta?.port ?? DEFAULT_PORT;
   const offline = Boolean(meta?.offline);
   const work = mkdtempSync(join(layout.prefix, ".update-"));
   updates.patchState({ in_progress: { since: Date.now(), to: check.latest } });
-  const oldLabel = `${current.version}${current.short ? `（${current.short}）` : ""}`;
+  const oldLabel = updates.displayVersion(current);
   const failed = (reason, extra = {}) => {
     const message = `自动更新失败，已回到 ${oldLabel}：${reason}`;
     emit({ type: "update.failed", severity: "warn", payload: { from: current.commit, to: check.latest, from_version: current.version, reason, message } });
@@ -582,12 +582,12 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
     rmSync(join(layout.prefix, "app.prev"), { recursive: true, force: true });
     const now = updates.buildInfo({ root: `${layout.app}/` });
     updates.patchState({
-      last_update: { at: Date.now(), from: current.commit, from_version: current.version, to: now.commit ?? check.latest, version: now.version, commits: check.commits },
+      last_update: { at: Date.now(), from: current.commit, from_version: updates.displayVersion(current), to: now.commit ?? check.latest, version: now.version, display: updates.displayVersion(now), commits: check.commits },
       last_failure: null,
     });
-    const message = `已更新到 ${now.version}${now.short ? ` · ${now.short}` : ""}（数据、账号、登录都保留）`;
+    const message = `已更新到 ${updates.displayVersion(now)}（数据、账号、登录都保留）`;
     log(message);
-    return { ok: true, updated: true, message, version: now.version, commit: now.commit, commits: check.commits };
+    return { ok: true, updated: true, message, version: now.version, display: updates.displayVersion(now), commit: now.commit, commits: check.commits };
   } finally {
     updates.patchState({ in_progress: null });
     rmSync(work, { recursive: true, force: true });

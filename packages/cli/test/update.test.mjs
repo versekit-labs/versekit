@@ -188,7 +188,7 @@ test("ACC-update-01 装好的程序知道自己是哪个提交：app/.versekit-b
 
   const v = await vk(main, "version");
   assert.equal(v.code, 0, v.stderr);
-  assert.match(v.stdout.split("\n")[0], new RegExp(`^0\\.1\\.0 · aaaaaaa · 安装于 ${stamp.installed_at}$`));
+  assert.match(v.stdout.split("\n")[0], new RegExp(`^0\\.1\\.0\\+aaaaaaa · 安装于 ${stamp.installed_at}$`));
   const j = json(await vk(main, "version", "--json"));
   assert.equal(j.commit, A);
   assert.equal(j.auto, true);
@@ -268,7 +268,7 @@ test("ACC-update-04 新包故意坏掉（起得来、/api 不通过自检）：�
   const out = json(r);
   assert.equal(out.ok, false);
   assert.equal(out.rolledBack, true);
-  assert.match(out.message, /^自动更新失败，已回到 9\.9\.9（bbbbbbb）：/);
+  assert.match(out.message, /^自动更新失败，已回到 9\.9\.9\+bbbbbbb：/);
   assert.match(out.message, /没通过自检/);
 
   // 回到了旧版本，服务照常可用

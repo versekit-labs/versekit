@@ -27,7 +27,6 @@ import { parseArgv, loginCommandOf } from "./argv.mjs";
 import * as service from "./service.mjs";
 import * as updates from "../../core/src/update.mjs";
 
-const PKG = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
 
 // ---------------------------------------------------------------- argv
 
@@ -1917,7 +1916,7 @@ const cmd = pos[0];
 
 try {
   if (!cmd || has("--help") || has("-h")) usage();
-  else if (has("--version") || has("-v")) console.log(PKG.version);
+  else if (has("--version") || has("-v")) console.log(updates.displayVersion(updates.buildInfo()));
   else if (cmd === "init") cmdInit();
   else if (cmd === "now") cmdNow();
   else if (cmd === "doctor") await cmdDoctor();

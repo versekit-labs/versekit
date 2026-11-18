@@ -70,12 +70,18 @@ test("ACC-update-01 装好的程序读 .versekit-build.json：版本 + 提交 + 
   writeFileSync(join(root, "package.json"), JSON.stringify({ version: "1.2.3" }));
   let b = updates.buildInfo({ root: `${root}/` });
   assert.deepEqual([b.version, b.commit, b.short], ["1.2.3", null, null]);
-  assert.match(updates.versionLine(b), /提交号未知/);
+  assert.equal(updates.displayVersion(b), "1.2.3+未知提交");
+  assert.match(updates.versionLine(b), /^1\.2\.3\+未知提交/);
 
   writeFileSync(join(root, ".versekit-build.json"), JSON.stringify({ commit: A, installed_at: "2026-11-17T01:02:03Z" }));
   b = updates.buildInfo({ root: `${root}/` });
   assert.deepEqual([b.version, b.commit, b.short, b.installedAt, b.fromInstall], ["1.2.3", A, "aaaaaaa", "2026-11-17T01:02:03Z", true]);
-  assert.equal(updates.versionLine(b), "1.2.3 · aaaaaaa · 安装于 2026-11-17T01:02:03Z");
+  assert.equal(updates.versionLine(b), "1.2.3+aaaaaaa · 安装于 2026-11-17T01:02:03Z");
+
+  // 不同提交 → 不同的版本号（package.json 版本不变）
+  writeFileSync(join(root, ".versekit-build.json"), JSON.stringify({ commit: "b".repeat(40) }));
+  assert.notEqual(updates.displayVersion(updates.buildInfo({ root: `${root}/` })), "1.2.3+aaaaaaa");
+  assert.equal(updates.displayVersion(updates.buildInfo({ root: `${root}/` })), "1.2.3+bbbbbbb");
 
   // 没被 export-subst 替换的占位符 / 乱写的提交号不算数
   writeFileSync(join(root, ".versekit-build.json"), JSON.stringify({ commit: "$Format:%H$" }));
