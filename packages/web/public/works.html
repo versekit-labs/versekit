@@ -15,10 +15,10 @@
     <a class="nv" href="system.html" data-key="system">系统</a></nav>
   <main id="main">
     <div class="hd"><h1>作品</h1><span class="sub" id="count"></span></div>
-    <div class="bar"><div class="seg" id="seg" role="group" aria-label="按状态筛选"></div><input type="search" id="q" placeholder="搜标题" aria-label="搜标题"></div>
+    <div class="bar"><div class="seg" id="seg" role="group" aria-label="按状态筛选"></div><div class="calnav" id="calnav" hidden></div><input type="search" id="q" placeholder="搜标题" aria-label="搜标题"><div class="seg views" id="views" role="group" aria-label="怎么看"></div></div>
     <div id="list"><div class="panel loading">正在读作品…</div></div>
-    <div class="legend"><span><span class="pf dy">抖</span>实心：这个平台已发布</span><span><span class="pf dy off">抖</span>空心：还没发</span><span><span class="pf dy err">抖</span>红色：出了问题</span><span>"最好的一条"是和那个账号自己的平时比，不同平台之间不比较。</span></div>
-    <div class="cmd">对应命令：<code>vk work list</code>　入库：<code>vk work add 视频.mp4</code></div>
+    <div class="legend" id="legend"></div>
+    <div class="cmd" id="cmd">新作品由 Claude 送进来，送来后在这里出现，等你确认。</div>
   </main>
 </div>
 <script src="/api.js"></script>
@@ -34,8 +34,24 @@
   const AWAITING = new Set(["pending_confirm", "notify_pending", "draft_pending"]);
   const SCHEDULED = new Set(["queued", "auto_running", "draft_running"]);
   const FIL = [["all", "全部"], ["awaiting_confirm", "等你确认"], ["scheduled", "排着要发"], ["done", "都发完了"], ["problem", "有问题"]];
-  const state = { works: [], filter: "all", q: "" };
+  const WDS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+  const VIEWS = [["list", "列表"], ["week", "周"], ["month", "月"]];
+  const RANK = { bad: 0, wait: 1, sched: 2, pub: 3 };
+  const p2 = (n) => String(n).padStart(2, "0");
+  const dayOf = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  const mondayOf = (d) => addDays(d, -((d.getDay() + 6) % 7));
+  const md = (d) => `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  /** 视图和翻到哪一周（月）记在地址里：#view=week&off=1，刷新不丢（ACC-v3-cal-01）。 */
+  const readHash = () => {
+    const h = new URLSearchParams(location.hash.slice(1));
+    const view = ["week", "month"].includes(h.get("view")) ? h.get("view") : "list";
+    return { view, off: Number.parseInt(h.get("off") ?? "0", 10) || 0 };
+  };
+  const { view: v0, off: o0 } = readHash();
+  const state = { works: [], filter: "all", q: "", view: v0, off: o0, cal: null, calKey: null };
   const keyOf = (w) => w.status?.key ?? "none";
+  document.getElementById("legend").innerHTML = `<span>${pfBadge("douyin")}品牌色标志：这个平台已发布</span><span>${pfBadge("douyin", "off")}灰色标志：还没发</span><span>${pfBadge("douyin", "err")}红底白色标志：出了问题</span><span>"最好的一条"是和那个账号自己的平时比，不同平台之间不比较。</span>`;
   const count = (w, set) => (w.platformList ?? []).filter((p) => set.has(p.state)).length;
 
   /** 现在的状态：和设计稿一致，带数量；数量只来自这个作品的平台稿状态。 */
@@ -62,8 +78,7 @@
       const bad = xs.some((x) => PROBLEM.has(x.state));
       const pubd = xs.filter((x) => PUBLISHED.has(x.state)).length;
       const tip = bad ? "出了问题" : pubd === xs.length ? "已发布" : pubd ? `已发 ${pubd} / ${xs.length}` : "还没发";
-      const [ch, name, cls] = pfOf(k);
-      return `<span class="pf ${cls} ${bad ? "err" : pubd ? "" : "off"}" title="${esc(name)}：${tip}" role="img" aria-label="${esc(name)}：${tip}">${esc(ch)}</span>`;
+      return pfBadge(k, bad ? "err" : pubd ? "" : "off", tip);
     }).join("");
   }
 
@@ -75,7 +90,116 @@
     return `<span class="pfn">${pfBadge(top.platform)}<span class="x ${ratioCls(top.multiple)}">${ratioText(top.multiple)}</span></span><div class="sub">${esc(top.verdictLabel ?? "")}</div>`;
   }
 
+  const setHash = () => {
+    const h = [state.view !== "list" && `view=${state.view}`, state.off && `off=${state.off}`].filter(Boolean).join("&");
+    history.replaceState(null, "", location.pathname + location.search + (h ? "#" + h : ""));
+  };
+  const today0 = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+
+  /** 当前可见的范围（本地时区的自然日）：周 = 7 天；月 = 含前后补齐的整周格子。 */
+  function visible() {
+    const t = today0();
+    if (state.view === "week") {
+      const d0 = addDays(mondayOf(t), state.off * 7);
+      return { days: [...Array(7)].map((_, i) => addDays(d0, i)) };
+    }
+    const first = new Date(t.getFullYear(), t.getMonth() + state.off, 1);
+    const d0 = mondayOf(first);
+    const dim = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    const weeks = Math.ceil(((first.getDay() + 6) % 7 + dim) / 7);
+    return { first, days: [...Array(weeks * 7)].map((_, i) => addDays(d0, i)) };
+  }
+
+  const evHref = (r) => `/work?id=${encodeURIComponent(r.workId)}${r.cutId ? `&cut=${encodeURIComponent(r.cutId)}` : ""}`;
+  const weekOff = (d) => Math.round((mondayOf(d) - mondayOf(today0())) / 6048e5);
+  const calNote = () => '<div class="calnote"><span class="st wait">等你确认</span><span class="st sched">已确认，到时间发</span><span class="st pub">已发布</span><span class="st bad">出了问题</span><span>想确认或改时间，点进去在成片里做。现在发的、你自己发的不在日历上。</span></div>';
+
+  /** 一天的额度：只在那天有这个平台的稿子时出现；超了是红字。数字来自后端（同一条排期规则）。 */
+  function quota(day, rows) {
+    const here = new Set(rows.map((r) => r.platform));
+    return (state.cal?.quota ?? []).filter((q) => q.day === day && here.has(q.platform)).map((q) => {
+      const name = pfOf(q.platform)[1];
+      return `<span class="q ${q.over ? "over" : ""}" title="${esc(name)}每天最多 ${q.cap} 条">${esc(name)} ${q.used} / ${q.cap}${q.over ? " 超了" : ""}</span>`;
+    }).join("");
+  }
+
+  function drawWeek({ days }, byDay) {
+    const t = today0(), tk = dayOf(t);
+    const total = days.reduce((n, d) => n + (byDay[dayOf(d)]?.length ?? 0), 0);
+    const any = total > 0;
+    document.getElementById("count").textContent = `${VK.current() ? VK.current().name + " · " : ""}这一周 ${total} 条`;
+    document.getElementById("calnav").innerHTML = `<button class="btn" type="button" data-go="-1" aria-label="上一周">‹</button><b>${md(days[0])} – ${md(days[6])}</b><button class="btn" type="button" data-go="1" aria-label="下一周">›</button>${state.off ? '<button class="link" type="button" data-go="0">回到这一周</button>' : ""}${any ? "" : '<span class="sub">这一周没有安排</span>'}`;
+    const head = days.map((d, i) => `<div class="dh ${dayOf(d) === tk ? "now" : ""}">${WDS[i]} <b>${d.getDate()}</b>${dayOf(d) >= tk ? quota(dayOf(d), byDay[dayOf(d)] ?? []) : ""}</div>`).join("");
+    const cols = days.map((d, i) => {
+      const k = dayOf(d), rs = byDay[k] ?? [], blocks = [];
+      for (const r of rs) {
+        let b = blocks.find((x) => x.cutId === r.cutId && x.workId === r.workId);
+        if (!b) blocks.push(b = { cutId: r.cutId, workId: r.workId, title: r.title, cutTitle: r.cutTitle, cutCount: r.cutCount, rs: [] });
+        b.rs.push(r);
+      }
+      return `<div class="dc ${k < tk ? "past" : ""}" data-day="${WDS[i]} ${md(d)}">${blocks.map((b) => `<div class="blk"><div class="bt" title="${esc(b.title)}${b.cutTitle ? " · " + esc(b.cutTitle) : ""}"><span>${esc(b.title)}</span>${b.cutCount > 1 && b.cutTitle ? `<i>· ${esc(b.cutTitle)}</i>` : ""}</div>${b.rs.map((r) => {
+        const [ch, name, cls] = pfOf(r.platform), time = when(r.at).t;
+        return `<a class="ev ${r.cal}" href="${evHref(r)}" title="${esc(name)} · ${time} · ${esc(r.calLabel)}"><span class="t">${time}</span><span class="pf ${cls}" role="img" aria-label="${esc(name)}">${esc(ch)}</span><span class="st ${r.cal}">${esc(r.calLabel)}</span></a>`;
+      }).join("")}</div>`).join("")}</div>`;
+    }).join("");
+    document.getElementById("list").innerHTML = `<div class="cal">${head}${cols}</div>${calNote()}`;
+  }
+
+  function drawMonth({ first, days }, byDay) {
+    const t = today0(), tk = dayOf(t), mon = dayOf(first).slice(0, 7);
+    const inMonth = days.filter((d) => dayOf(d).startsWith(mon));
+    const total = inMonth.reduce((n, d) => n + (byDay[dayOf(d)]?.length ?? 0), 0);
+    document.getElementById("count").textContent = `${VK.current() ? VK.current().name + " · " : ""}这个月 ${total} 条`;
+    document.getElementById("calnav").innerHTML = `<button class="btn" type="button" data-go="-1" aria-label="上个月">‹</button><b>${first.getFullYear()} 年 ${first.getMonth() + 1} 月</b><button class="btn" type="button" data-go="1" aria-label="下个月">›</button>${state.off ? '<button class="link" type="button" data-go="0">回到这个月</button>' : ""}${total ? "" : '<span class="sub">这个月没有安排</span>'}`;
+    const cells = days.map((d) => {
+      const k = dayOf(d), rs = byDay[k] ?? [], ws = [];
+      for (const r of rs) {
+        let b = ws.find((x) => x.workId === r.workId);
+        if (!b) ws.push(b = { workId: r.workId, title: r.title, rs: [] });
+        b.rs.push(r);
+      }
+      for (const b of ws) b.top = b.rs.reduce((a, c) => (RANK[c.cal] < RANK[a.cal] ? c : a));
+      ws.sort((a, c) => RANK[a.top.cal] - RANK[c.top.cal]);
+      const wk = weekOff(d);
+      return `<div class="dc ${k.startsWith(mon) ? "" : "out"}"><a class="dn ${k === tk ? "now" : ""}" href="#view=week&off=${wk}" data-week="${wk}" title="看这一周"><span>${d.getDate() === 1 ? `${d.getMonth() + 1} 月 1 日` : d.getDate()}</span></a>${ws.slice(0, 3).map((b) => `<a class="ev ${b.top.cal}" href="${evHref(b.rs[0])}" title="${esc(b.title)}：${b.rs.length} 条，${esc(b.top.calLabel)}"><span class="st ${b.top.cal}"></span><span class="ti">${esc(b.title)}</span><span class="sub cnt">${b.rs.length} 条</span></a>`).join("")}${ws.length > 3 ? `<a class="more" href="#view=week&off=${wk}" data-week="${wk}">还有 ${ws.length - 3} 个</a>` : ""}</div>`;
+    }).join("");
+    document.getElementById("list").innerHTML = `<div class="cal month">${WDS.map((n) => `<div class="dh">${n}</div>`).join("")}${cells}</div>${calNote()}`;
+  }
+
+  /** 一次只取当前可见的范围：publish.list 加起止时间。 */
+  async function drawCal() {
+    const vis = visible();
+    const from = vis.days[0].getTime(), to = addDays(vis.days[vis.days.length - 1], 1).getTime() - 1;
+    const key = `${state.view}:${from}:${to}`;
+    if (state.calKey !== key) {
+      const mine = key;
+      state.calKey = key;
+      const group = VK.current()?.id;
+      try {
+        const data = await VK.request(`/api/publishes?from=${from}&to=${to}${group ? `&group=${encodeURIComponent(group)}` : ""}`);
+        if (state.calKey !== mine) return;
+        state.cal = data;
+      } catch (err) {
+        state.calKey = null;
+        document.getElementById("list").innerHTML = `<div class="panel empty">读不到日历：${esc(err.message)}</div>`;
+        return;
+      }
+    }
+    const byDay = {};
+    for (const r of state.cal.rows) (byDay[dayOf(new Date(r.at))] ??= []).push(r);
+    (state.view === "week" ? drawWeek : drawMonth)(vis, byDay);
+  }
+
   function draw() {
+    document.getElementById("views").innerHTML = VIEWS.map(([k, n]) => `<button type="button" data-view="${k}" aria-pressed="${k === state.view}">${n}</button>`).join("");
+    const cal = state.view !== "list";
+    for (const id of ["seg", "q"]) document.getElementById(id).hidden = cal;
+    document.getElementById("calnav").hidden = !cal;
+    document.querySelector(".legend").hidden = cal;
+    document.getElementById("cmd").textContent = cal
+      ? "日历只看不改：点一行进那支成片。"
+      : "新作品由 Claude 送进来，送来后在这里出现，等你确认。";
+    if (cal) return void drawCal();
     const q = state.q.toLowerCase();
     const rows = state.works.filter((w) => (state.filter === "all" || keyOf(w) === state.filter) && w.title.toLowerCase().includes(q));
     const current = VK.current();
@@ -98,12 +222,19 @@
   }
 
   document.addEventListener("click", (e) => {
+    let v = e.target.closest("[data-view]");
+    if (v) { state.view = v.dataset.view; state.off = 0; setHash(); draw(); return; }
+    v = e.target.closest("[data-go]");
+    if (v) { const n = Number(v.dataset.go); state.off = n ? state.off + n : 0; setHash(); draw(); return; }
+    v = e.target.closest("[data-week]");
+    if (v) { e.preventDefault(); state.view = "week"; state.off = Number(v.dataset.week); setHash(); draw(); return; }
     const b = e.target.closest("[data-f]");
     if (!b) return;
     state.filter = b.dataset.f;
     if (state.filter === "all") { state.q = ""; document.getElementById("q").value = ""; }
     draw();
   });
+  window.addEventListener("hashchange", () => { const h = readHash(); state.view = h.view; state.off = h.off; draw(); });
   document.getElementById("q").addEventListener("input", (e) => { state.q = e.target.value.trim(); draw(); });
 
   try {

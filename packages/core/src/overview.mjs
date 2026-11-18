@@ -333,7 +333,7 @@ export function buildBootstrap({ now = Date.now() } = {}) {
  */
 export function resolveScope(groupRef = null) {
   const group = groupRef ? (listGroups().find((g) => g.id === groupRef || g.name === groupRef) ?? null) : currentGroup();
-  if (groupRef && !group) throw new Error(`没有这个账号组：${groupRef}（先 vk group list 看看有哪些）`);
+  if (groupRef && !group) throw new Error(`没有这个账号组：${groupRef}（在系统页的账号组里看有哪些）`);
   return group ? { id: group.id, name: group.name } : null;
 }
 

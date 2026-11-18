@@ -55,7 +55,7 @@ export function saveClientCredentials({ clientKey, clientSecret } = {}) {
 }
 
 export const MISSING_CLIENT_HINT =
-  "没有 TikTok 应用凭证：设置环境变量 TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET，或写进本机 config.json 的 tiktok.client_key / tiktok.client_secret（不要放进仓库）";
+  "没有 TikTok 应用凭证：到系统页的账号里填 TikTok 应用凭证";
 
 export function requireClientCredentials() {
   const creds = clientCredentials();
@@ -67,7 +67,7 @@ export function requireClientCredentials() {
 
 /** credential_ref 是相对凭证目录的路径；拒绝绝对路径与 `..`，不让账号行指到目录外。 */
 export function credentialPath(ref) {
-  if (typeof ref !== "string" || !ref.trim()) throw new Error("账号没有凭证：先 vk account connect <accountId> 授权");
+  if (typeof ref !== "string" || !ref.trim()) throw new Error("账号没有凭证：先到系统页授权这个账号");
   const clean = normalize(ref);
   if (isAbsolute(clean) || clean.split(sep).includes("..")) throw new Error(`凭证引用不合法：${ref}`);
   return join(paths().credentials, clean);

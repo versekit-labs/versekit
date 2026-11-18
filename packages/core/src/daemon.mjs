@@ -159,7 +159,7 @@ function serveMedia(req, res, { versionId }) {
   if (!asset) {
     return send(res, 404, {
       ok: false,
-      error: { code: "not_found", message: `没有这个版本：${versionId}（vk work list 看看有哪些作品）` },
+      error: { code: "not_found", message: `没有这个版本：${versionId}（到作品页看有哪些作品）` },
     });
   }
   let stat = null;
@@ -412,6 +412,17 @@ function audit({ command, args, origin, actor, result, reason }) {
   }
 }
 
+/** 页面不出现命令（ACC-v3-nocli-02）：成功结果里写给命令行看的 next / checkHint 提示，给页面时去掉。 */
+const COMMAND_RE = /\bvk [a-z]|\bnpm (?:run|install|test)\b|\bcurl \S|config\.json/;
+export function withoutCommandHints(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  const out = { ...result };
+  for (const key of ["next", "checkHint"]) {
+    if (typeof out[key] === "string" && COMMAND_RE.test(out[key])) delete out[key];
+  }
+  return out;
+}
+
 function send(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -574,12 +585,17 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
       const result = (await handler(args)) ?? {};
       audit({ command, args, origin, actor, result: "ok" });
       log(`[daemon] ${command.name} ok ${Date.now() - started}ms`);
-      return send(res, 200, { ...result, ok: result.ok ?? true });
+      return send(res, 200, { ...(origin === "web" ? withoutCommandHints(result) : result), ok: result.ok ?? true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       audit({ command, args, origin, actor, result: "error", reason: message });
       log(`[daemon] ${command.name} 失败：${message}`);
-      return send(res, 400, { ok: false, error: { code: err.code ?? "command_failed", message } });
+      // 带上页面要用的结构化细节（只在有值时）：最近能排的时间、哪条平台稿、超限清单。code / message 不变。
+      const detail = {};
+      if (Number.isFinite(err.suggestedAt)) detail.suggestedAt = err.suggestedAt;
+      if (typeof err.publishId === "string") detail.publishId = err.publishId;
+      if (Array.isArray(err.problems)) detail.problems = err.problems;
+      return send(res, 400, { ok: false, error: { code: err.code ?? "command_failed", message, ...detail, ...(err.hint && origin !== "web" ? { hint: String(err.hint) } : {}) } });
     }
   };
 }
@@ -611,7 +627,7 @@ export function isOfflineBlocked(name) {
 }
 
 export function offlineError(name) {
-  const err = new Error(`离线模式：不会访问任何平台，「${name}」已拒绝（用不带 --offline 的 vk serve 才能真实操作）`);
+  const err = new Error(`离线模式：不会访问任何平台，「${name}」已拒绝（要真实操作，请用正常模式启动）`);
   err.code = "offline_mode";
   return err;
 }

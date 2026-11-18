@@ -248,7 +248,7 @@ test("work.list / work.show：JSON 里有作品、成片、每条平台稿的状
   for (const c of handlers["work.show"]({ workId: series.id, group: "v2 组" }).work.cuts) handlers["publish.approve"]({ cutId: c.id });
   const confirmed = handlers["work.list"]({ group: "v2 组" }).works.find((w) => w.title === "同号多条");
   assert.equal(confirmed.status.key, "scheduled", "manual 模式的平台稿在 queued 状态 → 已确认等时间");
-  assert.throws(() => handlers["work.show"]({ workId: "work_nope" }), /vk work list/);
+  assert.throws(() => handlers["work.show"]({ workId: "work_nope" }), (e) => /没有这个作品/.test(e.message) && /vk work list/.test(e.hint), "报错是人话，命令放 hint");
 });
 
 test("ACC-v2-confirm-04 平台稿标题：work.show 给的就是「现在点确认会发出去」的那一个", async () => {

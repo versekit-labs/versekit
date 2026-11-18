@@ -33,8 +33,8 @@ after(async () => {
 
 test("account.add 必填 group：命令表、handler、store 三层都不允许无组账号", () => {
   assert.throws(() => parseArgs(findCommand("account.add"), { platform: "tiktok", name: "无组" }), /缺少参数：group/);
-  assert.throws(() => h["account.add"]({ platform: "tiktok", name: "无组" }), /必须带 --group/);
-  assert.throws(() => store.addAccount({ platform: "tiktok", handle: "@无组" }), /必须带 --group/);
+  assert.throws(() => h["account.add"]({ platform: "tiktok", name: "无组" }), /要先选账号组/);
+  assert.throws(() => store.addAccount({ platform: "tiktok", handle: "@无组" }), /要先选账号组/);
 
   const g = h["group.add"]({ name: "必填组" });
   const added = h["account.add"]({ platform: "tiktok", name: "一号", group: g.id });
@@ -52,7 +52,7 @@ test("ACC-add-01：组已锁定；已接入平台返回占用者，不能重复�
 
   assert.throws(
     () => h["account.add"]({ platform: "bilibili", name: "二号", group: g }),
-    (err) => /每个平台只能有一个/.test(err.message) && err.message.includes("一号") && err.message.includes(first.id) && /vk account remove/.test(err.message),
+    (err) => /每个平台只能有一个/.test(err.message) && err.message.includes("一号") && err.message.includes(first.id) && /vk account remove/.test(err.hint),
     "冲突错误要说清被谁占用，并给出换号路径",
   );
 

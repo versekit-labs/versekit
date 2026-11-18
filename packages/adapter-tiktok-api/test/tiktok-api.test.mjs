@@ -236,7 +236,7 @@ test("client_key / client_secret 只从环境变量或本地配置读：都没�
   delete process.env.TIKTOK_CLIENT_KEY;
   delete process.env.TIKTOK_CLIENT_SECRET;
   try {
-    assert.match(adapterModule.default.ready(), /TIKTOK_CLIENT_KEY/);
+    assert.match(adapterModule.default.ready(), /应用凭证/);
     core.ensureDirs();
     writeFileSync(core.paths().configFile, JSON.stringify({ tiktok: { client_key: "k", client_secret: "s" } }));
     assert.equal(adapterModule.default.ready(), null, "本地配置也算");
@@ -341,7 +341,7 @@ test("隐私级别没选：适配器拒绝，没有任何上传；核心在确�
   const acct = await connectedAccount();
   const work = store.upsertWork({ title: `作品 ${++n}`, cuts: [{ title: "c", versions: [{ language: "default", asset: fakeMp4(5) }] }] });
   const pub = store.createPublish({ workId: work.id, accountId: acct.accountId });
-  assert.throws(() => store.approvePublishes({ publishId: pub.id }), /没选不会发.*--privacy.*account creator/s);
+  assert.throws(() => store.approvePublishes({ publishId: pub.id }), /没选不会发/);
   assert.throws(() => store.publishNow({ publishId: pub.id }), /没选不会发/);
   assert.equal(row(pub.id).state, "pending_confirm");
   // 绕过确认直接进队列（不该发生，但防线要在）：适配器也不发

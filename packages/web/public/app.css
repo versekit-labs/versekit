@@ -90,8 +90,18 @@ button,a{-webkit-tap-highlight-color:transparent}
 .app input[type=text],.app input[type=search],.app input[type=datetime-local]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0;color:var(--ink);font-family:inherit}
 
 /* 平台与状态 */
-.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none}
-.pf.xhs{background:#e0213b}.pf.dy{background:#161823}.pf.sph{background:#9c5800}.pf.bili{background:#0079a8}.pf.tk{background:#25292e}.pf.yt{background:#d21a12}.pf.web{background:#55606b}.pf.mp{background:#04823f}
+.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none;border:1px solid transparent;background:var(--brand,#55606b)}
+/* 颜色与徽章样式以 docs/design/app.css 为准：xhs/dy 品牌底+白标志；tk/yt/bili/sph/mp 白底+品牌色标志（ACC-v3-fid-09） */
+.pf.xhs{--brand:#ff2442}.pf.dy{--brand:#010101}.pf.web{--brand:#55606b}
+.pf.tk,.pf.yt,.pf.bili,.pf.sph,.pf.mp{background:var(--paper);border-color:var(--ctl);color:var(--brand)}
+.pf.tk{--brand:#010101}.pf.yt{--brand:#ff0000}.pf.bili{--brand:#00a1d6}.pf.sph{--brand:#fa9d3b}.pf.mp{--brand:#07c160}
+/* 官方标志（packages/web/public/logos/<平台>.svg 存在时 panel.js 加 .lg，用 mask 画）；缺文件回落字母 */
+.pf.lg{font-size:0}
+.pf.lg::before{content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--logo) center/contain no-repeat;mask:var(--logo) center/contain no-repeat}
+.pf.lg.xhs::before{width:16px;height:16px}.pf.lg.yt::before{width:15px;height:15px}
+/* 还没发 = 灰色标志；出了问题 = 红底白色标志 */
+.pf.off,.pf.lg.off{background:var(--paper);border-color:var(--ctl);color:var(--ink3)}
+.pf.err,.pf.lg.err{background:var(--bad);border-color:var(--bad);color:#fffffe}
 .pfn{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .st{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);white-space:nowrap}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;border:1.5px solid var(--ink3);flex:none}
@@ -110,8 +120,6 @@ video.cv{pointer-events:none}
 .typ u{position:absolute;left:40%;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
 
 /* 平台图标三态（作品页）：实心 = 已发布，空心 = 还没发，红色 = 出了问题 */
-.pf.off{background:none;border:1px solid var(--ctl);color:var(--ink2)}
-.pf.err{background:var(--bad)}
 .pfs{display:flex;gap:4px;flex-wrap:wrap}
 .app .bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .app .bar input{margin-left:auto;width:220px}
@@ -150,8 +158,6 @@ video.cv{pointer-events:none}
 .prow .nm{font-size:13px;color:var(--ink2)}
 .prow .ti{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prow .tm{font-size:13px;font-weight:600;white-space:nowrap}
-.prow.ed{grid-template-columns:20px 64px minmax(0,1fr) auto auto}
-.prow.ed input[type=text]{width:100%}
 /* 每条平台稿能展开看正文和话题；「改」里能改标题、正文、话题、时间（#175） */
 .prow{align-content:center}
 .prow .tog{font:inherit;font-size:14px;color:var(--ink);background:none;border:0;padding:0;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;min-height:32px}
@@ -164,20 +170,15 @@ video.cv{pointer-events:none}
 .pdet .none{color:var(--ink2)}
 .pdet .tags{display:flex;gap:6px;flex-wrap:wrap}
 .pdet .tag{border:1px solid var(--line);border-radius:6px;padding:1px 7px;background:var(--paper)}
-.prow.ed .ef{grid-column:3/-1;display:grid;gap:6px}
-.prow.ed textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
-.prow.ed .lab{font-size:12px;color:var(--ink2)}
 .solo .pdet{padding:6px 0 0}
 .solo .tog{font:inherit;font-size:13px;background:none;border:0;padding:0;color:var(--ink2);text-decoration:underline;cursor:pointer;min-height:32px}
-.solo .ef{display:grid;gap:6px;margin-top:8px}
-.solo .ef textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
-.solo .ef .lab{font-size:12px;color:#6b5d1c}
 .prow.off .ti,.prow.off .tm{color:var(--ink2);text-decoration:line-through}
 .prow.bad{background:var(--bad-bg)}
 .solo{margin-top:12px;border:1px solid var(--mark-line);background:var(--mark-bg);border-radius:var(--r);padding:12px}
 .solo .sh{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
 .solo .ti{font-size:14px;margin:8px 0 2px;overflow-wrap:anywhere}
 .solo .sub{color:#6b5d1c}
+.solo .sub.unset{color:var(--ink2)}
 .solo .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
 /* TikTok 官方接口的发布设置面板（#173）：黄 = 等你处理；绿 = 成了；红 = 出了问题。 */
 .tkset .tk-note{margin:8px 0 10px;font-size:13px;color:#6b5d1c}
@@ -217,11 +218,11 @@ video.cv{pointer-events:none}
 .done-note{border:1px solid var(--good-line);background:var(--good-bg);color:var(--good);border-radius:var(--r);padding:12px 14px;font-size:14px;font-weight:600;flex:1}
 
 /* 素材占位：文件不在这台电脑上时退回这里，页面不报错（ACC-v2-web-02）。 */
-.media-fallback{width:100%;height:300px;border-radius:var(--r);background:#111214;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px;text-align:center}
+.media-fallback{width:100%;height:300px;border-radius:var(--r);background:#dcdcd8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px;text-align:center}
 .cp.vert .media-fallback{height:360px}
-.media-fallback svg{width:44px;height:44px;fill:#8d9399}
-.media-fallback .m1{color:#fffffe;font-size:13px}
-.media-fallback .m2{color:#8d9399;font-size:12px;overflow-wrap:anywhere;max-width:60ch}
+.media-fallback svg{width:44px;height:44px;fill:#9a9a95}
+.media-fallback .m1{color:var(--ink2);font-size:13px}
+.media-fallback .m2{color:var(--ink2);font-size:12px;overflow-wrap:anywhere;max-width:60ch}
 
 /* 成片列表（右栏） */
 .steps{display:flex;flex-direction:column;gap:4px}
@@ -257,8 +258,6 @@ video.cv{pointer-events:none}
   .prow,.prow.ed{grid-template-columns:20px minmax(0,1fr) auto}
   .prow .nm{display:none}
   .prow .tm{grid-column:2}
-  .prow.ed input[type=datetime-local]{grid-column:2}
-  .prow.ed .ef{grid-column:2/-1}
   .pdet{padding-left:0}
   .cp video,.cp .poster,.cp.vert video,.cp.vert .poster,.media-fallback,.cp.vert .media-fallback{height:220px}
   .app .grp{flex:1 1 100%;margin:0}
@@ -286,3 +285,75 @@ video.cv{pointer-events:none}
 .says{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .says .note>div{margin:4px 0 6px}
 @media (max-width:860px){.says{grid-template-columns:minmax(0,1fr)}.plr{grid-template-columns:72px minmax(0,1fr)}.plr .m{display:none}}
+/* 日历：周 / 月。最小单位是一条平台稿；不用新颜色，状态沿用 .st 的四种点 */
+.views{margin-left:auto}
+.calnav{display:flex;gap:8px;align-items:center}
+.calnav b{font-size:15px;font-weight:600;margin:0 6px;white-space:nowrap}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:12px;background:var(--paper);overflow:hidden}
+.cal .dh{padding:8px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink2);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.cal .dh b{font-size:14px;color:var(--ink);font-weight:600}
+.cal .dh.now b{background:var(--ink);color:#fffffe;border-radius:5px;padding:0 6px}
+.cal .dh .q{margin-left:auto;white-space:nowrap}.cal .dh .q.over{color:var(--bad);font-weight:600}
+.cal .dc{min-height:340px;padding:8px 6px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.cal .dh+.dh,.cal .dc+.dc{border-left:1px solid var(--line)}
+.cal .dc.past{background:var(--bg)}
+.blk{display:block;min-width:0}
+.blk .bt{font-size:12px;color:var(--ink2);padding:0 2px 2px;display:flex;gap:4px;white-space:nowrap;min-width:0}
+.blk .bt span{overflow:hidden;text-overflow:ellipsis;min-width:0}.blk .bt i{font-style:normal;flex:none}
+.ev,.cal .dn,.cal .more{text-decoration:none}
+.ev{display:flex;gap:5px;align-items:center;min-height:32px;padding:0 2px;border-radius:6px;font-size:13px;white-space:nowrap;min-width:0;color:var(--ink)}
+.ev:hover{background:var(--hover)}
+.ev .t{font-variant-numeric:tabular-nums;width:36px;flex:none}
+.ev .st{font-size:12px;gap:4px;flex:none}
+.ev.pub,.ev.pub .st{color:var(--ink2)}
+.ev.bad{background:var(--bad-bg)}
+.cal.month .dc{min-height:132px;gap:2px;padding:6px}
+.cal.month .dn{display:flex;align-items:center;min-height:32px;padding:0 4px;font-size:13px;color:var(--ink2);border-radius:6px;width:max-content}
+.cal.month .dn:hover{background:var(--hover)}
+.cal.month .dn.now{color:var(--ink);font-weight:600}.cal.month .dn.now span{background:var(--ink);color:#fffffe;border-radius:5px;padding:0 6px}
+.cal.month .dc.out{background:var(--bg)}.cal.month .dc.out .dn{color:var(--ink3)}
+.cal.month .dc:nth-child(7n+1){border-left:0}
+.cal.month .dc:nth-child(n+15){border-top:1px solid var(--line)}
+.cal.month .ev .ti{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cal.month .ev{padding:0 4px;gap:6px}.cal.month .ev .cnt{margin-left:auto;flex:none;font-size:12px}
+.cal.month .more{font-size:12px;color:var(--ink2);padding:0 4px}
+.calnote{margin:10px 0 0;font-size:12px;color:var(--ink2);display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+@media (max-width:860px){.views{margin-left:0}
+  .cal:not(.month){grid-template-columns:1fr}.cal:not(.month) .dh{display:none}.cal:not(.month) .dc{min-height:0;border-left:0;border-top:1px solid var(--line)}.cal:not(.month) .dc::before{content:attr(data-day);font-size:12px;color:var(--ink2);padding:0 4px}
+  .cal.month .ev .ti,.cal.month .ev .cnt{display:none}.cal.month .dc{min-height:72px;padding:2px}.cal.month .dh{padding:6px 2px;justify-content:center}}
+/* 改内容：面板的一个状态。上面通用文案，下面每个平台一行、点开单独写；底栏取消 / 保存（ACC-v3-edit-03） */
+.cp .cph .seg{margin-left:auto}
+.cp .cph .edit{margin-left:8px}
+.edc{border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:6px;background:var(--bg)}
+.edt{display:flex;gap:4px 12px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px}
+.lab{font-size:12px;color:var(--ink2)}
+.edc input[type=text],.eb input[type=text]{width:100%}
+.edc textarea,.eb textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);color:var(--ink);resize:vertical;display:block}
+.edh2{margin:18px 0 8px}
+.erow{border-bottom:1px solid var(--line2)}
+.erow:last-child{border-bottom:0}
+.eh{display:grid;grid-template-columns:20px 64px minmax(0,1fr) auto 12px;gap:10px;align-items:center;width:100%;min-height:44px;padding:5px 12px;border:0;background:none;text-align:left;font:inherit;font-size:13px;color:inherit;cursor:pointer}
+.eh:hover{background:var(--hover)}
+.eh .nm{color:var(--ink2)}
+.eh .sm{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eh .sm.own{color:var(--ink)}
+.eh .tm{font-weight:600;white-space:nowrap}
+.eh .tm.bad{color:var(--bad)}
+.prow .tm.unset,.eh .tm.unset{color:var(--ink2);font-weight:400}
+.eh::after{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink2);border-bottom:1.5px solid var(--ink2);transform:rotate(45deg);margin-top:-3px}
+.eh[aria-expanded=true]::after{transform:rotate(225deg);margin-top:3px}
+.eb{padding:2px 12px 14px 42px;display:grid;gap:6px}
+.fl{display:flex;gap:10px;align-items:center;min-height:32px;margin-top:4px}
+.fl .fs{font-size:12px;color:var(--ink2);margin-left:auto}
+.fl .fs.own{color:var(--ink);font-weight:600}
+.fl .link[hidden]{display:none}
+.eb .fol{color:var(--ink2)}
+.tmr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cfoot .ask{margin-right:auto;font-size:14px;font-weight:600}
+.err{font-size:13px;color:var(--bad);display:flex;gap:4px 10px;align-items:center;flex-wrap:wrap}
+.err .link{color:inherit}
+@media (max-width:860px){
+  .eh{grid-template-columns:20px minmax(0,1fr) auto 12px}
+  .eh .nm{display:none}
+  .eb{padding-left:12px}
+}

@@ -463,7 +463,8 @@ function daemonHandlers(adapters, log) {
       const tab = await creatorLoginTab(accountId, { fresh: true });
       await fillAndSendCode(tab, phone);
       loginSessions.set(accountId, { phone, sentAt: Date.now() });
-      return { mode: "sms", phone, sent: true, next: "验证码已发送，填进页面上的输入框" };
+      // 回给页面和日志的只有打了码的手机号：完整号码只留在这台电脑的内存里（重发要用），不落库。
+      return { mode: "sms", phone: `${phone.slice(0, 3)}****${phone.slice(-4)}`, sent: true, next: "验证码已发送，填进页面上的输入框" };
     },
 
     /**
@@ -1315,7 +1316,7 @@ async function cmdWork() {
 async function cmdRelay() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | pull | token push|pull";
+  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | disconnect | pull | token push|pull";
   if (sub === "serve") {
     const { mkdirSync, chmodSync: chmod } = await import("node:fs");
     const { randomBytes } = await import("node:crypto");
@@ -1357,6 +1358,12 @@ async function cmdRelay() {
       console.log(`每 ${data.intervalMinutes} 分钟拉取一次；还没拉完的投递 ${data.pending} 个`);
       for (const f of data.failures) console.log(`没入库：${f.id}：${f.message}`);
     } else out(data);
+    return data;
+  }
+  if (sub === "disconnect") {
+    const data = await send("relay.disconnect", {}, { log });
+    if (human) console.log(data.message);
+    else out(data);
     return data;
   }
   if (sub === "connect") {
@@ -1577,11 +1584,21 @@ async function cmdPublish() {
   const log = (m) => human && console.log(m);
 
   if (sub === "list") {
+    const from = parseBound(val("--from"));
+    const to = parseBound(val("--to"), { end: true });
     const data = await send("publish.list", {
       ...(val("--state") ? { state: val("--state") } : {}),
       ...(val("--platform") ? { platform: val("--platform") } : {}),
+      ...(val("--group") ? { group: val("--group") } : {}),
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {}),
     });
-    if (human) {
+    if (human && data.quota) {
+      // 日历口径（作品页的周 / 月视图同一份数据）：时间、状态、平台、作品·成片。
+      for (const r of data.rows) console.log(`${fmtTime(r.at).padEnd(22)}${r.calLabel.padEnd(8)}${r.platform.padEnd(12)}${r.title}${r.cutCount > 1 && r.cutTitle ? ` · ${r.cutTitle}` : ""}`);
+      if (!data.rows.length) console.log("这段时间没有安排");
+      for (const q of data.quota) console.log(`额度 ${q.day} ${q.platform} ${q.used} / ${q.cap}${q.over ? "  超了" : ""}`);
+    } else if (human) {
       for (const r of data.rows) console.log(`${r.id.padEnd(16)}${r.platform.padEnd(10)}${r.state.padEnd(18)}${String(r.title).slice(0, 30)}`);
       if (!data.rows.length) console.log("还没有发布：vk publish <素材> --to <平台>");
     } else out(data);
@@ -2048,7 +2065,7 @@ try {
   }
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  if (human) console.error(`出错：${message}`);
-  else out({ ok: false, error: { code: err.code ?? "error", message } });
+  if (human) console.error(`出错：${message}${err.hint ? `\n下一步：${err.hint}` : ""}`);
+  else out({ ok: false, error: { code: err.code ?? "error", message, ...(err.hint ? { hint: err.hint } : {}) } });
   process.exit(1);
 }

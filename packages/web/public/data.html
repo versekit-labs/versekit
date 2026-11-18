@@ -114,7 +114,7 @@
       </div>
       <div class="dbar"><h2>每一条</h2>${seg("pf", [["all", "全部"], ...pfs.map((k) => [k, pfName(k)])], view.pf, "按平台筛选")}${seg("s", [["x", "按倍数"], ["t", "按时间"]], view.sort, "排序")}</div>
       <div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th>发布</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${table}</tbody></table></div>
-      <div class="cmd">“平时”= 这个账号最近 20 条在发布 24 小时的播放中位数；2 倍以上算好，一半以下算差。　对应命令：<code>vk stats works</code></div>`
+      <div class="cmd">“平时”= 这个账号最近 20 条在发布 24 小时的播放中位数；2 倍以上算好，一半以下算差。</div>`
       : '<div class="panel empty">这段时间还没有发布满 24 小时的内容。发布满 24 小时后，每条和平时的对比会出现在这里。</div>');
   }
 
@@ -134,7 +134,7 @@
     draw();
   } catch (err) {
     main.innerHTML = `<div class="hd"><h1>数据</h1></div><div class="panel empty">读不到数据：${esc(err.message)}</div>` +
-      `<div class="cmd">守护进程没起？在电脑上运行 <code>vk serve --open</code>。</div>`;
+      `<div class="cmd">读不到数据：看看发布机是不是开着，过一会儿再刷新。</div>`;
   }
 })();
 </script>

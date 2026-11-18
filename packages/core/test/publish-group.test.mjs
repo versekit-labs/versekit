@@ -74,7 +74,7 @@ test("ACC-publish-01：默认只取当前组账号；失效账号不可选并返
     (err) =>
       /已失效（登录过期）/.test(err.message) &&
       /@acc01-main-tt/.test(err.message) &&
-      new RegExp(`vk account reauth ${mainTt}`).test(err.message),
+      /vk account reauth/.test(err.hint),
     "expired 账号必须返回可执行原因",
   );
 

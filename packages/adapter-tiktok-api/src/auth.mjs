@@ -42,11 +42,11 @@ export async function listenForCallback({ state, timeoutMs }) {
     const send = (status, title, body) => res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" }).end(page(title, body));
     const error = url.searchParams.get("error");
     if (url.searchParams.get("state") !== state) {
-      send(400, "授权被拒绝", "回调里的 state 对不上，可能不是你刚才发起的授权。回到终端重新运行 vk account connect。");
-      settle.reject(new Error("TikTok 回调的 state 对不上（可能是别的页面伪造的回调），已拒绝，没有使用其中的授权码；请重新运行 vk account connect"));
+      send(400, "授权被拒绝", "回调里的 state 对不上，可能不是你刚才发起的授权。回到系统页重新连接。");
+      settle.reject(new Error("TikTok 回调的 state 对不上（可能是别的页面伪造的回调），已拒绝，没有使用其中的授权码；请到系统页重新连接"));
     } else if (error) {
       send(200, "授权没有完成", "你在 TikTok 页面上取消了授权。回到终端可以重新开始。");
-      settle.reject(new Error(`你在 TikTok 授权页上取消了授权（${error}）：需要时重新运行 vk account connect`));
+      settle.reject(new Error(`你在 TikTok 授权页上取消了授权（${error}）：需要时到系统页重新连接`));
     } else if (!url.searchParams.get("code")) {
       send(400, "授权没有完成", "回调里没有授权码。");
       settle.reject(new Error("TikTok 回调里没有授权码：请重新运行 vk account connect"));
@@ -61,7 +61,7 @@ export async function listenForCallback({ state, timeoutMs }) {
   });
   const redirectUri = `http://127.0.0.1:${server.address().port}${CALLBACK_PATH}`;
   const timer = setTimeout(
-    () => settle.reject(new Error(`${Math.round(timeoutMs / 60e3)} 分钟内没有收到 TikTok 的授权回调，已取消：重新运行 vk account connect`)),
+    () => settle.reject(new Error(`${Math.round(timeoutMs / 60e3)} 分钟内没有收到 TikTok 的授权回调，已取消：到系统页重新连接`)),
     timeoutMs,
   );
   const closed = result.then(
@@ -151,7 +151,7 @@ const refreshing = new Map();
  * 没授权过、refresh_token 过期、续期被拒 → AdapterError("auth")，core 据此转「需要重新登录」。
  */
 export async function ensureAccessToken(credentialRef, { now = Date.now(), signal } = {}) {
-  const relogin = (why) => new AdapterError("auth", `TikTok 需要重新登录（${why}）：vk account connect <accountId>`);
+  const relogin = (why) => new AdapterError("auth", `TikTok 需要重新登录（${why}）：到系统页重新连接`);
   const rec = credentialRef ? readTokens(credentialRef) : null;
   if (!rec?.access_token) throw relogin("这个账号还没有授权");
   if (rec.expires_at - now > REFRESH_MARGIN_MS) return { token: rec.access_token, record: rec };

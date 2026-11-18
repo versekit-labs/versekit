@@ -103,6 +103,14 @@ for (const page of PAGES) {
   }
 }
 
+// ── 3'. 真实页面和脚本里也不出现命令行（ACC-v3-nocli-01）：设计稿查过了，实现也要查 ──
+const WEB = join(ROOT, 'packages/web/public');
+const CLI_RE = /<code[\s>]|\bvk (?:[a-z]+)\b|\bnpm (?:run|install|test)\b|\bcurl \S|config\.json/g;
+for (const f of existsSync(WEB) ? readdirSync(WEB).filter(n => /\.(html|js)$/.test(n)).sort() : []) {
+  const hits = [...readFileSync(join(WEB, f), 'utf8').matchAll(CLI_RE)].map(m => m[0]);
+  if (hits.length) add('cli-in-ui', `packages/web/public/${f} 有 ${hits.length} 处命令行或配置文件名（如「${hits[0].trim()}」）；界面上不出现命令`);
+}
+
 // ── 4. 检测器（含共享样式表） ──────────────────────────
 function runDetect(page) {
   return new Promise(resolve => {

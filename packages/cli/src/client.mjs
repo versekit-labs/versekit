@@ -52,7 +52,7 @@ function rawCall({ path, method, body, socketPath, timeout = 30_000 }) {
             return reject(new Error(`守护进程返回了非 JSON（HTTP ${res.statusCode}）：${data.slice(0, 200)}`));
           }
           if (res.statusCode >= 400 || parsed.ok === false) {
-            return reject(Object.assign(new Error(parsed.error?.message ?? `HTTP ${res.statusCode}`), { code: parsed.error?.code, status: res.statusCode }));
+            return reject(Object.assign(new Error(parsed.error?.message ?? `HTTP ${res.statusCode}`), { code: parsed.error?.code, status: res.statusCode, ...(parsed.error?.hint ? { hint: parsed.error.hint } : {}) }));
           }
           resolve(parsed);
         });

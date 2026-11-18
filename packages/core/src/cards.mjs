@@ -153,7 +153,7 @@ const dayKey = (t) => {
 
 /** 卡片上给人看的时间：今天 20:00 / 明天 20:00 / 11-16 20:00；没排时间就明说。 */
 export function formatWhen(ms, now = Date.now()) {
-  if (!Number.isFinite(ms)) return "还没排时间";
+  if (!Number.isFinite(ms)) return "还没定时间";
   const d = new Date(ms);
   const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   if (dayKey(ms) === dayKey(now)) return `今天 ${hm}`;
@@ -269,11 +269,13 @@ const copyLines = (r) => {
  * 一支成片的确认卡片。rows 是这支成片实际的平台稿（不含小红书）：
  * [{ publishId, platform, title, at }]，所以有几条平台稿就有几行，不是固定 6 行。
  */
-export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName = null, now = Date.now(), cardKey = `cut:${cut.id}:${now}`, note = null }) {
+export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName = null, now = Date.now(), cardKey = `cut:${cut.id}:${now}`, note = null, when = "scheduled" }) {
+  // 现在发还是按时间发：在改单卡片里选，带到这里的确认按钮（ACC-v3-time-05/06）。现在发的行不写时间。
+  const immediate = when === "now";
   const lines = [];
   rows.forEach((r, i) => {
     if (i) lines.push({ tag: "hr" });
-    lines.push(md(`**${platformLabel(r.platform)}**　${r.title}\n${grey(formatWhen(r.at, now))}\n${copyLines(r)}`));
+    lines.push(md(`**${platformLabel(r.platform)}**　${r.title}\n${grey(immediate ? "现在发" : formatWhen(r.at, now))}\n${copyLines(r)}`));
   });
   return v2Card({
     title: withGroup(`${cut.title} · 第 ${index} 支，共 ${total} 支`, groupName),
@@ -286,8 +288,8 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
         tag: "button",
         type: "primary",
         width: "fill",
-        text: { tag: "plain_text", content: `确认这 ${rows.length} 条，按时间发` },
-        behaviors: callback("publish.approve", { cutId: cut.id }, { key: `${cardKey}:publish.approve`, now }),
+        text: { tag: "plain_text", content: `确认这 ${rows.length} 条，${immediate ? "现在发" : "按时间发"}` },
+        behaviors: callback("publish.approve", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.approve`, now }),
       },
       {
         tag: "column_set",
@@ -296,7 +298,7 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
             tag: "column",
             width: "weighted",
             weight: 1,
-            elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: "改标题或时间" }, behaviors: callback("card.edit", { cutId: cut.id }, { now }) }],
+            elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: "改标题或时间" }, behaviors: callback("card.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }) }],
           },
           {
             tag: "column",
@@ -329,8 +331,10 @@ export function editFieldNames(rows) {
 }
 
 /** 改标题或时间：上一张卡片原地换成表单。「取消」在表单外面——飞书不允许表单里的重置按钮带回调。 */
-export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), cardKey = `edit:${cut.id}:${now}`, note = null }) {
+export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), cardKey = `edit:${cut.id}:${now}`, note = null, when = "scheduled" }) {
+  const immediate = when === "now";
   const names = editFieldNames(rows);
+  // 选现在发时不出现时间输入（ACC-v3-time-06）。
   const fields = rows.flatMap((r, i) => [
     md(`**${platformLabel(r.platform)}**`),
     {
@@ -339,16 +343,37 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
       default_value: r.title,
       ...(TITLE_MAX[r.platform] ? { max_length: TITLE_MAX[r.platform] } : {}),
     },
-    {
-      tag: "picker_datetime",
-      name: names[i].at,
-      ...(Number.isFinite(r.at) ? { initial_datetime: formatPickerTime(r.at) } : {}),
-    },
+    ...(immediate
+      ? []
+      : [
+          {
+            tag: "picker_datetime",
+            name: names[i].at,
+            ...(Number.isFinite(r.at) ? { initial_datetime: formatPickerTime(r.at) } : {}),
+          },
+        ]),
   ]);
+  // 「什么时候发」在表单外面：飞书表单里的控件不能带回调。切换会重画卡片，没提交的输入不保留，所以放在最上面先选。
+  const half = (label, mode) => ({
+    tag: "column",
+    width: "weighted",
+    weight: 1,
+    elements: [
+      {
+        tag: "button",
+        width: "fill",
+        type: (mode === "now") === immediate ? "primary" : "default",
+        text: { tag: "plain_text", content: label },
+        behaviors: callback("card.edit", { cutId: cut.id, ...(mode === "now" ? { when: "now" } : {}) }, { now }),
+      },
+    ],
+  });
   return v2Card({
     title: withGroup(`${cut.title} · 改标题或时间`, groupName),
     elements: [
       ...noteLine(note),
+      md(`**什么时候发**\n${grey(immediate ? "现在发：不用选时间，确认后马上开始发。" : "按时间发：下面每个平台选一个时间。先选这个，再改下面的内容。")}`),
+      { tag: "column_set", columns: [half("按时间发", "scheduled"), half("现在发", "now")] },
       {
         tag: "form",
         name: `edit_${cut.id}`,
@@ -361,7 +386,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
             name: "save",
             text: { tag: "plain_text", content: "改好了" },
             form_action_type: "submit",
-            behaviors: callback("card.save_edit", { cutId: cut.id }, { key: `${cardKey}:card.save_edit`, now }),
+            behaviors: callback("card.save_edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:card.save_edit`, now }),
           },
         ],
       },
@@ -369,7 +394,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
         tag: "button",
         width: "fill",
         text: { tag: "plain_text", content: "取消" },
-        behaviors: callback("card.show", { cutId: cut.id }, { now }),
+        behaviors: callback("card.show", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }),
       },
     ],
   });
@@ -378,7 +403,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
 /** 小红书单独确认：三个按钮，各对应一条真命令（按建议时间发 / 现在发 / 我自己发）。 */
 export function buildXhsCard({ publishId, workTitle, cutTitle, title, body = "", tags = [], at, assetNote = null, quotaLeft = null, groupName = null, now = Date.now(), cardKey = `xhs:${publishId}:${now}` }) {
   const when = formatWhen(at, now);
-  const facts = [assetNote, Number.isFinite(at) ? `建议 ${when} 发` : "还没排时间", Number.isInteger(quotaLeft) ? `今天还能发 ${quotaLeft} 条` : null].filter(Boolean);
+  const facts = [assetNote, Number.isFinite(at) ? `建议 ${when} 发` : "还没定时间", Number.isInteger(quotaLeft) ? `今天还能发 ${quotaLeft} 条` : null].filter(Boolean);
   const half = (label, cmd) => ({
     tag: "column",
     width: "weighted",
