@@ -90,8 +90,18 @@ button,a{-webkit-tap-highlight-color:transparent}
 .app input[type=text],.app input[type=search],.app input[type=datetime-local]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0;color:var(--ink);font-family:inherit}
 
 /* 平台与状态 */
-.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none}
-.pf.xhs{background:#e0213b}.pf.dy{background:#161823}.pf.sph{background:#9c5800}.pf.bili{background:#0079a8}.pf.tk{background:#25292e}.pf.yt{background:#d21a12}.pf.web{background:#55606b}.pf.mp{background:#04823f}
+.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none;border:1px solid transparent;background:var(--brand,#55606b)}
+/* 颜色与徽章样式以 docs/design/app.css 为准：xhs/dy 品牌底+白标志；tk/yt/bili/sph/mp 白底+品牌色标志（ACC-v3-fid-09） */
+.pf.xhs{--brand:#ff2442}.pf.dy{--brand:#010101}.pf.web{--brand:#55606b}
+.pf.tk,.pf.yt,.pf.bili,.pf.sph,.pf.mp{background:var(--paper);border-color:var(--ctl);color:var(--brand)}
+.pf.tk{--brand:#010101}.pf.yt{--brand:#ff0000}.pf.bili{--brand:#00a1d6}.pf.sph{--brand:#fa9d3b}.pf.mp{--brand:#07c160}
+/* 官方标志（packages/web/public/logos/<平台>.svg 存在时 panel.js 加 .lg，用 mask 画）；缺文件回落字母 */
+.pf.lg{font-size:0}
+.pf.lg::before{content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--logo) center/contain no-repeat;mask:var(--logo) center/contain no-repeat}
+.pf.lg.xhs::before{width:16px;height:16px}.pf.lg.yt::before{width:15px;height:15px}
+/* 还没发 = 灰色标志；出了问题 = 红底白色标志 */
+.pf.off,.pf.lg.off{background:var(--paper);border-color:var(--ctl);color:var(--ink3)}
+.pf.err,.pf.lg.err{background:var(--bad);border-color:var(--bad);color:#fffffe}
 .pfn{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .st{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);white-space:nowrap}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;border:1.5px solid var(--ink3);flex:none}
@@ -110,8 +120,6 @@ video.cv{pointer-events:none}
 .typ u{position:absolute;left:40%;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
 
 /* 平台图标三态（作品页）：实心 = 已发布，空心 = 还没发，红色 = 出了问题 */
-.pf.off{background:none;border:1px solid var(--ctl);color:var(--ink2)}
-.pf.err{background:var(--bad)}
 .pfs{display:flex;gap:4px;flex-wrap:wrap}
 .app .bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .app .bar input{margin-left:auto;width:220px}
