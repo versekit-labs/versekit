@@ -814,8 +814,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           reject(`${platformLabel(account.platform)}目前只能发${adapter.assetTypes.map((t) => ASSET_KIND_LABEL[t]).join("、")}，这支成片是${ASSET_KIND_LABEL[kind]}`);
           continue;
         }
+        // 通用文案留在语言版本上，平台稿只存入库时给这个平台「单独写的」字段（ACC-v3-edit-01）：
+        // 之后改通用，跟通用的平台稿发出去的就是新的。限制按合并后的生效文案判。
         const entry = store.copyFor(versionCopy, account.platform);
+        const own = versionCopy?.[store.copyPlatformOf(account.platform)] ?? {};
         const copy = { title: entry.title ?? cut.title, ...(entry.body ? { body: entry.body } : {}), ...(entry.tags?.length ? { tags: entry.tags } : {}) };
+        const ownCopy = { ...(own.title ? { title: own.title } : {}), ...(own.body ? { body: own.body } : {}), ...(own.tags?.length ? { tags: own.tags } : {}) };
         const bad = store.copyViolations(account.platform, copy);
         if (bad.length) {
           reject(`文案超限：${bad.join("；")}。入库时给 ${platformLabel(account.platform)} 单独写一份更短的文案（超限不会自动截断）`);
@@ -829,8 +833,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           reject(`近期排不进去：${account.platform} 这个账号已排满（每日上限 ${rules.dailyCap} 条，最小间隔 ${rules.minGapMinutes} 分钟）`);
           continue;
         }
-        const made = store.createPublish({ workId: cut.work_id, accountId: account.id, cutId: cut.id, versionId: version.id, scheduledAt: suggestedAt, overrides: { copy } });
-        const shown = store.effectiveCopy({ overrides: JSON.stringify({ copy }), cutTitle: cut.title });
+        const overrides = Object.keys(ownCopy).length ? { copy: ownCopy } : null;
+        const made = store.createPublish({ workId: cut.work_id, accountId: account.id, cutId: cut.id, versionId: version.id, scheduledAt: suggestedAt, overrides });
+        const shown = store.effectiveCopy({ overrides: overrides ? JSON.stringify(overrides) : null, versionMeta: version.meta_json, cutTitle: cut.title });
         created.push({
           ...who(account),
           publishId: made.id,
@@ -952,7 +957,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     // 发布前人确认（#146）：写库都在 store.mjs，这里只是把命令接上。
-    "publish.approve": ({ cutId = null, publishId = null }) => store.approvePublishes({ cutId, publishId }),
+    "publish.approve": ({ cutId = null, publishId = null, when = "scheduled" }) => store.approvePublishes({ cutId, publishId, when }),
+
+    // 改内容（ACC-v3-edit-*）：通用文案、各平台单独写的字段、按时间发的时间，一次提交、带 rev。
+    "cut.edit": ({ cutId, rev, language = null, generic = null, platforms = null }) => store.editCut({ cutId, rev, language, generic, platforms }),
 
     "publish.now": ({ publishId }) => store.publishNow({ publishId }),
 
