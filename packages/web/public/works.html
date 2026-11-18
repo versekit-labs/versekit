@@ -17,7 +17,7 @@
     <div class="hd"><h1>作品</h1><span class="sub" id="count"></span></div>
     <div class="bar"><div class="seg" id="seg" role="group" aria-label="按状态筛选"></div><div class="calnav" id="calnav" hidden></div><input type="search" id="q" placeholder="搜标题" aria-label="搜标题"><div class="seg views" id="views" role="group" aria-label="怎么看"></div></div>
     <div id="list"><div class="panel loading">正在读作品…</div></div>
-    <div class="legend"><span><span class="pf dy">抖</span>实心：这个平台已发布</span><span><span class="pf dy off">抖</span>空心：还没发</span><span><span class="pf dy err">抖</span>红色：出了问题</span><span>"最好的一条"是和那个账号自己的平时比，不同平台之间不比较。</span></div>
+    <div class="legend" id="legend"></div>
     <div class="cmd" id="cmd">对应命令：<code>vk work list</code>　入库：<code>vk work add 视频.mp4</code></div>
   </main>
 </div>
@@ -51,6 +51,7 @@
   const { view: v0, off: o0 } = readHash();
   const state = { works: [], filter: "all", q: "", view: v0, off: o0, cal: null, calKey: null };
   const keyOf = (w) => w.status?.key ?? "none";
+  document.getElementById("legend").innerHTML = `<span>${pfBadge("douyin")}品牌色标志：这个平台已发布</span><span>${pfBadge("douyin", "off")}灰色标志：还没发</span><span>${pfBadge("douyin", "err")}红底白色标志：出了问题</span><span>"最好的一条"是和那个账号自己的平时比，不同平台之间不比较。</span>`;
   const count = (w, set) => (w.platformList ?? []).filter((p) => set.has(p.state)).length;
 
   /** 现在的状态：和设计稿一致，带数量；数量只来自这个作品的平台稿状态。 */
@@ -77,8 +78,7 @@
       const bad = xs.some((x) => PROBLEM.has(x.state));
       const pubd = xs.filter((x) => PUBLISHED.has(x.state)).length;
       const tip = bad ? "出了问题" : pubd === xs.length ? "已发布" : pubd ? `已发 ${pubd} / ${xs.length}` : "还没发";
-      const [ch, name, cls] = pfOf(k);
-      return `<span class="pf ${cls} ${bad ? "err" : pubd ? "" : "off"}" title="${esc(name)}：${tip}" role="img" aria-label="${esc(name)}：${tip}">${esc(ch)}</span>`;
+      return pfBadge(k, bad ? "err" : pubd ? "" : "off", tip);
     }).join("");
   }
 
