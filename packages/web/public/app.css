@@ -91,7 +91,14 @@ button,a{-webkit-tap-highlight-color:transparent}
 
 /* 平台与状态 */
 .pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none}
-.pf.xhs{background:#e0213b}.pf.dy{background:#161823}.pf.sph{background:#9c5800}.pf.bili{background:#0079a8}.pf.tk{background:#25292e}.pf.yt{background:#d21a12}.pf.web{background:#55606b}.pf.mp{background:#04823f}
+.pf{background:var(--brand,#55606b)}
+.pf.xhs{--brand:#e0213b}.pf.dy{--brand:#161823}.pf.sph{--brand:#9c5800}.pf.bili{--brand:#0079a8}.pf.tk{--brand:#25292e}.pf.yt{--brand:#d21a12}.pf.web{--brand:#55606b}.pf.mp{--brand:#04823f}
+/* 官方标志（packages/web/public/logos/<平台>.svg 存在时 panel.js 加 .lg）：品牌色标志；还没发=灰色标志；出了问题=红底白色标志（ACC-v3-fid-09） */
+.pf.lg{background:none;color:var(--brand);font-size:0}
+.pf.lg::before{content:"";width:18px;height:18px;background:currentColor;-webkit-mask:var(--logo) center/contain no-repeat;mask:var(--logo) center/contain no-repeat}
+.pf.lg.off{border:0;color:var(--ink3)}
+.pf.lg.err{background:var(--bad);color:#fffffe}
+.pf.lg.err::before{width:14px;height:14px}
 .pfn{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .st{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);white-space:nowrap}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;border:1.5px solid var(--ink3);flex:none}
