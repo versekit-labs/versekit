@@ -32,7 +32,7 @@ function draw() {
   const ev = [[W.inAt, `Claude 入库${multi ? `，${W.cuts.length} 支成片` : ''}`]];
   c.pubs.forEach((x) => {
     if (x.state === 'published') { ev.push([x.at, `${PF[x.pf][1]} 已发布，已核对`]); if (x.issue) ev.push([x.at.slice(0, 14) + '04', `${PF[x.pf][1]} ${x.issue.done ? '归入合集重试成功' : '归入合集失败'}`, !x.issue.done]); }
-    else if (x.state === 'confirmed') ev.push([x.at, `${PF[x.pf][1]} 已确认，到时间发`]);
+    else if (x.state === 'confirmed') ev.push(x.timing === 'now' ? [NOW, `${PF[x.pf][1]} 已确认，正在发`] : [x.at, `${PF[x.pf][1]} 已确认，到时间发`]);
   });
   ev.sort((a, b) => a[0].localeCompare(b[0]));
   main.innerHTML = `
@@ -42,16 +42,17 @@ function draw() {
     <div>${cutSteps(W, c.id)}
       <div class="sidebox ${multi ? '' : 'first'}"><h2>经过${multi ? ' · ' + esc(c.name) : ''}</h2><div class="tl" style="margin-top:6px">${ev.map(([at, t, bad]) => `<b>${when(at).text}</b><span class="${bad ? 'bad' : ''}">${t}</span>`).join('')}</div></div></div></div>
   <div class="below">
-    ${iss.map((x) => `<div class="note bad"><b>${PF[x.pf][1]}：${esc(x.issue.what)}</b><div>${esc(x.issue.why)}</div><div class="acts"><button class="btn pri" data-retry="${c.pubs.indexOf(x)}">再试一次</button><button class="btn" data-manual="${c.pubs.indexOf(x)}">我手动归入</button><button class="btn" data-shot aria-expanded="${shot}">${shot ? '收起截图' : '看当时的截图'}</button></div>${shot ? '<div class="shot">这里放出问题那一刻的页面截图。演示数据里没有真实截图。</div>' : ''}</div>`).join('')}
+    ${iss.map((x) => `<div class="note bad"><b>${PF[x.pf][1]}：${esc(x.issue.what)}</b><div>${esc(x.issue.why)}</div><div class="acts"><button class="btn" data-retry="${c.pubs.indexOf(x)}">再试一次</button><button class="btn" data-manual="${c.pubs.indexOf(x)}">我手动归入</button><button class="btn" data-shot aria-expanded="${shot}">${shot ? '收起截图' : '看当时的截图'}</button></div>${shot ? '<div class="shot">这里放出问题那一刻的页面截图。演示数据里没有真实截图。</div>' : ''}</div>`).join('')}
     ${W.insight && res.length ? `<div class="note"><b>值得说的</b><div>${esc(W.insight)}</div></div>` : ''}
     ${res.length ? `<div><h2 style="margin-bottom:8px">${multi ? esc(c.name) + '的' : ''}结果 · 发布 24 小时的播放，和每个账号自己的平时比</h2><div class="tblwrap"><table><thead><tr><th>平台</th><th>发布</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${res.map((x) => { const q = ratio(x); return `<tr><td>${pfn(x.pf)}</td><td class="sub">${when(x.at).text}</td><td class="n">${fmt(x.n)}</td><td class="n sub">${fmt(BASE[x.pf])}</td><td>${typ(x)}</td><td class="n"><span class="x ${q.cls}">${q.txt}</span><div class="sub">${q.word}</div></td></tr>`; }).join('')}</tbody></table></div></div>` : ''}
-  </div>
-  <div class="cmd">对应命令：<code>vk work show ${W.id}</code></div>`;
+  </div>`;
   main.querySelector('#cp').append(confirmPanel(W, c, { onDone: () => { const nx = W.cuts.find((x) => cutPending(x).length); if (nx) cur = nx.id; } }));
 }
 main.addEventListener('click', (e) => { const b = e.target.closest('[data-c],[data-shot],[data-manual],.below [data-retry]'); if (!b) return; const ds = b.dataset; const c = W.cuts.find((x) => x.id === cur);
-  if (ds.c) { cur = ds.c; shot = false; draw(); }
+  if (ds.c) { if (editBusy()) return; cur = ds.c; shot = false; draw(); }
   else if ('shot' in ds) { shot = !shot; draw(); }
   else { c.pubs[+(ds.retry ?? ds.manual)].issue.done = true; toast(ds.retry ? '正在重试' : '好，你手动归入'); changed(); } });
 listeners.push(draw); draw();
+// 截图用：#edit=1 直接进「改内容」，并展开抖音和小红书两行
+if (HASH.edit) { main.querySelector('[data-edit=""]').click(); main.querySelectorAll('[data-open]').forEach((b, i) => { if (i < 2) main.querySelectorAll('[data-open]')[i].click(); }); }
 </script></body></html>

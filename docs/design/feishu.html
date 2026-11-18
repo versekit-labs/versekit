@@ -28,7 +28,7 @@ main{max-width:1320px;margin:0 auto}
 .acts .btn{flex:1}
 .fm{display:grid;gap:8px;margin-top:4px}
 .fm label{font-size:12px;color:var(--ink2);display:grid;gap:3px}
-.fm input{width:100%}
+.fm input,.fm select{width:100%}
 .vid{position:relative;border-radius:10px;overflow:hidden;background:#111214;width:210px}
 .vid img{display:block;width:100%;height:118px;object-fit:cover;opacity:.92}
 .vid span{position:absolute;right:8px;bottom:6px;color:#fffffe;font-size:12px;background:#111214;border-radius:4px;padding:0 5px}
@@ -60,9 +60,9 @@ main{max-width:1320px;margin:0 auto}
 <div class="chat"><h2>发出去了 · 出问题</h2>
 <div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 今天 21:06</div>
 <div class="c"><div class="h n">今晚的 2 条发出去了</div><div class="b"><div class="t">ISO 42001 到底证明什么？</div><div style="margin-top:6px">
-<div class="ln"><span class="pf dy">抖</span><span>抖音 · 20:00</span><span class="ok">已发布，已核对</span></div>
-<div class="ln"><span class="pf sph">视</span><span>视频号 · 21:00</span><span class="ok">已发布，已核对</span></div>
-<div class="ln"><span class="pf xhs">小</span><span>小红书 · 20:00</span><span>你没确认，没有发</span></div></div></div>
+<div class="ln"><span class="pf dy" role="img" aria-label="抖音"></span><span>抖音 · 20:00</span><span class="ok">已发布，已核对</span></div>
+<div class="ln"><span class="pf sph" role="img" aria-label="视频号"></span><span>视频号 · 21:00</span><span class="ok">已发布，已核对</span></div>
+<div class="ln"><span class="pf xhs" role="img" aria-label="小红书"></span><span>小红书 · 20:00</span><span>你没确认，没有发</span></div></div></div>
 <div class="acts"><button class="btn" data-t="在电脑上打开 versekit 看这个作品">打开作品</button></div></div></div></div>
 
 <div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 11-12 12:04</div>
@@ -81,27 +81,27 @@ main{max-width:1320px;margin:0 auto}
 
 <div class="msg"><div class="av"><i></i></div><div><div class="who">versekit · 周一 09:00</div>
 <div class="c"><div class="h n">上周：发了 3 个作品，29 条</div><div class="b">
-<div class="ln"><span class="pf xhs">小</span><span class="ti">找谁来发？ · 长片</span><b class="x up">2.4 倍</b></div>
-<div class="ln"><span class="pf dy">抖</span><span class="ti">找谁来发？ · 短片 1</span><b class="x up">2.1 倍</b></div>
-<div class="ln"><span class="pf dy">抖</span><span class="ti">DPO 能不能外包？ · 短片 2</span><b class="x dn">0.4 倍</b></div>
+<div class="ln"><span class="pf xhs" role="img" aria-label="小红书"></span><span class="ti">找谁来发？ · 长片</span><b class="x up">2.4 倍</b></div>
+<div class="ln"><span class="pf dy" role="img" aria-label="抖音"></span><span class="ti">找谁来发？ · 短片 1</span><b class="x up">2.1 倍</b></div>
+<div class="ln"><span class="pf dy" role="img" aria-label="抖音"></span><span class="ti">DPO 能不能外包？ · 短片 2</span><b class="x dn">0.4 倍</b></div>
 <div class="d">其余 26 条和平时差不多。1 条出过问题，已处理。每个平台只和自己的平时比。</div></div>
 <div class="acts"><button class="btn" data-t="在电脑上打开 versekit 的数据页">看全部</button></div></div></div></div>
 </div>
 
 </div>
-<div class="cmd" style="margin-top:16px">卡片标题前的小标签是账号组的名字，多个组时靠它分清是哪个号的事。卡片上每个按钮都对应一条 <code>vk</code> 命令。卡片 JSON 在 <code>docs/design/feishu-cards/</code>。</div>
+<div class="cmd" style="margin-top:16px">卡片标题前的小标签是账号组的名字，多个组时靠它分清是哪个号的事。卡片上能点的和网页上的是同一个动作，复杂的修改（各平台单独改文案）留给网页。</div>
 </main>
 <script src="app.js"></script>
 <script>
 const cut = WORKS[0].cuts[0]; const rows = cut.pubs.filter((x) => !x.solo); const xhs = cut.pubs.find((x) => x.solo);
-let mode = 'sum', xs = null;
+let mode = 'sum', xs = null, now = false;
 function drawC() {
   const el = document.getElementById('cc');
-  if (mode === 'done' || mode === 'skip') { el.innerHTML = `<div class="h n">长片 · ${mode === 'done' ? `已确认 ${rows.length} 条` : '先不发'}</div><div class="b"><div class="d" style="margin-top:0">${mode === 'done' ? `${when(rows.map((x) => x.at).sort()[0]).text} 起按时间发。发出去后会告诉你。` : '以后可以在电脑上的作品里再确认，或回复"重发确认"。'}</div></div>`; return; }
+  if (mode === 'done' || mode === 'skip') { el.innerHTML = `<div class="h n">长片 · ${mode === 'done' ? `已确认 ${rows.length} 条` : '先不发'}</div><div class="b"><div class="d" style="margin-top:0">${mode === 'done' ? now ? '现在开始发，一条接一条。发出去后会告诉你。' : `${when(rows.map((x) => x.at).sort()[0]).text} 起按时间发。发出去后会告诉你。` : '以后可以在电脑上的作品里再确认，或回复"重发确认"。'}</div></div>`; return; }
   el.innerHTML = `<div class="h y">长片 · 第 1 支，共 4 支</div><div class="b">${mode === 'sum'
-    ? rows.map((x) => `<div class="ln">${pf(x.pf)}<span class="ti">${esc(x.title)}</span><b>${when(x.at).text}</b></div>`).join('') + '<div class="d">AI 生成的内容，每个平台都会按要求标注。</div>'
-    : `<div class="fm">${rows.map((x, i) => `<label>${PF[x.pf][1]}<input type="text" value="${esc(x.title)}" data-ti="${i}"><input type="datetime-local" value="${x.at}" data-at="${i}" aria-label="${PF[x.pf][1]} 发布时间"></label>`).join('')}</div>`}</div>
-    <div class="acts">${mode === 'sum' ? `<button class="btn" data-m="skip">这支先不发</button><button class="btn" data-m="edit">改标题或时间</button><button class="btn pri" data-m="done" style="flex-basis:100%">确认这 ${rows.length} 条，按时间发</button>` : '<button class="btn" data-m="sum">取消</button><button class="btn pri" data-m="save">改好了</button>'}</div>`;
+    ? rows.map((x) => `<div class="ln">${pf(x.pf)}<span class="ti">${esc(x.title)}</span><b>${now ? '现在发' : when(x.at).text}</b></div>`).join('') + '<div class="d">AI 生成的内容，每个平台都会按要求标注。</div>'
+    : `<div class="fm"><label>什么时候发<select data-when aria-label="什么时候发"><option value="at" ${now ? '' : 'selected'}>预约发，各平台按下面的时间</option><option value="now" ${now ? 'selected' : ''}>现在发，不用定时间</option></select></label>${rows.map((x, i) => `<label>${PF[x.pf][1]}<input type="text" value="${esc(x.title)}" data-ti="${i}">${now ? '' : `<input type="datetime-local" value="${x.at}" min="${NOW}" data-at="${i}" aria-label="${PF[x.pf][1]} 发布时间">`}</label>`).join('')}</div>`}</div>
+    <div class="acts">${mode === 'sum' ? `<button class="btn" data-m="skip">这支先不发</button><button class="btn" data-m="edit">改标题或时间</button><button class="btn pri" data-m="done" style="flex-basis:100%">确认这 ${rows.length} 条，${now ? '现在发' : '按时间发'}</button>` : '<button class="btn" data-m="sum">取消</button><button class="btn pri" data-m="save">改好了</button>'}</div>`;
 }
 function drawX() {
   const el = document.getElementById('xc'); const w = when(xhs.at);
@@ -110,9 +110,10 @@ function drawX() {
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const ds = b.dataset;
   if (ds.t) toast(ds.t);
-  else if (ds.m === 'save') { document.querySelectorAll('[data-ti]').forEach((i) => (rows[+i.dataset.ti].title = i.value)); document.querySelectorAll('[data-at]').forEach((i) => (rows[+i.dataset.at].at = i.value || rows[+i.dataset.at].at)); mode = 'sum'; drawC(); }
+  else if (ds.m === 'save') { document.querySelectorAll('[data-ti]').forEach((i) => (rows[+i.dataset.ti].own.title = i.value)); document.querySelectorAll('[data-at]').forEach((i) => (rows[+i.dataset.at].at = i.value || rows[+i.dataset.at].at)); mode = 'sum'; drawC(); }
   else if (ds.m) { mode = ds.m; drawC(); }
   else if (ds.x) { xs = ds.x; drawX(); } });
 const tag = () => document.querySelectorAll('.c .h').forEach((h) => { if (!h.querySelector('.gp')) h.insertAdjacentHTML('afterbegin', `<span class="gp">${GROUP.name}</span>`); });
+document.addEventListener('change', (e) => { if (e.target.matches('[data-when]')) { now = e.target.value === 'now'; drawC(); } });
 drawC(); drawX(); tag(); new MutationObserver(tag).observe(document.querySelector('.cols'), { childList: true, subtree: true });
 </script></body></html>

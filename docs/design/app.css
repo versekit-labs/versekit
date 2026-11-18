@@ -1,4 +1,4 @@
-/* versekit 原型 v2 共用样式。定义见仓库根 DESIGN.md。 */
+/* versekit 原型 v3 共用样式。定义见仓库根 DESIGN.md。 */
 :root{
   --bg:#fafaf8;--paper:#fffffe;--side:#f1f1ee;--hover:#f3f3f0;
   --ink:#1a1c1f;--ink2:#5f656c;--ink3:#8d9399;
@@ -17,7 +17,7 @@ button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:inherit;text-underline-offset:3px}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--side);border-radius:4px;padding:1px 5px}
+.mono{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
 
 /* 外壳 */
 .app{display:grid;grid-template-columns:208px minmax(0,1fr);min-height:100vh}
@@ -40,9 +40,25 @@ code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--
 .nv:hover{background:#e8e8e4;color:var(--ink)}
 .nv[aria-current=page]{background:#e3e3df;color:var(--ink);font-weight:600}
 .nv b{min-width:18px;height:18px;border-radius:9px;background:var(--mark);color:var(--ink);font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
-.health{margin-top:auto;padding:10px;font-size:12px;color:var(--ink2);line-height:1.9;border-top:1px solid var(--line)}
+.health{margin-top:auto;padding:10px 10px 6px;font-size:12px;color:var(--ink2);line-height:1.9;border-top:1px solid var(--line)}
+/* 发布机在哪：每一页都看得到，平时安静，位置变了才变黄 */
+.mach{display:block;min-height:40px;color:inherit;text-decoration:none;border-radius:6px;margin:0 -4px;padding:0 4px}
+.mach:hover{background:#e8e8e4}
+.mach .loc{display:block;padding-left:13px;line-height:1.5;color:var(--ink);font-weight:600}
+.mach .loc .mono{font-weight:400;color:var(--ink2)}
+.dot.wait{background:var(--mark);box-shadow:inset 0 0 0 1px #b99700}
+.me{position:relative;border-top:1px solid var(--line);margin-top:4px;padding-top:6px}
+.me summary{list-style:none;display:flex;align-items:center;gap:8px;min-height:40px;padding:2px 10px;border-radius:7px;cursor:pointer;font-size:13px}
+.me summary::-webkit-details-marker{display:none}
+.me summary:hover{background:#e8e8e4}
+.me summary b{font-weight:600;display:block}
+.me summary small{display:block;font-size:12px;color:var(--ink2);line-height:1.3}
+.me .menu{position:absolute;left:0;right:0;bottom:calc(100% + 4px);background:var(--paper);border:1px solid var(--ctl);border-radius:10px;padding:4px;display:grid;gap:2px;z-index:5}
+.me .menu button{height:34px;border:0;background:none;border-radius:6px;text-align:left;padding:0 8px;font-size:13px}
+.me .menu button:hover{background:var(--hover)}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--good);margin-right:7px;vertical-align:1px}
 .dot.bad{background:var(--bad)}
+.dot.off{background:var(--ink3)}
 main{padding:28px 40px 80px;max-width:1240px;min-width:0}
 .hd{display:flex;align-items:baseline;gap:12px;margin-bottom:20px;flex-wrap:wrap}
 .hd .r{margin-left:auto;display:flex;gap:8px;align-items:center}
@@ -71,11 +87,29 @@ h3{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em;line-height:1.3
 .seg button{height:32px;padding:0 12px;border:0;border-radius:6px;background:none;font-size:13px;color:var(--ink2);white-space:nowrap}
 .seg button:hover{color:var(--ink)}
 .seg button[aria-pressed=true]{background:var(--ink);color:#fffffe;font-weight:600}
-input[type=text],input[type=search],input[type=datetime-local]{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0}
+input[type=text],input[type=search],input[type=datetime-local],input[type=email],input[type=password],input[type=tel],select{height:34px;border:1px solid var(--ctl);border-radius:7px;padding:0 9px;font-size:14px;background:var(--paper);min-width:0}
 
 /* 平台与状态 */
-.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none}
-.pf.xhs{background:#e0213b}.pf.dy{background:#161823}.pf.sph{background:#9c5800}.pf.bili{background:#0079a8}.pf.tk{background:#25292e}.pf.yt{background:#d21a12}.pf.web{background:#55606b}.pf.mp{background:#04823f}
+.pf{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fffffe;font-size:11px;font-weight:700;flex:none;border:1px solid transparent}
+/* 平台标志：各平台自己的官方标志（形状来自 Simple Icons，CC0；视频号来自 Remix Icon，Apache-2.0），颜色是各平台的品牌色。
+   用 mask 画，所以「还没发」（.off）和「出了问题」（.err）仍然只改颜色。官网不是平台，保留一个字。 */
+.pf::before{content:"";width:14px;height:14px;background:currentColor;-webkit-mask:var(--logo) center/contain no-repeat;mask:var(--logo) center/contain no-repeat}
+.pf.web::before{content:none}
+.pf.xhs{background:#ff2442}.pf.xhs::before{width:16px;height:16px}
+.pf.dy{background:#010101}
+.pf.tk{background:var(--paper);border-color:var(--ctl);color:#010101}
+.pf.yt{background:var(--paper);border-color:var(--ctl);color:#ff0000}.pf.yt::before{width:15px;height:15px}
+.pf.bili{background:var(--paper);border-color:var(--ctl);color:#00a1d6}
+.pf.sph{background:var(--paper);border-color:var(--ctl);color:#fa9d3b}
+.pf.mp{background:var(--paper);border-color:var(--ctl);color:#07c160}
+.pf.web{background:#55606b}
+.pf.xhs{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M22.405 9.879c.002.016.01.02.07.019h.725a.797.797 0 0 0 .78-.972.794.794 0 0 0-.884-.618.795.795 0 0 0-.692.794c0 .101-.002.666.001.777zm-11.509 4.808c-.203.001-1.353.004-1.685.003a2.528 2.528 0 0 1-.766-.126.025.025 0 0 0-.03.014L7.7 16.127a.025.025 0 0 0 .01.032c.111.06.336.124.495.124.66.01 1.32.002 1.981 0 .01 0 .02-.006.023-.015l.712-1.545a.025.025 0 0 0-.024-.036zM.477 9.91c-.071 0-.076.002-.076.01a.834.834 0 0 0-.01.08c-.027.397-.038.495-.234 3.06-.012.24-.034.389-.135.607-.026.057-.033.042.003.112.046.092.681 1.523.787 1.74.008.015.011.02.017.02.008 0 .033-.026.047-.044.147-.187.268-.391.371-.606.306-.635.44-1.325.486-1.706.014-.11.021-.22.03-.33l.204-2.616.022-.293c.003-.029 0-.033-.03-.034zm7.203 3.757a1.427 1.427 0 0 1-.135-.607c-.004-.084-.031-.39-.235-3.06a.443.443 0 0 0-.01-.082c-.004-.011-.052-.008-.076-.008h-1.48c-.03.001-.034.005-.03.034l.021.293c.076.982.153 1.964.233 2.946.05.4.186 1.085.487 1.706.103.215.223.419.37.606.015.018.037.051.048.049.02-.003.742-1.642.804-1.765.036-.07.03-.055.003-.112zm3.861-.913h-.872a.126.126 0 0 1-.116-.178l1.178-2.625a.025.025 0 0 0-.023-.035l-1.318-.003a.148.148 0 0 1-.135-.21l.876-1.954a.025.025 0 0 0-.023-.035h-1.56c-.01 0-.02.006-.024.015l-.926 2.068c-.085.169-.314.634-.399.938a.534.534 0 0 0-.02.191.46.46 0 0 0 .23.378.981.981 0 0 0 .46.119h.59c.041 0-.688 1.482-.834 1.972a.53.53 0 0 0-.023.172.465.465 0 0 0 .23.398c.15.092.342.12.475.12l1.66-.001c.01 0 .02-.006.023-.015l.575-1.28a.025.025 0 0 0-.024-.035zm-6.93-4.937H3.1a.032.032 0 0 0-.034.033c0 1.048-.01 2.795-.01 6.829 0 .288-.269.262-.28.262h-.74c-.04.001-.044.004-.04.047.001.037.465 1.064.555 1.263.01.02.03.033.051.033.157.003.767.009.938-.014.153-.02.3-.06.438-.132.3-.156.49-.419.595-.765.052-.172.075-.353.075-.533.002-2.33 0-4.66-.007-6.991a.032.032 0 0 0-.032-.032zm11.784 6.896c0-.014-.01-.021-.024-.022h-1.465c-.048-.001-.049-.002-.05-.049v-4.66c0-.072-.005-.07.07-.07h.863c.08 0 .075.004.075-.074V8.393c0-.082.006-.076-.08-.076h-3.5c-.064 0-.075-.006-.075.073v1.445c0 .083-.006.077.08.077h.854c.075 0 .07-.004.07.07v4.624c0 .095.008.084-.085.084-.37 0-1.11-.002-1.304 0-.048.001-.06.03-.06.03l-.697 1.519s-.014.025-.008.036c.006.01.013.008.058.008 1.748.003 3.495.002 5.243.002.03-.001.034-.006.035-.033v-1.539zm4.177-3.43c0 .013-.007.023-.02.024-.346.006-.692.004-1.037.004-.014-.002-.022-.01-.022-.024-.005-.434-.007-.869-.01-1.303 0-.072-.006-.071.07-.07l.733-.003c.041 0 .081.002.12.015.093.025.16.107.165.204.006.431.002 1.153.001 1.153zm2.67.244a1.953 1.953 0 0 0-.883-.222h-.18c-.04-.001-.04-.003-.042-.04V10.21c0-.132-.007-.263-.025-.394a1.823 1.823 0 0 0-.153-.53 1.533 1.533 0 0 0-.677-.71 2.167 2.167 0 0 0-1-.258c-.153-.003-.567 0-.72 0-.07 0-.068.004-.068-.065V7.76c0-.031-.01-.041-.046-.039H17.93s-.016 0-.023.007c-.006.006-.008.012-.008.023v.546c-.008.036-.057.015-.082.022h-.95c-.022.002-.028.008-.03.032v1.481c0 .09-.004.082.082.082h.913c.082 0 .072.128.072.128V11.19s.003.117-.06.117h-1.482c-.068 0-.06.082-.06.082v1.445s-.01.068.064.068h1.457c.082 0 .076-.006.076.079v3.225c0 .088-.007.081.082.081h1.43c.09 0 .082.007.082-.08v-3.27c0-.029.006-.035.033-.035l2.323-.003c.098 0 .191.02.28.061a.46.46 0 0 1 .274.407c.008.395.003.79.003 1.185 0 .259-.107.367-.33.367h-1.218c-.023.002-.029.008-.028.033.184.437.374.871.57 1.303a.045.045 0 0 0 .04.026c.17.005.34.002.51.003.15-.002.517.004.666-.01a2.03 2.03 0 0 0 .408-.075c.59-.18.975-.698.976-1.313v-1.981c0-.128-.01-.254-.034-.38 0 .078-.029-.641-.724-.998z'/%3E%3C/svg%3E")}
+.pf.dy{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z'/%3E%3C/svg%3E")}
+.pf.tk{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z'/%3E%3C/svg%3E")}
+.pf.yt{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z'/%3E%3C/svg%3E")}
+.pf.bili{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373Z'/%3E%3C/svg%3E")}
+.pf.sph{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19.1937 3.18117C20.3555 2.71123 21.3487 3.16205 21.8663 4.45774C23.2592 7.94366 19.9988 21.1333 17.4407 21.1333C16.6131 21.1333 15.7836 20.4447 14.8173 19.2068C14.3818 18.6489 13.9272 17.9838 13.4597 17.2333C13.0858 16.6328 12.7182 16.0015 12.3651 15.3626L12.0001 14.6901L11.9825 14.722C11.5257 15.5772 11.0385 16.4327 10.5399 17.2333C10.0725 17.9838 9.61783 18.6489 9.18231 19.2068C8.21598 20.4447 7.38653 21.1333 6.55888 21.1333C4.00086 21.1333 0.740407 7.94366 2.13327 4.45778C2.6509 3.16204 3.64414 2.71123 4.80589 3.18117C5.6482 3.5219 6.57782 4.3366 7.61665 5.55703C8.23486 6.28331 8.88155 7.14336 9.54718 8.11022C10.2842 9.18072 11.0062 10.3255 11.6841 11.4699L12.0002 12.0085L12.3156 11.4699C12.8578 10.5544 13.4284 9.63861 14.0123 8.76083L14.4524 8.11022C15.1181 7.14336 15.7648 6.28331 16.383 5.55703C17.4218 4.3366 18.3514 3.5219 19.1937 3.18117ZM4.32415 4.35258C3.83357 4.15413 3.58079 4.26886 3.31915 4.92382C2.86195 6.06804 3.05394 8.9514 3.73172 12.1871L3.89027 12.9114L4.06441 13.6438C4.91993 17.1047 6.15077 19.8682 6.55888 19.8682C6.83822 19.8682 7.44795 19.362 8.17369 18.4323C8.57863 17.9136 9.00904 17.284 9.45462 16.5685C9.8163 15.9877 10.1733 15.3745 10.5167 14.7531L10.9319 13.9859L11.2802 13.315L10.916 12.6774L10.5842 12.1107C9.91996 10.9892 9.21275 9.86797 8.49374 8.82358C7.85084 7.88975 7.22921 7.06302 6.64196 6.37311C5.72617 5.29724 4.92611 4.59608 4.32415 4.35258ZM20.6804 4.92377C20.4188 4.26886 20.1661 4.15413 19.6755 4.35258C19.0735 4.59608 18.2735 5.29724 17.3577 6.37311C16.7704 7.06302 16.1488 7.88975 15.5059 8.82358C14.9307 9.6591 14.363 10.5438 13.8189 11.4384L13.2452 12.3998L12.7184 13.315L12.8991 13.6647L13.1443 14.1298C13.5889 14.9621 14.0628 15.7941 14.545 16.5685C14.9906 17.284 15.421 17.9136 15.8259 18.4323C16.5517 19.362 17.1614 19.8682 17.4407 19.8682C17.8488 19.8682 19.0797 17.1047 19.9352 13.6438L20.1094 12.9114C20.9137 9.3881 21.1715 6.1528 20.6804 4.92377Z'/%3E%3C/svg%3E")}
+.pf.mp{--logo:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z'/%3E%3C/svg%3E")}
 .pfn{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .st{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);white-space:nowrap}
 .st::before{content:"";width:8px;height:8px;border-radius:50%;border:1.5px solid var(--ink3);flex:none}
@@ -109,6 +143,9 @@ a.wcell:hover b{text-decoration:underline}
 .note b{font-weight:600}
 .empty{padding:40px 20px;text-align:center;color:var(--ink2)}
 .cmd{font-size:12px;color:var(--ink2);margin-top:8px}
+.err{font-size:13px;color:var(--bad);display:flex;gap:4px 10px;align-items:center;flex-wrap:wrap}
+.err.warn{color:#6b5d1c}
+.err .link{color:inherit}
 
 /* 确认面板：一支成片 = 视频 + 各平台一行 + 小红书单独一块 + 一个确认按钮 */
 .cp video,.cp .poster{width:100%;height:300px;border-radius:var(--r);background:#111214;display:block;object-fit:contain}
@@ -122,8 +159,6 @@ a.wcell:hover b{text-decoration:underline}
 .prow .nm{font-size:13px;color:var(--ink2)}
 .prow .ti{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prow .tm{font-size:13px;font-weight:600;white-space:nowrap}
-.prow.ed{grid-template-columns:20px 64px minmax(0,1fr) auto auto}
-.prow.ed input[type=text]{width:100%}
 /* 每条平台稿能展开看正文和话题；「改」里能改标题、正文、话题、时间（#175） */
 .prow{align-content:center}
 .prow .tog{font:inherit;font-size:14px;color:var(--ink);background:none;border:0;padding:0;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;min-height:32px}
@@ -136,14 +171,8 @@ a.wcell:hover b{text-decoration:underline}
 .pdet .none{color:var(--ink2)}
 .pdet .tags{display:flex;gap:6px;flex-wrap:wrap}
 .pdet .tag{border:1px solid var(--line);border-radius:6px;padding:1px 7px;background:var(--paper)}
-.prow.ed .ef{grid-column:3/-1;display:grid;gap:6px}
-.prow.ed textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
-.prow.ed .lab{font-size:12px;color:var(--ink2)}
 .solo .pdet{padding:6px 0 0}
 .solo .tog{font:inherit;font-size:13px;background:none;border:0;padding:0;color:var(--ink2);text-decoration:underline;cursor:pointer;min-height:32px}
-.solo .ef{display:grid;gap:6px;margin-top:8px}
-.solo .ef textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical}
-.solo .ef .lab{font-size:12px;color:#6b5d1c}
 .prow.off .ti,.prow.off .tm{color:var(--ink2);text-decoration:line-through}
 .prow.bad{background:var(--bad-bg)}
 .solo{margin-top:12px;border:1px solid var(--mark-line);background:var(--mark-bg);border-radius:var(--r);padding:12px}
@@ -154,6 +183,35 @@ a.wcell:hover b{text-decoration:underline}
 .cfoot{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px 0;position:sticky;bottom:0;background:var(--paper);border-top:1px solid var(--line);flex-wrap:wrap}
 .cfoot .hint{font-size:12px;color:var(--ink2);margin-right:auto}
 .done-note{border:1px solid var(--good-line);background:var(--good-bg);color:var(--good);border-radius:var(--r);padding:12px 14px;font-size:14px;font-weight:600;flex:1}
+
+/* 改内容：面板的一个状态。上面通用文案，下面每个平台一行、点开单独写；底栏取消 / 保存 */
+.cp .cph .seg{margin-left:auto}
+.cp .cph .edit{margin-left:8px}
+.edc{border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:6px;background:var(--bg)}
+.edt{display:flex;gap:4px 12px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px}
+.lab{font-size:12px;color:var(--ink2)}
+.edc input,.eb input[type=text]{width:100%}
+.edc textarea,.eb textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);resize:vertical;display:block}
+.edh2{margin:18px 0 8px}
+.erow{border-bottom:1px solid var(--line2)}
+.erow:last-child{border-bottom:0}
+.eh{display:grid;grid-template-columns:20px 64px minmax(0,1fr) auto 12px;gap:10px;align-items:center;width:100%;min-height:44px;padding:5px 12px;border:0;background:none;text-align:left;font-size:13px}
+.eh:hover{background:var(--hover)}
+.eh .nm{color:var(--ink2)}
+.eh .sm{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eh .sm.own{color:var(--ink)}
+.eh .tm{font-weight:600;white-space:nowrap}
+.eh::after{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink2);border-bottom:1.5px solid var(--ink2);transform:rotate(45deg);margin-top:-3px}
+.eh[aria-expanded=true]::after{transform:rotate(225deg);margin-top:3px}
+.eb{padding:2px 12px 14px 42px;display:grid;gap:6px}
+.fl{display:flex;gap:10px;align-items:center;min-height:32px;margin-top:4px}
+.fl .fs{font-size:12px;color:var(--ink2);margin-left:auto}
+.fl .fs.own{color:var(--ink);font-weight:600}
+.eb .fol{color:var(--ink2)}
+.tmr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cfoot .ask{margin-right:auto;font-size:14px;font-weight:600}
+.eh .tm.bad{color:var(--bad)}
+.note.wait{background:var(--mark-bg);border-color:var(--mark-line);margin-bottom:12px}
 
 /* 成片列表（右栏） */
 .steps{display:flex;flex-direction:column;gap:4px}
@@ -179,11 +237,33 @@ a.wcell:hover b{text-decoration:underline}
   .brand{padding:4px 10px}
   .health{display:none}
   main{padding:20px 16px 60px}
-  .prow,.prow.ed{grid-template-columns:20px minmax(0,1fr) auto}
+  .prow{grid-template-columns:20px minmax(0,1fr) auto}
   .prow .nm{display:none}
   .prow .tm{grid-column:2}
-  .prow.ed input[type=datetime-local]{grid-column:2}
-  .prow.ed .ef{grid-column:2/-1}
   .pdet{padding-left:0}
   .cp video,.cp .poster,.cp.vert video,.cp.vert .poster{height:220px}
+}
+
+/* 没有侧栏的单列页：登录、接受邀请、允许设备接入 */
+.lone{max-width:440px;margin:0 auto;padding:72px 16px 80px}
+.lone.wide{max-width:560px}
+.lone .brand{padding:0 0 28px}
+.lone h1{margin-bottom:6px}
+.lone .panel{padding:22px;margin-top:20px;display:grid;gap:8px}
+.lone .panel input{width:100%}
+.lone .go{margin-top:10px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.lone .go .btn.pri{min-width:120px}
+.facts{margin:0;display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px 12px;font-size:14px}
+.facts dt{color:var(--ink2);font-size:13px}
+.facts dd{margin:0}
+/* 二维码：由发布机取回来，直接显示在网页里。原型里是占位 */
+.qr{width:132px;height:132px;border:1px dashed var(--ctl);border-radius:8px;background:var(--paper);display:grid;place-items:center;font-size:12px;color:var(--ink2);text-align:center;flex:none;padding:8px}
+.qr.old{color:var(--bad);border-color:var(--bad-line)}
+/* 一句可以复制的话 */
+.say{display:flex;gap:10px;align-items:center;border:1px solid var(--ctl);border-radius:7px;background:var(--paper);padding:6px 6px 6px 12px;font-size:14px;min-width:0}
+.say span{flex:1;min-width:0;overflow-wrap:anywhere}
+@media (max-width:860px){
+  .eh{grid-template-columns:20px minmax(0,1fr) auto 12px}
+  .eh .nm{display:none}
+  .eb{padding-left:12px}
 }

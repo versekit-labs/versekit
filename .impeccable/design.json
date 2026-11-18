@@ -502,7 +502,7 @@
       "pf-xhs": {
         "role": "tertiary",
         "displayName": "小红书",
-        "canonical": "#e0213b",
+        "canonical": "#ff2442",
         "tonalRamp": [
           "oklch(15.0% 0.088 21.8)",
           "oklch(26.4% 0.138 21.8)",
@@ -517,7 +517,7 @@
       "pf-douyin": {
         "role": "tertiary",
         "displayName": "抖音",
-        "canonical": "#161823",
+        "canonical": "#010101",
         "tonalRamp": [
           "oklch(15.0% 0.009 276.4)",
           "oklch(26.4% 0.014 276.4)",
@@ -532,7 +532,7 @@
       "pf-shipinhao": {
         "role": "tertiary",
         "displayName": "视频号",
-        "canonical": "#9c5800",
+        "canonical": "#fa9d3b",
         "tonalRamp": [
           "oklch(15.0% 0.049 61.8)",
           "oklch(26.4% 0.077 61.8)",
@@ -547,7 +547,7 @@
       "pf-bilibili": {
         "role": "tertiary",
         "displayName": "B站",
-        "canonical": "#0079a8",
+        "canonical": "#00a1d6",
         "tonalRamp": [
           "oklch(15.0% 0.046 234.5)",
           "oklch(26.4% 0.072 234.5)",
@@ -562,7 +562,7 @@
       "pf-tiktok": {
         "role": "tertiary",
         "displayName": "TikTok",
-        "canonical": "#25292e",
+        "canonical": "#010101",
         "tonalRamp": [
           "oklch(15.0% 0.004 254.0)",
           "oklch(26.4% 0.007 254.0)",
@@ -577,7 +577,7 @@
       "pf-youtube": {
         "role": "tertiary",
         "displayName": "YouTube",
-        "canonical": "#d21a12",
+        "canonical": "#ff0000",
         "tonalRamp": [
           "oklch(15.0% 0.086 29.2)",
           "oklch(26.4% 0.135 29.2)",
@@ -607,7 +607,7 @@
       "pf-mp": {
         "role": "tertiary",
         "displayName": "公众号",
-        "canonical": "#04823f",
+        "canonical": "#07c160",
         "tonalRamp": [
           "oklch(15.0% 0.056 151.3)",
           "oklch(26.4% 0.088 151.3)",
@@ -740,7 +740,7 @@
       "refersTo": "platform-row",
       "description": "确认面板里一个平台一行：徽章、名称、标题、时间。",
       "html": "<div class=\"ds-rows\"><div class=\"ds-prow\"><i class=\"ds-pf\">抖</i><span class=\"ds-nm\">抖音</span><span class=\"ds-ti\">ISO 27001 为什么还被罚</span><b>今晚 20:00</b></div><div class=\"ds-prow bad\"><i class=\"ds-pf\">B</i><span class=\"ds-nm\">B站</span><span class=\"ds-ti\">没归入合集</span><b>已发布</b></div></div>",
-      "css": ".ds-rows{border:1px solid #e5e6e3;border-radius:10px;background:#fffffe;width:420px}.ds-prow{display:grid;grid-template-columns:20px 56px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 12px;min-height:44px;border-bottom:1px solid #eeefec;font:14px -apple-system,sans-serif;color:#1a1c1f}.ds-prow:last-child{border-bottom:0}.ds-prow.bad{background:#fdf3f0}.ds-pf{width:20px;height:20px;border-radius:5px;background:#161823;color:#fffffe;font:700 11px sans-serif;display:inline-flex;align-items:center;justify-content:center;font-style:normal}.ds-nm{font-size:13px;color:#5f656c}.ds-ti{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-prow b{font-size:13px}"
+      "css": ".ds-rows{border:1px solid #e5e6e3;border-radius:10px;background:#fffffe;width:420px}.ds-prow{display:grid;grid-template-columns:20px 56px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 12px;min-height:44px;border-bottom:1px solid #eeefec;font:14px -apple-system,sans-serif;color:#1a1c1f}.ds-prow:last-child{border-bottom:0}.ds-prow.bad{background:#fdf3f0}.ds-pf{width:20px;height:20px;border-radius:5px;background:#010101;color:#fffffe;font:700 11px sans-serif;display:inline-flex;align-items:center;justify-content:center;font-style:normal}.ds-nm{font-size:13px;color:#5f656c}.ds-ti{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-prow b{font-size:13px}"
     },
     {
       "name": "Solo Block",
