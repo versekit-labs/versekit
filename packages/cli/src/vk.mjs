@@ -1367,10 +1367,74 @@ async function cmdRelay() {
     return data;
   }
   if (sub === "pull") {
-    const data = await send("relay.pull", {}, { log, timeout: 3 * 3600e3 });
-    if (human) console.log(`拉取完成：入库 ${data.ingested.length}，失败 ${data.failed.length}，没下完 ${data.pending.length}`);
-    else out(data);
-    return data;
+    // 不沉默（ACC-relay-06）：先说有几个投递，每个开始/结束各一行，下载中每 10 秒报一次大小，最后汇总。
+    // 进度行 human 时走 stdout，--json 时走 stderr，不污染 JSON。
+    const say = (m) => (human ? console.log(m) : console.error(m));
+    const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)}MB`;
+    const nameOf = (i) => (i.title ? `「${i.title}」` : i.id);
+    const t0 = Date.now();
+    const seen = new Set();
+    let announced = false;
+    let lastBytesAt = 0;
+    const render = (st) => {
+      const rd = st.round;
+      if (!rd || (rd.finishedAt && rd.finishedAt < t0)) return; // 上一轮留下的，不是这次的
+      if (!announced && (rd.total > 0 || rd.finishedAt)) {
+        announced = true;
+        say(rd.total ? `这一轮有 ${rd.total} 个投递` : "没有新投递");
+      }
+      for (const it of rd.items) {
+        const tag = `${it.index}/${rd.total}`;
+        if (!seen.has(`${it.id}:begin`)) {
+          seen.add(`${it.id}:begin`);
+          say(`正在下载 ${tag}：${nameOf(it)}${it.size != null ? `，${mb(it.size)}` : ""}`);
+        }
+        if (it.state !== "downloading" && !seen.has(`${it.id}:end`)) {
+          seen.add(`${it.id}:end`);
+          if (it.state === "ingested") say(`已入库 ${tag}：${nameOf(it)}，平台稿 ${it.drafts ?? 0} 条待确认`);
+          else if (it.state === "failed") say(`没入库 ${tag}：${nameOf(it)}：${it.reason}`);
+          else say(`没下完 ${tag}：${nameOf(it)}：${it.reason}（下一轮接着下）`);
+        }
+      }
+      const d = st.downloading?.[0];
+      if (d && Date.now() - lastBytesAt >= 10e3) {
+        lastBytesAt = Date.now();
+        say(`  下载中：${d.title ? `「${d.title}」` : d.name} ${mb(d.received)}/${mb(d.total)}（${d.percent}%）`);
+      }
+    };
+    const first = await send("relay.status", {}, { log });
+    const joined = first.pulling;
+    if (joined) say("后台正在拉取，进度：");
+    let finished = false;
+    const job = joined
+      ? (async () => {
+          while ((await send("relay.status", {}, { log })).pulling) await new Promise((r) => setTimeout(r, 1000));
+        })()
+      : send("relay.pull", {}, { log, timeout: 3 * 3600e3 });
+    const ticker = (async () => {
+      while (!finished) {
+        await send("relay.status", {}, { log }).then(render, () => {});
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    })();
+    let data;
+    try {
+      data = await job;
+    } finally {
+      finished = true;
+      await ticker;
+    }
+    const last = await send("relay.status", {}, { log });
+    render(last);
+    const items = last.round?.items ?? [];
+    const pick = (state) => items.filter((i) => i.state === state);
+    const result = joined || !data
+      ? { ingested: pick("ingested").map((i) => i.id), failed: pick("failed").map((i) => ({ id: i.id, reason: i.reason })), pending: pick("pending").map((i) => ({ id: i.id, error: i.reason })) }
+      : data;
+    const bad = result.failed.map((f) => `${nameOf(items.find((i) => i.id === f.id) ?? f)}：${f.reason}`);
+    say(`汇总：入库 ${result.ingested.length}，失败 ${result.failed.length}${bad.length ? `（${bad.join("；")}）` : ""}，没下完 ${result.pending.length}${result.ingested.length ? "；去「今天」页确认平台稿" : ""}`);
+    if (!human) out(result);
+    return result;
   }
   throw new Error(usage);
 }

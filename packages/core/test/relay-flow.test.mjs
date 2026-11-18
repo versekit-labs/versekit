@@ -302,8 +302,13 @@ test("ACC-relay-04 下载中：系统页/状态里看得见正在下载的投递
     assert.equal(seen.name, "x.mp4");
     assert.ok(publisher["relay.status"]().pulling);
     assert.ok(typeof publisher["today"]({}) === "object", "后台下载时别的命令照常响应");
+    assert.equal(publisher["relay.status"]().round.total, 1, "状态里有这一轮的投递数");
+    assert.equal(publisher["relay.status"]().round.items[0].state, "downloading");
     await pulling;
     assert.deepEqual(publisher["relay.status"]().downloading, []);
+    const rd = publisher["relay.status"]().round;
+    assert.ok(rd.finishedAt);
+    assert.ok(["ingested", "failed"].includes(rd.items[0].state), "ACC-relay-06 结束后留着每个投递的结果");
   } finally {
     fake.server.closeAllConnections?.();
     fake.server.close();
@@ -319,9 +324,11 @@ test("ACC-relay-03 守护进程后台自动拉取：不用手动 pull，入库�
   process.env.VERSEKIT_RELAY_START_DELAY_MS = "30";
   const daemon = await startDaemon({ handlers: mk(), port: 0, socketPath: join(ROOT, "d.sock"), runQueue: false, offline: true });
   try {
-    for (let i = 0; i < 150 && !store.listWorks().some((w) => w.title === "后台拉取作品"); i++) await sleep(30);
+    // 等状态落定再断言：入库和回报「已入库」不是同一刻发生，不靠固定时长
+    const stateOf = () => JSON.parse(readFileSync(join(CLOUD, "deliveries", `${r.id}.json`))).state;
+    for (let i = 0; i < 400 && stateOf() !== "ingested"; i++) await sleep(30);
     assert.ok(store.listWorks().some((w) => w.title === "后台拉取作品"), "后台拉取入库了");
-    assert.equal(JSON.parse(readFileSync(join(CLOUD, "deliveries", `${r.id}.json`))).state, "ingested");
+    assert.equal(stateOf(), "ingested");
   } finally {
     delete process.env.VERSEKIT_RELAY_START_DELAY_MS;
     await daemon.close();

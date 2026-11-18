@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, readdirSync, existsSync, readFileSync, rmSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { createRelayServer, hashFile, pushBlob, pushDelivery, downloadBlob, listDeliveries, reportState, ping, RETENTION_MS } from "../src/index.mjs";
+import { createRelayServer, hashFile, pushBlob, pushDelivery, downloadBlob, listDeliveries, reportState, pullOnce, ping, RETENTION_MS } from "../src/index.mjs";
 
 const ROOT = mkdtempSync(join(tmpdir(), "vk-relay-"));
 const PUSH = "push-token-for-test";
@@ -198,4 +198,34 @@ test("ACC-relay-03 下载走 Range 续传并核对 sha256；半截文件接着�
   assert.equal(await hashFile(dest), f.sha256);
   assert.ok(!existsSync(`${dest}.part`));
   assert.equal(statSync(dest).size, f.size);
+});
+
+test("ACC-relay-06 拉取一轮会逐个报进展：先说共几个，每个开始/结束一条，带作品标题和大小", async () => {
+  const f = fileOf("prog.mp4", Buffer.alloc(30_000, 5));
+  const d = await pushDelivery({ url, token: PUSH, group: "组", manifest: { ...manifest(f), title: "进度作品" }, files: [f] });
+  const expected = (await listDeliveries({ url, token: PULL })).length;
+  const events = [];
+  const records = new Map();
+  const r = await pullOnce({
+    url,
+    token: PULL,
+    inboxDir: join(ROOT, "inbox-prog"),
+    getRecord: (id) => records.get(id) ?? null,
+    record: (id, rec) => records.set(id, rec),
+    ingest: async () => ({ drafts: 2 }),
+    onEvent: (e) => events.push(e),
+  });
+  assert.equal(events[0].type, "round");
+  assert.equal(events[0].total, expected);
+  const mine = events.filter((e) => e.id === d.id);
+  assert.deepEqual(mine.map((e) => e.type), ["begin", "ingested"]);
+  assert.equal(mine[0].title, "进度作品");
+  assert.equal(mine[0].size, 30_000);
+  assert.equal(mine[1].drafts, 2);
+  assert.ok(mine[0].index >= 1 && mine[0].index <= expected);
+  assert.ok(r.ingested.includes(d.id));
+  // 再拉一轮：没有新投递，round.total 为 0，没有 begin
+  const again = [];
+  await pullOnce({ url, token: PULL, inboxDir: join(ROOT, "inbox-prog"), getRecord: (id) => records.get(id) ?? null, record: () => {}, ingest: async () => ({}), onEvent: (e) => again.push(e) });
+  assert.deepEqual(again, [{ type: "round", total: 0 }]);
 });
