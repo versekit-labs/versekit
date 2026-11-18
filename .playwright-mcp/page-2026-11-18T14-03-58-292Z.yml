@@ -1,0 +1,72 @@
+- generic [ref=f1e2]:
+  - navigation "主导航" [ref=f1e3]:
+    - generic [ref=f1e4]: versekit
+    - group [ref=f1e6]:
+      - generic "账号组：演示组，点开切换" [ref=f1e7] [cursor=pointer]:
+        - generic [ref=f1e8]:
+          - generic [ref=f1e9]: 演示组
+          - generic [ref=f1e10]: 3 个账号
+    - link "今天 2" [ref=f1e11] [cursor=pointer]:
+      - /url: /today
+      - text: 今天
+      - generic [ref=f1e12]: "2"
+    - link "作品" [ref=f1e13] [cursor=pointer]:
+      - /url: /works
+    - link "数据" [ref=f1e14] [cursor=pointer]:
+      - /url: /data
+    - link "系统" [ref=f1e15] [cursor=pointer]:
+      - /url: /system
+  - main [ref=f1e16]:
+    - link "← 作品" [ref=f1e17] [cursor=pointer]:
+      - /url: /works
+    - generic [ref=f1e18]:
+      - heading "演示·一期访谈" [level=1] [ref=f1e19]
+      - generic [ref=f1e20]: 今天 14:03 入库 · 2 支成片 · 演示组
+      - generic [ref=f1e21]: 4 条等你确认
+    - generic [ref=f1e22]:
+      - region "访谈长片" [ref=f1e24]:
+        - generic [ref=f1e25]:
+          - heading "访谈长片" [level=3] [ref=f1e26]
+          - button "改内容" [ref=f1e28] [cursor=pointer]
+        - generic [ref=f1e29]:
+          - generic [ref=f1e32]: 访谈长片
+          - generic [ref=f1e33]: 成片文件读不到
+        - generic [ref=f1e34]: AI 生成的内容，每个平台都会按它的要求标注。标题、正文、话题和时间是建议，想改再改。
+        - generic [ref=f1e35]:
+          - generic [ref=f1e36]:
+            - generic "B站" [ref=f1e37]: B
+            - generic [ref=f1e38]: B站
+            - button "访谈长片 ▾" [ref=f1e39] [cursor=pointer]
+            - generic [ref=f1e40]: 今天 16:03
+            - button "改B站的内容或时间" [ref=f1e41] [cursor=pointer]: 改
+          - generic [ref=f1e42]:
+            - generic "TikTok" [ref=f1e43]: T
+            - generic [ref=f1e44]: TikTok
+            - button "访谈长片 ▾" [ref=f1e45] [cursor=pointer]
+            - generic [ref=f1e46]: 今天 16:03
+            - button "改TikTok的内容或时间" [ref=f1e47] [cursor=pointer]: 改
+        - generic [ref=f1e48]:
+          - generic [ref=f1e49]: 确认之后才会排进发布；没确认的到时间也不会发。
+          - button "这支先不发" [ref=f1e50] [cursor=pointer]
+          - group "什么时候发" [ref=f1e51]:
+            - button "预约发" [pressed] [ref=f1e52] [cursor=pointer]
+            - button "现在发" [ref=f1e53] [cursor=pointer]
+          - button "确认这 2 条，按时间发" [ref=f1e54] [cursor=pointer]
+      - generic [ref=f1e55]:
+        - generic [ref=f1e56]:
+          - button "访谈长片 2 条等你确认" [ref=f1e57] [cursor=pointer]:
+            - generic [ref=f1e58]:
+              - generic [ref=f1e59]: 访谈长片
+              - generic [ref=f1e60]: 2 条等你确认
+          - button "访谈短片 2 条等你确认" [ref=f1e61] [cursor=pointer]:
+            - generic [ref=f1e62]:
+              - generic [ref=f1e63]: 访谈短片
+              - generic [ref=f1e64]: 2 条等你确认
+        - generic [ref=f1e65]:
+          - heading "经过 · 访谈长片" [level=2] [ref=f1e66]
+          - generic [ref=f1e67]:
+            - generic [ref=f1e68]: 今天 14:03
+            - generic [ref=f1e69]: Claude 入库，2 支成片
+    - generic [ref=f1e70]:
+      - text: 对应命令：
+      - code [ref=f1e71]: vk work show work_omc3fltnki

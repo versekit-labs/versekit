@@ -42,8 +42,9 @@
 (async function () {
   const VK = window.VK;
   const main = document.getElementById("main");
-  const state = { covers: new Map(), data: null, focusId: null, cutId: null, cache: new Map(), editing: new Set(), opened: new Set(), ver: new Map() };
-  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
+  const state = { covers: new Map(), data: null, focusId: null, cutId: null, cache: new Map(), opened: new Set(), ver: new Map() };
+  const panel = window.VKPanel(state);
+  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, pending, cutHasPending, fallback, confirmPanel, cutSteps } = panel;
 
   async function loadWork(id) {
     if (!id) return null;
@@ -66,7 +67,6 @@
       state.covers = new Map();
     }
     state.cache.clear();
-    state.editing.clear();
     const awaiting = state.data.awaiting ?? [];
     if (!awaiting.some((w) => w.workId === state.focusId)) state.focusId = awaiting[0]?.workId ?? null;
     const work = await loadWork(state.focusId);
@@ -76,7 +76,9 @@
   }
 
 
-  function upcomingBox(scheduled) {
+  function upcomingBox(all) {
+    // 现在发的确认后已经在发，不出现在「接下来要发」（ACC-v3-time-07）。
+    const scheduled = all.filter((r) => r.scheduledAt == null || r.scheduledAt > Date.now());
     const list = scheduled.slice(0, 7).map((r) => `<div class="nx"><b>${esc(when(r.scheduledAt).text)}</b>${pfBadge(r.platform)}` +
       `<span class="ti" title="${esc(r.workTitle)}">${esc(r.workTitle)}</span></div>`).join("");
     return `<div class="sidebox"><h2>接下来要发 · 你确认过的</h2>${scheduled.length ? "" : '<div class="sub">还没有确认过的。</div>'}${list}` +
@@ -170,7 +172,7 @@
 
     for (const video of main.querySelectorAll("video[data-media]")) {
       video.addEventListener("error", () => {
-        video.outerHTML = fallback(video.dataset.label || "这支成片", "这个文件在这台电脑上读不到，或浏览器不能播放它");
+        video.outerHTML = fallback(video.dataset.label || "这支成片", "成片文件读不到");
       }, { once: true });
     }
   }
@@ -191,30 +193,13 @@
   }
 
   main.addEventListener("click", (event) => {
-    const el = event.target.closest("[data-cut],[data-edit],[data-more],[data-save],[data-confirm],[data-skip],[data-solo],[data-retry],[data-ver],[data-group]");
+    const el = event.target.closest("[data-cut],[data-more],[data-skip],[data-solo],[data-retry],[data-ver],[data-group]");
     if (!el) return;
     const d = el.dataset;
 
-    if (d.cut) { state.cutId = d.cut; render(); return; }
+    if (d.cut) { if (d.cut !== state.cutId && panel.guard()) return; state.cutId = d.cut; render(); return; }
 
-    if (d.edit) { state.editing.add(d.edit); render(); return; }
     if (d.more) { state.opened.has(d.more) ? state.opened.delete(d.more) : state.opened.add(d.more); render(); return; }
-
-    if (d.save) {
-      const pub = d.save;
-      const title = main.querySelector(`[data-title="${pub}"]`)?.value ?? null;
-      const at = main.querySelector(`[data-at="${pub}"]`)?.value ?? null;
-      // 正文、话题只在改过时才传：没动就不写进这条平台稿，免得把入库时的文案固定住。
-      const changed = (sel) => { const f = main.querySelector(sel); return f && f.value !== f.defaultValue ? f.value : null; };
-      const body = changed(`[data-body="${pub}"]`);
-      const tags = changed(`[data-tags="${pub}"]`);
-      act(async () => {
-        await VK.editPublish(pub, { title, at: at || null, body, tags });
-        state.editing.delete(pub);
-        state.opened.add(pub);
-      }, "改好了，确认时按新的发");
-      return;
-    }
 
     if (d.ver) {
       const [cutId, versionId] = d.ver.split(":");
@@ -223,7 +208,6 @@
       return;
     }
 
-    if (d.confirm) { act(() => VK.approveCut(d.confirm), "已确认，会按时间发", { advance: true }); return; }
     if (d.skip) { act(() => VK.skipCut(d.skip), "好，这支先不发", { advance: true }); return; }
     if (d.retry) { act(() => VK.retryPublish(d.retry), "正在重试"); return; }
     if (d.solo && d.pub) {
@@ -237,6 +221,15 @@
     }
   });
 
+  panel.bind({
+    render: () => render(),
+    reload: () => refresh(),
+    act: (fn, msg, opts) => act(fn, msg, opts),
+    current: () => {
+      const work = state.focusId ? state.cache.get(state.focusId) : null;
+      return { work, cut: work?.cuts.find((c) => c.id === state.cutId) ?? work?.cuts[0] ?? null };
+    },
+  });
   try {
     await VK.ready();
     await refresh();

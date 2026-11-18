@@ -187,8 +187,10 @@ test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布
   const inkOn = (src) => [...src.matchAll(/class="btn pri[^"]*"[^>]*>([^<]*)/g)].map((m) => m[1]);
   assert.deepEqual(inkOn(today), [], "今天页自己不画墨色按钮");
   assert.deepEqual(inkOn(work), [], "作品详情页自己不画墨色按钮");
-  assert.equal(inkOn(panel).length, 1, "成片面板里只有确认是墨色");
-  assert.match(inkOn(panel)[0], /^确认这 /);
+  // 面板有两个状态、各一个墨色：看的时候是「确认这 N 条」，改内容的时候是「保存改动」（两者不同屏出现）
+  assert.equal(inkOn(panel).length, 2, "成片面板每个状态只有一个墨色");
+  assert.ok(inkOn(panel).some((t) => /^确认这 /.test(t)));
+  assert.match(panel, /data-ed="save"/);
   // 系统页：登录进行中的下一步是唯一的墨色；Connect TikTok、再试一次都是描边
   assert.equal(inkOn(system).length, 1);
   assert.match(inkOn(system)[0], /我扫好了/);
@@ -498,4 +500,29 @@ test("GET /api/stream 推实时状态，第一帧就带队列与通道", async (
   assert.ok(Array.isArray(frame.publishes));
   assert.ok(Array.isArray(frame.runs));
   res.destroy();
+});
+
+test("#245：HTTP 错误体有结构化细节才带（suggestedAt / publishId / problems），code 和 message 不变", async () => {
+  const boom = (extra) => Object.assign(new Error("说人话的原因"), { code: "E_X" }, extra);
+  const d = await startDaemon({
+    runQueue: false,
+    port: 0,
+    socketPath: join(HOME, "vk-detail.sock"),
+    handlers: {
+      "cut.edit": ({ rev }) => {
+        throw rev === 1 ? boom({ suggestedAt: 1234567, publishId: "pub_1" }) : rev === 2 ? boom({ problems: [{ publishId: "pub_1", message: "太长" }] }) : boom({});
+      },
+    },
+  });
+  try {
+    const post = async (rev) => (await fetch(`http://127.0.0.1:${d.port}/api/cuts/c1/edit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rev, generic: { title: "x" } }) })).json();
+    const a = await post(1);
+    assert.deepEqual(a.error, { code: "E_X", message: "说人话的原因", suggestedAt: 1234567, publishId: "pub_1" });
+    const b = await post(2);
+    assert.deepEqual(b.error.problems, [{ publishId: "pub_1", message: "太长" }]);
+    const c = await post(3);
+    assert.deepEqual(c.error, { code: "E_X", message: "说人话的原因" });
+  } finally {
+    await d.close();
+  }
 });
