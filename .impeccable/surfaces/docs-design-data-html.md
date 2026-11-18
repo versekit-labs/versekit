@@ -24,3 +24,7 @@ FORM：左 208px 侧栏四项（今天、作品、数据、系统）+ 右侧单�
 FINISH：unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and the baseline screenshots in docs/design/screenshots/v2/.
 FIRST VIEWPORT：标题 + 条数 + 时间范围；各平台点图；值得说的两条。
 SIGNATURE：点图中间一根墨色竖线 = 平时；条数少的平台明说"只能看个大概"。
+
+## v3（2026-11-18）
+
+页面上不出现命令。口径说明（"平时"怎么算）保留为普通文字。

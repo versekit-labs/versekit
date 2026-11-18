@@ -10,6 +10,7 @@
  *  5. 机械检测不过（颜色、字号、圆角、对比度）
  *  6. 手机横向溢出、触控目标过小
  *  7. 页面控制台出现未捕获异常 / error 级消息（语法错误会让整段脚本静默不执行）
+ *  8. 界面上出现命令行（用户的所有操作都应在界面上完成）
  *
  * 用法：node scripts/design-check.mjs [--json]
  * 退出码：0 通过；1 有阻塞项。
@@ -36,7 +37,7 @@ const add = (kind, msg) => problems.push({ kind, msg });
 // ── 1. 页面清单 ────────────────────────────────────────
 const PAGES = readdirSync(DESIGN).filter(f => f.endsWith('.html')).sort();
 // 入口页不参与「必须有组」的运行时检查
-const ENTRY = new Set(['feishu.html']); // 飞书卡片示意页：不是应用页面，没有主导航
+const ENTRY = new Set(['feishu.html', 'login.html', 'join.html', 'link.html']); // 飞书卡片示意页，以及登录前 / 接入设备的单列页：没有主导航
 
 // ── 2. 每个页面必须有 surface brief ────────────────────
 function briefSlug(file){
@@ -59,6 +60,13 @@ for (const page of PAGES) {
     .map(m => m[1])
     .filter(attrs => !/data-|role="button"/.test(attrs));
   if (dead.length) add('dead-anchor', `${page} 有 ${dead.length} 处 href="#"（点了不会有反应）`);
+
+  // 3a'. 界面上不出现命令行（所有者 2026-11-18 定，ADR-0005 §10）：用户的所有操作都在界面上完成。
+  // 飞书示意页是给实现方看的参考，不是产品页面，不查。
+  if (page !== 'feishu.html') {
+    const cli = [...html.matchAll(/<code[\s>]|\bvk (?:[a-z]+)\b|\bnpm (?:run|install|test)\b|\bcurl \S|config\.json/g)].map(m => m[0]);
+    if (cli.length) add('cli-in-ui', `${page} 有 ${cli.length} 处命令行或配置文件名（如「${cli[0].trim()}」）；界面上不出现命令`);
+  }
 
   // 3b. 内部链接必须指向存在的文件
   for (const m of html.matchAll(/href="([a-z0-9-]+\.html)/g)) {

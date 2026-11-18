@@ -48,13 +48,14 @@ function draw() {
   }
   main.innerHTML = `
   <div class="hd"><h1>今天</h1><span class="sub">11 月 15 日 周日 · ${GROUP.name}</span><span class="demo r">演示数据</span></div>
+  ${ipMoved() ? `<div class="oth" style="margin-bottom:14px;background:var(--mark-bg);border-color:var(--mark-line)"><span class="st wait"></span><div class="bd"><div class="t">发布机「书房的 Mac」的出口位置变了：日本 东京</div><div class="sub" style="color:#6b5d1c">平时在美国 洛杉矶。小红书、抖音、视频号、B站先暂停发布，等你处理；已确认的 ${up.length} 条不会丢。</div></div><div class="a"><a class="btn" href="system.html#ip=moved&tab=devices">去处理</a></div></div>` : ''}
   ${focus}
   <div class="others" ${more.length || iss.length ? '' : 'hidden'}>
     ${more.map((w) => { const x = pendingOf(w)[0]; const n = pendingOf(w).length;
       return n === 1 && x.solo
-        ? `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">小红书 · 建议${when(x.at).text} · 不确认就不发</div></div><div class="a"><button class="btn" data-x="manual" data-w="${w.id}">我自己发</button><button class="btn pri" data-x="confirmed" data-w="${w.id}">${when(x.at).t} 发</button></div></div>`
-        : `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div><div class="a"><a class="btn pri" href="work.html#id=${w.id}">去确认</a></div></div>`; }).join('')}
-    ${iss.map((r, i) => `<div class="oth bad"><span class="st bad"></span><img class="cv" src="${r.w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(r.w.title)}</div><div class="sub why">${PF[r.x.pf][1]}：${esc(r.x.issue.what)}</div></div><div class="a"><a class="btn" href="work.html#id=${r.w.id}&cut=${r.c.id}">看经过</a><button class="btn pri" data-p="${i}">再试一次</button></div></div>`).join('')}
+        ? `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">小红书 · 建议${when(x.at).text} · 不确认就不发</div></div><div class="a"><button class="btn" data-x="manual" data-w="${w.id}">我自己发</button><button class="btn" data-x="confirmed" data-w="${w.id}">${when(x.at).t} 发</button></div></div>`
+        : `<div class="oth"><span class="st wait"></span><img class="cv" src="${w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div><div class="a"><a class="btn" href="work.html#id=${w.id}">去确认</a></div></div>`; }).join('')}
+    ${iss.map((r, i) => `<div class="oth bad"><span class="st bad"></span><img class="cv" src="${r.w.cover}" width="52" height="39" alt=""><div class="bd"><div class="t">${esc(r.w.title)}</div><div class="sub why">${PF[r.x.pf][1]}：${esc(r.x.issue.what)}</div></div><div class="a"><a class="btn" href="work.html#id=${r.w.id}&cut=${r.c.id}">看经过</a><button class="btn" data-p="${i}">再试一次</button></div></div>`).join('')}
   </div>
   ${GROUPS.filter((g) => g !== GROUP).map((g) => { const n = g.id === 'main' ? MAIN_TODO : 1; return `<div class="oth" style="margin-top:14px"><span class="st wait"></span><div class="bd"><div class="t">账号组「${g.name}」里还有 ${n} 件事等你</div><div class="sub">这一页只显示当前账号组「${GROUP.name}」的内容</div></div><div class="a"><a class="btn" href="today.html${g.q}" data-sw>切过去</a></div></div>`; }).join('')}
   <h2 class="sec">最近结果 · 发布 24 小时的播放，和这个账号最近 20 条的中位数比</h2>
@@ -62,7 +63,7 @@ function draw() {
   if (W) main.querySelector('#cp').append(confirmPanel(W, W.cuts.find((x) => x.id === cur), { onDone: () => { const nx = W.cuts.find((x) => cutPending(x).length); if (nx) cur = nx.id; } }));
 }
 main.addEventListener('click', (e) => { if (e.target.closest('[data-sw]')) { setTimeout(() => location.reload(), 0); return; } const b = e.target.closest('[data-c],[data-x],[data-p]'); if (!b) return; const ds = b.dataset;
-  if (ds.c) { cur = ds.c; draw(); }
+  if (ds.c) { if (editBusy()) return; cur = ds.c; draw(); }
   else if (ds.x) { pendingOf(WORKS.find((w) => w.id === ds.w))[0].state = ds.x; toast(ds.x === 'manual' ? '好，这条你自己发' : '小红书这条已确认'); changed(); }
   else if (ds.p) { issues()[+ds.p].x.issue.done = true; toast('正在重试'); changed(); } });
 listeners.push(draw); draw();

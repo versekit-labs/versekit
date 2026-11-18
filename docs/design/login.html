@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · versekit</title>
+<link rel="stylesheet" href="app.css"></head>
+<body><main class="lone" id="main"></main>
+<script>
+// #from=link：从「允许设备接入」被带过来。#err=bad / #err=many：两种报错的样子。
+const HASH = Object.fromEntries(location.hash.slice(1).split('&').filter(Boolean).map((kv) => kv.split('=')));
+const main = document.getElementById('main'); let err = HASH.err || '';
+function draw() {
+  main.innerHTML = `
+  <div class="brand"><i></i>versekit</div>
+  <h1>登录</h1>
+  ${HASH.from === 'link' ? '<div class="sub">登录后继续接入「书房的 Mac」。</div>' : ''}
+  <form class="panel" novalidate>
+    <label class="lab" for="mail">邮箱</label><input type="email" id="mail" autocomplete="username" value="${err ? 'chenmo@example.com' : ''}">
+    <label class="lab" for="pw">密码</label><input type="password" id="pw" autocomplete="current-password">
+    ${err === 'bad' ? '<div class="err" role="alert">邮箱或密码不对。</div>' : err === 'many' ? '<div class="err" role="alert">试的次数太多了，15 分钟后再试。</div>' : ''}
+    <div class="go"><button class="btn pri lg" ${err === 'many' ? 'disabled' : ''}>登录</button><a class="link" href="login.html#err=bad" data-forgot>忘了密码</a><a class="link" href="join.html">我有邀请</a></div>
+  </form>`;
+}
+main.addEventListener('submit', (e) => { e.preventDefault(); const m = main.querySelector('#mail'), p = main.querySelector('#pw');
+  if (!m.value.trim()) return m.focus(); if (!p.value) return p.focus();
+  location.href = HASH.from === 'link' ? 'link.html' : 'today.html'; });
+main.addEventListener('click', (e) => { if (e.target.closest('[data-forgot]')) { e.preventDefault(); if (main.querySelector('[data-fg]')) return; const s = document.createElement('div'); s.dataset.fg = ''; s.className = 'sub'; s.setAttribute('role', 'status'); const m = main.querySelector('#mail').value.trim(); s.textContent = m ? `重设密码的邮件已经发到 ${m}。原型里不会真的发。` : '先填上邮箱，再点「忘了密码」。'; if (!m) { main.querySelector('#mail').focus(); s.removeAttribute('data-fg'); main.querySelector('.go').parentNode.querySelectorAll('.fgn').forEach((x) => x.remove()); s.classList.add('fgn'); } main.querySelector('.go').after(s); } });
+draw();
+</script></body></html>

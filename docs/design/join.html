@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>接受邀请 · versekit</title>
+<link rel="stylesheet" href="app.css">
+<style>
+.stp{border-top:1px solid var(--line);padding:14px 0;display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 10px;align-items:start}
+.stp:last-of-type{border-bottom:1px solid var(--line)}
+.stp .no{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--ink3);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--ink2);margin-top:1px}
+.stp.cur .no{border-color:var(--ink);color:var(--ink)}
+.stp.done .no{border-color:var(--good);background:var(--good);color:#fffffe}
+.stp h2{font-size:14px;color:var(--ink);line-height:24px}
+.stp.todo h2,.stp.skip h2{color:var(--ink2);font-weight:400}
+.stp .res{color:var(--ink2);font-size:13px}
+.stp .bd{grid-column:2;display:grid;gap:8px;margin-top:6px}
+.stp .bd p{margin:0}
+.stp .bd input,.stp .bd select{width:100%;max-width:320px}
+.stp .row{display:flex;gap:10px 14px;align-items:center;flex-wrap:wrap}
+.qrrow{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+</style></head>
+<body><main class="lone wide" id="main"></main>
+<script>
+// #s=1..5：直接看第几步（5 = 都做完）。#s=old：邀请过期或用过。#slow=1：第 2 步等了很久还没接上。
+const HASH = Object.fromEntries(location.hash.slice(1).split('&').filter(Boolean).map((kv) => kv.split('=')));
+const main = document.getElementById('main'); let cur = HASH.s === 'old' ? 0 : +HASH.s || 1; let slow = !!HASH.slow; let pw = '';
+const res = { 2: null, 3: null, 4: null }; const skipped = new Set(HASH.s === '5' ? [4] : []); const MLOC = '书房的 Mac · 美国 洛杉矶 203.0.113.24 · 家庭宽带'; let qr = 'qr'; let pf = '小红书';
+if (cur > 2) res[2] = MLOC; if (cur > 3) res[3] = '小红书 · 林夏的日常'; if (cur > 4) res[4] = '没接，以后在「系统」里接';
+const SAY = '帮我接入 versekit：https://vk.example.com/claude';
+// 做完一步后去哪：还没到过的下一步；都到过了就回到总结
+let far = cur; const nextCur = (n) => { far = Math.max(far, n + 1); return far > 4 ? 5 : n + 1; };
+const T = ['', '设一个密码', '接一台发布机', '登录第一个平台账号', '接上 Claude'];
+const R = () => ['', '邮箱 linxia@example.com', res[2], res[3], res[4]];
+function body(n) {
+  if (n === 1) return `<label class="lab" for="mail">邮箱（来自邀请，不能改）</label><input type="email" id="mail" value="linxia@example.com" disabled>
+    <label class="lab" for="pw">密码（至少 10 位）</label><input type="password" id="pw" autocomplete="new-password" value="${pw}"><div data-err></div>
+    <p class="sub" style="color:var(--ink)">要先说清楚的：平台的登录只存在你自己的发布机上，这个服务拿不到；你的作品、文案和成片存在这个服务上。</p>
+    <div class="row"><button class="btn pri lg" data-n="1">设好了，下一步</button></div>`;
+  if (n === 2) return `<p>发布机是一台你自己的电脑：平台账号在它上面登录，视频从它发出去。它要常开，并且和你的手机在同一个网络。</p>
+    <div class="row"><a class="btn pri lg" href="join.html#s=2" data-dl>打开安装页</a><button class="link" data-copy="https://vk.example.com/install">复制安装页的地址</button></div>
+    <p class="sub">照安装页上写的装好（Mac 和 Windows 都可以），它会自己打开浏览器让你点「允许」，不用填任何东西。现在用的不是那台电脑也没关系：把安装页的地址发到那台电脑上打开。</p>
+    <p class="sub">接上时那台电脑所在的位置，会被当作你的账号平时的位置。<b style="font-weight:600;color:var(--ink)">接之前先把那台电脑上的代理关掉。</b></p>
+    ${slow ? `<div class="err warn" role="status">还没接上。可能是：安装还没装完；那台电脑没联网；浏览器里那一页还没点「允许」。</div>` : ''}
+    <div class="row"><span class="st wait">等它接上来…</span><button class="link" data-n="2">原型里点这里当作接上了</button>${slow ? '' : '<button class="link" data-slow>看等了很久的样子</button>'}</div>`;
+  if (n === 3) return `<label class="lab" for="pf">平台</label><select id="pf">${['小红书', '抖音', '视频号', 'B站'].map((p) => `<option ${p === pf ? 'selected' : ''}>${p}</option>`).join('')}</select>
+    <div class="qrrow"><button class="qr" data-scan title="原型里点一下，当作扫了码">${qr === 'qr' ? '二维码<br>（原型里点一下当作扫了码）' : '已扫码<br>（再点一下当作点了确认）'}</button>
+    <div><b style="font-weight:600">${qr === 'qr' ? `用${pf} App 扫这个码` : '在手机上点「确认登录」'}</b><div class="sub">二维码是发布机「书房的 Mac」取回来的。登录数据只存在那台电脑上。</div></div></div>
+    <div class="row"><button class="link" data-skip="3">先跳过，以后在「系统」里登录</button></div>`;
+  return `<p>versekit 不做内容。把下面这句话发给你做内容的那个 Claude，它会自己接好，中间让你在浏览器里点一次「允许」。</p>
+    <div class="say"><span>${SAY}</span><button class="btn pri" data-copy>复制</button></div>
+    <div class="row"><span class="st wait">等 Claude 接上来…</span><button class="link" data-n="4">原型里点这里当作接上了</button><button class="link" data-skip="4">先跳过</button></div>`;
+}
+function draw() {
+  if (!cur) { main.innerHTML = `<div class="brand"><i></i>versekit</div><h1>这条邀请不能用了</h1><div class="panel"><div>它已经过期，或者已经用过一次。</div><div class="sub">请发邀请的人再发一次。已经设过密码的话，直接登录。</div><div class="go"><a class="btn" href="login.html">去登录</a></div></div>`; return; }
+  main.innerHTML = `<div class="brand"><i></i>versekit</div>
+  <h1>${cur > 4 ? (skipped.size ? `还差 ${skipped.size} 步才能发第一条` : '都接好了') : '你好，林夏'}</h1><div class="sub" style="margin-bottom:22px">${cur > 4 ? (skipped.size ? '跳过的可以现在接，也可以以后在「系统」里接。接好之前，还发不出去。' : '以后打开就是「今天」：有要你确认的会在那里等你。想在手机上确认，到「系统」的「通知」里接飞书。') : '陈默邀请你用 versekit。四步接好，中途关掉也没关系，下次登录接着来。'}</div>
+  ${[1, 2, 3, 4].map((n) => `<section class="stp ${skipped.has(n) && n !== cur ? 'skip' : n < cur ? 'done' : n === cur ? 'cur' : 'todo'}"><span class="no" aria-hidden="true">${n < cur && !skipped.has(n) ? '✓' : n}</span><div><h2>${T[n]}</h2>${skipped.has(n) && n !== cur ? `<div class="res">跳过了 <button class="link" data-redo="${n}">现在接</button></div>` : n < cur ? `<div class="res">${R()[n]}</div>` : ''}</div>${n === cur ? `<div class="bd">${body(n)}</div>` : ''}</section>`).join('')}
+  ${cur > 4 ? `<div class="go" style="margin-top:22px"><a class="btn ${skipped.size ? '' : 'pri'} lg" href="today.html">${skipped.size ? '先进去看看' : '进入今天'}</a></div>` : ''}`;
+}
+main.addEventListener('click', (e) => { const t = (s) => e.target.closest(s); let b;
+  if (t('[data-dl]')) { e.preventDefault(); return; }
+  if (t('[data-copy]')) { b = t('[data-copy]'); navigator.clipboard?.writeText(b.dataset.copy || SAY); b.textContent = '复制好了'; return; }
+  if (t('[data-slow]')) slow = true;
+  else if (t('[data-scan]')) { if (qr === 'qr') { pf = main.querySelector('#pf').value; qr = 'ok'; } else { res[3] = `${pf} · 林夏的日常`; skipped.delete(3); cur = nextCur(3); } }
+  else if ((b = t('[data-skip]'))) { skipped.add(+b.dataset.skip); cur = nextCur(+b.dataset.skip); }
+  else if ((b = t('[data-redo]'))) { cur = +b.dataset.redo; qr = 'qr'; }
+  else if ((b = t('[data-n]'))) { const n = +b.dataset.n;
+    if (n === 1) { const p = main.querySelector('#pw'); pw = p.value; if (pw.length < 10) { main.querySelector('[data-err]').innerHTML = `<div class="err" role="alert">密码至少 10 位，现在 ${pw.length} 位。</div>`; p.focus(); return; } }
+    if (n === 2) res[2] = MLOC; if (n === 4) res[4] = 'Mac mini 上的 Claude';
+    skipped.delete(n); cur = nextCur(n); }
+  else return;
+  draw(); });
+main.addEventListener('change', (e) => { if (e.target.id === 'pf') { pf = e.target.value; qr = 'qr'; draw(); } });
+draw();
+</script></body></html>
