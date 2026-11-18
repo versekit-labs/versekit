@@ -282,6 +282,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   };
   let relayDownloading = null;
   let relayPulling = null;
+  // 这一轮（或刚结束的一轮）的逐个投递进展，给 vk relay pull 和 relay.status 看（ACC-relay-06）
+  let relayRound = null;
 
   /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
   function ingestDelivery(delivery, filePaths, inboxDir) {
@@ -327,6 +329,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     const cfg = relayConfig();
     if (!cfg.url || !cfg.pullToken) fail("还没有连中转：先 vk relay connect <地址> --token <拉取 token>");
     const inboxDir = joinPath(paths().state, "relay-inbox");
+    relayRound = { startedAt: Date.now(), finishedAt: null, total: 0, items: [] };
     relayPulling = (async () => {
       try {
         const r = await pullOnce({
@@ -337,6 +340,19 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           getRecord: store.getRelayDelivery,
           record: recordRelay,
           ingest: (d, filePaths) => ingestDelivery(d, filePaths, inboxDir),
+          onEvent: (e) => {
+            const rd = relayRound;
+            if (!rd) return;
+            if (e.type === "round") rd.total = e.total;
+            else {
+              const prev = rd.items.find((i) => i.id === e.id);
+              const item = prev ?? { id: e.id, index: e.index, title: e.title ?? null, size: e.size ?? null };
+              if (!prev) rd.items.push(item);
+              item.state = { begin: "downloading", ingested: "ingested", failed: "failed", pending: "pending" }[e.type];
+              if (e.type === "ingested") item.drafts = e.drafts;
+              if (e.reason) item.reason = e.reason;
+            }
+          },
           onProgress: (p) => {
             relayDownloading = p ? { ...p, title: p.title ?? null } : null;
           },
@@ -352,6 +368,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       } finally {
         relayDownloading = null;
         relayPulling = null;
+        if (relayRound) relayRound.finishedAt = Date.now();
       }
     })();
     return relayPulling;
@@ -374,7 +391,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       lastPullAgeMs: st.last_ok_at ? Math.max(0, now - st.last_ok_at) : null,
       lastError: st.last_error ?? null,
       pulling: Boolean(relayPulling),
-      downloading: d ? [{ id: d.id, name: d.name, received: d.received, total: d.total, percent: d.total ? Math.floor((d.received / d.total) * 100) : 0 }] : [],
+      round: relayRound,
+      downloading: d ? [{ id: d.id, name: d.name, title: d.title ?? null, received: d.received, total: d.total, percent: d.total ? Math.floor((d.received / d.total) * 100) : 0 }] : [],
       pending: st.pending ?? 0,
       recent: st.recent ?? [],
       failures: (st.failures ?? []).filter((f) => now - f.at < RELAY_WEEK_MS),
@@ -453,7 +471,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         /* 非 POSIX */
       }
       log(`[relay] 已连接 ${clean}（${push ? "推送" : "拉取"}）`);
-      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以 vk work push 了" : "已连接中转，后台服务会定时拉取（也可以 vk relay pull 立刻拉一轮）") };
+      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以 vk work push 了" : "已连接中转，后台服务会自动拉取（也可以 vk relay pull 立刻拉一轮）；成片大的话下载要几分钟，vk relay pull 会显示进度") };
     },
 
     "relay.pull": () => pullRound(),

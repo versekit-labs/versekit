@@ -14,12 +14,18 @@ const safeName = (n) => String(n).replace(/[\\/]/g, "_").replace(/^\.+/, "_") ||
  *   getRecord(id)           本机记着的这个投递的结果：{ state: "ingested"|"failed", ... } 或 null
  *   ingest(delivery, paths) 入库；paths = { <sha256>: 本地绝对路径 }；不合格就抛带人话的错
  *   record(id, rec)         记下结果
- *   onProgress(p)           { id, name, received, total } 或 null（没有在下载的）
+ *   onProgress(p)           { id, name, title, received, total } 或 null（没有在下载的）
+ *   onEvent(e)              这一轮的进展（ACC-relay-06）：round{total} / begin{index,total,id,title,size} / ingested / failed / pending
  */
-export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest, onProgress = () => {}, log = () => {}, retries = 3, backoffMs = 1000 }) {
+export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest, onProgress = () => {}, onEvent = () => {}, log = () => {}, retries = 3, backoffMs = 1000 }) {
   const out = { seen: 0, ingested: [], failed: [], skipped: [], pending: [] };
   const deliveries = await listDeliveries({ url, token });
   out.seen = deliveries.length;
+
+  const wellFormed = (d) => /^dl_[0-9a-f]{12,32}$/.test(d?.id ?? "") && Array.isArray(d.blobs) && !d.blobs.some((b) => !/^[0-9a-f]{64}$/.test(b?.sha256 ?? "") || !Number.isInteger(b?.size));
+  const todo = deliveries.filter((d) => wellFormed(d) && !["ingested", "failed"].includes(getRecord(d.id)?.state));
+  onEvent({ type: "round", total: todo.length });
+  const titleOf = (d) => d.manifest?.title ?? null;
 
   for (const d of deliveries) {
     // 中转是外部输入：id 和 sha 要长得对，才拿来拼本地路径。
@@ -35,6 +41,9 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
       continue;
     }
 
+    const index = todo.indexOf(d) + 1;
+    const title = titleOf(d);
+    onEvent({ type: "begin", index, total: todo.length, id: d.id, title, size: d.blobs.reduce((n, b) => n + b.size, 0) });
     const paths = {};
     let failure = null;
     let current = null;
@@ -50,7 +59,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
           dest,
           retries,
           backoffMs,
-          onProgress: (received, total) => onProgress({ id: d.id, name: b.name, received, total }),
+          onProgress: (received, total) => onProgress({ id: d.id, name: b.name, title, received, total }),
         });
         paths[b.sha256] = dest;
       }
@@ -61,6 +70,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
         // 网络问题不是投递的错：留着，下一轮接着下。
         log(`[relay] 投递 ${d.id} 这一轮没下完：${err.message}`);
         out.pending.push({ id: d.id, error: err.message });
+        onEvent({ type: "pending", index, total: todo.length, id: d.id, title, reason: err.message });
         continue;
       }
     }
@@ -72,6 +82,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
         const res = await ingest(d, paths);
         record(d.id, { state: "ingested", at: Date.now(), title: d.manifest?.title ?? null, ...(res ?? {}) });
         out.ingested.push(d.id);
+        onEvent({ type: "ingested", index, total: todo.length, id: d.id, title, drafts: res?.drafts ?? 0 });
         await reportState({ url, token, id: d.id, state: "ingested" }).catch((err) => log(`[relay] 回报「已入库」失败（下一轮补报）：${err.message}`));
         continue;
       } catch (err) {
@@ -80,6 +91,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
     }
     record(d.id, { state: "failed", at: Date.now(), reason: failure, title: d.manifest?.title ?? null });
     out.failed.push({ id: d.id, reason: failure });
+    onEvent({ type: "failed", index, total: todo.length, id: d.id, title, reason: failure });
     await reportState({ url, token, id: d.id, state: "failed", reason: failure }).catch((err) => log(`[relay] 回报「失败」没送到（下一轮补报）：${err.message}`));
   }
   return out;
