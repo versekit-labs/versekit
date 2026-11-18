@@ -2,10 +2,10 @@
  *
  * 为什么是「同步门面」：本地应用的数据量很小，页面不需要为每次读都写一套 loading 状态；
  * 打开页面先拉一次快照，渲染时直接读内存。写操作（选组 / 建组）一律 POST 命令表派生的
- * HTTP 路由，成功后再刷新快照——页面看到的数字与 `vk --json`、`/api/bootstrap` 是同一份。
+ * HTTP 路由，成功后再刷新快照——页面看到的数字与命令行、`/api/bootstrap` 是同一份。
  *
  * 当前账号组存在守护进程的 meta 表里，不存 localStorage：换一台浏览器打开也还是同一个组，
- * 且 `vk group use` 与页面切组是同一条命令，不会出现「页面记的和 CLI 记的不一样」。
+ * 且页面切组与命令行切组是同一条命令，不会出现「页面记的和命令行记的不一样」。
  *
  * 这里不引用设计稿原型里的 localStorage 假数据：那些数字只用于视觉稿，真实数据只从 /api 来。
  */
@@ -18,7 +18,8 @@
   async function request(path, { method = "GET", body } = {}) {
     const res = await fetch(path, {
       method,
-      headers: body ? { "content-type": "application/json" } : {},
+      // 标明来自页面：服务端给页面的报错不带命令行提示（ACC-v3-nocli-02）。
+      headers: { "x-vk-origin": "web", ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
@@ -112,7 +113,7 @@
     return group(id)?.freshness ?? snapshot?.freshness ?? { total: 0, fresh: 0, stale: 0, failing: 0, unknown: 0 };
   }
 
-  /** 当前组口径（与总览页、`vk bootstrap --json` 同一份），不是跨组汇总。 */
+  /** 当前组口径（与总览页、命令行同一份），不是跨组汇总。 */
   function counts() {
     return snapshot?.counts ?? { works: 0, publishes: 0, publishedPublishes: 0 };
   }

@@ -245,7 +245,7 @@ test("ACC-update-05 开关：update --auto off|on 落到 config.json 的 update.
   assert.equal(JSON.parse(readFileSync(core.paths().configFile, "utf8")).update.auto, false);
   assert.equal((await h.update({ auto: "on" })).auto, true);
   assert.equal(h["update.status"]().auto, true);
-  await assert.rejects(async () => h.update({ auto: "maybe" }), /on 或 off/);
+  await assert.rejects(async () => h.update({ auto: "maybe" }), /开或关/);
 });
 
 test("ACC-update-05 状态里有上次更新（最多 5 条标题）与上次失败，系统页读的就是这份", async () => {

@@ -191,10 +191,11 @@ test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布
   assert.equal(inkOn(panel).length, 2, "成片面板每个状态只有一个墨色");
   assert.ok(inkOn(panel).some((t) => /^确认这 /.test(t)));
   assert.match(panel, /data-ed="save"/);
-  // 系统页：登录进行中的下一步是唯一的墨色；Connect TikTok、再试一次都是描边
-  assert.equal(inkOn(system).length, 1);
-  assert.match(inkOn(system)[0], /我扫好了/);
-  assert.match(system, /connected\(a\) \? "link" : "btn"\}" data-login/);
+  // 系统页：墨色只出现在「这一步要你做的事」上（短信的发验证码和登录、窗口登录的我登录好了、填凭证、接中转），
+  // 而且这些都在各自的行内展开里，同一行同时只有一步；Connect TikTok、再试一次、现在更新都是描边
+  const sysInk = [...system.matchAll(/"([^"]{1,12})", "btn pri"/g)].map((m) => m[1]).sort();
+  assert.deepEqual(sysInk, ["保存", "发验证码", "我登录好了", "登录", "接入"].sort());
+  assert.match(system, /connected\(a\) \? "link" : "btn"/);
   assert.match(system, /<button class="btn" data-retry=/);
   // 已发布的行，时间列是发布时间；竖版成片视频框 360px
   assert.match(panel, /isPub && p\.publishedAt != null \? p\.publishedAt : p\.scheduledAt/);

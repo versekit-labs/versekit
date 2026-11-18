@@ -99,8 +99,8 @@ test("同组同平台只能有一个账号；不同组互不影响；新账号�
   h["account.add"]({ platform: "bilibili", name: "一号", group: g1 });
   assert.throws(() => h["account.add"]({ platform: "bilibili", name: "二号", group: g1 }), /每个平台只能有一个/);
   h["account.add"]({ platform: "bilibili", name: "三号", group: g2 });
-  assert.throws(() => h["account.add"]({ platform: "bilibili", name: "没带组" }), /必须带 --group/);
-  assert.throws(() => store.addAccount({ platform: "bilibili", handle: "@无组" }), /必须带 --group/);
+  assert.throws(() => h["account.add"]({ platform: "bilibili", name: "没带组" }), /要先选账号组/);
+  assert.throws(() => store.addAccount({ platform: "bilibili", handle: "@无组" }), /要先选账号组/);
 
   // 数据库层同样兜底：绕过 store 直接写也会被唯一索引拦下。
   assert.throws(

@@ -51,7 +51,7 @@ export class PauseError extends AdapterError {
 export function classifyError(code, message = "", { status = 0, logId = null } = {}) {
   const text = message ? `${code}：${message}` : String(code);
   if (code in PAUSE_CODES) return new PauseError(code, { logId });
-  if (AUTH_CODES.has(code)) return new AdapterError("auth", `TikTok 授权失效（${text}）：vk account connect 重新授权`);
+  if (AUTH_CODES.has(code)) return new AdapterError("auth", `TikTok 授权失效（${text}）：到系统页重新授权`);
   if (ASSET_FAIL_REASONS.has(code)) return new AdapterError("asset_invalid", `TikTok 不收这个视频（${text}）：换文件再发`);
   if (code === "rate_limit_exceeded") return new AdapterError("quota", `TikTok 限流（${text}）`);
   if (status >= 500 || code === "internal_error" || code === "internal") return new AdapterError("unknown", `TikTok 服务端出错（${text}）`);

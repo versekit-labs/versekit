@@ -174,6 +174,17 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "relay.disconnect",
+    summary: "断开中转：清掉本机保存的中转地址和令牌（已经下载入库的作品不动）",
+    remote: false,
+    localOnly: true,
+    args: {},
+    http: { method: "POST", path: "/api/relay/disconnect" },
+    cli: { usage: "vk relay disconnect" },
+    card: null,
+    audit: "never",
+  },
+  {
     name: "relay.pull",
     summary: "发布机：现在就从中转拉一轮待投递（后台服务也会每 5 分钟自动拉）",
     remote: false,

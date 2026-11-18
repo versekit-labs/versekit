@@ -463,7 +463,8 @@ function daemonHandlers(adapters, log) {
       const tab = await creatorLoginTab(accountId, { fresh: true });
       await fillAndSendCode(tab, phone);
       loginSessions.set(accountId, { phone, sentAt: Date.now() });
-      return { mode: "sms", phone, sent: true, next: "验证码已发送，填进页面上的输入框" };
+      // 回给页面和日志的只有打了码的手机号：完整号码只留在这台电脑的内存里（重发要用），不落库。
+      return { mode: "sms", phone: `${phone.slice(0, 3)}****${phone.slice(-4)}`, sent: true, next: "验证码已发送，填进页面上的输入框" };
     },
 
     /**
@@ -1315,7 +1316,7 @@ async function cmdWork() {
 async function cmdRelay() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | pull | token push|pull";
+  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | disconnect | pull | token push|pull";
   if (sub === "serve") {
     const { mkdirSync, chmodSync: chmod } = await import("node:fs");
     const { randomBytes } = await import("node:crypto");
@@ -1357,6 +1358,12 @@ async function cmdRelay() {
       console.log(`每 ${data.intervalMinutes} 分钟拉取一次；还没拉完的投递 ${data.pending} 个`);
       for (const f of data.failures) console.log(`没入库：${f.id}：${f.message}`);
     } else out(data);
+    return data;
+  }
+  if (sub === "disconnect") {
+    const data = await send("relay.disconnect", {}, { log });
+    if (human) console.log(data.message);
+    else out(data);
     return data;
   }
   if (sub === "connect") {
@@ -2058,7 +2065,7 @@ try {
   }
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  if (human) console.error(`出错：${message}`);
-  else out({ ok: false, error: { code: err.code ?? "error", message } });
+  if (human) console.error(`出错：${message}${err.hint ? `\n下一步：${err.hint}` : ""}`);
+  else out({ ok: false, error: { code: err.code ?? "error", message, ...(err.hint ? { hint: err.hint } : {}) } });
   process.exit(1);
 }

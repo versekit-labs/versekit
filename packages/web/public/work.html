@@ -106,7 +106,7 @@
     document.title = `${work.title} · 作品详情 · versekit`;
     if (!cut) {
       main.innerHTML = `<a class="crumb" href="/works">← 作品</a><div class="wh"><h1>${esc(work.title)}</h1></div>` +
-        `<div class="panel empty">这个作品还没有成片。</div><div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;
+        `<div class="panel empty">这个作品还没有成片。</div>`;
       return;
     }
     const multi = work.cuts.length > 1;
@@ -126,7 +126,7 @@
         `<div class="why">${esc(p.error?.message ?? (p.state === "notify_pending" ? "这条停在待人工确认，处理好后可以直接再试一次" : "原因还没记下来"))}</div>` +
         `<div class="acts"><button class="btn" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
       resultsTable(cut, multi) + `</div>` +
-      `<div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;
+      ``;
 
     for (const video of main.querySelectorAll("video[data-media]")) {
       video.addEventListener("error", () => {
@@ -181,7 +181,7 @@
     await load();
   } catch (err) {
     main.innerHTML = `<div class="hd"><h1>作品详情</h1></div><a class="crumb" href="/works">← 作品</a><div class="panel empty">读不到这个作品：${esc(err.message)}</div>` +
-      `<div class="cmd">对应命令：<code>vk work show ${esc(id)}</code></div>`;
+      ``;
   }
 })();
 </script>

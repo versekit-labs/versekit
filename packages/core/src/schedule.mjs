@@ -61,7 +61,7 @@ function groupFilter(conn, group) {
   if (group == null || group === "") return { sql: "", params: [] };
   const cols = conn.prepare("PRAGMA table_info(account)").all().map((c) => c.name);
   if (!cols.includes("group_id")) {
-    throw coded("E_GROUP_UNSUPPORTED", "还没有账号组（account.group_id 不存在）：先完成账号组迁移，或去掉 --group");
+    throw coded("E_GROUP_UNSUPPORTED", "这份数据库还没升级到支持账号组，先升级后再试");
   }
   const hasGroupTable = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_group'").get();
   if (hasGroupTable) {
