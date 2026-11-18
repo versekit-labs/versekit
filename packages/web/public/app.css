@@ -170,6 +170,7 @@ video.cv{pointer-events:none}
 .solo .sh{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
 .solo .ti{font-size:14px;margin:8px 0 2px;overflow-wrap:anywhere}
 .solo .sub{color:#6b5d1c}
+.solo .sub.unset{color:var(--ink2)}
 .solo .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
 /* TikTok 官方接口的发布设置面板（#173）：黄 = 等你处理；绿 = 成了；红 = 出了问题。 */
 .tkset .tk-note{margin:8px 0 10px;font-size:13px;color:#6b5d1c}

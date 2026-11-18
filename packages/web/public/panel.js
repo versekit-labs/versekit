@@ -573,7 +573,7 @@ window.VKPanel = function createPanel(state) {
       if (p.platform === "tiktok-api") return tkHtml(p, work.id);
       const w = when(p.scheduledAt);
       const acts = p.state === "pending_confirm"
-        ? `<div class="acts"><button class="btn" type="button" data-solo="approve" data-pub="${esc(p.id)}">${esc(w.text)} 发</button>` +
+        ? `<div class="acts"><button class="btn" type="button" data-solo="approve" data-pub="${esc(p.id)}">${p.scheduledAt == null ? "按建议时间发" : esc(w.text) + " 发"}</button>` +
           `<button class="btn" type="button" data-solo="now" data-pub="${esc(p.id)}">现在发</button>` +
           `<button class="btn" type="button" data-solo="manual" data-pub="${esc(p.id)}">我自己发</button></div>`
         : `<div class="acts"><span class="st ${p.state === "skipped" ? "" : "done"}">${
@@ -582,7 +582,7 @@ window.VKPanel = function createPanel(state) {
       const editBtn = isEditable(p)
         ? `<button class="link" type="button" style="margin-left:auto" data-ed="start" data-arg="${esc(p.id)}" aria-label="改小红书的内容或时间">改</button>` : "";
       const late = p.shifted && p.state === "pending_confirm" ? ` · 原定${esc(when(p.originalAt).text)}，已顺延` : "";
-      const head = `<div class="ti">${esc(p.title)}</div><div class="sub">${p.scheduledAt == null ? "还没定时间" : esc(w.text) + " 发"}${late}</div>` +
+      const head = `<div class="ti">${esc(p.title)}</div><div class="sub${p.scheduledAt == null ? " unset" : ""}">${p.scheduledAt == null ? "还没定时间" : esc(w.text) + " 发"}${late}</div>` +
         `<button class="tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}">${isOpen(p.id) ? "收起正文和话题" : "看正文和话题"}</button>${isOpen(p.id) ? detHtml(p) : ""}`;
       return `<div class="solo"><div class="sh">${pfBadge("xiaohongshu")}小红书 · 每条都要你单独确认${editBtn}</div>${head}${acts}</div>`;
     }).join("");
