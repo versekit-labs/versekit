@@ -266,6 +266,25 @@ video.cv{pointer-events:none}
 }.st.res{font-weight:600;color:var(--ink)}
 .st.res .x{font-size:14px}
 
+/* 数据页（ACC-v3-fid-02）：点图、值得说的、每一条 */
+.pl{padding:6px 18px 14px}
+.plr{display:grid;grid-template-columns:96px minmax(0,1fr) 150px;gap:16px;align-items:center;min-height:40px;border-bottom:1px solid var(--line2)}
+.plr:last-child{border-bottom:0}
+.plr.head{min-height:30px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink2);font-weight:600}
+.strip{position:relative;height:28px}
+.strip::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}
+.strip u{position:absolute;top:2px;bottom:2px;width:2px;margin-left:-1px;left:50%;background:var(--ink)}
+.strip s{position:absolute;top:8px;bottom:8px;width:1px;background:var(--ctl)}
+.strip i{position:absolute;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;background:#8d9399;border:1.5px solid var(--paper)}
+.strip i.up{background:var(--good)}.strip i.dn{background:var(--bad)}
+.axis{position:relative;height:18px}
+.axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.plr .m{text-align:right;font-size:13px}
+.dbar{display:flex;gap:12px;align-items:center;margin:34px 0 8px;flex-wrap:wrap}
+.dbar h2{margin-right:auto}
+.says{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.says .note>div{margin:4px 0 6px}
+@media (max-width:860px){.says{grid-template-columns:minmax(0,1fr)}.plr{grid-template-columns:72px minmax(0,1fr)}.plr .m{display:none}}
 /* 日历：周 / 月。最小单位是一条平台稿；不用新颜色，状态沿用 .st 的四种点 */
 .views{margin-left:auto}
 .calnav{display:flex;gap:8px;align-items:center}

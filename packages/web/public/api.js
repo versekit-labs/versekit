@@ -397,6 +397,8 @@
 
   const today = () => request("/api/today");
   const works = () => request("/api/works");
+  /** 数据页：当前账号组每条发布的 24 小时播放与倍数（命令 stats.works）；范围由页面按发布时间切。 */
+  const stats = () => request("/api/stats/works");
   const work = (workId) => {
     if (!workId) throw new Error("先指定一个作品");
     return request(`/api/works/${encodeURIComponent(workId)}`);
@@ -531,6 +533,7 @@
   VK.media = media;
   VK.today = today;
   VK.works = works;
+  VK.stats = stats;
   VK.work = work;
   VK.approveCut = approveCut;
   VK.editCut = editCut;

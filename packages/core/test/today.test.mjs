@@ -288,3 +288,24 @@ test("ACC-v2-today-01 四块：等确认按成片、出了问题、等时间按�
   assert.equal(row.multiple, 4);
   assert.equal(row.verdictLabel, "比平时好");
 });
+
+test("ACC-v3-fid-02 stats.works 每条带作品 / 成片 / 发布时间，数据页据此画点图并链到作品", () => {
+  const g = group("数据页组");
+  const acc = account(g, "tiktok", "@datapage");
+  const work = newWork("数据页作品", ["长版", "短版"]);
+  const cut = work.cuts?.[1] ?? null;
+  const cutId = cut?.id ?? conn().prepare("SELECT id FROM cut WHERE work_id = ? ORDER BY rowid DESC").get(work.id).id;
+  const at = NOW - 2 * DAY;
+  const pid = insertPublish({ workId: work.id, accountId: acc, publishedAt: at, cutId, play: 800 });
+
+  const rows = handlers["stats.works"]({ group: g.name }).rows;
+  const row = rows.find((r) => r.publishId === pid);
+  assert.equal(row.workId, work.id);
+  assert.equal(row.cutId, cutId);
+  assert.equal(row.cutTitle, "短版");
+  assert.equal(row.cutCount, 2);
+  assert.equal(row.publishedAt, at);
+  assert.equal(row.platform, "tiktok");
+  assert.equal(row.baseline.play24h, 800);
+  assert.ok(!("accountId" in row), "accountId 是内部键，不外泄");
+});

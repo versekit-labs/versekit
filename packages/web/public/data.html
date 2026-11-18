@@ -13,27 +13,128 @@
     <a class="nv" href="works.html" data-key="works">作品</a>
     <a class="nv" href="data.html" data-key="data" aria-current="page">数据</a>
     <a class="nv" href="system.html" data-key="system">系统</a></nav>
-  <main id="main">
-    <div class="hd"><h1>数据</h1><span class="sub" id="sub">每个平台只和自己比：一条发布 24 小时的播放，是这个账号平时的几倍。</span></div>
-    <section class="wip" aria-label="还没做">
-      <h3>这一页还没做</h3>
-      <p>数据页要给每个平台画一条点图（一个点是一条发布，位置是它相当于平时的几倍），并列出这段时间值得说的一条好和一条差。
-        倍数与「平时」的口径在内核里算好，页面只渲染。</p>
-      <div class="cmd">不同平台的播放数不相加，也不互相比较。</div>
-    </section>
-  </main>
+  <main id="main"><div class="panel empty">正在读数据…</div></main>
 </div>
 <script src="/api.js"></script>
 <script src="/shell.js"></script>
+<script src="/panel.js"></script>
 <script>
 (async function () {
-  const sub = document.getElementById("sub");
+  const VK = window.VK;
+  const main = document.getElementById("main");
+  const state = { covers: new Map() };
+  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls } = window.VKPanel(state);
+  const view = { days: 30, pf: "all", sort: "x", rows: [] };
+  const DAY = 864e5;
+
+  // 点的位置：0.25 倍 … 4 倍，对数刻度，平时在正中。倍数本身是内核算好的，这里只换成位置。
+  const pos = (x) => Math.max(0, Math.min(1, (Math.log2(x) + 2) / 4)) * 100;
+  const median = (a) => {
+    const s = [...a].sort((p, q) => p - q);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+  };
+  const mult = (r) => r.baseline?.multiple ?? null;
+  const play = (r) => r.baseline?.play24h ?? null;
+  const workHref = (r) => `/work?id=${encodeURIComponent(r.workId)}${r.cutId ? "&cut=" + encodeURIComponent(r.cutId) : ""}`;
+  const label = (r) => `${esc(r.title)}${r.cutCount > 1 && r.cutTitle ? `（${esc(r.cutTitle)}）` : ""}`;
+
+  async function load() {
+    const data = await VK.stats();
+    try {
+      state.covers = new Map(((await VK.works()).works ?? []).map((w) => [w.id, w.coverVersionId]));
+    } catch {
+      state.covers = new Map();
+    }
+    // 只留已经发布满 24 小时、有 24 小时播放的；没有数的发布不在这页出现。
+    view.rows = (data.rows ?? []).filter((r) => r.publishedAt != null && play(r) != null);
+  }
+
+  function draw() {
+    const current = VK.current();
+    const since = Date.now() - view.days * DAY;
+    const all = view.rows.filter((r) => r.publishedAt >= since);
+    const pfs = [...new Set(all.map((r) => r.platform))];
+    if (view.pf !== "all" && !pfs.includes(view.pf)) view.pf = "all";
+    const byX = (a, b) => (mult(b) ?? -Infinity) - (mult(a) ?? -Infinity);
+    const rows = all.filter((r) => view.pf === "all" || r.platform === view.pf)
+      .sort((a, b) => (view.sort === "x" ? byX(a, b) : b.publishedAt - a.publishedAt));
+    const ranked = all.filter((r) => mult(r) != null).sort(byX);
+    const top = ranked[0], low = ranked[ranked.length - 1];
+    const better = top && top.baseline.verdict === "better" ? top : null;
+    const worse = low && low.baseline.verdict === "worse" ? low : null;
+    // 差的那条：同一支成片在别的平台如果和平时差不多，才说「不是成片的问题」，不凭空下结论。
+    const elsewhere = worse && all.some((r) => r.workId === worse.workId && r.cutId === worse.cutId && r.platform !== worse.platform && r.baseline?.verdict === "normal");
+
+    const say = (kind, r, extra) => `<div class="note"><b>${kind}：${esc(pfName(r.platform))} · <span class="x ${ratioCls(mult(r))}">${ratioText(mult(r))}</span></b>` +
+      `<div>${label(r)}，24 小时 ${fmt(play(r))} 播放，平时 ${fmt(r.baseline.baselineMedian)}。${extra}</div>` +
+      `<a class="link" href="${workHref(r)}">打开这个作品</a></div>`;
+
+    const plot = pfs.map((k) => {
+      const rs = all.filter((r) => r.platform === k);
+      const scored = rs.filter((r) => mult(r) != null);
+      const best = scored.length ? scored.reduce((a, b) => (mult(a) >= mult(b) ? a : b)) : null;
+      const aria = `${pfName(k)}：${rs.length} 条${best ? `，最高 ${ratioText(mult(best))}` : "，历史还不够，没法和平时比"}`;
+      const dots = scored.map((r) => `<i class="${ratioCls(mult(r))}" style="left:${pos(mult(r)).toFixed(1)}%" title="${esc(r.title)} · ${ratioText(mult(r))}"></i>`).join("");
+      const unscored = rs.length - scored.length;
+      return `<div class="plr"><span class="pfn">${pfBadge(k)}${esc(pfName(k))}</span>` +
+        `<div class="strip" role="img" aria-label="${esc(aria)}"><s style="left:25%"></s><s style="left:75%"></s><u></u>${dots}</div>` +
+        `<span class="m">${rs.length} 条 · ${fmt(median(rs.map(play)))}` +
+        `${unscored ? `<div class="sub">${unscored} 条历史不够，没画</div>` : rs.length < 5 ? '<div class="sub">条数少，只能看个大概</div>' : ""}</span></div>`;
+    }).join("");
+
+    const table = rows.map((r) => {
+      const q = mult(r);
+      const typ = q == null ? '<span class="sub">—</span>'
+        : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${esc(r.baseline.verdictLabel ?? "")}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${Math.min(100, q * 40)}%"></i><u></u></div>`;
+      const verdict = q == null ? `<div class="sub" title="${esc(r.baseline.reason ?? "")}">还没法比</div>` : `<div class="sub">${esc(r.baseline.verdictLabel ?? "")}</div>`;
+      return `<tr><td><a class="wcell" href="${workHref(r)}">${cover(state.covers.get(r.workId), 48, 36)}<span><b>${esc(r.title)}</b>` +
+        `${r.cutCount > 1 && r.cutTitle ? `<span class="sub">${esc(r.cutTitle)}</span>` : ""}</span></a></td>` +
+        `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span></td>` +
+        `<td class="sub">${esc(when(r.publishedAt).day)}</td><td class="n">${fmt(play(r))}</td><td class="n sub">${fmt(r.baseline.baselineMedian)}</td>` +
+        `<td>${typ}</td><td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span>${verdict}</td></tr>`;
+    }).join("");
+
+    const seg = (attr, items, on, aria) => `<span class="seg" role="group" aria-label="${aria}">${items.map(([v, t]) => `<button type="button" data-${attr}="${esc(v)}" aria-pressed="${String(v) === String(on)}">${esc(t)}</button>`).join("")}</span>`;
+
+    main.innerHTML =
+      `<div class="hd"><h1>数据</h1><span class="sub">${current ? esc(current.name) + " · " : ""}${all.length} 条发布满 24 小时</span>` +
+      `<span class="r">${seg("d", [[7, "最近 7 天"], [30, "最近 30 天"]], view.days, "时间范围")}</span></div>` +
+      (all.length ? `
+      <h2 style="margin-bottom:8px">各平台 · 一个点是一条，位置是它相当于这个账号平时的几倍</h2>
+      <div class="panel pl">
+        <div class="plr head"><span>平台</span><div class="axis"><span style="left:0;transform:none">0.25 倍</span><span style="left:25%">0.5 倍</span><span style="left:50%;color:var(--ink)">平时</span><span style="left:75%">2 倍</span><span style="left:100%;transform:translateX(-100%)">4 倍</span></div><span class="m">条数 · 这段时间的中位数</span></div>
+        ${plot}
+      </div>
+      <div class="cmd">不同平台的播放数不相加，也不互相比较；每个平台只和自己比。</div>
+      <h2 class="sec">这段时间值得说的</h2>
+      <div class="says">
+        ${better ? say("最好", better, "") : '<div class="note">这段时间没有哪条明显好过平时（2 倍以上）。</div>'}
+        ${worse ? say("最差", worse, elsewhere ? "同一支成片在别的平台和平时差不多，原因还看不出来。" : "") : '<div class="note">这段时间没有哪条明显差过平时（一半以下）。</div>'}
+      </div>
+      <div class="dbar"><h2>每一条</h2>${seg("pf", [["all", "全部"], ...pfs.map((k) => [k, pfName(k)])], view.pf, "按平台筛选")}${seg("s", [["x", "按倍数"], ["t", "按时间"]], view.sort, "排序")}</div>
+      <div class="tblwrap"><table><thead><tr><th>作品</th><th>平台</th><th>发布</th><th class="n">24 小时播放</th><th class="n">平时</th><th>对比</th><th class="n">结论</th></tr></thead><tbody>${table}</tbody></table></div>
+      <div class="cmd">“平时”= 这个账号最近 20 条在发布 24 小时的播放中位数；2 倍以上算好，一半以下算差。</div>`
+      : '<div class="panel empty">这段时间还没有发布满 24 小时的内容。发布满 24 小时后，每条和平时的对比会出现在这里。</div>');
+  }
+
+  main.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-d],[data-pf],[data-s]");
+    if (!b) return;
+    const d = b.dataset;
+    if (d.d) { view.days = Number(d.d); view.pf = "all"; }
+    else if (d.pf) view.pf = d.pf;
+    else view.sort = d.s;
+    draw();
+  });
+
   try {
-    await window.VK.ready();
-    const current = window.VK.current();
-    if (current) sub.textContent = `${current.name} · 每个平台只和自己比：一条发布 24 小时的播放，是这个账号平时的几倍。`;
+    await VK.ready();
+    await load();
+    draw();
   } catch (err) {
-    sub.textContent = `读不到账号组：${err.message}`;
+    main.innerHTML = `<div class="hd"><h1>数据</h1></div><div class="panel empty">读不到数据：${esc(err.message)}</div>` +
+      `<div class="cmd">读不到数据：看看发布机是不是开着，过一会儿再刷新。</div>`;
   }
 })();
 </script>
