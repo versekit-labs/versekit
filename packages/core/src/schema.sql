@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS cut (
   title      TEXT NOT NULL,
   position   INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
+  -- 版本号：cut.edit 带着它提交，别处先改过就拒绝（ACC-v3-edit-02）。只增不减。
+  rev        INTEGER NOT NULL DEFAULT 0 CHECK (rev >= 0),
   UNIQUE (work_id, title)
 );
 
@@ -68,6 +70,8 @@ CREATE TABLE IF NOT EXISTS cut_version (
   asset_sha  TEXT,
   meta_json  TEXT,
   created_at INTEGER NOT NULL,
+  -- 人改过的通用文案字段（JSON 数组，如 ["title","body"]）：重复入库不覆盖它们（ACC-v3-edit-07）。
+  edited_fields TEXT CHECK (edited_fields IS NULL OR json_valid(edited_fields)),
   UNIQUE (cut_id, language)
 );
 

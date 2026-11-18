@@ -104,6 +104,7 @@ export function migrate() {
   conn.exec(schema); // 幂等：补齐第一遍因缺列而没建成的索引
   backfillCuts(conn);
   dropLegacyPublishUnique(conn);
+  unsnapshotGenericCopy(conn);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(SCHEMA_VERSION);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('installed_at', ?) ON CONFLICT(key) DO NOTHING").run(String(Date.now()));
   try {
@@ -119,6 +120,8 @@ const COLUMNS = {
   run: { lane: "TEXT" },
   publish: { published_at: "INTEGER", cut_id: "TEXT REFERENCES cut(id)", version_id: "TEXT REFERENCES cut_version(id)" },
   work: { source: "TEXT" },
+  cut: { rev: "INTEGER NOT NULL DEFAULT 0 CHECK (rev >= 0)" },
+  cut_version: { edited_fields: "TEXT CHECK (edited_fields IS NULL OR json_valid(edited_fields))" },
   account: { last_checked_at: "INTEGER", group_id: "TEXT REFERENCES account_group(id)", removed_at: "INTEGER" },
   command_audit: { idempotency_key: "TEXT" },
 };
@@ -161,6 +164,46 @@ function backfillCuts(conn) {
   } catch (err) {
     conn.exec("ROLLBACK");
     throw err;
+  }
+}
+
+// 同 store.COPY_ALIASES（store 依赖本文件，这里不能反向 import）。
+const COPY_ALIAS = { "tiktok-api": "tiktok", xhs: "xiaohongshu", bili: "bilibili" };
+
+/**
+ * 旧版 plan.apply 把「通用 + 平台」合并后的文案整份抄进平台稿的 overrides.copy，之后改通用文案传不下去。
+ * 现在平台稿只存「单独写的」字段（ACC-v3-edit-01）：这里把还没发的平台稿里「和通用文案一样、
+ * 且入库时没给这个平台单独写」的字段去掉，让它们重新跟通用。幂等；已发出去的不动。
+ */
+function unsnapshotGenericCopy(conn) {
+  const rows = conn
+    .prepare(
+      `SELECT p.id, p.overrides_json, a.platform, v.meta_json AS version_meta
+         FROM publish p JOIN account a ON a.id = p.account_id JOIN cut_version v ON v.id = p.version_id
+        WHERE p.overrides_json LIKE '%"copy"%'
+          AND p.state IN ('pending_confirm','skipped','queued','notify_pending','draft_pending')`,
+    )
+    .all();
+  for (const r of rows) {
+    try {
+      const ov = JSON.parse(r.overrides_json);
+      const copy = JSON.parse(r.version_meta ?? "null")?.copy;
+      if (!ov?.copy || !copy?.default) continue;
+      const own = copy[COPY_ALIAS[r.platform] ?? r.platform] ?? {};
+      let changed = false;
+      for (const f of ["title", "body", "tags"]) {
+        if (own[f] != null || ov.copy[f] == null) continue;
+        if (JSON.stringify(ov.copy[f]) === JSON.stringify(copy.default[f])) {
+          delete ov.copy[f];
+          changed = true;
+        }
+      }
+      if (!changed) continue;
+      if (!Object.keys(ov.copy).length) delete ov.copy;
+      conn.prepare("UPDATE publish SET overrides_json = ? WHERE id = ?").run(Object.keys(ov).length ? JSON.stringify(ov) : null, r.id);
+    } catch {
+      /* 解析不了的行原样保留 */
+    }
   }
 }
 

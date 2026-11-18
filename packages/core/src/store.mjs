@@ -8,6 +8,7 @@ import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { open, newId, paths, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 import { withBaselines } from "./baseline.mjs";
+import { planRules, takenTimes, nearestAvailable, violationAt } from "./plan-rules.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
 export const PUBLISH_VISIBILITIES = ["public", "private", "friends", "private_then_public"];
@@ -438,6 +439,28 @@ export function checkWorkPlan({ title, source = null, cuts }) {
   return { t, plan, sourceKey };
 }
 
+const editedList = (json) => {
+  try {
+    const list = JSON.parse(json ?? "[]");
+    return Array.isArray(list) ? list.filter((f) => ["title", "body", "tags"].includes(f)) : [];
+  } catch {
+    return [];
+  }
+};
+
+/** 再次入库时：人改过的通用字段取库里现有的值（现有没有就保持没有），其余取这次入库的。 */
+function keepEditedCopy(meta, have) {
+  const edited = editedList(have.edited_fields);
+  if (!edited.length || !meta?.copy) return meta;
+  const current = asObject(have.meta_json)?.copy?.default ?? {};
+  const def = { ...(meta.copy.default ?? {}) };
+  for (const f of edited) {
+    if (f in current) def[f] = current[f];
+    else delete def[f];
+  }
+  return { ...meta, copy: { ...meta.copy, default: def } };
+}
+
 export function upsertWork({ title, source = null, cuts, meta = null }) {
   const { t, plan, sourceKey } = checkWorkPlan({ title, source, cuts });
 
@@ -461,15 +484,18 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
     let position = (conn.prepare("SELECT COALESCE(MAX(position), -1) m FROM cut WHERE work_id = ?").get(work.id).m ?? -1) + 1;
     for (const c of plan) {
       let cut = conn.prepare("SELECT id FROM cut WHERE work_id = ? AND title = ?").get(work.id, c.title);
-      if (cut) stats.cuts.updated++;
-      else {
+      if (cut) {
+        stats.cuts.updated++;
+        conn.prepare("UPDATE cut SET rev = rev + 1 WHERE id = ?").run(cut.id);
+      } else {
         cut = { id: newId("cut") };
         conn.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,?,?)").run(cut.id, work.id, c.title, position++, now);
         stats.cuts.created++;
       }
       for (const v of c.versions) {
-        const have = conn.prepare("SELECT id FROM cut_version WHERE cut_id = ? AND language = ?").get(cut.id, v.language);
-        const metaJson = v.meta ? JSON.stringify(v.meta) : null;
+        const have = conn.prepare("SELECT id, meta_json, edited_fields FROM cut_version WHERE cut_id = ? AND language = ?").get(cut.id, v.language);
+        // 人改过的通用文案字段不被再次入库覆盖（ACC-v3-edit-07）。
+        const metaJson = v.meta ? JSON.stringify(have ? keepEditedCopy(v.meta, have) : v.meta) : null;
         if (have) {
           conn.prepare("UPDATE cut_version SET asset_path = ?, meta_json = COALESCE(?, meta_json) WHERE id = ?").run(v.asset, metaJson, have.id);
           stats.versions.updated++;
@@ -670,23 +696,36 @@ const textList = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === "string
 /**
  * 一条平台稿「现在点确认，实际会发出去」的标题、正文、话题（ACC-v2-plan-03 / ACC-v2-copy-03）。
  *
- * 取值链：人在确认前改过的（overrides 顶层的 title/body/tags）> 生成平台稿时写进去的
- * （overrides.copy）> 语言版本 meta > 作品 meta（旧的 publish.create 把正文/话题放在这里）>
- * 成片标题 > 作品标题。正文、话题没有就是空，不编造。
+ * 通用文案存在语言版本上（meta.copy.default），平台稿只存「单独写的」字段，逐字段覆盖（ACC-v3-edit-01）。
+ * 取值链：人改过的（overrides 顶层的 title/body/tags）> 入库时给这个平台单独写的（overrides.copy）>
+ * 语言版本的通用文案（meta.copy.default）> 语言版本 meta > 作品 meta（旧的 publish.create 把正文/话题放在这里）>
+ * 成片标题 > 作品标题。正文、话题没有就是空，不编造。生效文案只在这一处算，发布、卡片、页面都读它。
  * 平台自己的限制仍在适配器里判；这里给的是页面、卡片、适配器共用的那一个值。
  */
 export function effectiveCopy({ overrides, versionMeta, workMeta, cutTitle = null, workTitle = null }) {
   const ov = asObject(overrides);
   const oc = ov.copy && typeof ov.copy === "object" ? ov.copy : {};
   const vm = asObject(versionMeta);
+  const vd = vm.copy && typeof vm.copy.default === "object" && vm.copy.default ? vm.copy.default : {};
   const wm = asObject(workMeta);
   const pick = (...vals) => vals.find((v) => nonEmpty(v)) ?? null;
   return {
-    title: pick(ov.title, oc.title, vm.title, wm.title, cutTitle, workTitle) ?? "",
+    title: pick(ov.title, oc.title, vd.title, vm.title, wm.title, cutTitle, workTitle) ?? "",
     // 人亲手清空的正文（空字符串）也算数：不回退到入库时写的正文。
-    body: typeof ov.body === "string" ? ov.body : pick(ov.body, ov.desc, oc.body, vm.body, vm.description, wm.body, wm.description) ?? "",
-    tags: textList(ov.tags) ?? textList(oc.tags) ?? textList(vm.tags) ?? textList(wm.tags) ?? [],
+    body: typeof ov.body === "string" ? ov.body : pick(ov.body, ov.desc, oc.body, vd.body, vm.body, vm.description, wm.body, wm.description) ?? "",
+    tags: textList(ov.tags) ?? textList(oc.tags) ?? textList(vd.tags) ?? textList(vm.tags) ?? textList(wm.tags) ?? [],
   };
+}
+
+/** 这条平台稿哪些字段是「单独写的」（不跟通用）：页面据此标「跟通用」或「单独写的」。 */
+export function ownCopyFields(overrides) {
+  const ov = asObject(overrides);
+  const oc = ov.copy && typeof ov.copy === "object" ? ov.copy : {};
+  return [
+    ...(nonEmpty(ov.title) || nonEmpty(oc.title) ? ["title"] : []),
+    ...(typeof ov.body === "string" || nonEmpty(oc.body) ? ["body"] : []),
+    ...(textList(ov.tags) || textList(oc.tags) ? ["tags"] : []),
+  ];
 }
 
 /**
@@ -781,6 +820,7 @@ function workView(work) {
       .all(c.id)
       .map((p) => {
         const copy = effectiveCopy({ overrides: p.overrides_json, versionMeta: p.version_meta, workMeta: work.meta_json, cutTitle: c.title, workTitle: work.title });
+        const schedule = effectiveSchedule({ id: p.id, state: p.state, scheduled_at: p.scheduled_at, account_id: p.account_id, platform: p.platform });
         return {
         id: p.id,
         platform: p.platform,
@@ -793,16 +833,19 @@ function workView(work) {
         // 哪些是空的：标题总有回退（成片标题），正文、话题没写就是空，页面据此提示。
         empty: [...(copy.title ? [] : ["title"]), ...(copy.body ? [] : ["body"]), ...(copy.tags.length ? [] : ["tags"])],
         titleEdited: Boolean(nonEmpty(asObject(p.overrides_json).title)),
+        ownFields: ownCopyFields(p.overrides_json),
         versionId: p.version_id,
         language: p.language ?? null,
-        scheduledAt: p.scheduled_at,
+        // 建议时间过了还没确认的，读出来按平台规则顺延（ACC-v3-time-03）；原定时间一并给出，页面写「原定…，已顺延」。
+        scheduledAt: schedule.at,
+        ...(schedule.shifted ? { originalAt: schedule.originalAt, shifted: true } : {}),
         url: p.external_url,
         error: p.error_code ? { code: p.error_code, message: p.error_message } : null,
         publishedAt: p.published_at ?? null,
         accountId: p.account_id,
         };
       });
-    return { id: c.id, title: c.title, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
+    return { id: c.id, title: c.title, rev: c.rev ?? 0, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
   });
   attachBaselines(cuts);
   const allStates = cuts.flatMap((c) => c.publishes.map((p) => p.state));
@@ -1165,10 +1208,60 @@ export const CONFIRMABLE_STATES = ["pending_confirm", "skipped"];
  */
 export const PER_ITEM_PLATFORMS = ["xiaohongshu"];
 
+/** 「今天 20:00」「明天 09:30」「11-20 20:00」：对人说的时间。 */
+export function whenLabel(t, now = Date.now()) {
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, "0");
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(d) - day(new Date(now))) / 86400e3);
+  const head = diff === 0 ? "今天" : diff === 1 ? "明天" : `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return `${head} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const platformName = (platform) => COPY_LIMITS[copyPlatformOf(platform)]?.label ?? platform;
+
+/**
+ * 等确认的平台稿「读出来」的建议时间（ACC-v3-time-03）：已经过去的，按平台规则（每日上限、最小间隔）
+ * 顺延到最近的可用时间，并带上原定时间；没过期的原样。不写库——确认时（admit）才把顺延后的时间存下来，
+ * 所以确认按钮不会因为时间过期而失败。row 要有 id、state、scheduled_at、account_id、platform。
+ */
+export function effectiveSchedule(row, now = Date.now()) {
+  const at = row.scheduled_at ?? null;
+  if (at == null || at > now || !CONFIRMABLE_STATES.includes(row.state)) return { at, originalAt: null, shifted: false };
+  const next = nearestAvailable(now + 60e3, takenTimes(row.account_id, row.id), planRules(row.platform), now);
+  return next == null ? { at, originalAt: null, shifted: false } : { at: next, originalAt: at, shifted: true };
+}
+
+const coded = (code, message, extra = {}) => Object.assign(new Error(message), { code }, extra);
+
+/**
+ * 「现在发」不绕过任何检查（ACC-v3-time-09）：账号登录状态、平台每日上限、最小间隔。
+ * 过不了返回 { code, reason, nextAt }——原因里已带最近能发的时间，调用方不发这一条、留在待确认。
+ */
+function nowBlocker(row, now) {
+  if (UNUSABLE_ACCOUNT_STATES.includes(row.account_state)) {
+    return { code: "account_unusable", reason: accountUnusableReason({ id: row.account_id, platform: row.platform, handle: row.handle, state: row.account_state }), nextAt: null };
+  }
+  const rules = planRules(row.platform);
+  const taken = takenTimes(row.account_id, row.id);
+  const v = violationAt(now, taken, rules);
+  if (!v) return null;
+  const nextAt = nearestAvailable(now, taken, rules, now);
+  const why =
+    v.reason === "daily_cap"
+      ? `${platformName(row.platform)} 今天已经排了 ${v.count} 条，每日上限 ${rules.dailyCap} 条`
+      : `和${whenLabel(v.conflictAt, now)}那条隔得太近，最小间隔 ${rules.minGapMinutes} 分钟`;
+  return {
+    code: v.reason === "daily_cap" ? "plan_daily_cap" : "plan_min_gap",
+    reason: `${why}，现在不能发${nextAt != null ? `；最近能发：${whenLabel(nextAt, now)}` : ""}`,
+    nextAt,
+  };
+}
+
 const confirmRows = (where, ...params) =>
   open()
     .prepare(
-      `SELECT p.id, p.state, p.mode, p.scheduled_at, p.account_id, p.cut_id, p.overrides_json, a.platform, a.handle, a.removed_at
+      `SELECT p.id, p.state, p.mode, p.scheduled_at, p.account_id, p.cut_id, p.overrides_json, a.platform, a.handle, a.removed_at, a.state AS account_state
          FROM publish p JOIN account a ON a.id = p.account_id
         WHERE ${where}
         ORDER BY p.created_at, p.id`,
@@ -1219,12 +1312,23 @@ function admit(row, { reason, now, at = null }) {
   if (missing) fail(missing);
   // 账号已从组里移除：确认了也发不出去，而且会从一个已让出的槽位发帖。说清楚，不进队列。
   if (row.removed_at) fail(`${label(row)} 已从账号组移除，这条平台稿不能再确认（${row.id}）`);
-  const patch = at != null ? { scheduled_at: at } : {};
+  // 按时间发：建议时间已过的，顺延后存下来再排队，不因为时间过期而失败（ACC-v3-time-03）。
+  const eff = at == null ? effectiveSchedule(row, now) : null;
+  const patch = at != null ? { scheduled_at: at } : eff?.shifted ? { scheduled_at: eff.at } : {};
   transitionPublish(row.id, "queued", { reason, patch });
-  const when = at ?? row.scheduled_at;
+  const when = at ?? eff?.at ?? row.scheduled_at;
   const runAfter = when && when > now ? when : null;
   const runId = row.mode === "manual" ? null : queuePublish({ id: row.id, account_id: row.account_id }, { runAfter });
-  return { publishId: row.id, platform: row.platform, handle: row.handle, state: "queued", scheduledAt: when ?? null, runAfter, runId };
+  return {
+    publishId: row.id,
+    platform: row.platform,
+    handle: row.handle,
+    state: "queued",
+    scheduledAt: when ?? null,
+    ...(eff?.shifted ? { originalAt: eff.originalAt, shifted: true } : {}),
+    runAfter,
+    runId,
+  };
 }
 
 function inTransaction(fn) {
@@ -1246,10 +1350,13 @@ function inTransaction(fn) {
  *    小红书的不带上，原样留在待确认，回执里列出来让人逐条决定。
  *  · 给 publishId：只确认这一条（小红书「按建议时间发」走这里）。
  */
-export function approvePublishes({ cutId = null, publishId = null, now = Date.now() } = {}) {
+export function approvePublishes({ cutId = null, publishId = null, when = "scheduled", now = Date.now() } = {}) {
   if (Boolean(cutId) === Boolean(publishId)) fail("确认要指定一支成片（--cut）或一条平台稿（--publish），二选一");
+  if (!["scheduled", "now"].includes(when)) fail(`发布方式只能是 scheduled（预约发）或 now（现在发），收到：${when}`);
+  const immediate = when === "now";
   if (publishId) {
     const row = requireConfirmable(publishId);
+    if (immediate) return { approved: [publishNow({ publishId, now })], perItem: [], when };
     return inTransaction(() => ({ approved: [admit(row, { reason: "approved_by_operator", now })], perItem: [] }));
   }
   const cut = requireCut(cutId);
@@ -1271,13 +1378,33 @@ export function approvePublishes({ cutId = null, publishId = null, now = Date.no
     }
     fail(`成片「${cut.title}」没有等确认的平台稿`);
   }
-  const approved = inTransaction(() => batch.map((r) => admit(r, { reason: "approved_by_operator", now })));
-  return { cutId, title: cut.title, approved, perItem, ...(removed.length ? { removed } : {}), ...(incomplete.length ? { incomplete } : {}) };
+  // 现在发：每一条先过账号状态、每日上限、最小间隔；过不了的不发，留在待确认，回执里写原因和最近能发的时间。
+  const held = [];
+  const go = immediate
+    ? batch.filter((r) => {
+        const block = nowBlocker(r, now);
+        if (block) held.push({ publishId: r.id, platform: r.platform, handle: r.handle, ...block });
+        return !block;
+      })
+    : batch;
+  const approved = inTransaction(() => go.map((r) => (immediate ? admit(r, { reason: "approved_now_by_operator", now, at: now }) : admit(r, { reason: "approved_by_operator", now }))));
+  return {
+    cutId,
+    title: cut.title,
+    when,
+    approved,
+    perItem,
+    ...(held.length ? { held } : {}),
+    ...(removed.length ? { removed } : {}),
+    ...(incomplete.length ? { incomplete } : {}),
+  };
 }
 
 /** publish.now：这一条现在就发（建议时间改成现在）。 */
 export function publishNow({ publishId, now = Date.now() }) {
   const row = requireConfirmable(publishId);
+  const block = nowBlocker(row, now);
+  if (block) throw coded(block.code, `${label(row)} 这条现在发不了：${block.reason}`, { suggestedAt: block.nextAt });
   return inTransaction(() => admit(row, { reason: "approved_now_by_operator", now, at: now }));
 }
 
@@ -1406,6 +1533,7 @@ export function editPublish({
     open()
       .prepare("UPDATE publish SET overrides_json = ?, scheduled_at = ?, mode = ?, updated_at = ? WHERE id = ?")
       .run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, changes.at ? at : row.scheduled_at, mode, Date.now(), row.id);
+    if (row.cut_id) open().prepare("UPDATE cut SET rev = rev + 1 WHERE id = ?").run(row.cut_id);
     emit({ type: "publish.edited", severity: "info", publishId: row.id, payload: { state: row.state, changes } });
     return {
       publishId: row.id,
@@ -1418,6 +1546,210 @@ export function editPublish({
       scheduledAt: changes.at ? at : row.scheduled_at,
       ...(touchesTiktok ? { tiktok: { ...(overrides.tiktok ?? {}), caption: overrides.caption ?? null, draft: overrides.draft === true } } : {}),
       changes,
+    };
+  });
+}
+
+// ------------------------------------------------------------------ 改内容：cut.edit（ACC-v3-edit-*）
+
+/**
+ * 还能改的平台稿：等确认的（含先不发），以及已确认、还没到点的（按时间发的那些，ACC-v3-edit-06）。
+ * 已经发出去的、正在发的（含现在发）、失败的都不能改。
+ */
+const isEditable = (row, now) =>
+  CONFIRMABLE_STATES.includes(row.state) || (row.state === "queued" && row.scheduled_at != null && row.scheduled_at > now);
+
+const COPY_FIELDS = ["title", "body", "tags"];
+
+function copyField(field, value, where) {
+  if (field === "tags") {
+    if (!Array.isArray(value) || value.some((t) => typeof t !== "string")) fail(`${where}：话题必须是字符串数组（不带 #）`);
+    return value.map((t) => t.trim().replace(/^#+/, "")).filter(Boolean);
+  }
+  if (typeof value !== "string") fail(`${where}：${field === "title" ? "标题" : "正文"}必须是字符串`);
+  if (field === "title") return requireString(value, `${where}的标题`, { max: 200 });
+  if (value.length > 20000) fail(`${where}：正文太长（最多 20000 字）`);
+  return value.trim();
+}
+
+/** 预约的时间选到过去、或碰到平台规则：说原因和最近能排的时间（ACC-v3-time-04）。 */
+function assertEditTime(row, at, now) {
+  if (!Number.isInteger(at) || at < 0) fail("时间必须是毫秒时间戳");
+  const rules = planRules(row.platform);
+  const taken = takenTimes(row.account_id, row.id);
+  const past = at <= now;
+  const v = past ? null : violationAt(at, taken, rules);
+  if (!past && !v) return;
+  const nextAt = nearestAvailable(Math.max(at, now + 60e3), taken, rules, now);
+  const why = past
+    ? `${whenLabel(at, now)} 已经过去了`
+    : v.reason === "daily_cap"
+      ? `${platformName(row.platform)} 那天已经排了 ${v.count} 条，每日上限 ${rules.dailyCap} 条`
+      : `和${whenLabel(v.conflictAt, now)}那条隔得太近，最小间隔 ${rules.minGapMinutes} 分钟`;
+  throw coded(past ? "E_TIME_PAST" : v.reason === "daily_cap" ? "plan_daily_cap" : "plan_min_gap", `${why}${nextAt != null ? `；最近能排：${whenLabel(nextAt, now)}` : ""}`, { suggestedAt: nextAt });
+}
+
+/**
+ * cut.edit：改一支成片的内容，一次提交、一个事务（ACC-v3-edit-02）。
+ *  · rev：打开编辑时读到的成片版本号；别处先改过（rev 变了）就拒绝，不覆盖；
+ *  · generic：{ title?, body?, tags? } 改通用文案，存在 language 指定的语言版本上（只有一个版本时可省略）；
+ *  · platforms：{ <平台稿 id>: { title?, body?, tags?, at? } }，字段给值 = 单独写，给 null = 改回跟通用；
+ *    at 是按时间发的时间，只有给了才提交（只改文案不碰时间，ACC-v3-time-02）。
+ * 只校验这次动过的字段：超出某个平台限制的新问题拒绝、不截断；入库时就有的问题不拦无关的保存（ACC-v3-edit-08）。
+ * 现在发 / 预约发不在这里选（ACC-v3-time-08）。
+ */
+export function editCut({ cutId, rev, language = null, generic = null, platforms = null, now = Date.now() }) {
+  const conn = open();
+  const cut = conn.prepare("SELECT id, work_id, title, rev FROM cut WHERE id = ?").get(cutId);
+  if (!cut) fail(`没有这支成片：${cutId}`);
+  if (!Number.isInteger(rev) || rev < 0) fail("rev 必须是整数：用打开编辑时读到的成片版本号");
+  if (cut.rev !== rev) throw coded("E_REV_CONFLICT", "这支成片刚在别处改过，重新打开再改", { rev: cut.rev });
+  const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+  if (generic != null && !isObj(generic)) fail("generic 必须是 { title, body, tags } 对象");
+  if (platforms != null && !isObj(platforms)) fail("platforms 必须是 { <平台稿 id>: { title, body, tags, at } } 对象");
+  if (!Object.keys(generic ?? {}).length && !Object.keys(platforms ?? {}).length) fail("要改什么？给 generic（通用文案）或 platforms（平台稿）");
+
+  const work = conn.prepare("SELECT title, meta_json FROM work WHERE id = ?").get(cut.work_id);
+  const versions = conn.prepare("SELECT * FROM cut_version WHERE cut_id = ? ORDER BY rowid").all(cut.id);
+  const rows = conn
+    .prepare(
+      `SELECT p.id, p.state, p.mode, p.scheduled_at, p.account_id, p.version_id, p.overrides_json, a.platform, a.handle, v.meta_json AS version_meta
+         FROM publish p JOIN account a ON a.id = p.account_id LEFT JOIN cut_version v ON v.id = p.version_id
+        WHERE p.cut_id = ? ORDER BY p.created_at, p.id`,
+    )
+    .all(cut.id);
+
+  // 通用文案：写到语言版本的 meta.copy.default，并记下人改过哪些字段。
+  let version = null;
+  let nextMeta = null;
+  let nextEdited = null;
+  const genericChanges = {};
+  if (generic && Object.keys(generic).length) {
+    for (const k of Object.keys(generic)) if (!COPY_FIELDS.includes(k)) fail(`通用文案里没有「${k}」这个字段（只有 title / body / tags）`);
+    if (language != null) version = versions.find((v) => v.language === language) ?? fail(`成片「${cut.title}」没有「${language}」这个语言版本`);
+    else if (versions.length === 1) version = versions[0];
+    else fail(`成片「${cut.title}」有 ${versions.length} 个语言版本（${versions.map((v) => v.language).join("、")}），改通用文案要指定语言`);
+    const meta = asObject(version.meta_json);
+    const copy = { ...(meta.copy && typeof meta.copy === "object" ? meta.copy : {}) };
+    const def = { ...(copy.default ?? {}) };
+    for (const [k, v] of Object.entries(generic)) {
+      const to = copyField(k, v, "通用文案");
+      genericChanges[k] = { from: def[k] ?? null, to };
+      if ((k === "tags" && !to.length) || (k === "body" && !to)) delete def[k];
+      else def[k] = to;
+    }
+    copy.default = def;
+    nextMeta = { ...meta, copy };
+    nextEdited = [...new Set([...editedList(version.edited_fields), ...Object.keys(generic)])];
+  }
+
+  // 平台稿：逐条改字段 / 改回跟通用 / 改时间。
+  const targets = new Map();
+  for (const [publishId, spec] of Object.entries(platforms ?? {})) {
+    const row = rows.find((r) => r.id === publishId) ?? fail(`成片「${cut.title}」下没有这条平台稿：${publishId}`);
+    if (!isObj(spec) || !Object.keys(spec).length) fail(`平台稿 ${publishId}：要改什么？给 title / body / tags / at`);
+    for (const k of Object.keys(spec)) if (![...COPY_FIELDS, "at"].includes(k)) fail(`平台稿 ${publishId}：不认识「${k}」（只有 title / body / tags / at；现在发还是按时间发在确认时选）`);
+    if (!isEditable(row, now)) {
+      fail(`${platformName(row.platform)} ${handleLabel(row.handle)} 这条${["published", "published_limited"].includes(row.state) ? "已经发出去了" : "已经在发或不在等待中"}（${row.state}），不能改`);
+    }
+    targets.set(publishId, { row, spec });
+  }
+
+  const after = new Map(); // publishId → { overrides, scheduledAt, changes }
+  const touched = new Set([...targets.keys()]);
+  if (version) for (const r of rows) if (r.version_id === version.id && isEditable(r, now)) touched.add(r.id);
+  for (const id of touched) {
+    const { row, spec = {} } = targets.get(id) ?? { row: rows.find((r) => r.id === id) };
+    const overrides = asObject(row.overrides_json);
+    const changes = {};
+    for (const [k, v] of Object.entries(spec)) {
+      if (k === "at") continue;
+      const own = ownCopyFields(row.overrides_json).includes(k);
+      if (v === null) {
+        // 改回跟通用：顶层和入库时写的都去掉。
+        delete overrides[k];
+        if (overrides.copy) {
+          delete overrides.copy[k];
+          if (!Object.keys(overrides.copy).length) delete overrides.copy;
+        }
+        changes[k] = { from: own ? "own" : "generic", to: "generic" };
+      } else {
+        const to = copyField(k, v, `${platformName(row.platform)} 的文案`);
+        overrides[k] = to;
+        changes[k] = { from: own ? "own" : "generic", to };
+      }
+    }
+    let scheduledAt = row.scheduled_at;
+    if ("at" in spec && spec.at !== null) {
+      assertEditTime(row, spec.at, now);
+      changes.at = { from: row.scheduled_at ?? null, to: spec.at };
+      scheduledAt = spec.at;
+    }
+    after.set(id, { row, overrides, scheduledAt, changes });
+  }
+
+  // 只拦这次新出现的超限（入库时就超的不拦无关的保存）。
+  const problems = [];
+  for (const [id, { row, overrides }] of after) {
+    const ctx = { workMeta: work.meta_json, cutTitle: cut.title, workTitle: work.title };
+    const was = effectiveCopy({ overrides: row.overrides_json, versionMeta: row.version_meta, ...ctx });
+    const now_ = effectiveCopy({
+      overrides: JSON.stringify(overrides),
+      versionMeta: version && row.version_id === version.id ? JSON.stringify(nextMeta) : row.version_meta,
+      ...ctx,
+    });
+    const had = copyViolations(row.platform, was);
+    for (const message of copyViolations(row.platform, now_)) if (!had.includes(message)) problems.push({ publishId: id, platform: row.platform, message });
+  }
+  if (problems.length) {
+    throw coded("E_COPY_LIMIT", `${problems.map((p) => p.message).join("；")}（超限不会自动截断，请改短，或给该平台单独写一份）`, { problems });
+  }
+
+  return inTransaction(() => {
+    const bumped = conn.prepare("UPDATE cut SET rev = rev + 1 WHERE id = ? AND rev = ?").run(cut.id, rev);
+    if (!bumped.changes) throw coded("E_REV_CONFLICT", "这支成片刚在别处改过，重新打开再改");
+    if (version) {
+      conn.prepare("UPDATE cut_version SET meta_json = ?, edited_fields = ? WHERE id = ?").run(JSON.stringify(nextMeta), JSON.stringify(nextEdited), version.id);
+    }
+    const out = [];
+    for (const [id, { row, overrides, scheduledAt, changes }] of after) {
+      if (Object.keys(changes).length) {
+        conn
+          .prepare("UPDATE publish SET overrides_json = ?, scheduled_at = ?, updated_at = ? WHERE id = ?")
+          .run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, scheduledAt, Date.now(), id);
+        // 已确认、还没到点的：时间变了，队列里的开始时间跟着变；没改时间就仍按原来的时间发。
+        if (changes.at && row.state === "queued") {
+          conn.prepare("UPDATE run SET run_after = ? WHERE kind = 'publish' AND target_type = 'publish' AND target_id = ? AND state = 'queued'").run(scheduledAt, id);
+        }
+        emit({ type: "publish.edited", severity: "info", publishId: id, payload: { state: row.state, via: "cut.edit", changes } });
+      }
+      const shown = effectiveCopy({
+        overrides: JSON.stringify(overrides),
+        versionMeta: version && row.version_id === version.id ? JSON.stringify(nextMeta) : row.version_meta,
+        workMeta: work.meta_json,
+        cutTitle: cut.title,
+        workTitle: work.title,
+      });
+      out.push({
+        publishId: id,
+        platform: row.platform,
+        handle: row.handle,
+        state: row.state,
+        title: shown.title,
+        body: shown.body,
+        tags: shown.tags,
+        ownFields: ownCopyFields(JSON.stringify(overrides)),
+        scheduledAt,
+        changes,
+      });
+    }
+    return {
+      cutId: cut.id,
+      title: cut.title,
+      rev: rev + 1,
+      ...(version ? { language: version.language, generic: nextMeta.copy.default, editedFields: nextEdited, genericChanges } : {}),
+      publishes: out,
+      ...(out.some((p) => p.state === "queued") ? { note: "已确认的仍按原来的时间发" } : {}),
     };
   });
 }

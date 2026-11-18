@@ -1542,6 +1542,36 @@ async function cmdGroup() {
   throw new Error("用法：vk group list | add <名字> | use <组> | rename <组> <新名字>");
 }
 
+/** vk cut edit：改一支成片的内容（cut.edit）。平台稿的改动用 --platforms 给 JSON 或 JSON 文件。 */
+async function cmdCut() {
+  const [sub] = pos.slice(1);
+  if (sub !== "edit") throw new Error("用法：vk cut edit <cutId> --rev <版本号> [--lang <语言>] [--title <通用标题>] [--body <通用正文>] [--tags <话题,逗号分隔>] [--platforms <JSON或文件>]");
+  const cutId = pos[2];
+  const rev = val("--rev") != null ? Number(val("--rev")) : NaN;
+  if (!cutId || !Number.isInteger(rev)) throw new Error("用法：vk cut edit <cutId> --rev <版本号>（版本号在 vk work show 里，每支成片一个）…");
+  const tags = val("--tags") != null ? val("--tags").split(/[,，]/).map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
+  const generic = {
+    ...(val("--title") != null ? { title: val("--title") } : {}),
+    ...(val("--body") != null ? { body: val("--body") } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+  };
+  let platforms;
+  if (val("--platforms") != null) {
+    const raw = val("--platforms");
+    platforms = JSON.parse(existsSync(raw) ? readFileSync(raw, "utf8") : raw);
+  }
+  const data = await send(
+    "cut.edit",
+    { cutId, rev, ...(val("--lang") ? { language: val("--lang") } : {}), ...(Object.keys(generic).length ? { generic } : {}), ...(platforms ? { platforms } : {}) },
+    { log },
+  );
+  if (human) {
+    console.log(`已改「${data.title}」，版本号 ${data.rev}${data.note ? `。${data.note}` : ""}`);
+    for (const p of data.publishes) console.log(`  ${platformLabelOf(p.platform).padEnd(10)}${p.title}${p.ownFields.length ? `（单独写的：${p.ownFields.join("、")}）` : "（跟通用）"}`);
+  } else out(data);
+  return data;
+}
+
 async function cmdPublish() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
@@ -1562,10 +1592,11 @@ async function cmdPublish() {
   if (sub === "approve") {
     const cutId = val("--cut");
     const publishId = val("--publish") ?? pos[2];
-    if (!cutId && !publishId) throw new Error("用法：vk publish approve --cut <cutId> | --publish <publishId>");
-    const data = await send("publish.approve", { ...(cutId ? { cutId } : {}), ...(publishId && !cutId ? { publishId } : {}) }, { log });
+    if (!cutId && !publishId) throw new Error("用法：vk publish approve --cut <cutId> | --publish <publishId> [--now]");
+    const data = await send("publish.approve", { ...(cutId ? { cutId } : {}), ...(publishId && !cutId ? { publishId } : {}), ...(has("--now") ? { when: "now" } : {}) }, { log });
     if (human) {
-      for (const a of data.approved) console.log(`已确认 ${platformLabelOf(a.platform).padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}`);
+      for (const a of data.approved) console.log(`已确认 ${platformLabelOf(a.platform).padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}${a.shifted ? `（原定 ${fmtTime(a.originalAt)}，已顺延）` : ""}`);
+      for (const x of data.held ?? []) console.log(`没发 ${platformLabelOf(x.platform)} ${x.publishId}：${x.reason}`);
       for (const x of data.incomplete ?? []) console.log(`还不能确认 ${platformLabelOf(x.platform)} ${x.publishId}：${x.reason}`);
       for (const x of data.perItem ?? []) console.log(`待逐条决定 ${x.platform.padEnd(9)}${x.publishId}：vk publish approve --publish ${x.publishId} | now | manual`);
     } else out(data);
@@ -1958,6 +1989,7 @@ function usage() {
       "  vk publish now|manual <publishId>                          小红书逐条：现在发 / 我自己发",
       "  vk publish skip --cut <cutId>                              这支先不发（以后还能再确认）",
       "  vk publish edit <publishId> [--title <标题>] [--at <时间>]  确认前改标题或时间",
+      "  vk cut edit <cutId> --rev <版本号> [--title ..] [--platforms <JSON>]  改成片内容（通用文案 + 各平台），一次提交",
       "  vk approval list | link <publishId> | apply <token> retry|cancel",
       "  vk collect [--now] [--platform <p>]",
       "  vk stats works [--range 7d] [--group <组>] | series <publishId>",
@@ -1998,6 +2030,7 @@ try {
   else if (cmd === "relay") await cmdRelay();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
+  else if (cmd === "cut") await cmdCut();
   else if (cmd === "collect") await cmdCollect();
   else if (cmd === "stats") await cmdStats();
   else if (cmd === "schedule") await cmdSchedule();

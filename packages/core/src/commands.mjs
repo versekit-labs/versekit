@@ -592,14 +592,27 @@ export const COMMANDS = [
   // 与 publish.confirm（notify 模式下确认已在 App 里发完）是两回事，与 approval.*（失败后的签名审批链接）也是两回事。
   {
     name: "publish.approve",
-    summary: "确认发布：给成片就确认它下面所有非小红书的待确认平台稿，按建议时间发；给平台稿就只确认这一条（小红书逐条）",
+    summary: "确认发布：给成片就确认它下面所有非小红书的待确认平台稿，按建议时间发（when=now 则现在发，照样过每日上限、最小间隔、账号状态，过不了的留在待确认并写原因）；给平台稿就只确认这一条（小红书逐条）",
     remote: true,
-    args: { cutId: "string?", publishId: "string?" },
-    idempotent: (a) => `approve:${a.cutId ?? a.publishId}`,
+    args: { cutId: "string?", publishId: "string?", when: "string?" },
+    idempotent: (a) => `approve:${a.cutId ?? a.publishId}:${a.when ?? "scheduled"}`,
     ttlMs: 24 * 3600e3,
     http: { method: "POST", path: "/api/publishes/approve" },
-    cli: { usage: "vk publish approve --cut <cutId> | --publish <publishId>" },
+    cli: { usage: "vk publish approve --cut <cutId> | --publish <publishId> [--now]" },
     card: { label: "按时间发", style: "primary", confirm: false },
+    audit: "always",
+  },
+  {
+    name: "cut.edit",
+    summary: "改一支成片的内容：通用文案、各平台单独写的字段、按时间发的时间，一次提交、带 rev（别处先改过就拒绝）",
+    remote: true,
+    args: { cutId: "string", rev: "number", language: "string?", generic: "object?", platforms: "object?" },
+    // rev 本身就是幂等保护：同一个 rev 只能成功一次。
+    idempotent: (a) => `cutedit:${a.cutId}:${a.rev}`,
+    ttlMs: 24 * 3600e3,
+    http: { method: "POST", path: "/api/cuts/:cutId/edit" },
+    cli: { usage: "vk cut edit <cutId> --rev <版本号> [--lang <语言>] [--title <通用标题>] [--body <通用正文>] [--tags <话题,逗号分隔>] [--platforms <JSON或文件>]" },
+    card: null,
     audit: "always",
   },
   {
@@ -882,6 +895,7 @@ export function parseArgs(command, input = {}) {
     if (type === "number" && typeof value !== "number") throw new Error(`参数 ${key} 必须是数字`);
     if (type === "boolean" && typeof value !== "boolean") throw new Error(`参数 ${key} 必须是布尔值`);
     if (type === "array" && !Array.isArray(value)) throw new Error(`参数 ${key} 必须是数组`);
+    if (type === "object" && (typeof value !== "object" || Array.isArray(value))) throw new Error(`参数 ${key} 必须是对象`);
     if (type === "string[]" && !Array.isArray(value)) throw new Error(`参数 ${key} 必须是字符串数组`);
     if (type === "auto|manual" && !["auto", "manual"].includes(value)) throw new Error(`参数 ${key} 只能是 auto 或 manual`);
     out[key] = value;

@@ -86,7 +86,11 @@ test("ACC-v2-confirm-01 红线：到点但未确认的平台稿，跑一轮队�
   for (const p of PLATFORMS) assert.equal(stateOf(f.pub[p]), "pending_confirm");
 
   // 人确认之后才发——证明上面不是因为队列坏了才没发。
-  h["publish.approve"]({ cutId: f.cutId });
+  const res = h["publish.approve"]({ cutId: f.cutId });
+  // 过期的建议时间在确认时按平台规则顺延到将来（ACC-v3-time-03），不会因为过期失败；
+  // 这里把它们提前到「到点」，只验证确认之后队列确实会发。
+  assert.ok(res.approved.every((a) => a.shifted && a.scheduledAt > Date.now()), "过期的建议时间顺延到将来");
+  db().prepare("UPDATE run SET run_after = ? WHERE kind='publish'").run(Date.now() - 1);
   await runner().tick();
   assert.equal(callsFor(f.pub.tiktok), 1);
   assert.equal(callsFor(f.pub.bilibili), 1);
