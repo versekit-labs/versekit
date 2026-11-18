@@ -51,7 +51,35 @@ window.VKPanel = function createPanel(state) {
     web: ["官", "官网", "web"], gongzhonghao: ["公", "公众号", "mp"],
   };
   const pfOf = (key) => PF[key] ?? [String(key ?? "?").slice(0, 1), String(key ?? ""), "web"];
-  const pfBadge = (key) => { const [ch, name, cls] = pfOf(key); return `<span class="pf ${cls}" title="${esc(name)}">${esc(ch)}</span>`; };
+  // 官方标志文件：logos/<file>.svg。文件在才用标志，不在就回落字母徽章（ACC-v3-fid-09；素材清单见 logos/README.md）。
+  const LOGO_FILE = { xiaohongshu: "xiaohongshu", douyin: "douyin", shipinhao: "shipinhao", bilibili: "bilibili", tiktok: "tiktok", "tiktok-api": "tiktok", youtube: "youtube", web: "web", gongzhonghao: "gongzhonghao" };
+  const logoUrl = (f) => `/logos/${f}.svg`;
+  const LOGOS = new Set();
+  const upgradeLogos = (root = document) => root.querySelectorAll?.(".pf[data-logo]:not(.lg)").forEach((n) => {
+    if (!LOGOS.has(n.dataset.logo)) return;
+    n.style.setProperty("--logo", `url(${logoUrl(n.dataset.logo)})`);
+    n.classList.add("lg");
+  });
+  // logos/index.json 列出已放进来的文件名（没放的不去请求，免得控制台一串 404）。
+  if (typeof fetch !== "undefined" && typeof Image !== "undefined") {
+    fetch("/logos/index.json").then((r) => (r.ok ? r.json() : [])).catch(() => []).then((list) => {
+      for (const f of Array.isArray(list) ? list : []) {
+        const im = new Image();
+        im.onload = () => { LOGOS.add(f); upgradeLogos(); };
+        im.src = logoUrl(f);
+      }
+    });
+    if (typeof MutationObserver !== "undefined" && document.body) new MutationObserver(() => upgradeLogos()).observe(document.body, { childList: true, subtree: true });
+  }
+  // state：""=已发布/默认（品牌色），"off"=还没发（灰色标志），"err"=出了问题（红底白标志）；tip 给读屏和悬停。
+  const pfBadge = (key, state = "", tip = "") => {
+    const [ch, name, cls] = pfOf(key);
+    const f = LOGO_FILE[key];
+    const lg = f && LOGOS.has(f);
+    const label = tip ? `${name}：${tip}` : name;
+    const a11y = tip ? ` role="img" aria-label="${esc(label)}"` : "";
+    return `<span class="pf ${cls} ${state}${lg ? " lg" : ""}"${f ? ` data-logo="${f}"` : ""}${lg ? ` style="--logo:url(${logoUrl(f)})"` : ""} title="${esc(label)}"${a11y}>${esc(ch)}</span>`;
+  };
   const pfName = (key) => pfOf(key)[1];
   // tiktok-api（官方接口）也逐条确认：隐私级别要人亲手选，不能跟着整支成片一起批量确认（#173）。
   const PER_ITEM = new Set(["xiaohongshu", "tiktok-api"]);
@@ -154,7 +182,7 @@ window.VKPanel = function createPanel(state) {
           `<input type="datetime-local" value="${esc(local)}" data-at="${esc(p.id)}" aria-label="${esc(name)} 发布时间">` +
           `<button class="btn" type="button" data-save="${esc(p.id)}">好了</button>${editFields(p, name)}</div>`;
       }
-      return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform)}` +
+      return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform, bad ? "err" : ["published", "published_limited"].includes(p.state) ? "" : "off")}` +
         `<span class="nm">${esc(name)}</span>` +
         `<button class="ti tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}" title="${esc(p.title)}">${esc(p.title)}</button>` +
         `<span class="tm">${esc(w.text)}</span>${rowState(p)}${isOpen(p.id) ? detHtml(p) : ""}</div>`;
