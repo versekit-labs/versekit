@@ -13,7 +13,7 @@ import { hashFile, ping, pushDelivery, pullOnce } from "../../relay/src/index.mj
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
-import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules } from "./plan-rules.mjs";
+import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules, dayUsage } from "./plan-rules.mjs";
 import * as planModel from "./plan.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -1009,9 +1009,16 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "stats.series": ({ publishId }) => ({ publishId, points: store.seriesFor({ publishId }) }),
 
-    "publish.list": ({ state = null, platform = null, limit = 100 }) => ({
-      rows: store.listPublishes({ state, platform, limit }),
-    }),
+    // 给了 from / to 就是日历的取数（ACC-v3-cal-08）：只取可见范围、只限当前组，
+    // 连同「天 × 平台」额度一起返回，额度的上限与排期用同一条 planRules。
+    "publish.list": ({ state = null, platform = null, limit = 100, from = null, to = null, group = null }) => {
+      if (from == null && to == null) return { rows: store.listPublishes({ state, platform, limit }) };
+      if (from == null || to == null) fail("看日历要同时给 --from 和 --to");
+      const g = group ? requireGroup(group) : store.currentGroup();
+      const groupId = g?.id ?? null;
+      const rows = store.listCalendarPublishes({ from, to, groupId }).filter((r) => (!state || r.state === state) && (!platform || r.platform === platform));
+      return { group: g ? { id: g.id, name: g.name } : null, from, to, rows, quota: dayUsage({ from, to, groupId }) };
+    },
 
     // 排期投影与撞车都在 core 里算（schedule.mjs），Web 与 CLI 只读结果。
     "schedule.list": ({ group = null, from = null, to = null }) => listSchedule({ group, from, to }),

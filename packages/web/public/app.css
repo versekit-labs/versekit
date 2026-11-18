@@ -266,3 +266,40 @@ video.cv{pointer-events:none}
   .app .hd .r{margin-left:0}
 }.st.res{font-weight:600;color:var(--ink)}
 .st.res .x{font-size:14px}
+
+/* 日历：周 / 月。最小单位是一条平台稿；不用新颜色，状态沿用 .st 的四种点 */
+.views{margin-left:auto}
+.calnav{display:flex;gap:8px;align-items:center}
+.calnav b{font-size:15px;font-weight:600;margin:0 6px;white-space:nowrap}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:12px;background:var(--paper);overflow:hidden}
+.cal .dh{padding:8px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink2);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.cal .dh b{font-size:14px;color:var(--ink);font-weight:600}
+.cal .dh.now b{background:var(--ink);color:#fffffe;border-radius:5px;padding:0 6px}
+.cal .dh .q{margin-left:auto;white-space:nowrap}.cal .dh .q.over{color:var(--bad);font-weight:600}
+.cal .dc{min-height:340px;padding:8px 6px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.cal .dh+.dh,.cal .dc+.dc{border-left:1px solid var(--line)}
+.cal .dc.past{background:var(--bg)}
+.blk{display:block;min-width:0}
+.blk .bt{font-size:12px;color:var(--ink2);padding:0 2px 2px;display:flex;gap:4px;white-space:nowrap;min-width:0}
+.blk .bt span{overflow:hidden;text-overflow:ellipsis;min-width:0}.blk .bt i{font-style:normal;flex:none}
+.ev,.cal .dn,.cal .more{text-decoration:none}
+.ev{display:flex;gap:5px;align-items:center;min-height:32px;padding:0 2px;border-radius:6px;font-size:13px;white-space:nowrap;min-width:0;color:var(--ink)}
+.ev:hover{background:var(--hover)}
+.ev .t{font-variant-numeric:tabular-nums;width:36px;flex:none}
+.ev .st{font-size:12px;gap:4px;flex:none}
+.ev.pub,.ev.pub .st{color:var(--ink2)}
+.ev.bad{background:var(--bad-bg)}
+.cal.month .dc{min-height:132px;gap:2px;padding:6px}
+.cal.month .dn{display:flex;align-items:center;min-height:32px;padding:0 4px;font-size:13px;color:var(--ink2);border-radius:6px;width:max-content}
+.cal.month .dn:hover{background:var(--hover)}
+.cal.month .dn.now{color:var(--ink);font-weight:600}.cal.month .dn.now span{background:var(--ink);color:#fffffe;border-radius:5px;padding:0 6px}
+.cal.month .dc.out{background:var(--bg)}.cal.month .dc.out .dn{color:var(--ink3)}
+.cal.month .dc:nth-child(7n+1){border-left:0}
+.cal.month .dc:nth-child(n+15){border-top:1px solid var(--line)}
+.cal.month .ev .ti{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cal.month .ev{padding:0 4px;gap:6px}.cal.month .ev .cnt{margin-left:auto;flex:none;font-size:12px}
+.cal.month .more{font-size:12px;color:var(--ink2);padding:0 4px}
+.calnote{margin:10px 0 0;font-size:12px;color:var(--ink2);display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+@media (max-width:860px){.views{margin-left:0}
+  .cal:not(.month){grid-template-columns:1fr}.cal:not(.month) .dh{display:none}.cal:not(.month) .dc{min-height:0;border-left:0;border-top:1px solid var(--line)}.cal:not(.month) .dc::before{content:attr(data-day);font-size:12px;color:var(--ink2);padding:0 4px}
+  .cal.month .ev .ti,.cal.month .ev .cnt{display:none}.cal.month .dc{min-height:72px;padding:2px}.cal.month .dh{padding:6px 2px;justify-content:center}}
