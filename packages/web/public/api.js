@@ -24,7 +24,10 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error?.message ?? `HTTP ${res.status}`);
+      // 结构化细节（最近能排的时间、哪条平台稿、超限清单）挂在错误对象上，页面据此在原地说清楚。
+      const err = new Error(data.error?.message ?? `HTTP ${res.status}`);
+      for (const k of ["code", "suggestedAt", "publishId", "problems"]) if (data.error?.[k] != null) err[k] = data.error[k];
+      throw err;
     }
     return data;
   }
@@ -401,9 +404,20 @@
 
   /* 确认、改、跳过、重试：每一个都对应 commands.mjs 里的命令，页面不自己拼状态。
    * 成功后由页面重新拉一次 today / work——数字只认服务端那一份。 */
-  async function approveCut(cutId) {
+  /** when：scheduled（预约发，默认）或 now（现在发）。整批在成片面板底栏选（ACC-v3-time-08）。 */
+  async function approveCut(cutId, when = "scheduled") {
     if (!cutId) throw new Error("先指定一支成片");
-    return request("/api/publishes/approve", { method: "POST", body: { cutId } });
+    return request("/api/publishes/approve", { method: "POST", body: when === "now" ? { cutId, when } : { cutId } });
+  }
+
+  /** 改内容 = 命令 cut.edit：一次提交；rev 是打开编辑时读到的成片版本号。 */
+  async function editCut(cutId, { rev, language = null, generic = null, platforms = null }) {
+    if (!cutId) throw new Error("先指定一支成片");
+    const body = { cutId, rev };
+    if (language) body.language = language;
+    if (generic && Object.keys(generic).length) body.generic = generic;
+    if (platforms && Object.keys(platforms).length) body.platforms = platforms;
+    return request(`/api/cuts/${encodeURIComponent(cutId)}/edit`, { method: "POST", body });
   }
 
   async function approvePublish(publishId) {
@@ -519,6 +533,7 @@
   VK.works = works;
   VK.work = work;
   VK.approveCut = approveCut;
+  VK.editCut = editCut;
   VK.approvePublish = approvePublish;
   VK.publishNow = publishNow;
   VK.publishManual = publishManual;

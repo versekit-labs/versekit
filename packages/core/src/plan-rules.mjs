@@ -139,3 +139,45 @@ export function describeRules(platform, config = readConfig()) {
     isDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
   };
 }
+
+const dayKey = (t) => {
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/**
+ * 日历列头的「平台额度」（ACC-v3-cal-06）：[from, to] 里每个「天 × 平台」已占几条、上限几条。
+ * 占名额的口径和排期一样（takenTimes：除 SLOT_FREE_STATES 外都占，含现在发、我自己发的），
+ * 上限来自同一个 planRules()；「一天」同样按本机时区的自然日。同一天同一平台有几个账号时取最多的那个账号，
+ * 因为上限是按账号算的（violationAt）。`over` = 已占超过上限，和 assertPlanSlot 拒绝的条件一致（>= 上限再加一条才拒，所以超 = used > cap）。
+ */
+export function dayUsage({ from, to, groupId = null, config } = {}) {
+  const placeholders = SLOT_FREE_STATES.map(() => "?").join(",");
+  const rows = open()
+    .prepare(
+      `SELECT p.account_id, a.platform, COALESCE(p.published_at, p.scheduled_at) AS t
+         FROM publish p JOIN account a ON a.id = p.account_id
+        WHERE p.state NOT IN (${placeholders})
+          AND COALESCE(p.published_at, p.scheduled_at) BETWEEN ? AND ?
+          AND (? IS NULL OR a.group_id = ?)`,
+    )
+    .all(...SLOT_FREE_STATES, from, to, groupId, groupId);
+  const per = new Map();
+  for (const r of rows) {
+    const k = `${dayKey(r.t)}|${r.platform}|${r.account_id}`;
+    per.set(k, (per.get(k) ?? 0) + 1);
+  }
+  const out = new Map();
+  for (const [k, n] of per) {
+    const [day, platform] = k.split("|");
+    const key = `${day}|${platform}`;
+    out.set(key, { day, platform, used: Math.max(out.get(key)?.used ?? 0, n) });
+  }
+  return [...out.values()]
+    .map((u) => {
+      const { dailyCap } = planRules(u.platform, config);
+      return { ...u, cap: dailyCap, over: u.used > dailyCap };
+    })
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.platform < b.platform ? -1 : 1));
+}

@@ -590,7 +590,12 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
       const message = err instanceof Error ? err.message : String(err);
       audit({ command, args, origin, actor, result: "error", reason: message });
       log(`[daemon] ${command.name} 失败：${message}`);
-      return send(res, 400, { ok: false, error: { code: err.code ?? "command_failed", message, ...(err.hint && origin !== "web" ? { hint: String(err.hint) } : {}) } });
+      // 带上页面要用的结构化细节（只在有值时）：最近能排的时间、哪条平台稿、超限清单。code / message 不变。
+      const detail = {};
+      if (Number.isFinite(err.suggestedAt)) detail.suggestedAt = err.suggestedAt;
+      if (typeof err.publishId === "string") detail.publishId = err.publishId;
+      if (Array.isArray(err.problems)) detail.problems = err.problems;
+      return send(res, 400, { ok: false, error: { code: err.code ?? "command_failed", message, ...detail, ...(err.hint && origin !== "web" ? { hint: String(err.hint) } : {}) } });
     }
   };
 }

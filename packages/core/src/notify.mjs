@@ -299,7 +299,9 @@ function cutPosition(workId, cutId) {
   return { index: Math.max(ids.indexOf(cutId), 0) + 1, total: Math.max(ids.length, 1) };
 }
 
-function renderConfirm(cutId, { now, note = null } = {}) {
+const whenOf = (args) => (args?.when === "now" ? "now" : "scheduled");
+
+function renderConfirm(cutId, { now, note = null, when = "scheduled" } = {}) {
   const { batch, first } = loadCut(cutId);
   if (!batch.length) return null;
   const { index, total } = cutPosition(first.work_id, cutId);
@@ -312,10 +314,11 @@ function renderConfirm(cutId, { now, note = null } = {}) {
     groupName: groupNameOf(batch[0].group_id),
     now,
     note,
+    when,
   });
 }
 
-function renderEdit(cutId, { now, note = null } = {}) {
+function renderEdit(cutId, { now, note = null, when = "scheduled" } = {}) {
   const { batch, first } = loadCut(cutId);
   if (!batch.length) return null;
   return buildEditCard({
@@ -324,6 +327,7 @@ function renderEdit(cutId, { now, note = null } = {}) {
     groupName: groupNameOf(batch[0].group_id),
     now,
     note,
+    when,
   });
 }
 
@@ -398,8 +402,9 @@ function resultFor(cmd, res, args, cutTitle, now) {
     return { title: `${cutTitle} · 先不发`, lines: ["这支先不发。", "以后想发，到作品页再确认。"] };
   }
   if (cmd === "publish.approve" && args.cutId) {
-    const lines = [`已确认 ${r.approved?.length ?? 0} 条，按时间发：`];
-    for (const a of r.approved ?? []) lines.push(`${platformLabel(a.platform)}　${formatWhen(a.scheduledAt, now)}`);
+    const immediate = args.when === "now";
+    const lines = [`已确认 ${r.approved?.length ?? 0} 条，${immediate ? "现在发：" : "按时间发："}`];
+    for (const a of r.approved ?? []) lines.push(`${platformLabel(a.platform)}　${immediate ? "现在发" : formatWhen(a.scheduledAt, now)}`);
     for (const x of r.removed ?? []) lines.push(`没带上：${x.reason}`);
     if (r.perItem?.length) lines.push("小红书要你单独确认，下一张卡片就是。");
     return { title: `${cutTitle} · 已确认`, lines };
@@ -523,11 +528,11 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
 
   const cutId = args.cutId;
   if (cmd === "card.show") {
-    const card = renderConfirm(cutId, { now });
+    const card = renderConfirm(cutId, { now, when: whenOf(args) });
     return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
   }
   if (cmd === "card.edit") {
-    const card = renderEdit(cutId, { now });
+    const card = renderEdit(cutId, { now, when: whenOf(args) });
     return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
   }
 
@@ -535,6 +540,7 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
   const { batch } = loadCut(cutId);
   if (!batch.length) return gone(cutId);
   const form = evt.form_value ?? {};
+  const when = whenOf(args);
   const names = editFieldNames(batch.map(toRow));
   const edits = [];
   const problems = [];
@@ -547,7 +553,8 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
       if (!rawTitle.trim()) problems.push(`${label}：标题不能为空`);
       else change.title = rawTitle.trim();
     }
-    if (typeof rawAt === "string" && rawAt.trim()) {
+    // 现在发：卡片上没有时间输入，也就不处理时间（ACC-v3-time-06）。
+    if (when !== "now" && typeof rawAt === "string" && rawAt.trim()) {
       const at = parsePickerTime(rawAt);
       if (at == null) problems.push(`${label}：时间「${rawAt}」格式不对，应是 2026-11-15 20:00`);
       // 选择器只到分钟：没动它回来的值和库里（带秒）的时间差不到一分钟，不算改动，别凭空触发一次 publish.edit。
@@ -556,7 +563,7 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     if (change.title !== undefined || change.at !== undefined) edits.push(change);
   });
   if (problems.length) {
-    await updateCard(channel, evt, renderEdit(cutId, { now, note: { error: true, text: problems.join("\n") } }), log);
+    await updateCard(channel, evt, renderEdit(cutId, { now, when, note: { error: true, text: problems.join("\n") } }), log);
     return { ok: false, message: problems.join("；") };
   }
   const failures = [];
@@ -572,11 +579,11 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     if (!res.ok && !res.duplicate) failures.push(`${e.label}：${res.message}`);
   }
   if (failures.length) {
-    await updateCard(channel, evt, renderEdit(cutId, { now, note: { error: true, text: failures.join("\n") } }), log);
+    await updateCard(channel, evt, renderEdit(cutId, { now, when, note: { error: true, text: failures.join("\n") } }), log);
     return { ok: false, message: failures.join("；") };
   }
   recordNav({ cmd, parsed, args, operator: evt.operator_id, now, text: `edited ${edits.length}` });
-  const card = renderConfirm(cutId, { now, note: { text: edits.length ? `已改好 ${edits.length} 处，下面是现在的样子。` : "没有改动。" } });
+  const card = renderConfirm(cutId, { now, when, note: { text: edits.length ? `已改好 ${edits.length} 处，下面是现在的样子。` : "没有改动。" } });
   if (!card) return gone(cutId);
   await updateCard(channel, evt, card, log);
   return done;
