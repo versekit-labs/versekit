@@ -124,7 +124,7 @@
       `<div class="below">` +
       issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：${p.state === "notify_pending" && !p.error ? "需要你手动处理" : "没有发出去"}</b>` +
         `<div class="why">${esc(p.error?.message ?? (p.state === "notify_pending" ? "这条停在待人工确认，处理好后可以直接再试一次" : "原因还没记下来"))}</div>` +
-        `<div class="acts"><button class="btn pri" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
+        `<div class="acts"><button class="btn" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
       resultsTable(cut, multi) + `</div>` +
       `<div class="cmd">对应命令：<code>vk work show ${esc(work.id)}</code></div>`;
 

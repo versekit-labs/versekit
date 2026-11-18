@@ -53,7 +53,7 @@
   const main = document.getElementById("main");
   const VK = window.VK;
   const panel = window.VKPanel({ editing: new Set(), ver: new Map() });
-  const { esc, pfBadge, pfName, BLANK } = panel;
+  const { esc, pfBadge, pfName, cover } = panel;
   const whenText = (ms) => panel.when(ms).text;
   const toast = (m) => window.VKShell?.toast(m);
 
@@ -67,7 +67,7 @@
   const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
 
   const ui = {
-    accounts: [], platforms: [], today: null, groupsErr: null,
+    accounts: [], platforms: [], covers: new Map(), today: null, groupsErr: null,
     login: {},            // accountId → { kind: "wait" | "fail", text, url }
     logoutAsk: null,      // 正在二次确认「退出登录」的账号 id
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
@@ -100,6 +100,8 @@
     ui.accounts = accounts;
     ui.platforms = platforms;
     ui.today = today;
+    // 「最近出的问题」里的作品封面：按作品对上 coverVersionId，读不到就是占位。
+    ui.covers = await VK.works().then((d) => new Map((d.works ?? []).map((w) => [w.id, w.coverVersionId]))).catch(() => new Map());
     await loadSections(group);
     const taken = (p) => accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
     if (!ui.addPlatform || !platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (platforms.find((p) => !taken(p.platform)) ?? platforms[0])?.platform ?? "";
@@ -156,7 +158,7 @@
     if (lg?.kind === "wait") {
       act = a.platform === "tiktok-api" ? "" : `<span class="tbtns"><button class="link" data-cancel="${esc(a.id)}">取消</button><button class="btn pri" data-done="${esc(a.id)}">${SCAN.has(a.platform) ? "我扫好了" : "我登录好了"}</button></span>`;
     } else if (credsMissing(a)) act = '<span class="sub">先填下面的应用凭证</span>';
-    else if (a.platform === "tiktok-api") act = `<button class="${connected(a) ? "link" : "btn pri"}" data-login="${esc(a.id)}">${connected(a) ? "重新连接" : "Connect TikTok"}</button>`;
+    else if (a.platform === "tiktok-api") act = `<button class="${connected(a) ? "link" : "btn"}" data-login="${esc(a.id)}">${connected(a) ? "重新连接" : "Connect TikTok"}</button>`;
     else act = `<button class="${st.key === "ok" ? "link" : "btn"}" data-login="${esc(a.id)}">重新登录</button>`;
     // 退出登录：关浏览器 + 删这个账号自己的浏览器资料，之后才能扫码/短信登录另一个号（vk account logout）。
     if (!credsMissing(a) && WEB_LOGIN(a.platform) && lg?.kind !== "wait") {
@@ -170,7 +172,7 @@
     return row + `<tr class="credrow"><td colspan="6"><form class="sysrow" data-credform onsubmit="return false"><b style="font-weight:600">TikTok 官方接口还没有应用凭证</b>` +
       `<input type="text" id="cred-key" placeholder="client key" aria-label="client key" autocomplete="off" value="${esc(c.key)}">` +
       `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
-      `<button class="btn pri" data-credsave${c.busy ? " disabled" : ""}>保存</button>` +
+      `<button class="btn" data-credsave${c.busy ? " disabled" : ""}>保存</button>` +
       `<span class="say${c.bad ? " bad" : ""}" role="status">${esc(c.note) || "在 TikTok 开发者后台的应用里复制。保存在这台电脑的 config.json（权限 600），不会回显，也不进日志。"}</span></form></td></tr>`;
   }
 
@@ -183,7 +185,7 @@
       const accs = accountsOf(g.id);
       const names = accs.length ? `${accs.length} 个 · <span class="sub">${accs.map((a) => esc(pfName(a.platform))).join("、")}</span>` : '<span class="sub">还没有账号</span>';
       const nameCell = ui.renaming === g.id
-        ? `<div class="grpname"><input type="text" id="rename-input" value="${esc(g.name)}" aria-label="新名字" maxlength="60"><button class="btn pri" data-renamesave="${esc(g.id)}">保存</button><button class="link" data-renamecancel>取消</button></div>`
+        ? `<div class="grpname"><input type="text" id="rename-input" value="${esc(g.name)}" aria-label="新名字" maxlength="60"><button class="btn" data-renamesave="${esc(g.id)}">保存</button><button class="link" data-renamecancel>取消</button></div>`
         : `<b style="font-weight:600">${esc(g.name)}</b>`;
       const act = isCur ? '<span class="sub">当前</span>' : `<a class="btn" href="/system" data-sw="${esc(g.id)}">切过去</a>`;
       return `<tr><td>${nameCell}</td><td>${names}</td><td>${n ? `<span class="st wait">${n} 件</span>` : '<span class="st">没有</span>'}</td>` +
@@ -199,7 +201,7 @@
     const empty = none ? "没有已安装的平台" : "这个组的平台都接上了";
     return `<div class="sysrow" id="addrow"><select id="add-platform" aria-label="平台"${none || allTaken ? " disabled" : ""}>${none || allTaken ? `<option value="" selected>${empty}</option>` : opts}</select>` +
       `<input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}">` +
-      `<button class="btn pri" data-add${ui.addBusy || none || allTaken || !group ? " disabled" : ""}>接入账号</button>` +
+      `<button class="btn" data-add${ui.addBusy || none || allTaken || !group ? " disabled" : ""}>接入账号</button>` +
       `<span class="say${ui.addBad ? " bad" : ""}" role="status">${esc(ui.addNote)}</span></div>`;
   }
 
@@ -224,7 +226,7 @@
     return `<tr class="planedit"><td colspan="4"><div class="sysrow" style="margin-top:0">${ed.isNew ? `<b style="font-weight:600">加一行</b>${opts(KIND_OPTS, ed.kind, "pe-kind")}${opts(LANG_OPTS, ed.language, "pe-lang")}` : `<b style="font-weight:600">${esc(r.label)}</b>`}</div>` +
       `<div class="pickpf" role="group" aria-label="发到哪些平台">${picks}</div>` +
       `<div class="sysrow" style="margin-top:0"><label>节奏：入库后第 <input type="number" id="pe-days" min="0" max="60" value="${ed.delayDays}" aria-label="入库后第几天起排"> 天起排</label>` +
-      `<button class="btn pri" data-plansave${ui.planBusy ? " disabled" : ""}>保存</button><button class="link" data-plancancel>取消</button>${canRemove ? '<button class="link" data-planremove>删掉这一行</button>' : ""}` +
+      `<button class="btn" data-plansave${ui.planBusy ? " disabled" : ""}>保存</button><button class="link" data-plancancel>取消</button>${canRemove ? '<button class="link" data-planremove>删掉这一行</button>' : ""}` +
       `<span class="say${ui.planNote ? " bad" : ""}" role="status">${esc(ui.planNote)}</span></div></td></tr>`;
   }
 
@@ -316,9 +318,9 @@
     const rows = updRow + relayRowsHtml + ui.problems.map(({ run, p }) => {
       const day = whenText(run.created_at);
       const why = p.error?.message ?? run.last_error ?? "";
-      return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}"><img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
+      return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}">${cover(ui.covers.get(p.workId), 48, 36)}<span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
         `<td>${pfn(p.platform, pfName(p.platform))}</td><td><span class="st bad">${esc(WHAT[p.state] ?? p.state)}</span><div class="sub">${esc(why)}</div></td>` +
-        `<td class="n"><button class="btn pri" data-retry="${esc(p.publishId)}"${ui.retrying.has(p.publishId) ? " disabled" : ""}>再试一次</button></td></tr>`;
+        `<td class="n"><button class="btn" data-retry="${esc(p.publishId)}"${ui.retrying.has(p.publishId) ? " disabled" : ""}>再试一次</button></td></tr>`;
     }).join("");
     return `<h2 class="sec" id="problems">最近出的问题</h2>` +
       (rows ? `<div class="tblwrap"><table><tbody>${rows}</tbody></table></div>` : '<div class="panel empty">最近 7 天没有出过问题。</div>') +
@@ -353,7 +355,7 @@
       ? `<div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${groupRows(pending)}</tbody></table></div>`
       : '<div class="panel empty">还没有账号组。账号组是一套平台账号，有自己的作品、待办、数据和发布方案；先建一个，再接入账号。</div>';
     const newGroup = ui.newGroup || !VK.groups().length
-      ? `<div class="sysrow"><input type="text" id="ng-name" placeholder="账号组名字" aria-label="账号组名字" maxlength="60" value="${esc(ui.newGroupName)}"><button class="btn pri" data-ngsave${ui.groupBusy ? " disabled" : ""}>创建</button><button class="link" data-ngcancel>取消</button><span class="say bad" role="status">${esc(ui.groupNote)}</span></div>` : "";
+      ? `<div class="sysrow"><input type="text" id="ng-name" placeholder="账号组名字" aria-label="账号组名字" maxlength="60" value="${esc(ui.newGroupName)}"><button class="btn" data-ngsave${ui.groupBusy ? " disabled" : ""}>创建</button><button class="link" data-ngcancel>取消</button><span class="say bad" role="status">${esc(ui.groupNote)}</span></div>` : "";
 
     let accountsBlock = "";
     if (!group) {

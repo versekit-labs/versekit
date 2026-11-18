@@ -9,6 +9,42 @@ window.VKPanel = function createPanel(state) {
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   // 封面不入库，占位图与设计稿一致（docs/design/app.js 的 BLANK）：页面不因为缺图坏掉。
   const BLANK = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#dcdcd8"/><path d="M290 200l80 40-80 40z" fill="#9a9a95"/></svg>');
+  /**
+   * 封面（ACC-v3-fid-03）：用这支成片的第一个语言版本。入库不生成缩略图，所以视频直接取第一帧
+   * （video + #t=0.1，只读元数据），图片素材退到 <img>，都读不到才用占位。没有版本 id 就是占位。
+   */
+  const cover = (versionId, w, h) => versionId
+    ? `<video class="cv" src="${esc(VK.media(versionId))}#t=0.1" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" width="${w}" height="${h}" data-cover="${esc(versionId)}"></video>`
+    : `<img class="cv" src="${BLANK}" width="${w}" height="${h}" alt="">`;
+  if (!window.__vkCover) {
+    window.__vkCover = true;
+    // error 不冒泡，用捕获：视频读不了 → 试图片 → 再不行才占位。
+    document.addEventListener("error", (e) => {
+      const t = e.target;
+      if (t?.matches?.("video[data-cover]")) {
+        const img = document.createElement("img");
+        img.className = t.className; img.width = t.width; img.height = t.height; img.alt = "";
+        img.dataset.coverImg = t.dataset.cover; img.src = t.currentSrc.split("#")[0] || t.src.split("#")[0];
+        t.replaceWith(img);
+      } else if (t?.matches?.("img[data-cover-img]")) {
+        t.removeAttribute("data-cover-img");
+        t.src = BLANK;
+      }
+    }, true);
+    // 成片视频读到元数据后：标题旁写时长，竖版的视频框高 360（ACC-v3-fid-06）。
+    document.addEventListener("loadedmetadata", (e) => {
+      const v = e.target;
+      if (!v?.matches?.("video[data-media]")) return;
+      const box = v.closest(".cp");
+      if (!box) return;
+      if (v.videoHeight > v.videoWidth) box.classList.add("vert");
+      const dur = box.querySelector("[data-dur]");
+      if (dur && Number.isFinite(v.duration)) {
+        const sec = Math.round(v.duration);
+        dur.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+      }
+    }, true);
+  }
   const PF = {
     xiaohongshu: ["小", "小红书", "xhs"], douyin: ["抖", "抖音", "dy"], shipinhao: ["视", "视频号", "sph"],
     bilibili: ["B", "B站", "bili"], tiktok: ["T", "TikTok", "tk"], "tiktok-api": ["T", "TikTok", "tk"], youtube: ["Y", "YouTube", "yt"],
@@ -107,7 +143,8 @@ window.VKPanel = function createPanel(state) {
     const anyOpen = pending(cut).length > 0;
 
     const rows = rest.map((p) => {
-      const w = when(p.scheduledAt);
+      const isPub = ["published", "published_limited"].includes(p.state);
+      const w = when(isPub && p.publishedAt != null ? p.publishedAt : p.scheduledAt);
       const name = pfName(p.platform);
       const bad = ["failed", "blocked", "expired"].includes(p.state);
       if (state.editing.has(p.id)) {
@@ -127,7 +164,7 @@ window.VKPanel = function createPanel(state) {
       if (p.platform === "tiktok-api") return tkHtml(p, work.id);
       const w = when(p.scheduledAt);
       const acts = p.state === "pending_confirm"
-        ? `<div class="acts"><button class="btn pri" type="button" data-solo="approve" data-pub="${esc(p.id)}">${esc(w.text)} 发</button>` +
+        ? `<div class="acts"><button class="btn" type="button" data-solo="approve" data-pub="${esc(p.id)}">${esc(w.text)} 发</button>` +
           `<button class="btn" type="button" data-solo="now" data-pub="${esc(p.id)}">现在发</button>` +
           `<button class="btn" type="button" data-solo="manual" data-pub="${esc(p.id)}">我自己发</button></div>`
         : `<div class="acts"><span class="st ${p.state === "skipped" ? "" : "done"}">${
@@ -158,7 +195,7 @@ window.VKPanel = function createPanel(state) {
           : "";
 
     return `<section class="cp" aria-label="${esc(cut.title)}">` +
-      `<div class="cph"><h3>${esc(cut.title)}</h3>` +
+      `<div class="cph"><h3>${esc(cut.title)}</h3><span class="sub" data-dur></span>` +
       `<span class="vers">${showVers ? versions.map((v) => `<button class="btn" type="button" data-ver="${esc(cut.id)}:${esc(v.id)}" aria-pressed="${(state.ver.get(cut.id) ?? versions[0].id) === v.id}">${esc(v.language)}</button>`).join("") : ""}</span></div>` +
       mediaBox(cut) +
       `<div class="ai">${anyOpen ? "AI 生成的内容，每个平台都会按它的要求标注。标题、正文、话题和时间是建议，想改再改。" : "AI 生成的内容，每个平台都按它的要求标注了。"}</div>` +
@@ -222,7 +259,7 @@ window.VKPanel = function createPanel(state) {
       `<div class="tk-grid" data-tk-form>${tkForm(p, t, c)}</div>` +
       `<div class="tk-ai"><b>AI 生成</b><span>这支视频是 AI 生成的，发布时会带 TikTok 的 AI 生成标记（is_aigc）。</span></div>` +
       `<div class="tk-wm">不加水印。</div>` +
-      `<div class="acts"><button class="btn pri" type="button" data-tk-post="${esc(p.id)}">Post</button>` +
+      `<div class="acts"><button class="btn" type="button" data-tk-post="${esc(p.id)}">Post</button>` +
       `<button class="btn" type="button" data-tk-draft="${esc(p.id)}">Send to TikTok drafts</button>` +
       `<span class="tk-why" data-tk-why></span></div>` +
       `<div class="tk-res" data-tk-msg role="status" aria-live="polite">${esc(t.msg)}</div></div>`;
@@ -383,12 +420,12 @@ window.VKPanel = function createPanel(state) {
       const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
       const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
       const [cls, txt] = bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
-      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}"><img src="${BLANK}" alt=""><span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
+      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover(c.versions?.[0]?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
     }).join("")}</div>`;
   }
 
   return {
-    esc, BLANK, pfOf, ORDER, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD,
+    esc, BLANK, cover, pfOf, ORDER, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD,
     pending, batchOf, soloOf, cutHasPending, fallback, confirmPanel, cutSteps,
   };
 };

@@ -15,6 +15,12 @@
     { key: "system", href: "/system", label: "系统" },
   ];
 
+  // 侧栏摘要里的平台叫法（与 panel.js 的 PF 一致；这里不依赖 panel.js，它比 shell.js 晚加载）。
+  const PLATFORM_NAME = {
+    xiaohongshu: "小红书", douyin: "抖音", shipinhao: "视频号", bilibili: "B站", tiktok: "TikTok", "tiktok-api": "TikTok",
+    youtube: "YouTube", web: "官网", gongzhonghao: "公众号",
+  };
+
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const el = (html) => {
     const t = document.createElement("template");
@@ -120,17 +126,28 @@
     }
     const ok = accounts.filter((a) => window.VK.loginState(a).key === "ok").length;
     const bad = accounts.length - ok;
-    const left = accounts.reduce((n, a) => n + (a.quota?.left ?? 0), 0);
+    // 今天还能发：按平台说，不跨平台相加（ACC-v3-fid-04）。不限额的账号不出现。
+    const leftBy = new Map();
+    for (const a of accounts) {
+      if (!a.quota) continue;
+      const name = PLATFORM_NAME[a.platform] ?? a.platform;
+      leftBy.set(name, (leftBy.get(name) ?? 0) + (a.quota.left ?? 0));
+    }
+    const leftLines = [...leftBy].map(([name, n]) => `${name} ${n} 条`);
+    const quotaLines = !leftLines.length ? []
+      : leftLines.length === 1 ? [`<div class="nw"><span class="dot"></span>今天还能发：${esc(leftLines[0])}</div>`]
+        : [`<div class="nw"><span class="dot"></span>今天还能发</div>`, ...leftLines.map((t) => `<div class="nw ind">${esc(t)}</div>`)];
     const lines = failed
       ? [`<div><span class="dot bad"></span>读不到账号状态</div>`]
       : [
-          `<div><span class="dot${bad ? " bad" : ""}"></span>${
-            accounts.length ? `${ok} 个账号登录正常${bad ? `，${bad} 个要处理` : ""}` : "还没有接入账号"
+          // 有问题只写「N 个账号要处理」，全正常写「N 个账号登录正常」：一行放得下，不折行。
+          `<div class="nw"><span class="dot${bad ? " bad" : ""}"></span>${
+            accounts.length ? (bad ? `${bad} 个账号要处理` : `${ok} 个账号登录正常`) : "还没有接入账号"
           }</div>`,
           machine?.online
-            ? `<div><span class="dot"></span>发布机在线</div>`
-            : `<div><span class="dot bad"></span>${machine ? "发布机不在线" : "读不到发布机状态"}</div>`,
-          ...(accounts.length ? [`<div><span class="dot"></span>今天还能发 ${left} 条</div>`] : []),
+            ? `<div class="nw"><span class="dot"></span>发布机在线</div>`
+            : `<div class="nw"><span class="dot bad"></span>${machine ? "发布机不在线" : "读不到发布机状态"}</div>`,
+          ...quotaLines,
         ];
     nav.querySelector(".health")?.remove();
     const health = el(`<div class="health" data-health></div>`);
