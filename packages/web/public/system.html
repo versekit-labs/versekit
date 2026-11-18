@@ -269,14 +269,14 @@
   function updateRows() {
     const u = ui.update;
     if (!u) return "";
-    const ver = `${esc(u.version)}${u.short ? ` · <code>${esc(u.short)}</code>` : ""}`;
+    const ver = `<code>${esc(u.display ?? `${u.version}+${u.short ?? "未知提交"}`)}</code>`;
     const at = u.installedAt ? `<span class="sub">安装于 ${esc(whenText(Date.parse(u.installedAt)))}</span>` : "";
     const checked = u.lastCheckAt
       ? `${esc(ago(Date.now() - u.lastCheckAt))} <span class="sub">${esc(u.lastCheck?.message ?? "")}</span>`
       : `<span class="sub">还没检查过${u.auto ? "（服务启动后很快会查一次）" : ""}</span>`;
     const lu = u.lastUpdate;
     const fresh = lu && Date.now() - lu.at < RECENT_UPDATE_MS
-      ? `<dt>刚更新过</dt><dd>已更新到 ${esc(lu.version)}（${esc(whenText(lu.at))}）${(lu.commits ?? []).length ? `<ul class="sub" style="margin:6px 0 0;padding-left:18px">${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}</dd>`
+      ? `<dt>刚更新过</dt><dd>已更新到 ${esc(lu.display ?? lu.version)}（${esc(whenText(lu.at))}）${(lu.commits ?? []).length ? `<ul class="sub" style="margin:6px 0 0;padding-left:18px">${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}</dd>`
       : "";
     return `<dt>版本</dt><dd>${ver} ${at}</dd>` +
       `<dt>上次检查</dt><dd>${checked}</dd>` +

@@ -204,7 +204,7 @@ test("ACC-install-03：再运行一次就是升级——数据、配置、凭证
   const r = await install(main);
   appTarball = "app-1";
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /已升级 0\.1\.0 → 9\.9\.9/);
+  assert.match(r.stdout, /已升级 0\.1\.0\+未知提交 → 9\.9\.9\+未知提交/);
   assert.equal(r.stdout.trim().split("\n").at(-1), `装好了，控制台地址 http://127.0.0.1:${main.port}，终端可以关了`);
 
   assert.equal(JSON.parse(readFileSync(join(main.home, ".versekit/app/package.json"), "utf8")).version, "9.9.9");
@@ -397,4 +397,26 @@ test("ACC-install-06：export-ignore 之后的程序包 ≤ 5MB，只含运行�
   } finally {
     srv.kill();
   }
+});
+
+test("ACC-update-06：版本号带短提交号——不同提交装上去前后不同，同一提交重装不说已升级", { timeout: 180000 }, async () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const h = await newHome();
+  const first = await install(h, { env: { VERSEKIT_APP_COMMIT: A } });
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.match(first.stdout, /已安装 0\.1\.0\+aaaaaaa/);
+
+  const second = await install(h, { env: { VERSEKIT_APP_COMMIT: B } });
+  assert.equal(second.code, 0, second.stdout + second.stderr);
+  assert.match(second.stdout, /已升级 0\.1\.0\+aaaaaaa → 0\.1\.0\+bbbbbbb/);
+
+  const again = await install(h, { env: { VERSEKIT_APP_COMMIT: B } });
+  assert.equal(again.code, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /已是最新（bbbbbbb），重新装了一遍/);
+  assert.doesNotMatch(again.stdout, /已升级/);
+
+  const v = await sh(h, vkOf(h), ["version"]);
+  assert.match(v.stdout.split("\n")[0], /^0\.1\.0\+bbbbbbb/);
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
 });

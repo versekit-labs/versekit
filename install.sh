@@ -115,10 +115,16 @@ main() {
   sha_of() { $SHA "$1" | awk '{print $1}'; }
 
   mkdir -p "$PREFIX/bin"
-  local OLD_VERSION=""
+  # 用户看得到的版本号 = <package.json 版本>+<短提交号>（ACC-update-06；JS 侧是 update.mjs 的 displayVersion）。
+  version_label() { # version_label <版本> <40 位提交号或空>
+    local c="${2:-}"
+    if [ -n "$c" ]; then printf '%s+%s' "${1:-未知}" "$(printf '%s' "$c" | cut -c1-7)"; else printf '%s+未知提交' "${1:-未知}"; fi
+  }
+  local OLD_VERSION="" OLD_COMMIT=""
   if [ -f "$PREFIX/app/package.json" ]; then
     HAD_APP=1
     OLD_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PREFIX/app/package.json" | head -1)"
+    OLD_COMMIT="$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' "$PREFIX/app/.versekit-build.json" 2>/dev/null | head -1 || true)"
   fi
   local META="${VK_HOME:-$HOME}/.local/state/versekit/service.json"
   if [ -f "$META" ]; then OLD_PORT="$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$META" | head -1)"; fi
@@ -282,8 +288,13 @@ EOF
   # 后台更新要在「新版本起来后自检」通过之后才丢掉旧程序，所以那种情况留给更新程序清。
   [ "$UPDATING" = 1 ] || rm -rf "$PREFIX/app.prev"
   DONE=1
-  if [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_VERSION:-未知} → ${NEW_VERSION:-未知}（数据、账号、登录都保留）"
-  else say "已安装 ${NEW_VERSION:-未知}"; fi
+  local OLD_LABEL NEW_LABEL
+  OLD_LABEL="$(version_label "$OLD_VERSION" "$OLD_COMMIT")"
+  NEW_LABEL="$(version_label "$NEW_VERSION" "$APP_COMMIT")"
+  if [ "$HAD_APP" = 1 ] && [ -n "$APP_COMMIT" ] && [ "$OLD_COMMIT" = "$APP_COMMIT" ]; then
+    say "已是最新（$(printf '%s' "$APP_COMMIT" | cut -c1-7)），重新装了一遍（数据、账号、登录都保留）"
+  elif [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_LABEL} → ${NEW_LABEL}（数据、账号、登录都保留）"
+  else say "已安装 ${NEW_LABEL}"; fi
   say "新开的终端里可以直接用 vk；日常管理：vk service status | restart | stop | uninstall"
   printf '装好了，控制台地址 %s，终端可以关了\n' "$URL"
 }

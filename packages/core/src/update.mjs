@@ -63,8 +63,14 @@ export function buildInfo({ root = APP_ROOT } = {}) {
   };
 }
 
-export const versionLine = (b = buildInfo()) =>
-  `${b.version}${b.short ? ` · ${b.short}` : "（提交号未知）"}${b.installedAt ? ` · 安装于 ${b.installedAt}` : ""}`;
+/**
+ * 用户看得到的版本号只在这里拼（ACC-update-06）：`<package.json 版本>+<短提交号>`，如 `0.1.0+860ddc6`。
+ * package.json 的版本很少变，光看它分不出装没装上新版；没有提交号写「+未知提交」，不假装是同一版。
+ * install.sh 里有一份等价的 shell 拼法（version_label），改这里要一起改。
+ */
+export const displayVersion = (b = buildInfo()) => `${b.version}+${b.short ?? "未知提交"}`;
+
+export const versionLine = (b = buildInfo()) => `${displayVersion(b)}${b.installedAt ? ` · 安装于 ${b.installedAt}` : ""}`;
 
 // ---------------------------------------------------------------- 配置与状态
 
@@ -179,6 +185,7 @@ export function statusView({ now = Date.now() } = {}) {
   const s = readState();
   return {
     version: b.version,
+    display: displayVersion(b),
     commit: b.commit,
     short: b.short,
     installedAt: b.installedAt,
