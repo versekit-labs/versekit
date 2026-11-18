@@ -801,13 +801,20 @@ function attachBaselines(cuts) {
   }
 }
 
+/** 语言版本上的通用文案（meta.copy.default），给改内容的界面用；没写的字段是空。 */
+function genericCopyOf(metaJson) {
+  const vm = asObject(metaJson);
+  const d = vm.copy && typeof vm.copy.default === "object" && vm.copy.default ? vm.copy.default : {};
+  return { title: d.title ?? vm.title ?? "", body: d.body ?? vm.body ?? vm.description ?? "", tags: textList(d.tags) ?? textList(vm.tags) ?? [] };
+}
+
 function workView(work) {
   const conn = open();
   const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c) => {
     const versions = conn
-      .prepare("SELECT id, language, asset_path, created_at FROM cut_version WHERE cut_id = ? ORDER BY rowid")
+      .prepare("SELECT id, language, asset_path, created_at, meta_json FROM cut_version WHERE cut_id = ? ORDER BY rowid")
       .all(c.id)
-      .map((v) => ({ id: v.id, language: v.language, asset: v.asset_path }));
+      .map((v) => ({ id: v.id, language: v.language, asset: v.asset_path, generic: genericCopyOf(v.meta_json) }));
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
@@ -845,6 +852,13 @@ function workView(work) {
         accountId: p.account_id,
         };
       });
+    // 改内容的界面要知道各平台的文案限制：数字只从 COPY_LIMITS 取，页面不另写一份（ACC-v3-edit-04）。
+    const copyLimit = {};
+    for (const p of publishes) {
+      const limit = COPY_LIMITS[copyPlatformOf(p.platform)];
+      if (limit && limit.verified !== false) copyLimit[p.platform] = { ...limit, tags: limit.tags ? { ...limit.tags } : undefined };
+    }
+    for (const v of versions) v.copyLimit = copyLimit;
     return { id: c.id, title: c.title, rev: c.rev ?? 0, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
   });
   attachBaselines(cuts);
@@ -1586,7 +1600,7 @@ function assertEditTime(row, at, now) {
     : v.reason === "daily_cap"
       ? `${platformName(row.platform)} 那天已经排了 ${v.count} 条，每日上限 ${rules.dailyCap} 条`
       : `和${whenLabel(v.conflictAt, now)}那条隔得太近，最小间隔 ${rules.minGapMinutes} 分钟`;
-  throw coded(past ? "E_TIME_PAST" : v.reason === "daily_cap" ? "plan_daily_cap" : "plan_min_gap", `${why}${nextAt != null ? `；最近能排：${whenLabel(nextAt, now)}` : ""}`, { suggestedAt: nextAt });
+  throw coded(past ? "E_TIME_PAST" : v.reason === "daily_cap" ? "plan_daily_cap" : "plan_min_gap", `${why}${nextAt != null ? `；最近能排：${whenLabel(nextAt, now)}` : ""}`, { suggestedAt: nextAt, publishId: row.id });
 }
 
 /**

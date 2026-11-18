@@ -476,12 +476,12 @@ test("时间选择器：只校验格式，认本机时区与显式偏移，拒�
   assert.equal(cards.parsePickerTime(cards.formatPickerTime(local)), local, "格式化再解析回到原值");
 });
 
-test("formatWhen：今天 / 明天 / 日期，没排时间明说", () => {
+test("formatWhen：今天 / 明天 / 日期，没定时间明说", () => {
   const now = new Date(2026, 10, 15, 9, 0).getTime();
   assert.equal(cards.formatWhen(new Date(2026, 10, 15, 20, 0).getTime(), now), "今天 20:00");
   assert.equal(cards.formatWhen(new Date(2026, 10, 16, 8, 30).getTime(), now), "明天 08:30");
   assert.equal(cards.formatWhen(new Date(2026, 10, 18, 8, 30).getTime(), now), "11-18 08:30");
-  assert.equal(cards.formatWhen(null, now), "还没排时间");
+  assert.equal(cards.formatWhen(null, now), "还没定时间");
 });
 
 test("通道：表单回传的值兼容对象与 JSON 字符串，其余当作不是表单", () => {
@@ -519,4 +519,56 @@ test("ACC-v2-copy-04：确认卡片显示正文前几行与话题；为空时写
   assert.match(t, /没有话题/);
   const long = cards.copySummary({ body: "字".repeat(60), tags: [] });
   assert.equal([...long.bodyText].length, 41);
+});
+
+// ---------------------------------------------------------------- #245 · ACC-v3-time-06 / ACC-v3-fid-07
+
+test("ACC-v3-time-06 飞书改单里有「什么时候发」：选现在发时没有时间输入，确认按钮是「现在发」", async () => {
+  const f = fixture();
+  const ch = fakeChannel();
+  await click(ch, await deliverNewWork(f, ch), "card.review");
+  const confirm = ch.sent()[1].card;
+  await click(ch, confirm, "card.edit", { messageId: "om_edit" });
+  const edit = ch.updates().at(-1).card;
+  const inForm = (card) => card.body.elements.find((e) => e.tag === "form").elements;
+
+  // 按时间发（默认）：每个平台有时间选择器；上面有两个选项。
+  assert.match(text(edit), /什么时候发/);
+  assert.ok(inForm(edit).some((e) => e.tag === "picker_datetime"));
+  const choices = cards.callbackValues(edit).filter((v) => v.cmd === "card.edit");
+  assert.equal(choices.length, 2, "按时间发 / 现在发");
+
+  // 选现在发：重画成没有时间输入的表单，标题输入还在。
+  await click(ch, edit, "card.edit", { messageId: "om_edit", value: choices.find((v) => v.args.when === "now") });
+  const now = ch.updates().at(-1).card;
+  assert.equal(inForm(now).some((e) => e.tag === "picker_datetime"), false, "选现在发时不出现时间输入");
+  assert.ok(inForm(now).some((e) => e.tag === "input"));
+  assert.equal(cb(now, "card.save_edit").args.when, "now");
+  assert.equal(cb(now, "card.show").args.when, "now", "取消回到确认卡片，仍是现在发");
+
+  // 现在发下提交表单：只改标题，不碰时间；回到确认卡片，按钮写「现在发」，行上不写时间。
+  const before = store.getPublish(f.pubs["0:douyin"]).scheduled_at;
+  await click(ch, now, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "现在发的新标题", title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title } });
+  assert.equal(store.getPublish(f.pubs["0:douyin"]).scheduled_at, before);
+  assert.equal(JSON.parse(store.getPublish(f.pubs["0:douyin"]).overrides_json).title, "现在发的新标题");
+  const back = ch.updates().at(-1).card;
+  assert.match(text(back), /确认这 2 条，现在发/);
+  assert.equal(cb(back, "publish.approve").args.when, "now");
+  assert.doesNotMatch(text(back), /今天 \d\d:\d\d|明天 \d\d:\d\d/);
+
+  // 按钮仍要人点才发：这时平台稿还没确认。
+  assert.equal(stateOf(f.pubs["0:douyin"]), "pending_confirm");
+});
+
+test("ACC-v3-time-05 确认卡片默认还是「按时间发」，approve 不带 when", async () => {
+  const f = fixture();
+  const ch = fakeChannel();
+  await click(ch, await deliverNewWork(f, ch), "card.review");
+  const confirm = ch.sent()[1].card;
+  assert.match(text(confirm), /确认这 2 条，按时间发/);
+  assert.equal(cb(confirm, "publish.approve").args.when, undefined);
+});
+
+test("ACC-v3-fid-07 没有建议时间：写「还没定时间」", () => {
+  assert.equal(cards.formatWhen(null), "还没定时间");
 });

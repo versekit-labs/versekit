@@ -373,3 +373,27 @@ test("迁移：旧库补上 cut.rev / cut_version.edited_fields（只加不减�
   core.close();
   process.env.VK_HOME = keep;
 });
+
+// ---- #245：改内容的界面要读的东西（只增字段）
+test("ACC-v3-edit-03/04：work.show 的语言版本带通用文案和各平台文案限制，数字只来自 COPY_LIMITS", () => {
+  const f = fixture();
+  const v = store.showWork(f.workId).cuts[0].versions[0];
+  assert.deepEqual(v.generic, { title: "通用标题", body: "通用正文", tags: ["通用"] });
+  assert.equal(v.copyLimit.bilibili.title, store.COPY_LIMITS.bilibili.title);
+  assert.equal(v.copyLimit.xiaohongshu.title, store.COPY_LIMITS.xiaohongshu.title);
+  assert.equal(v.copyLimit.tiktok, undefined, "这支成片没有 TikTok 平台稿，就不带它的限制");
+  // 已有字段没动
+  assert.ok(v.id && v.language === "zh" && "asset" in v);
+});
+
+test("ACC-v3-time-04：时间错误带 publishId，页面才知道是哪条平台稿的时间框", () => {
+  const f = fixture();
+  const err = (() => {
+    try {
+      h["cut.edit"]({ cutId: f.cut().id, rev: f.cut().rev, platforms: { [f.pub.bilibili]: { at: Date.now() - HOUR } } });
+    } catch (e) {
+      return e;
+    }
+  })();
+  assert.equal(err.publishId, f.pub.bilibili);
+});
