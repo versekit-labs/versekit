@@ -42,8 +42,8 @@
 (async function () {
   const VK = window.VK;
   const main = document.getElementById("main");
-  const state = { data: null, focusId: null, cutId: null, cache: new Map(), editing: new Set(), opened: new Set(), ver: new Map() };
-  const { esc, BLANK, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
+  const state = { covers: new Map(), data: null, focusId: null, cutId: null, cache: new Map(), editing: new Set(), opened: new Set(), ver: new Map() };
+  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, pending, cutHasPending, fallback, confirmPanel, cutSteps } = window.VKPanel(state);
 
   async function loadWork(id) {
     if (!id) return null;
@@ -59,6 +59,12 @@
 
   async function refresh({ advance = false } = {}) {
     state.data = await VK.today();
+    // 今天的待办、结果里没有成片，封面从作品列表（coverVersionId）按作品对上；读不到就退回占位。
+    try {
+      state.covers = new Map(((await VK.works()).works ?? []).map((w) => [w.id, w.coverVersionId]));
+    } catch {
+      state.covers = new Map();
+    }
     state.cache.clear();
     state.editing.clear();
     const awaiting = state.data.awaiting ?? [];
@@ -117,19 +123,19 @@
       const x = pend[0];
       if (n === 1 && x.platform === "xiaohongshu") {
         const t = when(x.scheduledAt);
-        return `<div class="oth"><span class="st wait"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+        return `<div class="oth"><span class="st wait"></span>${cover(state.covers.get(w.workId), 52, 39)}` +
           `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">小红书 · 建议${esc(t.text)} · 不确认就不发</div></div>` +
           `<div class="a"><button class="btn" type="button" data-solo="manual" data-pub="${esc(x.publishId)}">我自己发</button>` +
-          `<button class="btn pri" type="button" data-solo="approve" data-pub="${esc(x.publishId)}">${esc(t.t || "按建议时间")} 发</button></div></div>`;
+          `<button class="btn" type="button" data-solo="approve" data-pub="${esc(x.publishId)}">${esc(t.t || "按建议时间")} 发</button></div></div>`;
       }
-      return `<div class="oth"><span class="st wait"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+      return `<div class="oth"><span class="st wait"></span>${cover(state.covers.get(w.workId), 52, 39)}` +
         `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div>` +
-        `<div class="a"><a class="btn pri" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
+        `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
     }).join("");
-    const badOnes = problems.map((p) => `<div class="oth bad"><span class="st bad"></span><img class="cv" src="${BLANK}" width="52" height="39" alt="">` +
+    const badOnes = problems.map((p) => `<div class="oth bad"><span class="st bad"></span>${cover(state.covers.get(p.workId), 52, 39)}` +
       `<div class="bd"><div class="t">${esc(p.workTitle)}</div><div class="sub why">${esc(pfName(p.platform))}：${esc(p.error?.message ?? "没有发出去，原因还没记下来")}</div></div>` +
       `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(p.workId)}${p.cutId ? "&cut=" + encodeURIComponent(p.cutId) : ""}">看经过</a>` +
-      `<button class="btn pri" type="button" data-retry="${esc(p.publishId)}">再试一次</button></div></div>`).join("");
+      `<button class="btn" type="button" data-retry="${esc(p.publishId)}">再试一次</button></div></div>`).join("");
     const groupRows = (data.others ?? []).map((o) => `<div class="oth" style="margin-top:14px"><span class="st wait"></span>` +
       `<div class="bd"><div class="t">账号组「${esc(o.group.name)}」里还有 ${o.total} 件事等你</div>` +
       `<div class="sub">这一页只显示当前账号组${current ? "「" + esc(current.name) + "」" : ""}的内容</div></div>` +
@@ -143,7 +149,7 @@
       const typ = q == null ? '<span class="sub">—</span>'
         : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${verdict}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${width}%"></i><u></u></div>`;
       return `<tr><td><a class="wcell" href="/work?id=${encodeURIComponent(r.workId)}${r.cutId ? "&cut=" + encodeURIComponent(r.cutId) : ""}">` +
-        `<img class="cv" src="${BLANK}" width="48" height="36" alt=""><span><b>${esc(r.workTitle)}</b>` +
+        `${cover(state.covers.get(r.workId), 48, 36)}<span><b>${esc(r.workTitle)}</b>` +
         `<span class="sub">${esc(r.cutTitle ?? "")}${r.cutTitle ? " · " : ""}${esc(when(r.publishedAt).day)} 发</span></span></a></td>` +
         `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span></td>` +
         `<td class="n">${fmt(r.play24h)}</td><td class="n sub">${fmt(r.baselineMedian)}</td><td>${typ}</td>` +

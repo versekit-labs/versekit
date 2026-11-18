@@ -150,6 +150,62 @@ test("本地控制台首页就是今天的待办，静态资源带了正确类�
   }
 });
 
+test("ACC-v3-fid-01 app.css 里没有 v1 旧样式，实测值与设计稿一致", async () => {
+  const css = await (await fetch(`${base}/app.css`)).text();
+  const rule = (sel) => {
+    const at = css.indexOf(`\n${sel}{`);
+    return at < 0 ? "" : css.slice(at + sel.length + 2, css.indexOf("}", at));
+  };
+  // 旧外壳的类名一个都不能剩
+  for (const old of [".shell{", ".sidebar{", ".nav a{", ".local{", ".pagehead{", "--ground:", "--amber:", "--navy:", "aside :focus-visible"]) {
+    assert.ok(!css.includes(old), `v1 的 ${old} 还在 app.css 里`);
+  }
+  assert.match(rule("body"), /background:var\(--bg\)/);
+  assert.match(css, /--bg:#fafaf8/, "页面底色 #fafaf8");
+  assert.match(rule("body"), /-webkit-font-smoothing:antialiased/);
+  assert.match(rule("body"), /font-variant-numeric:tabular-nums/);
+  assert.match(rule("button,input,select,textarea"), /font:inherit/, "按钮、输入框、下拉框继承正文字体");
+  assert.match(rule(":focus-visible"), /outline:2px solid var\(--ink\);outline-offset:2px/, "焦点环 2px 墨色、偏移 2px");
+  assert.match(rule("::selection"), /background:var\(--mark\)/);
+  assert.match(css, /--mark:#ffd84a/, "选中色 #ffd84a");
+  assert.match(css, /\.app \.nv\{[^}]*height:34px/, "导航项高 34px");
+  assert.ok(!/\.nav a\{[^}]*min-height/.test(css), "没有别的规则把导航项撑高");
+});
+
+test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布时间：页面脚本里的口径", async () => {
+  const get = async (p) => (await fetch(`${base}${p}`)).text();
+  const [panel, today, works, work, system, shell, css] = await Promise.all(["/panel.js", "/today", "/works", "/work", "/system", "/shell.js", "/app.css"].map(get));
+  // 封面：作品、今天、成片步骤、系统页的问题行都走 cover()，页面里不再直接写占位图
+  for (const [name, src] of [["today", today], ["works", works], ["system", system]]) {
+    assert.match(src, /cover\(/, `${name} 要用真实封面`);
+    assert.doesNotMatch(src, /<img class="cv" src="\$\{BLANK\}"/, `${name} 不能再直接写占位图`);
+  }
+  assert.match(works, /cover\(w\.coverVersionId/);
+  assert.match(panel, /data-cover=/);
+  assert.match(panel, /cover\(c\.versions\?\.\[0\]\?\.id, 44, 44\)/, "成片列表用成片自己的封面");
+  // 一屏至多一个墨色主按钮：今天和作品详情里只有「确认这 N 条」是 pri
+  const inkOn = (src) => [...src.matchAll(/class="btn pri[^"]*"[^>]*>([^<]*)/g)].map((m) => m[1]);
+  assert.deepEqual(inkOn(today), [], "今天页自己不画墨色按钮");
+  assert.deepEqual(inkOn(work), [], "作品详情页自己不画墨色按钮");
+  assert.equal(inkOn(panel).length, 1, "成片面板里只有确认是墨色");
+  assert.match(inkOn(panel)[0], /^确认这 /);
+  // 系统页：登录进行中的下一步是唯一的墨色；Connect TikTok、再试一次都是描边
+  assert.equal(inkOn(system).length, 1);
+  assert.match(inkOn(system)[0], /我扫好了/);
+  assert.match(system, /connected\(a\) \? "link" : "btn"\}" data-login/);
+  assert.match(system, /<button class="btn" data-retry=/);
+  // 已发布的行，时间列是发布时间；竖版成片视频框 360px
+  assert.match(panel, /isPub && p\.publishedAt != null \? p\.publishedAt : p\.scheduledAt/);
+  assert.match(panel, /videoHeight > v\.videoWidth/);
+  assert.match(css, /\.cp\.vert video[^{]*\{[^}]*height:360px/);
+  // 侧栏：今天还能发按平台说，不相加；摘要不折行
+  assert.doesNotMatch(shell, /reduce\(\(n, a\) => n \+ \(a\.quota/);
+  assert.match(shell, /今天还能发：/);
+  assert.match(shell, /\$\{bad\} 个账号要处理/);
+  assert.doesNotMatch(shell, /个账号登录正常\$\{bad/);
+  assert.match(css, /\.health \.nw\{white-space:nowrap/);
+});
+
 test("旧单页已下线：index.html / app.js / style.css 不再提供", async () => {
   for (const path of ["/index.html", "/app.js", "/style.css"]) {
     assert.equal((await fetch(`${base}${path}`)).status, 404, `${path} 应该已删除`);
