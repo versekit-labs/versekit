@@ -1120,6 +1120,70 @@ const boundedLimit = (limit, fallback = 100) => {
   return Math.min(n, 500);
 };
 
+/** 日历上的状态只有四种（ACC-v3-cal-05）：wait 等你确认 / sched 已确认 / pub 已发布 / bad 出了问题。 */
+const CAL_STATE = {
+  pending_confirm: "wait", notify_pending: "wait", draft_pending: "wait",
+  queued: "sched", auto_running: "sched", draft_running: "sched",
+  published: "pub", published_limited: "pub",
+  failed: "bad", blocked: "bad", expired: "bad",
+};
+const CAL_LABEL = { wait: "等你确认", sched: "已确认", pub: "已发布", bad: "出了问题" };
+const CAL_LIMIT = 2000;
+
+/**
+ * 日历用的平台稿（ACC-v3-cal-02、08）：只取 [from, to] 里的，一次只取可见范围。
+ * 时间 = 已发布的用实际发布时间，没发的用计划时间。现在发的、我自己发的、先不发的、已取消的不上日历。
+ * `groupId` 把范围限在一个账号组里（日历是当前组的）。
+ */
+export function listCalendarPublishes({ from = null, to = null, groupId = null } = {}) {
+  const lo = from == null ? -8.64e15 : Number(from);
+  const hi = to == null ? 8.64e15 : Number(to);
+  if (Number.isNaN(lo) || Number.isNaN(hi)) fail("from / to 必须是毫秒时间戳");
+  if (lo > hi) fail("from 不能晚于 to");
+  const states = Object.keys(CAL_STATE);
+  const rows = open()
+    .prepare(
+      `SELECT p.id, p.state, p.error_code, COALESCE(p.published_at, p.scheduled_at) AS at,
+              p.work_id, p.cut_id, a.platform, a.handle, a.is_manual, w.title,
+              c.title AS cut_title,
+              (SELECT COUNT(*) FROM cut c2 WHERE c2.work_id = p.work_id) AS cut_count
+         FROM publish p
+         JOIN account a ON a.id = p.account_id
+         JOIN work w ON w.id = p.work_id
+         LEFT JOIN cut c ON c.id = p.cut_id
+        WHERE COALESCE(p.published_at, p.scheduled_at) BETWEEN ? AND ?
+          AND (? IS NULL OR a.group_id = ?)
+          AND p.state IN (${states.map(() => "?").join(",")})
+          AND COALESCE(p.fallback_reason, '') != 'self_publish'
+          AND NOT EXISTS (
+            SELECT 1 FROM event e
+             WHERE e.publish_id = p.id AND e.payload_json LIKE '%"reason":"approved_now_by_operator"%')
+        ORDER BY at, p.id
+        LIMIT ?`,
+    )
+    .all(lo, hi, groupId, groupId, ...states, CAL_LIMIT);
+  return rows.map((r) => {
+    const cal = CAL_STATE[r.state];
+    const paused = Boolean(r.is_manual) && (cal === "wait" || cal === "sched");
+    return {
+      id: r.id,
+      state: r.state,
+      at: r.at,
+      platform: r.platform,
+      handle: r.handle,
+      workId: r.work_id,
+      title: r.title,
+      cutId: r.cut_id,
+      cutTitle: r.cut_title,
+      cutCount: r.cut_count,
+      cal,
+      calLabel: paused ? "暂停中" : CAL_LABEL[cal],
+      paused,
+      errorCode: r.error_code ?? null,
+    };
+  });
+}
+
 export function listPublishes({ state = null, platform = null, limit = 100 } = {}) {
   return open()
     .prepare(

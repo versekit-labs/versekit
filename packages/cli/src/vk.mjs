@@ -1577,11 +1577,21 @@ async function cmdPublish() {
   const log = (m) => human && console.log(m);
 
   if (sub === "list") {
+    const from = parseBound(val("--from"));
+    const to = parseBound(val("--to"), { end: true });
     const data = await send("publish.list", {
       ...(val("--state") ? { state: val("--state") } : {}),
       ...(val("--platform") ? { platform: val("--platform") } : {}),
+      ...(val("--group") ? { group: val("--group") } : {}),
+      ...(from != null ? { from } : {}),
+      ...(to != null ? { to } : {}),
     });
-    if (human) {
+    if (human && data.quota) {
+      // 日历口径（作品页的周 / 月视图同一份数据）：时间、状态、平台、作品·成片。
+      for (const r of data.rows) console.log(`${fmtTime(r.at).padEnd(22)}${r.calLabel.padEnd(8)}${r.platform.padEnd(12)}${r.title}${r.cutCount > 1 && r.cutTitle ? ` · ${r.cutTitle}` : ""}`);
+      if (!data.rows.length) console.log("这段时间没有安排");
+      for (const q of data.quota) console.log(`额度 ${q.day} ${q.platform} ${q.used} / ${q.cap}${q.over ? "  超了" : ""}`);
+    } else if (human) {
       for (const r of data.rows) console.log(`${r.id.padEnd(16)}${r.platform.padEnd(10)}${r.state.padEnd(18)}${String(r.title).slice(0, 30)}`);
       if (!data.rows.length) console.log("还没有发布：vk publish <素材> --to <平台>");
     } else out(data);
