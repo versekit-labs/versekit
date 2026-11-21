@@ -34,7 +34,10 @@
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
 #   11  有 worker 需要处理：worker-list 报 requiresAction/已退出；或 worker-read 末尾出现额度/限流错误；
 #       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定。
-#       例外：跑在火山通道上的验收 worker 报额度用尽（ACC-harness-model-07）是正证据，循环自己处理、不退出：
+#       例外 1：跑在 Codex 通道上的实现/返工 worker 屏幕出现用量上限（ACC-harness-codex-04）也是正证据，循环自己处理：
+#       写 $STATE_DIR/codex-exhausted（解析 try again at <时间>，解析不出按 5 小时）→ worker-stop → issue 退回 s:ready；
+#       冷却期内 bin/worker-channel.sh 把 model:codex 的单子改派 Sonnet，到点自动恢复
+#       例外 2：跑在火山通道上的验收 worker 报额度用尽（ACC-harness-model-07）是正证据，循环自己处理、不退出：
 #       写 $STATE_DIR/volc-exhausted（解析报错里的重置时间，解析不出按 5 小时）→ worker-stop → 清验收锁 → 改用千问重派
 #   14  同一项目已有循环在跑（锁文件 $COORD_STATE_DIR/coordinator-loop.lock 里的 pid 还活着且是本项目的循环）；
 #       什么都不做就退出，不调用 orca / cycle.sh
@@ -213,6 +216,26 @@ def reset_at(text):
         except Exception: pass
     t=int(now+5*3600)
     return t,time.strftime("%Y-%m-%d %H:%M:%S %z",time.localtime(t))+"（按 5 小时估算）"
+CODEX_QUOTA=re.compile(r"hit your usage limit|usage limit.{0,80}try again|you.ve reached your .{0,40}limit",re.I)
+CODEX_RESET=re.compile(r"try again (?:at|on|after)\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)\s*([+-]\d{2}:?\d{2})?",re.I)
+def codex_reset_at(text):
+    m=CODEX_RESET.search(text)
+    if m:
+        try:
+            tm=m.group(2) if m.group(2).count(":")==2 else m.group(2)+":00"
+            z=(m.group(3) or "+0800").replace(":","")
+            t=datetime.datetime.strptime(m.group(1)+" "+tm+" "+z,"%Y-%m-%d %H:%M:%S %z")
+            if t.timestamp()>now: return int(t.timestamp()),m.group(1)+" "+tm+" "+z
+        except Exception: pass
+    t=int(now+5*3600)
+    return t,time.strftime("%Y-%m-%d %H:%M:%S %z",time.localtime(t))+"（按 5 小时估算）"
+def codex_worker(did):
+    # 只有跑在 Codex 通道上的实现/返工 worker 才算「Codex 额度用完」；cycle.sh 派工时把通道写进 dispatch 记录。
+    sd=os.environ["VOLC_STATE_DIR"]
+    try: rec=json.load(open(os.path.join(sd,"dispatch-%s.json"%did)))
+    except Exception: return None
+    if rec.get("role") not in ("engineer","rework"): return None
+    return rec.get("issue") if rec.get("channel")=="codex" else None
 def volc_worker(did):
     # 只有跑在火山通道上的验收 worker 才算「火山额度用尽」；其它通道的额度错误仍交给协调器。
     sd=os.environ["VOLC_STATE_DIR"]
@@ -255,6 +278,11 @@ for w in ws:
     if reason:
         vu,vt,vi="-","-","-"
         if reason=="额度用尽":
+            ci0=codex_worker(did)
+            if ci0 is not None and CODEX_QUOTA.search("\n".join(lines[-15:])):
+                ep,ct=codex_reset_at("\n".join(lines[-15:])); issue="#"+str(ci0)
+                print("%s\t%s\t%s\t%s\t%s\t%s\t%s\tcodex" % (issue,did,reason," ⏎ ".join(SECRET.sub("***",l)[:200] for l in tail),ep,ct,ci0))
+                continue
             vi0=volc_worker(did)
             if vi0 is not None:
                 ep,vt=reset_at("\n".join(lines[-15:])); vu=str(ep); vi=str(vi0); issue="#"+vi
@@ -352,8 +380,26 @@ print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage"
   # 其余停摆（疑似卡住、非火山的额度错误）仍交给协调器。
   if [ -n "$stalled" ]; then
     rest=""
-    while IFS=$'\t' read -r issue did reason tail vu vt vi; do
+    while IFS=$'\t' read -r issue did reason tail vu vt vi kind; do
       [ -n "$issue" ] || continue
+      if [ "${kind:-}" = "codex" ]; then
+        # Codex 额度用完（ACC-harness-codex-04）：记冷却 → worker-stop → issue 退回 s:ready；冷却期内 model:codex 改派 Sonnet。
+        say "Codex 额度用完（${issue} dispatch=${did}）：worker-read 末尾 ⏎ ${tail}"
+        mkdir -p "$VOLC_STATE_DIR" && printf '%s\t%s\n' "$vu" "$vt" > "$VOLC_STATE_DIR/codex-exhausted"
+        say "  1/3 已记「Codex 额度用完，到 ${vt} 为止」→ $VOLC_STATE_DIR/codex-exhausted（worker-channel.sh 到期前把 model:codex 的单子改派 Sonnet）"
+        if orca orchestration worker-stop --dispatch "$did" --json >/dev/null 2>&1; then
+          say "  2/3 已 worker-stop dispatch=${did}"
+        else
+          say "  2/3 ✗ worker-stop dispatch=${did} 失败，下一轮仍会重试"
+        fi
+        if node "${AGENTCTL_BIN:-bin/agentctl.mjs}" set --issue "$vi" --to ready --force >/dev/null 2>&1; then
+          say "  3/3 已把 #${vi} 退回 s:ready；下一轮 cycle 改派 Sonnet（见下方派工）"
+        else
+          say "  3/3 ✗ 退回 #${vi} 到 s:ready 失败，需要协调器手动处理"
+        fi
+        run_cycle || true
+        continue
+      fi
       if [ "${vu:--}" = "-" ]; then
         rest="${rest:+$rest$'\n'}$(printf '%s\t%s\t%s\t%s' "$issue" "$did" "$reason" "$tail")"
         continue
