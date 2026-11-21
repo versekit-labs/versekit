@@ -142,6 +142,9 @@ export function loginHint(platform, accountId) {
   if (platform === "tiktok-api") {
     return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用 TikTok 登录并同意）`;
   }
+  if (platform === "youtube") {
+    return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用你的 Google 账号登录并同意）`;
+  }
   return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
 }
 
@@ -179,7 +182,21 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       rules: [...new Set([...(connected.length ? connected : knownPlatforms())])].map((p) => ({ ...describeRules(p, config), name: platformLabel(p) })),
     };
   }
-  /** 进行中的 TikTok 授权会话，按账号。 */
+  /**
+   * 平台自己能按时公开的（YouTube：上传时带 publishAt，到点由平台公开）：确认后立刻开始上传，而不是等到
+   * 预约时间才开始传。store 按预约时间排的 run 在这里改成马上跑；适配器看到平稿的预约时间在未来，
+   * 就私享上传并带 publishAt。其余平台不受影响。
+   */
+  function releaseNativeSchedule(result) {
+    for (const item of result?.approved ?? []) {
+      if (!item?.runId || !item.runAfter || item.state !== "queued") continue;
+      if (byPlatform.get(item.platform)?.adapter?.nativeSchedule !== true) continue;
+      open().prepare("UPDATE run SET run_after = NULL WHERE id = ? AND state = 'queued'").run(item.runId);
+    }
+    return result;
+  }
+
+  /** 进行中的授权会话（TikTok 官方接口、YouTube），按账号。 */
   const connectSessions = new Map();
 
   /** 创建发布的本地校验：不写任何行、不碰网络。 */
@@ -633,7 +650,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         // 发布台据此在选素材时提前提示；null = 适配器没声明，页面不猜。
         assetTypes: a.assetTypes ?? null,
         ready: a.adapter.ready(),
-        // 需要应用凭证的平台（目前只有 TikTok 官方接口）：页面据此决定先填凭证还是直接授权。不含 secret。
+        // 需要应用凭证的平台（TikTok 官方接口、YouTube）：页面据此决定先填凭证还是直接授权。不含 secret。
         credentials: a.adapter.credentials?.status?.() ?? null,
       })),
     }),
@@ -722,7 +739,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         accountId,
         state: "waiting",
         url: session.url,
-        next: "在浏览器里打开这个链接，用 TikTok 登录并同意；完成后这条命令会显示头像和昵称",
+        next: account.platform === "youtube"
+          ? "在浏览器里打开这个链接，用你的 Google 账号登录并同意；完成后这条命令会显示频道名"
+          : "在浏览器里打开这个链接，用 TikTok 登录并同意；完成后这条命令会显示头像和昵称",
       };
     },
 
@@ -750,7 +769,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (account.platform === "xiaohongshu") {
         return { accountId, started: false, next: loginHint(account.platform, accountId) };
       }
-      if (account.platform === "tiktok-api") {
+      if (account.platform === "tiktok-api" || account.platform === "youtube") {
         return { accountId, started: false, next: loginHint(account.platform, accountId) };
       }
       return { accountId, started: false, next: `打开本机浏览器登录 ${account.platform} @${account.handle}，完成后运行 vk account mode ${accountId} auto` };
@@ -991,7 +1010,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     // 发布前人确认（#146）：写库都在 store.mjs，这里只是把命令接上。
-    "publish.approve": ({ cutId = null, publishId = null, when = "scheduled" }) => store.approvePublishes({ cutId, publishId, when }),
+    "publish.approve": ({ cutId = null, publishId = null, when = "scheduled" }) => releaseNativeSchedule(store.approvePublishes({ cutId, publishId, when })),
 
     // 改内容（ACC-v3-edit-*）：通用文案、各平台单独写的字段、按时间发的时间，一次提交、带 rev。
     "cut.edit": ({ cutId, rev, language = null, generic = null, platforms = null }) => store.editCut({ cutId, rev, language, generic, platforms }),

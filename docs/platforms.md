@@ -24,7 +24,7 @@
 |---|---|---|
 | 小红书 | 驱动 `creator.xiaohongshu.com` 的发布页；登录有两个入口：主站扫码（网页内展示二维码）或短信验证码；采集走数据看板接口 | **无**（账号需登录一次） |
 | B站 | `biliup` CLI + 你自己的 cookie（`~/.config/assurelane/bilibili-cookies.json`） | **无** |
-| YouTube | 官方 Data API v3（唯一走官方 API 的） | 无（未审核项目会被锁私享） |
+| YouTube | 官方 Data API v3（唯一走官方 API 的）；已移植为 `packages/adapter-youtube` | 无（未审核项目会被锁私享，适配器会明说） |
 | TikTok | ⚠️ 目前是 5 行 `manual()` 占位，**还没跑通自动** | — |
 
 > 所以：**自动化是主路，官方 API 是升级项。** 下面按这个前提重写矩阵。
@@ -50,12 +50,34 @@
 
 ## 2. 逐平台
 
-### YouTube — 🟢 官方 API（唯一）
+### YouTube — 🟢 官方 API（`packages/adapter-youtube`，platform = `youtube`）
 
-- `videos.insert` 可续传，支持标题/描述/标签/AI 声明/缩略图/播放列表。
-- **坑（工厂已验证）**：未审核项目的上传会被**强制锁成私享** → 必须回传 `visibility_forced_private` 提示，否则是"发了没人看"的静默失败。
-- 采集：YouTube Analytics API + `videos.list`。
-- 降级触发：OAuth 撤销、配额耗尽、账号被限。
+移植自视频工厂 `trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`；工厂里为某个频道写死的东西（播放列表名与简介、类目 28、只发英文版、AI 合成声明、话题过滤与 `#Shorts`、目录约定、`~/.config/assurelane` 凭证）全部剥掉，改成平台稿参数或 core 传入的文案与素材。
+
+**怎么接入（全在系统页，界面上没有命令行）**：账号那一行「填应用凭证」→ 填你自己在 Google Cloud 控制台建的 OAuth 客户端（Desktop 类型）的 client id / client secret → 「Connect YouTube」→ 新标签页里用你的 Google 账号同意 → 本机 `127.0.0.1` 临时端口收回调（带 `state` 和 PKCE S256），拿到 code 立刻关端口。token 只在本机凭证目录（权限 600），账号表只存 `credential_ref`。用哪个 Google 号由你在授权页上选，适配器不写死。授权要勾全权限（上传、管理账号用来回读核实、Analytics 可选）。
+
+**发布**：
+- `videos.insert` 可续传，**分块**读文件（默认 8 MiB，必须是 256 KB 的整数倍），断线后先问服务端偏移再续传，不重传。整个发布受 `publish.timeout_ms`（默认 5 分钟）约束：上传大文件（如 4K 母版）要在 `config.json` 里调大。
+- 标题、简介（正文 + 话题）、标签来自平台稿；语言来自成片的语言版本（`default` 不传）。
+- 平台稿参数（逐条放 `overrides.youtube`，或作品 / 成片 `meta.youtube`，逐条的优先）：`privacy`（public / unlisted / private，缺省用平台稿可见性）、`category_id`（缺省 `config.json` 的 `youtube.default_category_id`，再缺省 22）、`contains_synthetic_media`（缺省不声明）、`made_for_kids`（缺省 false）、`playlist` 或 `playlist_id`（默认不加；按名字找已有列表，找不到只记 notes，不新建）、`captions`（`{ path, language, name }`）。缩略图用版本 `meta.cover`。
+- 竖版（或方形）且时长不超过 180 秒的成片按 Shorts 处理（读 mp4 的 `tkhd` / `mvhd`，认得手机竖拍的旋转矩阵）；不靠话题，不追加 `#Shorts`。
+- **预约发**：私享上传 + `publishAt`，到点由 YouTube 公开；core 在确认时就让它开始上传（`nativeSchedule`），不等到预约时间。离现在不到 15 分钟的按现在发。**现在发**：按平台稿的可见性直接发。
+- 发布后一定 `videos.list` 回读核实 id、状态、`privacyStatus`，不信任上传返回。视频已在 YouTube 上之后，缩略图 / 字幕 / 播放列表失败只写进事件（`publish.needs_followup`，`kind: notes`），**不重传**；回读读不到则是「结果待确认」，同样不重传。
+
+**强制私享不静默**：未过 Google API 合规审核的项目，上传可能被锁成私享。回读的 `privacyStatus` 与请求不符时，平台稿记 `fallback_reason = visibility_forced_private`、状态 `published_limited`、一条 `set_visibility_public` 待办和一条事件，人话：「YouTube 把这条锁成了私享：接入用的 Google 项目还没过审，需要在 YouTube Studio 里手动改成公开」。预约发时 YouTube 丢了 `publishAt` 同理。
+
+**配额**（2026-11-21 查阅官方文档）：
+- `videos.insert` 有**独立配额桶**，默认每天 100 次、每次计 1；其余接口共用每天 10,000 单位：`videos.list` / `channels.list` / `playlists.list` = 1，`thumbnails.set` / `playlistItems.insert` / `playlists.insert` = 50，`captions.insert` = 400。配额每天**太平洋时间零点**重置。
+- 官方页：<https://developers.google.com/youtube/v3/determine_quota_cost>、<https://developers.google.com/youtube/v3/getting-started>。数字都在 `src/quota.mjs` 一处；过审后额度调高了，写 `config.json` 的 `youtube.daily_inserts` / `youtube.daily_units`（或环境变量 `VK_YOUTUBE_DAILY_INSERTS` / `VK_YOUTUBE_DAILY_UNITS`），不要改代码。
+- 本机按 Google 项目（client id）记账（凭证目录里，权限 600）；发布前预估今天剩的够不够，不够就**不开始上传**并说明原因。
+- 接口回 `quotaExceeded`：立即停下、不重试，这个项目暂停到太平洋时间次日零点，撞上的账号同时暂停（和 TikTok 风控暂停是同一个开关），发事件；到点后由 core 自动放开。429 和 5xx 指数退避重试（1s、2s、4s、8s）。
+- `uploadLimitExceeded`（频道当天传得太多）、token 失效（转「需要重新登录」）、视频被拒（`rejectionReason`）、文件被判损坏（`failureReason`）各有 `error_code` + 人话 + 事件。
+
+**坑**：Google Cloud 项目的发布状态还是「测试」时，refresh token 7 天就失效，到点会转「需要重新登录」；改成「生产」才长期有效（与 API 合规审核是两件事）。
+
+**采集**：`videos.list`（statistics）回填播放（键名 `play`，倍数口径和别的平台一致）、点赞、评论；授权里有 Analytics 权限时再取观看时长（`watch_minutes`、`avg_view_seconds`），没有或取失败不报错。
+
+降级触发：OAuth 撤销、配额耗尽、账号被限。
 
 ### B站 — 🟢 biliup + cookie
 

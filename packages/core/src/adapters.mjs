@@ -59,9 +59,11 @@ export async function loadAdapters({ only = null, root = PACKAGES } = {}) {
 export async function checkAccount(adapters, accountId) {
   {
     const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
-    const account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
+    let account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
     if (!account) throw new Error(`没有这个账号：${accountId}`);
     const adapter = byPlatform.get(account.platform);
+    // 定时暂停（YouTube 配额）到点了：先放开，检查结果才是账号现在真实的状态。
+    if (adapter && resumeLapsedPauses(adapter).includes(accountId)) account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
     const at = Date.now();
     const mark = (patch) => {
       const sets = Object.keys(patch).map((k) => `${k}=?`).join(", ");
@@ -141,6 +143,62 @@ function pauseAccountFor(publishId, row, err) {
   }
 }
 
+/**
+ * 适配器报了「暂停到某个时刻」的错（YouTube 每日配额用完，到太平洋时间零点重置）：账号暂停（和 TikTok 的
+ * 暂停是同一个开关 is_manual）并推事件。适配器自己记着暂停到几点；到点后 resumeLapsedPauses 放开。
+ */
+function pauseAccountUntil(publishId, row, err) {
+  const { code, until } = err.pause;
+  open().prepare("UPDATE account SET is_manual = 1 WHERE id = ?").run(row.account_id);
+  emit({
+    type: "publish.needs_human",
+    severity: "warn",
+    publishId,
+    payload: {
+      error_code: err.code,
+      platform_error: code,
+      accountId: row.account_id,
+      platform: row.platform,
+      handle: row.handle,
+      accountPaused: true,
+      pausedUntil: until,
+      message: String(err.message).slice(0, 300),
+    },
+    dedupeKey: `publish:${publishId}:${code}`,
+  });
+}
+
+/** 适配器声明的定时暂停到期了：把它们的账号放开。返回被放开的账号 id。 */
+function resumeLapsedPauses(adapter) {
+  if (typeof adapter.adapter.lapsedPauses !== "function") return [];
+  let ids = [];
+  try {
+    ids = adapter.adapter.lapsedPauses() ?? [];
+  } catch {
+    return []; // 记账文件读不了不该挡住发布；暂停没放开只是多等一次检查
+  }
+  for (const id of ids) open().prepare("UPDATE account SET is_manual = 0 WHERE id = ?").run(id);
+  return ids;
+}
+
+/** 适配器说「这次发出去了，但有一件事要人知道」（YouTube 把视频锁成私享）：写进平台稿，页面和卡片都读得到。 */
+function recordNotice(publishId, notice) {
+  open()
+    .prepare("UPDATE publish SET fallback_reason = ?, error_code = ?, error_message = ?, updated_at = ? WHERE id = ?")
+    .run(notice.code, notice.code, String(notice.message).slice(0, 500), Date.now(), publishId);
+}
+
+/** 视频已经发出去之后，缩略图、字幕、播放列表这类尽力而为的步骤没做成：不是失败，也不能静默——留事件。 */
+function recordNotes(publishId, platform, notes) {
+  emit({
+    type: "publish.needs_followup",
+    severity: "warn",
+    publishId,
+    payload: { kind: "notes", platform, hint: notes.join("；").slice(0, 500) },
+    dedupeKey: `publish:${publishId}:notes`,
+  });
+}
+
 /** 队列可以拿去调适配器的平台稿状态（白名单）。running 是租约过期后重领的情形。 */
 export const RUNNABLE_PUBLISH_STATES = ["queued", "auto_running", "draft_running"];
 
@@ -192,9 +250,10 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       // 暂停中的账号不再发（#143）：TikTok 判了 spam_risk_* / 活跃用户上限后，账号已被暂停；
       // 队列里同账号的其他平台稿不能绕过暂停继续往外发。不静默：转「待人处理」并留事件。
       if (adapter.adapter.respectsPause) {
+        resumeLapsedPauses(adapter);
         const acc = open().prepare("SELECT is_manual FROM account WHERE id = ?").get(row.account_id);
         if (acc?.is_manual) {
-          const message = `账号 ${row.handle} 已被暂停自动发布（TikTok 风控或用户上限）：这条没有发；确认没问题后到系统页恢复自动发布，再重新确认`;
+          const message = `账号 ${row.handle} 已被暂停自动发布（${adapter.adapter.pausedWhy ?? "TikTok 风控或用户上限"}）：这条没有发；确认没问题后到系统页恢复自动发布，再重新确认`;
           transitionPublish(publishId, "notify_pending", { reason: "account_paused", patch: { fallback_reason: "risk_control", error_message: message.slice(0, 500) } });
           emit({
             type: "publish.needs_human",
@@ -264,6 +323,8 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         const result = await Promise.race([runAdapter, deadline]);
         if (result?.dryRun) return result;
         const applied = applyPublishResult(publishId, result);
+        if (result?.notice?.code) recordNotice(publishId, result.notice);
+        if (Array.isArray(result?.notes) && result.notes.length) recordNotes(publishId, adapter.platform, result.notes);
         // 选了「送草稿箱」不是失败也不是降级：说清楚下一步在 TikTok 收件箱里发。
         if (result?.state === "draft_pending" && result.note) {
           emit({
@@ -276,8 +337,20 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         }
         return applied;
       } catch (err) {
-        if (err?.pause) pauseAccountFor(publishId, row, err);
+        if (err?.pause?.until) pauseAccountUntil(publishId, row, err);
+        else if (err?.pause) pauseAccountFor(publishId, row, err);
         const disposition = applyPublishError(publishId, err);
+        // 适配器给了平台自己的错误码（uploadLimitExceeded、视频被拒、预估配额不够……）：留一条带原码的事件，
+        // 光有 error_code=platform_reject 分不清是哪一种。暂停类已在上面单独发过事件。
+        if (err?.platformCode && !err.pause?.until && ["platform_reject", "result_unconfirmed"].includes(err.code)) {
+          emit({
+            type: "publish.needs_human",
+            severity: "warn",
+            publishId,
+            payload: { error_code: err.code, platform_error: err.platformCode, platform: row.platform, handle: row.handle, message: String(err.message).slice(0, 300) },
+            dedupeKey: `publish:${publishId}:${err.platformCode}`,
+          });
+        }
         if (disposition.retryable) throw toAdapterError(err);
         // 超时还要把 run 标成失败：任务页靠 run.state=failed 显示这条错误并给出「重试」入口。
         // 其他终态失败（auth / asset_invalid …）已有对应状态与人话，run 正常结束即可。

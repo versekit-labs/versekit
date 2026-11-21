@@ -352,7 +352,7 @@ export const COMMANDS = [
   },
   {
     name: "account.connect",
-    summary: "TikTok 官方接口授权（Login Kit）：本机临时端口接回调、PKCE；完成后保存 token 到本机凭证目录，显示头像和昵称",
+    summary: "官方接口账号授权（TikTok Login Kit、YouTube 的 Google OAuth）：本机临时端口接回调、PKCE；完成后保存 token 到本机凭证目录，显示头像和昵称（YouTube 显示频道名）",
     remote: false,
     localOnly: true,
     args: { accountId: "string", timeoutMs: "number?" },
@@ -363,12 +363,12 @@ export const COMMANDS = [
   },
   {
     name: "account.credentials",
-    summary: "保存某个平台的应用凭证（目前只有 TikTok 官方接口：client key / client secret，写进本机 config.json，权限 600；环境变量仍优先）",
+    summary: "保存某个平台的应用凭证（TikTok 官方接口：client key / client secret；YouTube：Google OAuth 客户端的 client id / client secret；写进本机 config.json，权限 600；环境变量仍优先）",
     remote: false,
     localOnly: true,
     args: { platform: "string", clientKey: "string", clientSecret: "string" },
     http: { method: "POST", path: "/api/platforms/:platform/credentials" },
-    cli: { usage: "vk account credentials tiktok --client-key <key> [--client-secret <secret>]（secret 也可从 stdin 或 TIKTOK_CLIENT_SECRET 读）" },
+    cli: { usage: "vk account credentials tiktok|youtube --client-key <key 或 client id> [--client-secret <secret>]（secret 也可从 stdin 或 TIKTOK_CLIENT_SECRET 读）" },
     card: null,
     // 不审计：command_audit 会把 args 原样写进库，而这里的 args 里有 secret。保存动作留一条不含凭证的事件。
     audit: "never",

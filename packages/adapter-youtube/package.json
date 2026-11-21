@@ -1,0 +1,9 @@
+{
+  "name": "@versekit-app/adapter-youtube",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "YouTube 官方接口适配器：Google OAuth（本机回调 + PKCE）+ Data API v3 可续传上传；预约发用 publishAt，回读核实，强制私享不静默",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}
