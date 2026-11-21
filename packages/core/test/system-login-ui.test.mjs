@@ -100,7 +100,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
   const rowText = (id) => tab.eval(`(() => { const r = document.querySelector(${JSON.stringify(row(id))}); return r ? r.innerText + "\\n" + (r.nextElementSibling?.classList.contains("subrow") ? r.nextElementSibling.innerText : "") : ""; })()`);
 
   try {
-    tab = await driver.openAccount({ accountId: "sys-login-ui", url: `${base}/system#pollms=200`, headless: process.env.CI === "true" });
+    tab = await driver.openAccount({ accountId: `sys-login-ui-${process.pid}`, url: `${base}/system#pollms=200`, headless: process.env.CI === "true" });
     await tab.waitFor(`document.querySelector("main table")`, [], { timeout: 25e3, what: "系统页" });
     await watch();
 
@@ -219,7 +219,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     assert.deepEqual(errors, [], "不应有未捕获的 JS 错误");
   } finally {
     if (tab) await tab.close().catch(() => {});
-    await driver.closeAccount("sys-login-ui").catch(() => {});
+    await driver.closeAccount(`sys-login-ui-${process.pid}`).catch(() => {});
     await daemon.close();
   }
 });

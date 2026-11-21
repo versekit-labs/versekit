@@ -196,9 +196,13 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
 
 const base = (port) => `http://127.0.0.1:${port}`;
 
-async function probeVersion(port) {
+async function probeVersion(port, expectedSocket = null) {
   try {
     const r = await fetch(`${base(port)}/json/version`, { signal: AbortSignal.timeout(1500) });
+    if (r.ok && expectedSocket) {
+      const { webSocketDebuggerUrl } = await r.json();
+      return webSocketDebuggerUrl === expectedSocket ? "ok" : "occupied";
+    }
     void r.body?.cancel().catch(() => {});
     return r.ok ? "ok" : "occupied";
   } catch {
@@ -246,18 +250,21 @@ function chromeUserDataDirForPid(pid) {
   }
 }
 
+function portListenerPids(port, family = "") {
+  try {
+    return execFileSync("lsof", ["-nP", `-i${family}TCP:${Number(port)}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+    }).trim().split(/\s+/).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** 这个端口上监听的进程实际用的 `--user-data-dir`。查不出来按归属不明处理。 */
 export function chromeUserDataDirOnPort(port) {
-  try {
-    const pids = execFileSync("lsof", ["-nP", `-iTCP:${Number(port)}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] })
-      .split(/\s+/)
-      .filter(Boolean);
-    for (const pid of pids) {
-      const profile = chromeUserDataDirForPid(pid);
-      if (profile) return profile;
-    }
-  } catch {
-    /* lsof/ps 不可用或超时：当作查不出来 */
+  for (const pid of portListenerPids(port)) {
+    const profile = chromeUserDataDirForPid(pid);
+    if (profile) return profile;
   }
   return null;
 }
@@ -341,12 +348,12 @@ function canBindPort(port) {
   });
 }
 
-async function pickPort(accountId, profile) {
+async function pickPort(accountId, profile, rejectedPorts) {
   const preferred = accountPort(accountId);
   const span = PORT_TOP - BASE_PORT;
   for (let i = 0; i < 64; i++) {
     const port = BASE_PORT + ((preferred - BASE_PORT + i) % span);
-    if (claimedPorts.has(port)) continue;
+    if (claimedPorts.has(port) || rejectedPorts.has(port)) continue;
     const status = await probeVersion(port);
     if (status === "ok") {
       if (claimedPorts.has(port)) continue;
@@ -372,6 +379,73 @@ async function pickPort(accountId, profile) {
   throw new Error(`账号 ${accountId} 没有可用端口（从 ${preferred} 起探测了 64 个）`);
 }
 
+async function startChrome({ accountId, port, profile, headless, deadline }) {
+  const chrome = process.env.VK_CHROME_BIN ?? findChrome();
+  if (!chrome) throw new Error(browserReady() ?? "没有可用的 Chrome");
+  if (process.env.VK_CHROME_BIN && !existsSync(chrome)) throw new Error(`VK_CHROME_BIN 不存在：${chrome}`);
+
+  const child = spawn(chrome, chromeArgs({ port, profile, headless }), {
+    detached: true, stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.unref();
+  child.stderr.unref();
+  child.stderr.setEncoding("utf8");
+  let startupLog = "";
+  let listeningSocket = null;
+  let bindFailed = false;
+  child.stderr.on("data", (chunk) => {
+    if (listeningSocket || bindFailed) return;
+    startupLog = (startupLog + chunk).slice(-4096);
+    listeningSocket = startupLog.match(/DevTools listening on (ws:\/\/\S+)\s/)?.[1] ?? null;
+    // IPv4 绑定失败时，Chrome 也可能只监听 ::1，而驱动只走 127.0.0.1。
+    bindFailed = listeningSocket
+      ? !listeningSocket.startsWith(`ws://127.0.0.1:${port}/`)
+      : startupLog.includes("Cannot start http server for devtools");
+  });
+  let spawnError;
+  child.once("error", (err) => { spawnError = err; });
+  child.once("exit", () => {
+    if (instances.get(accountId)?.child === child) forget(accountId);
+  });
+
+  let ready = false;
+  try {
+    do {
+      if (spawnError) throw new Error(`Chrome 启动失败：${spawnError.message}`);
+      const expectedSocket = listeningSocket;
+      if (bindFailed) return null;
+      const status = await probeVersion(port, expectedSocket);
+      if (bindFailed || status === "occupied") return null;
+      if (status === "ok") {
+        // canBindPort 放掉探测 socket 后，其他进程可能先绑定。确认回答 CDP 的是刚启动的进程。
+        // Chrome 自报的浏览器目标已由 probeVersion 核对；无日志的可执行文件则查监听 PID。
+        const pids = expectedSocket ? [] : portListenerPids(port, "4");
+        if (pids.some((pid) => pid !== String(child.pid))) return null;
+        if (expectedSocket || pids.includes(String(child.pid))) {
+          ready = true;
+          return child;
+        }
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        if (!(await canBindPort(port))) return null;
+        throw new Error(`Chrome 启动即退出（${child.exitCode ?? child.signalCode}），profile: ${profile}`);
+      }
+      if (Date.now() >= deadline) break;
+      await sleep(500);
+    } while (Date.now() < deadline);
+    throw new Error(`Chrome 没有在端口 ${port} 上启动并通过归属检查（profile: ${profile}）`);
+  } finally {
+    if (!ready && child.pid && child.exitCode === null && child.signalCode === null) {
+      // 端口可能属于另一个 profile。仅回收这次启动的进程。
+      child.kill("SIGTERM");
+      if (!(await waitPidGone(child.pid, 2e3))) {
+        throw new Error(`Chrome 启动失败后未能退出（profile: ${profile}，PID ${child.pid}）`);
+      }
+      clearStaleSingleton(profile, child.pid);
+    }
+  }
+}
+
 async function startInstance(accountId, { headless = false } = {}) {
   const profile = accountProfile(accountId);
   mkdirSync(profile, { recursive: true, mode: 0o700 });
@@ -385,45 +459,34 @@ async function startInstance(accountId, { headless = false } = {}) {
   const instance = { accountId, profile, port: null, pid: null, tabs: new Set(), slotHeld: true, headless };
 
   try {
-    const { port, adopted, pid, headless: adoptedHeadless } = await pickPort(accountId, profile);
-    instance.port = port;
-    instance.pid = pid;
-    if (adopted) instance.headless = adoptedHeadless === true;
+    const deadline = Date.now() + 30e3;
+    const rejectedPorts = new Set();
+    let adopted;
+    for (;;) {
+      const picked = await pickPort(accountId, profile, rejectedPorts);
+      const { port, pid } = picked;
+      instance.port = port;
+      adopted = picked.adopted;
+      if (adopted) {
+        instance.pid = pid;
+        instance.headless = picked.headless === true;
+        break;
+      }
+      const child = await startChrome({ accountId, port, profile, headless, deadline });
+      if (!child) {
+        claimedPorts.delete(port);
+        rejectedPorts.add(port);
+        if (Date.now() >= deadline) throw new Error(`Chrome 启动期间调试端口持续被占用（profile: ${profile}）`);
+        continue;
+      }
+      instance.child = child;
+      instance.pid = child.pid;
+      writeMarker(profile, { accountId, port, pid: instance.pid, startedAt: Date.now(), headless });
+      break;
+    }
 
     if (!adopted) {
-      const chrome = process.env.VK_CHROME_BIN ?? findChrome();
-      if (!chrome) throw new Error(browserReady() ?? "没有可用的 Chrome");
-      if (process.env.VK_CHROME_BIN && !existsSync(chrome)) throw new Error(`VK_CHROME_BIN 不存在：${chrome}`);
-
-      const child = spawn(
-        chrome,
-        chromeArgs({ port, profile, headless }),
-        { detached: true, stdio: "ignore" },
-      );
-      child.unref();
-      instance.child = child;
-      instance.pid = child.pid ?? null;
-      // 先写标记再等端口：否则另一个进程可能在这段窗口里误以为 profile 空闲。
-      writeMarker(profile, { accountId, port, pid: instance.pid, startedAt: Date.now(), headless });
-
-      let spawnError = null;
-      child.once("error", (err) => {
-        spawnError = err;
-      });
-      child.once("exit", () => {
-        const live = instances.get(accountId);
-        if (live?.pid === child.pid) forget(accountId);
-      });
-
-      let ready = false;
-      for (let i = 0; i < 60 && !ready; i++) {
-        if (spawnError) throw new Error(`Chrome 启动失败：${spawnError.message}`);
-        if (child.exitCode !== null) throw new Error(`Chrome 启动即退出（退出码 ${child.exitCode}），profile: ${profile}`);
-        await sleep(500);
-        ready = await up(port);
-      }
-      if (!ready) throw new Error(`Chrome 没有在端口 ${port} 上启动（profile: ${profile}）`);
-
+      const { port } = instance;
       // Chrome 启动时会自带一个 about:blank 标签页；不清掉的话，每次自动化都会
       // 在用户屏幕上留一个空白窗口。
       try {
@@ -465,8 +528,11 @@ async function ensureInstance(accountId, opts = {}) {
     } else {
       const ready = await up(live.port);
       if (closing.has(accountId) || instances.get(accountId) !== live) return ensureInstance(accountId, opts);
-      if (ready) return live;
-      forget(accountId); // Chrome 已经挂了，重新起
+      // 短暂探测超时不能当作退出，否则会主动断开这个 profile 仍在用的 tab。
+      if (ready || (live.child ? live.child.exitCode === null && live.child.signalCode === null : portBelongsToProfile(live.port, live.profile))) {
+        return live;
+      }
+      forget(accountId);
     }
   }
   const pending = starting.get(accountId);
