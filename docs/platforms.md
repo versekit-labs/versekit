@@ -103,7 +103,7 @@
 
 **错误对照**：标题超长 / 文案超限 / 文件不对 → `asset_invalid`（没开浏览器）；被踢回登录页 → `auth`；找不到控件、回读对不上、草稿箱里没多出这条 → `flaky_ui`（带截图）；风控页面、账号暂停中 → `platform_reject`（风控还带账号暂停）。
 
-**dry-run**：`vk publish --platform douyin --dry-run` 单独能跑，不产生平台副作用。真实站点上只出计划（标题、正文、话题、封面、步骤、今天额度）；把 `VK_DOUYIN_BASE` 指到本机模拟页（`packages/adapter-douyin/fixtures/`，回环地址）时，会真的走一遍，停在「存草稿」前一步并截图。开发机从不打开 `creator.douyin.com`。
+**dry-run**：`vk publish --platform douyin --dry-run` 单独能跑，不产生平台副作用。真实站点上只出计划（标题、正文、话题、封面、步骤）；把 `VK_DOUYIN_BASE` 指到本机模拟页（`packages/adapter-douyin/fixtures/`，回环地址）时，会真的走一遍，停在「存草稿」前一步并截图。开发机从不打开 `creator.douyin.com`。
 
 **待人工（ACC-douyin-07）**：页面选择器只对照手搭的模拟页和 SAU 的记录写成，真实页面上对不对由所有者在和手机同网的电脑上验证——登录一次、送一条成片进草稿箱、在手机上确认标题、正文、话题、封面都对，再手动发布。「存草稿」按钮的文案（「暂存离开」）和草稿箱入口的位置尤其要核对：它们集中在 `src/page.mjs` 的 `T` 表里，改版只改那一处。
 
