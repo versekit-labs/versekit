@@ -2,9 +2,11 @@
 // 不装飞书、不联网，所以 CI 里也能跑。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter, once } from "node:events";
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const DIR = mkdtempSync(join(tmpdir(), "vk-feishu-"));
 const LOG = join(DIR, "calls.ndjson");
@@ -91,19 +93,29 @@ test("updateCard(): 按 message_id PATCH，content 是序列化后的卡片", as
   assert.deepEqual(JSON.parse(body.content), card);
 });
 
-test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", async () => {
+async function receiveAction(signal, check) {
   const got = [];
-  const stop = channel.start({ onAction: (evt) => got.push(evt) });
+  const events = new EventEmitter();
+  const received = once(events, "action", { signal });
+  const stop = channel.start({ onAction: (evt) => {
+    got.push(evt);
+    events.emit("action");
+  } });
   try {
-    const end = Date.now() + 5000;
-    while (!got.length && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+    await received;
     assert.equal(got.length, 1, "应该收到一条按钮事件");
-    assert.equal(got[0].operator_id, "ou_test");
-    assert.equal(got[0].token, "tok_1");
-    assert.equal(JSON.parse(got[0].action_value).cmd, "publish.retry");
+    check(got[0]);
   } finally {
     stop();
   }
+}
+
+test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", { timeout: 30e3 }, async ({ signal }) => {
+  await receiveAction(signal, (evt) => {
+    assert.equal(evt.operator_id, "ou_test");
+    assert.equal(evt.token, "tok_1");
+    assert.equal(JSON.parse(evt.action_value).cmd, "publish.retry");
+  });
 });
 
 test("probeEvents(): 未订阅时返回 false 并带上后台订阅链接", async () => {
@@ -167,7 +179,6 @@ test("probeEvents(): 已订阅时返回 true", async () => {
 const args = process.argv.slice(2);
 if (args[0] === "event") {
   console.error("[source] feishu-websocket: connected");
-  setTimeout(() => process.exit(0), 200);
   return;
 }
 process.exit(0);
@@ -291,7 +302,7 @@ process.exit(0);
   }
 });
 
-test("createAppStart(): 从官方创建流程里截出链接，并生成二维码", async () => {
+test("createAppStart(): 从官方创建流程里截出链接，并生成二维码", { timeout: 60e3 }, async ({ signal }) => {
   const bin = join(DIR, "lark-create");
   const marker = join(DIR, "created-profile");
   writeFileSync(
@@ -301,8 +312,7 @@ const fs = require("node:fs");
 const a = process.argv.slice(2);
 if (a[0] === "config" && a.includes("--new")) {
   console.log("在浏览器里完成创建：https://open.feishu.cn/page/app-create?demo=1");
-  setTimeout(() => { fs.writeFileSync(${JSON.stringify(marker)}, "1"); process.exit(0); }, 400);
-  setInterval(() => {}, 1000);
+  fs.writeFileSync(${JSON.stringify(marker)}, "1");
   return;
 }
 if (a[0] === "auth" && a[1] === "qrcode") {
@@ -324,16 +334,20 @@ process.exit(0);
     assert.match(started.url, /open\.feishu\.cn\/page\/app-create/);
     assert.match(started.qr, /^data:image\/png;base64,/);
 
-    await new Promise((r) => setTimeout(r, 600));
-    const status = channel.createAppStatus();
+    let status = channel.createAppStatus();
+    while (status.running) {
+      await delay(50, undefined, { signal });
+      status = channel.createAppStatus();
+    }
     assert.equal(status.configured, true);
     assert.equal(status.appId, "cli_create");
   } finally {
+    channel.createAppCancel();
     process.env.VK_LARK_BIN = BIN;
   }
 });
 
-test("start(): 事件被 data/event 包一层时仍能收到", async () => {
+test("start(): 事件被 data/event 包一层时仍能收到", { timeout: 30e3 }, async ({ signal }) => {
   const bin = join(DIR, "lark-nested");
   writeFileSync(
     bin,
@@ -341,10 +355,7 @@ test("start(): 事件被 data/event 包一层时仍能收到", async () => {
 const a = process.argv.slice(2);
 if (a[0] === "event" && a[1] === "consume") {
   process.stdin.resume();
-  const send = (o) => console.log(JSON.stringify(o));
-  setTimeout(() => {
-    send({ type: "event", event_key: "card.action.trigger", data: { action_value: JSON.stringify({ cmd: "publish.confirm", args: { publishId: "p1" } }), operator_id: "ou_nested", message_id: "om_1", token: "t" } });
-  }, 150);
+  console.log(JSON.stringify({ type: "event", event_key: "card.action.trigger", data: { action_value: JSON.stringify({ cmd: "publish.confirm", args: { publishId: "p1" } }), operator_id: "ou_nested", message_id: "om_1", token: "t" } }));
   setInterval(() => {}, 1000);
   return;
 }
@@ -354,16 +365,12 @@ process.exit(0);
   chmodSync(bin, 0o755);
 
   process.env.VK_LARK_BIN = bin;
-  const got = [];
-  const stop = channel.start({ onAction: (e) => got.push(e) });
   try {
-    const end = Date.now() + 5000;
-    while (!got.length && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
-    assert.equal(got.length, 1);
-    assert.equal(got[0].operator_id, "ou_nested");
-    assert.equal(JSON.parse(got[0].action_value).cmd, "publish.confirm");
+    await receiveAction(signal, (evt) => {
+      assert.equal(evt.operator_id, "ou_nested");
+      assert.equal(JSON.parse(evt.action_value).cmd, "publish.confirm");
+    });
   } finally {
-    stop();
     process.env.VK_LARK_BIN = BIN;
   }
 });
