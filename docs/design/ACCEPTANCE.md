@@ -203,6 +203,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-codex-05 | 读 `docs/COORDINATOR.md` §5.1 | 选模型的表里多一档 `model:codex`：写明适合（口径写得死、不靠看图判断的后端/脚本/测试单，如核心逻辑、CLI、适配器内部、不稳定测试排查）和不适合（界面还原、要看设计稿的单、对外文案、须人拍板的单），以及额度用完自动改派 Sonnet；协调器打这个 label 要在 issue 里写理由 |
 | ACC-harness-verdict-01 | `packages/core/test/agentctl.test.mjs` 用真实出现过的五种写法各造一条 PASS 判定评论（`acceptance:` 下的 ① `- id:` + `status:`；② `- item:` + `status:`（versekit #257/PR #260）；③ `- id:` + `result: pass`（trustbridge PR #683）；④ 行内 `- {id: ACC-x, status: pass}`（trustbridge PR #679）；⑤ 映射 `ACC-x: pass`（versekit #247）），调用 `parseVerdict` 和 `merge --pending --dry-run` | 五种都解析出同样的逐条结果，`merge --pending` 不再报「verdict 没有逐条覆盖」；只认 `acceptance:` 段，`failed:` 段里的 `- item:` 不会被当成 pass；同一条既有 pass 又有 fail 时按 fail；`status` 写成 pass/fail 以外的值（如 `待人工`）不算覆盖 |
 | ACC-harness-verdict-02 | 读 `bin/cycle.sh` 里验收任务书 | 判定 YAML 给出一份完整可抄的样例（PASS 一份、FAIL 一份），`acceptance:` 每条固定 `- id:` + `status:`，`failed:` 每条也用 `id:` 而不是 `item:`；`agentctl reject` 写出的 FAIL 评论同样改用 `id:`（旧评论里的 `item:` 仍能被读） |
+| ACC-harness-arch-01 | 离线测试造两张 issue：「涉及」含 `packages/core/src/commands.mjs`、`schema.sql`、`store.mjs`、`handlers.mjs`、`daemon.mjs` 或 `packages/relay/` 之一，一张口径列了 ACC-arch-09、一张没列；再造一个对应 PR 描述里没有六问的情况，跑 `agentctl tick` 和 `merge --pending --dry-run` | 没列 ACC-arch-09 的那张被 tick 标「补口径」、不派工；PR 描述里没有六问（6 个编号答案）时 `merge --pending` 拒绝合并并写明「缺 ADR-0005 §13 六问」；不涉及这些文件的单子不受影响 |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
 
 ## 账号浏览器的内存（driver-browser）
@@ -384,6 +385,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-arch-07] 新表是 `STRICT`；状态列有 `CHECK`，取值和状态机白名单同源（改一处，另一处不改则测试失败）；外键列有索引。
 - [ACC-arch-08] `npm run check:parity` 检查四端：CLI、HTTP、卡片按钮、MCP 工具的命令集合一致；每条命令声明 `permission`，制作机和发布机能调哪些由它决定，有测试钉住两种设备各调不了什么。
 - [ACC-arch-09] 改了表结构、命令、鉴权、文件、设备的 PR，描述里有 ADR-0005 §13 的六问检查表并逐条作答。没有的打回。
+- [ACC-arch-11] 补答六问（2026-11-21 审计发现 ACC-arch-09 没执行）：v3 单机单里改了命令或存储、却没带六问的 PR #251、#253、#254、#255、#261，各补一条 PR 评论逐条回答 ADR-0005 §13 的六问，答案要对照该 PR 的 diff 写实（单机模式还没有 `ctx.db` 和 `permission` 的，如实写「单机模式，暂缓到第 6/8 单」）；答出来不符合的地方（如失败没留 `error_code` + 人话 + 事件、该建没建的索引、界面按钮没有对应命令）列成清单写进 issue 评论，由协调器另开单。
 - [ACC-arch-10] 备份可恢复：从最近一次快照恢复一个用户的库，能登录、作品和排期都在。演练步骤写进运维文档，合并前实际做过一次并留记录。
 
 ### 分布式（ADR-0003 §4 的验证计划，原样纳入）
@@ -512,6 +514,15 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v3-fid-09] 平台徽章用各平台的官方标志，形状不改；颜色是各平台的品牌色。「还没发」是灰色标志，「出了问题」是红底白色标志。素材以各平台品牌资源页的正式文件为准，来源和许可证写在文件头。TikTok 相关界面遵守 TikTok 的品牌规范。
 - [ACC-v3-fid-08] 界面类实现单的证据包：1360 宽的截图和 `docs/design/screenshots/v3/` 里对应的那张并排；并贴出上面 fid-01 的实测值。（截图放 `docs/design/screenshots/impl/<页面>.png`，用 `vk demo seed` 的演示数据截，每次覆盖同名文件；PR 描述里用相对链接和 v3 那张并排。不放所有者的作品封面。）
 - [ACC-v3-fid-10] 入库可以带封面：清单的成片上可写 `cover`（图片路径，相对清单），`vk work add`、`vk work push` 和发布机拉取都带上它，`/api/works` 返回封面地址；页面有封面用封面，没有才退回首帧。入库技能 `versekit-ingest` 的清单说明补上这个字段。不引入 ffmpeg 等运行时依赖。有测试。
+
+### 实现对设计的还原（2026-11-21 审计出来的）
+
+独立 agent 用 `vk demo seed` 的离线演示数据把 main（3868e04）和定稿并排比过。下面四条是那次查出来、此前口径没写到或验收漏判的。
+
+- [ACC-v3-fid-11] 成片面板底栏选「现在发」以后，各平台行的时间列整列显示「现在发」（同 `docs/design/work.html` 切换后的样子），切回「预约发」恢复成时间。改内容里「跟通用」的字段是灰字、「单独写的」是墨色（同 `docs/design/screenshots/v3/work-edit.png`）。发布机相关文案里不再出现「这台电脑」，一律写发布机的名字（不是主机名 `xxx.local`，用设备名；没起名时用「发布机」）。
+- [ACC-v3-fid-12] 同一件事各处说法一致，有测试：① 作品列表「最好的一条」和数据页对同一作品用同一个「平时」口径，倍数一致；② 成片还没有平台稿时，成片列表不显示「已发布」，和页头的「还没有平台稿」一致；③ 系统页页头「有 N 件事要处理」的 N 等于页面上列出来的条数。
+- [ACC-v3-fid-13] 去掉定稿里没有的说明文字和区块：今天页底部「没确认的到时间也不会发；小红书每条单独确认。」；作品页周视图、月视图底部「日历只看不改：点一行进那支成片。」；系统页设备分段的「这台发布机现在」一块（排着要发 / 正在发 / 等你确认）。
+- [ACC-v3-fid-14] 细节对齐：成片没时长时标题后不出现孤立的「·」；改内容里「各平台」小标题和通用文案框之间的间距同定稿；数据页每一条的作品标题下面有成片名，结论列只写倍数；`/api/works` 已返回 `cover: null` 时前端不请求 `/media/<id>?cover=1`（控制台没有 404）。
 
 ### 测试稳定（2026-11-18）
 
