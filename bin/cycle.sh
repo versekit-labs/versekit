@@ -1128,8 +1128,16 @@ rework_spec() {
   local extra=""
   if [ "$channel" = "claude" ] || [ "$channel" = "codex" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
   if [ "$channel" = "codex" ]; then extra="${extra}$(codex_github_note)"$'\n'; fi
-  printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
-    "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
+  local task="返工 issue #${num} ${title}（PR #${pull}，原分支 ${branch}，第 ${round} 轮）。"
+  local change="按最近验收意见在原分支继续修改"
+  local comment_label="验收意见"
+  if [[ "$comment_body" == '<!-- agent-merge-conflict -->'* ]]; then
+    task="解决 issue #${num} ${title} 的合并冲突（PR #${pull}，原分支 ${branch}）。"
+    change="在原分支拉取并合并 PR 的目标分支（通常为 main），解决评论列出的冲突后提交，推送新 head 供重新验收"
+    comment_label="合并冲突说明"
+  fi
+  printf '目标：%s\n\n改动：%s；不新建分支、不新建 issue、不改写历史。\n\n最近评论：%s\n\n%s（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
+    "$task" "$change" "$comment_url" "$comment_label" "$comment_body" "$extra" \
     "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
 }
 
