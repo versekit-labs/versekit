@@ -119,7 +119,7 @@
   const platformInfo = (p) => ui.platforms.find((x) => x.platform === p) ?? null;
   const credsMissing = (a) => a.platform === "tiktok-api" && platformInfo("tiktok-api")?.credentials?.configured === false;
   const connected = (a) => Boolean(a.credential_ref && a.state === "ok");
-  const machineName = () => ui.machine?.name || "这台电脑";
+  const machineName = () => ui.machine?.name || "发布机";
   const publisherOffline = () => Boolean(ui.machine) && !ui.machine.online;
 
   // ── 读数据 ─────────────────────────────────────────────────────────────
@@ -156,13 +156,13 @@
     ui.machine = machine;
     ui.update = update;
     ui.relay = relay;
-    // 最近 7 天、失败的发布任务；只有这条平台稿现在还停在出问题的状态才能「再试一次」。
-    const since = Date.now() - 7 * 864e5;
-    const bad = new Map((ui.today?.problems ?? []).map((p) => [p.publishId, p]));
-    ui.problems = (runs?.rows ?? [])
-      .filter((r) => r.target_type === "publish" && r.created_at >= since && bad.has(r.target_id))
-      .map((r) => ({ run: r, p: bad.get(r.target_id) }))
-      .filter((x, i, all) => all.findIndex((y) => y.p.publishId === x.p.publishId) === i);
+    // 「最近出的问题」= 现在还停在出问题状态的平台稿（与今天页同源）；有失败的发布任务就带上它的原因，没有也要列出来。
+    // 页头「有 N 件事要处理」的 N 和这里列的条数用同一份数据算（ACC-v3-fid-12）。
+    const lastRun = new Map();
+    for (const r of runs?.rows ?? []) {
+      if (r.target_type === "publish" && (!lastRun.has(r.target_id) || r.created_at > lastRun.get(r.target_id).created_at)) lastRun.set(r.target_id, r);
+    }
+    ui.problems = (ui.today?.problems ?? []).map((p) => ({ run: lastRun.get(p.publishId) ?? null, p }));
   }
 
   async function refresh() {
@@ -421,27 +421,27 @@
     const behind = u?.lastCheck && !u.lastCheck.up_to_date;
     let act = "";
     if (!ui.upd && u) {
-      const dis = !online ? ' disabled title="这台电脑不在线，上线后才能更新"' : "";
-      act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? '<div class="sub">这台电脑不在线，上线后才能更新</div>' : ""}`;
+      const dis = !online ? ` disabled title="${esc(machineName())}不在线，上线后才能更新"` : "";
+      act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? `<div class="sub">${esc(machineName())}不在线，上线后才能更新</div>` : ""}`;
     }
     const lu = ui.update?.lastUpdate;
     const notes = ui.notesOpen && lu?.commits?.length
       ? subRow(5, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
       : "";
-    const updMsg = ui.upd ? subRow(5, `<p role="status">正在更新到最新版本，更新时这台电脑的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
+    const updMsg = ui.upd ? subRow(5, `<p role="status">正在更新到最新版本，更新时${esc(machineName())}的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
       : ui.updNote ? subRow(5, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
     const sub = updMsg || notes;
-    return `<tr${sub ? ' class="has-sub"' : ""}><td><b class="nm">${esc(machineName())}</b><span class="sub">发布机 · 这台电脑</span></td>` +
+    return `<tr${sub ? ' class="has-sub"' : ""}><td><b class="nm">${esc(machineName())}</b><span class="sub">发布机</span></td>` +
       `<td>${status}${relayRows()}</td><td>${accountsN ? `${accountsN} 个` : '<span class="sub">没有</span>'}</td><td>${versionCell()}</td><td class="n">${act}</td></tr>${sub}`;
   }
 
   /** 接入 / 断开中转：放在设备表的最后一行。 */
   function relayAction() {
     const r = ui.relay;
-    if (ui.relayAsk) return subRow(5, `<p>断开后这台电脑不再拉取制作机送来的作品，已经入库的作品不受影响。</p><span class="acts">${B("data-relayno", "取消", "link")}${B("data-relayoff", "断开")}</span>`);
-    if (r?.configured) return `<tr><td colspan="5"><button class="link" data-relayask>断开中转</button> <span class="sub">制作机送来的作品经中转交给这台发布机</span></td></tr>`;
+    if (ui.relayAsk) return subRow(5, `<p>断开后${esc(machineName())}不再拉取制作机送来的作品，已经入库的作品不受影响。</p><span class="acts">${B("data-relayno", "取消", "link")}${B("data-relayoff", "断开")}</span>`);
+    if (r?.configured) return `<tr><td colspan="5"><button class="link" data-relayask>断开中转</button> <span class="sub">制作机送来的作品经中转交给${esc(machineName())}</span></td></tr>`;
     const f = ui.relayForm;
-    if (!f) return '<tr><td colspan="5"><button class="link" data-relayadd>接入中转</button> <span class="sub">让别的电脑上做好的作品送到这台发布机</span></td></tr>';
+    if (!f) return `<tr><td colspan="5"><button class="link" data-relayadd>接入中转</button> <span class="sub">让别的电脑上做好的作品送到${esc(machineName())}</span></td></tr>`;
     return subRow(5, `<div class="how"><b>接入中转</b><span class="sub">填中转的地址和它给你的拉取令牌。令牌只保存在发布机上，不会回显。</span>${f.note ? `<span class="say bad" role="status">${esc(f.note)}</span>` : ""}</div>` +
       `<input type="text" id="relay-url" placeholder="中转地址" aria-label="中转地址" autocomplete="off" value="${esc(f.url)}">` +
       `<input type="password" id="relay-token" placeholder="拉取令牌" aria-label="拉取令牌" autocomplete="new-password" value="${esc(f.token)}">` +
@@ -449,26 +449,30 @@
   }
 
   function tabDevices() {
-    return `<h2 class="sec">发布机 · 你的平台账号在这台电脑上登录和发布，登录数据只存在它上面</h2>` +
+    return `<h2 class="sec">发布机 · 你的平台账号在${esc(machineName())}上登录和发布，登录数据只存在它上面</h2>` +
       `<div class="tblwrap"><table class="dev"><thead><tr><th>电脑</th><th>状态</th><th>账号</th><th>版本</th><th class="n"></th></tr></thead><tbody>${deviceRow()}${relayAction()}</tbody></table></div>` +
-      `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>` +
-      (ui.machine ? `<h2 class="sec">这台发布机现在</h2><div class="panel"><dl class="kv"><dt>排着要发</dt><dd>${ui.machine.queued.count} 条已确认${ui.machine.queued.nextAt ? `，最近一条 ${esc(whenText(ui.machine.queued.nextAt))}` : ""}</dd>` +
-        `<dt>正在发</dt><dd>${ui.machine.running.count ? `${ui.machine.running.count} 条` : "没有"}</dd><dt>等你确认</dt><dd>${ui.machine.awaiting.count} 条 <span class="sub">没确认的到时间也不会发</span></dd></dl></div>` : "");
+      `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>`;
   }
 
   // ── 最近出的问题（在分段上面）──────────────────────────────────────────────
   const WHAT = { failed: "没发出去", blocked: "被拦下了", expired: "过了时间没确认" };
 
+  /** 最近出的问题里的更新失败：7 天内的那一条（页头计数和列表共用这一个判断）。 */
+  const updFailure = () => {
+    const uf = ui.update?.lastFailure;
+    return uf && Date.now() - uf.at < 7 * 864e5 ? uf : null;
+  };
+
   function problemsBlock(group) {
     if (!group) return "";
-    const uf = ui.update?.lastFailure;
-    const updRow = uf && Date.now() - uf.at < 7 * 864e5
+    const uf = updFailure();
+    const updRow = uf
       ? `<tr><td><b class="nm">自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功，已回到原版本</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
       : "";
     const relayRowsHtml = (ui.relay?.failures ?? []).map((f) => `<tr><td><b class="nm">中转投递${f.title ? `「${esc(f.title)}」` : ""}</b><span class="sub">${esc(whenText(f.at))}</span></td><td></td><td><span class="st bad">没入库</span><div class="sub">${esc(f.message)}</div></td><td class="n"></td></tr>`).join("");
     const rows = updRow + relayRowsHtml + ui.problems.map(({ run, p }) => {
-      const day = whenText(run.created_at);
-      const why = p.error?.message ?? run.last_error ?? "";
+      const day = whenText(run?.created_at ?? p.scheduledAt ?? Date.now());
+      const why = p.error?.message ?? run?.last_error ?? "";
       return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}">${cover(ui.covers.get(p.workId), 48, 36)}<span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
         `<td>${pfn(p.platform, pfName(p.platform))}</td><td><span class="st bad">${esc(WHAT[p.state] ?? p.state)}</span><div class="sub">${esc(why)}</div></td>` +
         `<td class="n"><button class="btn" data-retry="${esc(p.publishId)}"${ui.retrying.has(p.publishId) ? " disabled" : ""}>再试一次</button></td></tr>`;
@@ -500,7 +504,7 @@
     const group = VK.current();
     const pending = {};
     for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
-    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + (ui.today?.problems?.length ?? 0);
+    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + ui.problems.length + (updFailure() ? 1 : 0) + (ui.relay?.failures ?? []).length;
     const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
     const behind = ui.update?.lastCheck && !ui.update.lastCheck.up_to_date;
     const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0);
@@ -658,7 +662,7 @@
     if (!a) return;
     if (publisherOffline()) return toast(OFFLINE_SAY);
     if (a.platform === "tiktok-api") return connectTikTok(id);
-    if (!platformInfo(a.platform)) return fail(id, `这台电脑上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
+    if (!platformInfo(a.platform)) return fail(id, `${machineName()}上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
     const how = method ?? (HEADLESS.has(a.platform) ? "qr" : "win");
     if (how === "qr") return startQr(id);
     if (how === "sms") { stopPoll(id); ui.login[id] = { step: "sms1" }; draw(); document.getElementById("sms-phone")?.focus(); return; }

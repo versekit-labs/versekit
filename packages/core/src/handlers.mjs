@@ -5,7 +5,6 @@
 // cannot diverge. Adapter work is queued, never awaited here: an HTTP request that waits 20
 // minutes for an upload is a timeout, not a feature.
 
-import { hostname } from "node:os";
 import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
@@ -23,6 +22,12 @@ import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
 import * as updates from "./update.mjs";
+
+/** 设备名：config.json 的 device.name；没起名叫「发布机」。主机名（xxx.local）不是给人看的。 */
+const deviceName = () => {
+  const n = readConfig().device?.name;
+  return typeof n === "string" && n.trim() ? n.trim() : "发布机";
+};
 
 /** 报错的文字是给页面看的人话；命令提示放 hint，只给命令行（页面收到的错误体不带 hint）。 */
 const fail = (message, hint) => {
@@ -927,7 +932,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const now = Date.now();
       return {
         group: g ? { id: g.id, name: g.name } : null,
-        name: hostname(),
+        // 设备名：用户起的名字（config.json 的 device.name）；没起名就叫「发布机」，不把主机名 xxx.local 露给人看（ACC-v3-fid-11）。
+        name: deviceName(),
         heartbeatAt,
         heartbeatAgeMs: heartbeatAt ? Math.max(0, now - heartbeatAt) : null,
         online: heartbeatAt != null && now - heartbeatAt < HEARTBEAT_STALE_MS,
@@ -1029,10 +1035,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "stats.works": ({ range = "all", publishId = null, group = null }) => {
       const g = overview.resolveScope(group);
-      return {
-        group: g,
-        rows: overview.statsWithBaseline(store.listStats({ range, publishId, groupId: g?.id ?? null })),
-      };
+      const rows = overview.statsWithBaseline(store.listStats({ range, publishId, groupId: g?.id ?? null }));
+      const sole = store.soleCutTitles(rows.filter((r) => !r.cutTitle).map((r) => r.workId));
+      return { group: g, rows: rows.map((r) => (r.cutTitle || !sole.has(r.workId) ? r : { ...r, cutTitle: sole.get(r.workId) })) };
     },
 
     "stats.series": ({ publishId }) => ({ publishId, points: store.seriesFor({ publishId }) }),
