@@ -1630,10 +1630,18 @@ EOF
 }
 
 dispatch_acceptance() {
-  local queue
-  queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
-    log "  ✗ acceptance: 取队列失败"; return 1
+  local queue diagnostics rc=0 line
+  diagnostics=$(mktemp "${TMPDIR:-/tmp}/cycle-acceptance.XXXXXX") || {
+    log "  ✗ acceptance: 无法创建队列诊断文件"; return 1
   }
+  queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>"$diagnostics") || rc=$?
+  ACCEPTANCE_VERDICT_ALERTS=$(grep '^\[验收判定\] ' "$diagnostics" || true)
+  while IFS= read -r line; do log "  ⚠ $line"; done < "$diagnostics"
+  rm -f "$diagnostics"
+  if [ "$rc" -ne 0 ]; then
+    log "  ✗ acceptance: 取队列失败"; return 1
+  fi
+  ACCEPTANCE_QUEUE_READ=1
   # 队列里可能有多条。旧实现只看 queue[0]：队首有锁（已验过这个 head，或被协调器暂停）
   # 就整队停派，后面的 PR 永远等不到验收。现在逐条找第一个没锁的。
   local num="" pull="" head="" acc="" title="" total=0 skipped=0
@@ -1733,6 +1741,7 @@ for q in (json.load(sys.stdin).get("queue") or []):
   return 0
 }
 
+ACCEPTANCE_QUEUE_READ=0
 dispatch_acceptance || FAILED=1
 
 # ---------------------------------------------------------------- 5. 消费消息
@@ -1760,6 +1769,28 @@ else
     log "    收件箱归协调器；cycle.sh 不 run-use、不 ack、不抢占"
     record_owner_failure "${code:-unknown}" "${msg:-没有错误消息}"
   fi
+fi
+
+# 所有权检查可能清理告警文件。验收告警在它之后落盘，处理完的判定随下一次成功读取队列清除。
+write_acceptance_verdict_alerts() {
+  local file="$STATE_DIR/cycle-owner-alert.txt" tmp
+  if [ -z "$ACCEPTANCE_VERDICT_ALERTS" ] && ! grep -q '^\[验收判定\] ' "$file" 2>/dev/null; then
+    return 0
+  fi
+  tmp=$(mktemp "$STATE_DIR/cycle-owner-alert.XXXXXX") || return 1
+  if ! {
+    if [ -f "$file" ]; then sed '/^\[验收判定\] /d' "$file"; fi &&
+    if [ -n "$ACCEPTANCE_VERDICT_ALERTS" ]; then printf '%s\n' "$ACCEPTANCE_VERDICT_ALERTS"; fi
+  } > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ -s "$tmp" ]; then mv -f "$tmp" "$file"; else rm -f "$tmp" "$file"; fi
+}
+
+if [ "$ACCEPTANCE_QUEUE_READ" = 1 ] && ! write_acceptance_verdict_alerts; then
+  log "  ✗ 无法更新 $STATE_DIR/cycle-owner-alert.txt 中的验收判定告警"
+  FAILED=1
 fi
 
 # ---------------------------------------------------------------- 6. 结算
