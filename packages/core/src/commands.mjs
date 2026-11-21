@@ -878,6 +878,55 @@ export const COMMANDS = [
 
 export const findCommand = (name) => COMMANDS.find((c) => c.name === name) ?? null;
 
+/**
+ * 卡片上的「翻页」按钮（开始确认、切换按时间/现在发、取消回到确认卡）。它们只换卡片、不改数据，
+ * 所以不是命令；但它们也必须在这张表里声明，并指明服务于哪条远程命令（`serves`）。
+ * 卡片上出现既不是命令、也没在这里声明的 cmd，`check:parity` 与 card-parity 测试都会失败。
+ * 真正改数据的动作（提交修改、确认、跳过）一律是命令本身，不在这里。
+ */
+export const CARD_VIEWS = [
+  { name: "card.review", serves: "publish.approve", summary: "新作品卡片「开始确认」：发出第一支成片的确认卡" },
+  { name: "card.edit", serves: "publish.edit", summary: "确认卡「改标题或时间」/ 编辑卡切换「按时间发 / 现在发」：原地换成编辑表单" },
+  { name: "card.show", serves: "publish.approve", summary: "编辑卡「取消」：原地换回确认卡" },
+];
+
+export const findCardView = (name) => CARD_VIEWS.find((v) => v.name === name);
+
+/**
+ * 卡片按钮 value 的唯一造法：cmd 必须是 remote 命令，或 CARD_VIEWS 里声明过的翻页，否则当场抛错。
+ * cards.mjs 不再自己手写 callback 的 cmd 字面量——翻页用 viewButton(name, ...)，命令用 commandButton(name, ...)，
+ * 两者都经过这里，所以卡片上不可能出现表外动作（check:parity 再从源码层面兜一道）。
+ */
+export function cardCallbackValue(cmd, args, { key = null, now, ttlMs }) {
+  const problems = cardActionProblems([{ cmd }]);
+  if (problems.length) throw new Error(`卡片按钮不合法：${problems.join("；")}`);
+  return { cmd, args, exp: now + ttlMs, ...(key ? { key } : {}) };
+}
+
+/**
+ * 一组卡片按钮 value（{ cmd, ... }）里，哪些动作在表里找不到。每条返回人话。
+ * 合法 = 远程命令，或 CARD_VIEWS 里声明过且 serves 指向远程命令的翻页。
+ */
+export function cardActionProblems(values) {
+  const problems = [];
+  for (const v of values) {
+    const cmd = v?.cmd;
+    if (!cmd) {
+      problems.push("按钮没有带 cmd");
+      continue;
+    }
+    const command = findCommand(cmd);
+    if (command) {
+      if (!command.remote) problems.push(`${cmd} 是命令但不是 remote，不能挂在卡片按钮上`);
+      continue;
+    }
+    const view = findCardView(cmd);
+    if (!view) problems.push(`${cmd} 既不在命令表、也没在 CARD_VIEWS 里声明`);
+    else if (findCommand(view.serves)?.remote !== true) problems.push(`${cmd} 声明服务于 ${view.serves}，但它不是 remote 命令`);
+  }
+  return problems;
+}
+
 /** What a remote caller (card button) is allowed to trigger. */
 export const remoteCommands = () => COMMANDS.filter((c) => c.remote);
 

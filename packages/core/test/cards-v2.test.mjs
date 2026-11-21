@@ -266,7 +266,7 @@ test("ACC-v2-card-02 改标题或时间：上一张卡片原地换成表单；�
   assert.match(form.elements.find((e) => e.name === "at_douyin").initial_datetime, /^\d{4}-\d\d-\d\d \d\d:\d\d$/);
   const submit = form.elements.find((e) => e.tag === "button");
   assert.equal(submit.form_action_type, "submit");
-  assert.equal(submit.behaviors[0].value.cmd, "card.save_edit");
+  assert.equal(submit.behaviors[0].value.cmd, "publish.edit");
   assert.equal(form.elements.filter((e) => e.tag === "button").length, 1, "表单里只有提交，没有重置按钮");
   const cancel = card.body.elements.at(-1);
   assert.equal(cancel.tag, "button");
@@ -288,7 +288,7 @@ test("ACC-v2-card-02 提交表单：改动逐条走 publish.edit；改后回到�
   const p2 = (n) => String(n).padStart(2, "0");
   const picked = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 
-  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "  新标题  ", at_douyin: picked, title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title, at_bilibili: cards.formatPickerTime(store.getPublish(f.pubs["0:bilibili"]).scheduled_at) } });
+  await click(ch, edit, "publish.edit", { messageId: "om_edit", form: { title_douyin: "  新标题  ", at_douyin: picked, title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title, at_bilibili: cards.formatPickerTime(store.getPublish(f.pubs["0:bilibili"]).scheduled_at) } });
   const row = store.getPublish(f.pubs["0:douyin"]);
   assert.equal(JSON.parse(row.overrides_json).title, "新标题");
   assert.equal(row.scheduled_at, cards.parsePickerTime(picked));
@@ -307,7 +307,7 @@ test("ACC-v2-card-02 表单只校验格式：时间格式不对 / 标题清空�
   await click(ch, ch.sent()[1].card, "card.edit", { messageId: "om_edit" });
   const edit = ch.updates().at(-1).card;
   const before = store.getPublish(f.pubs["0:douyin"]);
-  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "要改的标题", at_douyin: "明天晚上八点", title_bilibili: "", at_bilibili: "" } });
+  await click(ch, edit, "publish.edit", { messageId: "om_edit", form: { title_douyin: "要改的标题", at_douyin: "明天晚上八点", title_bilibili: "", at_bilibili: "" } });
   const after = store.getPublish(f.pubs["0:douyin"]);
   assert.equal(after.overrides_json, before.overrides_json);
   assert.equal(after.scheduled_at, before.scheduled_at);
@@ -328,7 +328,7 @@ test("ACC-v2-card-02 平台规则（#151）拒绝的改动：留在表单里，�
   const past = new Date(Date.now() - 2 * H);
   const p2 = (n) => String(n).padStart(2, "0");
   const picked = `${past.getFullYear()}-${p2(past.getMonth() + 1)}-${p2(past.getDate())} ${p2(past.getHours())}:${p2(past.getMinutes())}`;
-  await click(ch, edit, "card.save_edit", { messageId: "om_edit", form: { title_douyin: store.resolvePublishCopy(f.pubs["0:douyin"]).title, at_douyin: picked } });
+  await click(ch, edit, "publish.edit", { messageId: "om_edit", form: { title_douyin: store.resolvePublishCopy(f.pubs["0:douyin"]).title, at_douyin: picked } });
   assert.match(text(ch.updates().at(-1).card), /抖音：.*过去的时间/);
   assert.ok(ch.updates().at(-1).card.body.elements.some((e) => e.tag === "form"));
 });
@@ -543,12 +543,12 @@ test("ACC-v3-time-06 飞书改单里有「什么时候发」：选现在发时�
   const now = ch.updates().at(-1).card;
   assert.equal(inForm(now).some((e) => e.tag === "picker_datetime"), false, "选现在发时不出现时间输入");
   assert.ok(inForm(now).some((e) => e.tag === "input"));
-  assert.equal(cb(now, "card.save_edit").args.when, "now");
+  assert.equal(cb(now, "publish.edit").args.when, "now");
   assert.equal(cb(now, "card.show").args.when, "now", "取消回到确认卡片，仍是现在发");
 
   // 现在发下提交表单：只改标题，不碰时间；回到确认卡片，按钮写「现在发」，行上不写时间。
   const before = store.getPublish(f.pubs["0:douyin"]).scheduled_at;
-  await click(ch, now, "card.save_edit", { messageId: "om_edit", form: { title_douyin: "现在发的新标题", title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title } });
+  await click(ch, now, "publish.edit", { messageId: "om_edit", form: { title_douyin: "现在发的新标题", title_bilibili: store.resolvePublishCopy(f.pubs["0:bilibili"]).title } });
   assert.equal(store.getPublish(f.pubs["0:douyin"]).scheduled_at, before);
   assert.equal(JSON.parse(store.getPublish(f.pubs["0:douyin"]).overrides_json).title, "现在发的新标题");
   const back = ch.updates().at(-1).card;
