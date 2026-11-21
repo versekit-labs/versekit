@@ -91,6 +91,8 @@ function canTransition(from, to) {
 // 这条校验只读本地文件，不花 API 配额。
 
 const ACCEPTANCE_FILE = join(ROOT, "docs/design/ACCEPTANCE.md");
+const ARCHITECTURE_ACC = "ACC-arch-09";
+const ARCHITECTURE_FILES = ["commands.mjs", "schema.sql", "store.mjs", "handlers.mjs", "daemon.mjs"];
 
 let acceptanceCache = null;
 function acceptanceIds() {
@@ -113,6 +115,36 @@ function issueAccIds(body) {
     }
   }
   return out;
+}
+
+/** 代码样例和隐藏注释不能充当口径或 PR 答案。 */
+function markdownProseLines(body) {
+  let fence = null;
+  return (body ?? "").replace(/<!--[\s\S]*?(?:-->|$)/g, "").split(/\r?\n/).filter((line) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return false;
+    }
+    if (!marker) return true;
+    fence = marker[1];
+    return false;
+  });
+}
+
+/** headingPattern 的第一组是标题的 #，同级或上级标题结束该节。 */
+function* markdownSections(lines, headingPattern) {
+  for (const [start, line] of lines.entries()) {
+    const heading = headingPattern.exec(line);
+    if (!heading) continue;
+    const level = heading[1].length;
+    const end = lines.findIndex((candidate, index) => {
+      if (index <= start) return false;
+      const next = /^ {0,3}(#{1,6})(?:[ \t]|$)/.exec(candidate);
+      return next && next[1].length <= level;
+    });
+    yield lines.slice(start, end === -1 ? lines.length : end);
+  }
 }
 
 // ---------------------------------------------------------------- 涉及文件
@@ -176,7 +208,7 @@ function normalizeScopePath(token) {
  * issue 正文「涉及」段里会被改动的文件。
  * 解析不到时返回 []；调用方必须把空数组当成"未知，串行"，不能当成"没有文件"。
  */
-function issueTouchedFiles(body) {
+function issueTouchedFiles(body, { allowPlainPaths = false } = {}) {
   const text = String(body ?? "");
   const lines = text.split(/\r?\n/);
   const files = [];
@@ -187,6 +219,13 @@ function issueTouchedFiles(body) {
     if (!p || seen.has(p)) return;
     seen.add(p);
     files.push(p);
+  };
+  const addFromLine = (line) => {
+    for (const match of line.matchAll(/`([^`\n]+)`/g)) add(match[1]);
+    if (allowPlainPaths) {
+      const plain = line.replace(/`[^`\n]+`/g, " ");
+      for (const token of plain.match(/[\w./-]+/g) ?? []) add(token);
+    }
   };
 
   let inSection = false;
@@ -199,8 +238,8 @@ function issueTouchedFiles(body) {
       continue;
     }
     if (!inSection) continue;
-    if (isExcludedScopeLine(line) || !isChangeScopeLine(line)) continue;
-    for (const m of line.matchAll(/`([^`\n]+)`/g)) add(m[1]);
+    if (isExcludedScopeLine(line) || (!allowPlainPaths && !isChangeScopeLine(line))) continue;
+    addFromLine(line);
   }
 
   // 没有「## 涉及…」小节时的兼容写法：单行「涉及：`a`、`b`」。
@@ -208,7 +247,7 @@ function issueTouchedFiles(body) {
     for (const line of lines) {
       if (!/^\s*(?:[-*]\s*)?涉及\s*[：:]/.test(line)) continue;
       if (isExcludedScopeLine(line)) continue;
-      for (const m of line.matchAll(/`([^`\n]+)`/g)) add(m[1]);
+      addFromLine(line);
     }
   }
 
@@ -230,6 +269,32 @@ function filesOverlap(a, b) {
   if (!na || !nb) return false;
   if (na === nb) return true;
   return na.startsWith(nb + "/") || nb.startsWith(na + "/");
+}
+
+function requiresArchitectureChecklist(body) {
+  const scope = markdownProseLines(body).join("\n");
+  return issueTouchedFiles(scope, { allowPlainPaths: true }).some((file) =>
+    filesOverlap(file, "packages/relay/") ||
+    ARCHITECTURE_FILES.some((name) => file === name || filesOverlap(file, `packages/core/src/${name}`)),
+  );
+}
+
+function hasArchitectureAcceptance(body) {
+  const lines = markdownProseLines(body);
+  const sections = [...markdownSections(lines, /^ {0,3}(#{1,6})[ \t]+(?:验收)?口径(?=[\s（(:：]|$)/)];
+  const acceptance = sections.length
+    ? sections.flat()
+    : lines.filter((line) => /^\s*(?:[-*]\s+)?(?:验收)?口径\s*[：:]/.test(line));
+  return issueAccIds(acceptance.join("\n")).includes(ARCHITECTURE_ACC);
+}
+
+function hasArchitectureAnswers(body) {
+  const sections = markdownSections(markdownProseLines(body), /^ {0,3}(#{2,3})[ \t]+.*六问/);
+  for (const section of sections) {
+    const answers = section.map((line) => /^ {0,3}([1-6])\.[ \t]+\S/.exec(line)?.[1]).filter(Boolean);
+    if (answers.join("") === "123456") return true;
+  }
+  return false;
 }
 
 /** 正在被实现的 issue 占用的文件（只认 s:doing：s:changes 还没开工，不该挡住新活）。 */
@@ -262,7 +327,7 @@ function findFileConflict(locks, files) {
 
 /**
  * 派工前的口径校验。返回 { ok, ids, why }。
- * 三种失败都要说清"缺什么"，否则 coordinator 只看到"跳过"会当成偶发。
+ * 失败都要说清"缺什么"，否则 coordinator 只看到"跳过"会当成偶发。
  */
 function validateScope(issue) {
   const ids = issueAccIds(issue.body);
@@ -273,6 +338,9 @@ function validateScope(issue) {
   const missing = ids.filter((id) => !known.has(id));
   if (missing.length) {
     return { ok: false, ids, why: `引用了 ACCEPTANCE.md 里不存在的条目：${missing.join(", ")}` };
+  }
+  if (requiresArchitectureChecklist(issue.body) && !hasArchitectureAcceptance(issue.body)) {
+    return { ok: false, ids, why: `涉及核心命令或存储文件，验收口径缺 ${ARCHITECTURE_ACC}（ADR-0005 §13 六问）` };
   }
   return { ok: true, ids, why: `引用 ${ids.length} 条口径` };
 }
@@ -407,7 +475,7 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
 
   // 口径不合格的 issue 派出去也只能猜。先纠正，再谈派工——
   // 这一步同时挡掉"引用了一个不存在的 ACC id"这种看似齐活的情况。
-  if (state === "ready") {
+  if (state === "ready" || (state === "changes" && requiresArchitectureChecklist(issue.body))) {
     const scope = validateScope(issue);
     if (!scope.ok) return { actor: "human", action: "补口径", why: scope.why, blocked: true };
   }
@@ -1532,6 +1600,9 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
     if (pull?.draft) problems.push("PR 还是草稿");
 
     if (pull) {
+      if (requiresArchitectureChecklist(issue.body) && !hasArchitectureAnswers(pull.body)) {
+        problems.push("PR 描述缺 ADR-0005 §13 六问（在「六问」小节逐条填写 1. 到 6.）");
+      }
       if (!verdict) problems.push("PR 里没有可解析的 verdict（需要 ```yaml 块，含 verdict/head_sha）");
       else if (verdict.verdict !== "PASS") problems.push(`最新判定是 ${verdict.verdict}`);
       else if (!verdict.headSha || !pull.head.sha.startsWith(verdict.headSha)) {

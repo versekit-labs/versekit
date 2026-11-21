@@ -92,6 +92,7 @@ prompt 里只跑 `bin/cycle.sh`。六个阶段由脚本内部完成，对应 Orc
 
 **合并是脚本的活，不是人的活。** 但只要有一条不满足就不合，并把原因逐条打出来：
 判定不是 PASS、判定针对的 `head_sha` 与当前 head 不一致、ACC 条目没逐条覆盖、五道 CI 门禁没全绿。
+涉及核心命令或存储文件的 PR 还要在正文写全六个编号答案，缺任一条会提示「缺 ADR-0005 §13 六问」。
 
 > 验收锁按 `issue + head_sha`（`accept-<issue>-<head8>.lock`），打回后新 head 能立刻复审。
 > `coordinator` 的 `reuseSession` 仍建议在重开 automation 前拍板：每轮新 session 是 6 次/小时的稳定开销。
@@ -173,6 +174,10 @@ issue 是施工单，写得含糊，agent 就只能猜。**四块内容缺一不
 **最重要的一行是"口径"**：验收 agent 判 PASS 时必须逐条引用这些 id。引用不到的 PASS 是无效的——这是防"橡皮图章"的机械保障。
 
 id 从哪来？`docs/design/ACCEPTANCE.md` 里本来就有。写完 grep 一下确认能搜到。
+
+「涉及」列出要改 `packages/core/src/` 下的 `commands.mjs`、`schema.sql`、`store.mjs`、`handlers.mjs`、`daemon.mjs`，或 `packages/relay/` 时，在「验收口径」里加一条 `- [ACC-arch-09]`。漏了以后，`agentctl tick` 会显示「补口径」，工单不会被派出。
+
+开 PR 时在正文单列六问小节，例如 `## ADR-0005 §13 六问`。标题用 `##` 或 `###` 并包含「六问」，节内用 `1.` 到 `6.` 各写一条非空答案，不适用的题也写明原因。`agentctl merge --pending` 只检查该节里的编号。六道题见 [ADR-0005 §13](adr-0005-saas-architecture.md#13-架构验收进-ci也进每个实现单的口径)。
 
 ---
 

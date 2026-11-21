@@ -168,33 +168,17 @@ failed:
   assert.deepEqual(nearMisses.acceptance.map(({ status }) => status), [null, null, null]);
 });
 
-test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍被拦下", async (t) => {
-  const verdicts = [
-    ...verdictFormats.map(([, entries]) => verdictComment(`acceptance:\n${entries}`)),
-    ...uncoveredVerdicts.map(([, yaml]) => verdictComment(yaml)),
-  ];
-  const issues = verdicts.map((_, index) => ({ number: index + 1, labels: ["s:accept"], body: "ACC-x、ACC-y" }));
-  const pulls = issues.map(({ number }) => ({
-    number: number + 100,
-    body: `Closes #${number}`,
-    head: { sha: verdictHead },
-    state: "open",
-  }));
-  const routes = new Map([
-    ["issues", issues],
-    ["pulls", pulls],
-    [`commits/${verdictHead}/check-runs`, {
-      check_runs: [
-        "test / npm test",
-        "parity / 命令表 = 路由 = 卡片 = CLI",
-        "adapter-contract / 形状 + ready + dry-run 无副作用",
-        "no-backdoor / web 与 channel 不得直连数据库",
-        "design / 任务书 · 导航 · 死链 · 检测器 · 触控",
-      ].map((name) => ({ name, status: "completed", conclusion: "success" })),
-    }],
-    ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{ id: number, body: verdicts[index] }]]),
-    ["issues/1", issues[0]],
-  ]);
+const greenChecks = {
+  check_runs: [
+    "test / npm test",
+    "parity / 命令表 = 路由 = 卡片 = CLI",
+    "adapter-contract / 形状 + ready + dry-run 无副作用",
+    "no-backdoor / web 与 channel 不得直连数据库",
+    "design / 任务书 · 导航 · 死链 · 检测器 · 触控",
+  ].map((name) => ({ name, status: "completed", conclusion: "success" })),
+};
+
+async function mockAgentctl(t, routes) {
   const server = createServer((req, res) => {
     const path = new URL(req.url, "http://localhost").pathname.replace(/^\/repos\/example\/versekit\//, "");
     const data = req.method === "GET" && routes.get(path);
@@ -205,8 +189,8 @@ test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍�
   await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
 
   const script = fileURLToPath(new URL("../../../bin/agentctl.mjs", import.meta.url));
-  const run = async (...args) => {
-    const { stdout } = await promisify(execFile)(process.execPath, [script, ...args, "--dry-run", "--json"], {
+  return async (...args) => {
+    const { stdout } = await promisify(execFile)(process.execPath, [script, ...args, "--json"], {
       env: {
         ...process.env,
         GIT_CONFIG_COUNT: "1",
@@ -219,15 +203,122 @@ test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍�
     });
     return JSON.parse(stdout);
   };
-  const { results } = await run("merge", "--pending");
+}
+
+test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍被拦下", async (t) => {
+  const verdicts = [
+    ...verdictFormats.map(([, entries]) => verdictComment(`acceptance:\n${entries}`)),
+    ...uncoveredVerdicts.map(([, yaml]) => verdictComment(yaml)),
+  ];
+  const issues = verdicts.map((_, index) => ({ number: index + 1, labels: ["s:accept"], body: "ACC-x、ACC-y" }));
+  const pulls = issues.map(({ number }) => ({
+    number: number + 100,
+    body: `Closes #${number}`,
+    head: { sha: verdictHead },
+    state: "open",
+  }));
+  const run = await mockAgentctl(t, new Map([
+    ["issues", issues],
+    ["pulls", pulls],
+    [`commits/${verdictHead}/check-runs`, greenChecks],
+    ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{ id: number, body: verdicts[index] }]]),
+    ["issues/1", issues[0]],
+  ]));
+  const { results } = await run("merge", "--pending", "--dry-run");
   assert.deepEqual(results, issues.map(({ number }, index) => index < verdictFormats.length
     ? { issue: number, merged: false, dryRun: true, pull: number + 100, head: verdictHead }
     : { issue: number, merged: false, problems: ["verdict 没有逐条覆盖：ACC-x"] }));
 
   const { body } = await run("reject", "--issue", "1", "--item", "ACC-harness-verdict-02",
-    "--expected", "显示确认消息", "--observed", "没有提示", "--repro", "修改标题并保存");
+    "--expected", "显示确认消息", "--observed", "没有提示", "--repro", "修改标题并保存", "--dry-run");
   assert.match(body, /\nfailed:\n  - id: ACC-harness-verdict-02\n/);
   assert.equal(parseVerdict(body).verdict, "FAIL");
+});
+
+const coreIssue = (path, acceptance = "- [ACC-arch-09]") =>
+  `## 验收口径\n- [ACC-account-01]\n${acceptance}\n\n## 涉及与不可动\n- 改：\`${path}\``;
+
+test("validateScope：核心文件需要在验收口径内列出 ACC-arch-09", () => {
+  for (const path of [
+    "packages/core/src/commands.mjs", "schema.sql", "store.mjs", "handlers.mjs", "daemon.mjs",
+    "packages/relay/", "packages/relay/src/index.mjs",
+  ]) {
+    assert.equal(validateScope({ body: coreIssue(path) }).ok, true, path);
+    assert.match(validateScope({ body: coreIssue(path, "") }).why, /缺 ACC-arch-09/, path);
+  }
+  assert.match(validateScope({ body: "口径：ACC-account-01\n\n## 涉及\n- 文件/模块：packages/core/src/schema.sql" }).why, /缺 ACC-arch-09/);
+  assert.match(validateScope({ body: `${coreIssue("store.mjs", "")}\n\n## 完成定义\n见 ACC-arch-09` }).why, /缺 ACC-arch-09/);
+  assert.equal(validateScope({ body: "涉及：`packages/core/src/store.mjs`\n口径：ACC-arch-09" }).ok, true);
+  assert.equal(validateScope({ body: `${coreIssue("packages/cli/src/handlers.mjs", "")}\n- 不动：\`packages/core/src/commands.mjs\`` }).ok, true);
+});
+
+test("ACC-harness-arch-01：tick 和 claim 都挡住口径缺六问的核心工单", async (t) => {
+  const issues = [
+    coreIssue("packages/core/src/commands.mjs", ""),
+    coreIssue("packages/core/src/commands.mjs"),
+    coreIssue("bin/agentctl.mjs", ""),
+  ].map((body, index) => ({ number: index + 1, labels: ["s:ready"], body }));
+  const run = await mockAgentctl(t, new Map([["issues", issues], ["pulls", []]]));
+
+  const { rows } = await run("tick");
+  assert.deepEqual(rows.map(({ actor, action, blocked }) => [actor, action, blocked]), [
+    ["human", "补口径", true], ["engineer", "派工实现", false], ["engineer", "派工实现", false],
+  ]);
+  assert.match(rows[0].why, /缺 ACC-arch-09/);
+
+  const { wouldClaim, skipped } = await run("claim", "--role", "engineer", "--dry-run");
+  assert.deepEqual(wouldClaim.map(({ number }) => number), [2, 3]);
+  assert.deepEqual(skipped.map(({ number }) => number), [1]);
+  assert.match(skipped[0].why, /缺 ACC-arch-09/);
+});
+
+test("ACC-harness-arch-01：merge 只认 PR 正文六问小节内的全部六个答案", async (t) => {
+  const answers = Array.from({ length: 6 }, (_, index) => `${index + 1}. 这项保持原状。`);
+  const complete = answers.join("\n");
+  const section = `### ADR-0005 §13 六问\n\n${complete}`;
+  const cases = [
+    { description: "" },
+    { description: `## 实现步骤\n\n${complete}` },
+    { description: `## 六问\n\n${answers.slice(0, 5).join("\n")}\n\n## 证据\n\n${answers[5]}` },
+    { description: `## 六问\n\n${answers.slice(0, 5).join("\n")}\n6.   ` },
+    { description: `## 六问\n\n\`\`\`markdown\n${complete}\n\`\`\`` },
+    { description: section, mergeable: true },
+    { description: "", ordinary: true, mergeable: true },
+  ];
+  const issues = cases.map(({ ordinary }, index) => ({
+    number: index + 1,
+    labels: ["s:accept"],
+    body: ordinary ? coreIssue("bin/agentctl.mjs", "") : coreIssue("packages/relay/"),
+  }));
+  const pulls = issues.map(({ number }, index) => ({
+    number: number + 100,
+    body: `Closes #${number}\n\n${cases[index].description}`,
+    head: { sha: verdictHead },
+  }));
+  const run = await mockAgentctl(t, new Map([
+    ["issues", issues],
+    ["pulls", pulls],
+    [`commits/${verdictHead}/check-runs`, greenChecks],
+    ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{
+      id: number,
+      body: verdictComment(`acceptance:\n  ACC-account-01: pass${cases[index].ordinary ? "" : "\n  ACC-arch-09: pass"}`),
+    }]]),
+  ]));
+
+  const { results } = await run("merge", "--pending", "--dry-run");
+  assert.equal(results.length, cases.length);
+  for (const [index, result] of results.entries()) {
+    const { description, mergeable } = cases[index];
+    assert.equal(result.issue, issues[index].number);
+    if (mergeable) {
+      assert.equal(result.dryRun, true, description);
+      assert.equal(result.pull, pulls[index].number);
+    } else {
+      assert.equal(result.merged, false, description);
+      assert.equal(result.problems.length, 1);
+      assert.match(result.problems[0], /缺 ADR-0005 §13 六问/);
+    }
+  }
 });
 
 test("validateScope：引用不到的 ACC 条目不算口径齐", () => {
