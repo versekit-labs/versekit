@@ -202,7 +202,7 @@ def strings(o,acc):
     elif isinstance(o,list):
         for v in o: strings(v,acc)
     return acc
-QUOTA=re.compile(r"exceeded.{0,60}quota|usage limit|HTTP 429|rate.?limit(ed)?|too many requests",re.I)
+QUOTA=re.compile(r"exceeded.{0,60}quota|hit your usage limit|usage limit.{0,80}try again|reached your .{0,40}limit|HTTP 429|rate.?limit(ed)?|too many requests",re.I)
 SECRET=re.compile(r"(sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+|(?:token|key|secret|password)\s*[=:]\s*\S+)",re.I)
 RESET=re.compile(r"reset\s+at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*([+-]\d{2}:?\d{2})?",re.I)
 def reset_at(text):
@@ -252,8 +252,10 @@ for w in ws:
     did=w.get("dispatchId") or ""
     if not did: continue
     live.add(did)
-    m=re.search(r"cycle-issue-(\d+)",json.dumps(w))
-    issue="#"+m.group(1) if m else "#?"
+    # issue 号只取自派工记录 dispatch-<id>.json；worktree 目录名会被复用（lane 复用同一目录），不可信。
+    try: ri=json.load(open(os.path.join(os.environ["VOLC_STATE_DIR"],"dispatch-%s.json"%did))).get("issue")
+    except Exception: ri=None
+    issue="#"+str(ri) if ri not in (None,"") else "issue 未知"
     r=run(["worker-read","--dispatch",did,"--source","terminal","--limit","60","--json"])
     if not r.get("ok",True): continue
     # 真实 worker-read：终端输出在 result.terminal.tail，其后跟着 cursor/status/projection 等元数据，
@@ -423,7 +425,8 @@ print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage"
     [ -n "$ack" ] && orca orchestration check --run "$RUN_ID" --ack "$ack" --json >/dev/null 2>&1
     say "✗ 有 worker 停摆，需要协调器处理（不自动 stop/kill；确认后 worker-stop 再重派）："
     printf '%s\n' "$stalled" | while IFS=$'\t' read -r issue did reason tail; do
-      printf '  - issue=%s dispatch=%s 原因=%s\n    worker-read 末尾：%s\n' "$issue" "$did" "$reason" "$tail"
+      case "$issue" in "#"*) issue="issue=$issue" ;; esac
+      printf '  - %s dispatch=%s 原因=%s\n    worker-read 末尾：%s\n' "$issue" "$did" "$reason" "$tail"
     done
     exit 11
   fi
