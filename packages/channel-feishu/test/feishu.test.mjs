@@ -37,6 +37,11 @@ if (args[0] === "api") {
   process.exit(0);
 }
 if (args[0] === "event") {
+  if (process.env.VK_TEST_PROBE_STDERR !== undefined) {
+    console.error(process.env.VK_TEST_PROBE_STDERR);
+    process.exitCode = Number(process.env.VK_TEST_PROBE_STATUS);
+    return;
+  }
   console.log(JSON.stringify({ type: "card.action.trigger", operator_id: "ou_test", action_value: JSON.stringify({ cmd: "publish.retry", args: { publishId: "p1" }, exp: Date.now() + 60000, key: "k1" }), token: "tok_1" }));
   setInterval(() => {}, 60000);
   return;
@@ -118,80 +123,49 @@ test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", { ti
   });
 });
 
-test("probeEvents(): 未订阅时返回 false 并带上后台订阅链接", async () => {
-  const bin = join(DIR, "lark-probe-bad");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "event") {
-  console.error(JSON.stringify({ ok: false, error: { type: "validation", subtype: "failed_precondition",
-    message: "EventKey card.action.trigger requires callbacks not subscribed in console: card.action.trigger",
-    hint: "subscribe these callbacks by scanning: https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc" } }));
-  process.exit(2);
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-
-  process.env.VK_LARK_BIN = bin;
+async function probeWithFixture(stderr, status) {
+  // 复用 ready() 和 start() 的假 CLI，避免首次执行新脚本的开销占掉探活期限。
+  process.env.VK_TEST_PROBE_STDERR = stderr;
+  process.env.VK_TEST_PROBE_STATUS = String(status);
   try {
-    const res = await channel.probeEvents();
-    assert.equal(res.ok, false);
-    assert.match(res.detail, /没有订阅|未订阅/);
-    assert.equal(res.url, "https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc");
+    return await channel.probeEvents();
   } finally {
-    process.env.VK_LARK_BIN = BIN;
+    delete process.env.VK_TEST_PROBE_STDERR;
+    delete process.env.VK_TEST_PROBE_STATUS;
   }
+}
+
+test("probeEvents(): 未订阅时返回 false 并带上后台订阅链接", async () => {
+  const res = await probeWithFixture(JSON.stringify({
+    ok: false,
+    error: {
+      type: "validation",
+      subtype: "failed_precondition",
+      message: "EventKey card.action.trigger requires callbacks not subscribed in console: card.action.trigger",
+      hint: "subscribe these callbacks by scanning: https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc",
+    },
+  }), 2);
+  assert.equal(res.ok, false);
+  assert.match(res.detail, /没有订阅|未订阅/);
+  assert.equal(res.url, "https://open.feishu.cn/page/launcher?clientID=cli_test&addons=abc");
 });
 
 test("probeEvents(): 已有消费者在跑时视为订阅生效，不误报", async () => {
-  const bin = join(DIR, "lark-probe-busy");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "event") {
-  console.error(JSON.stringify({ ok: false, error: { type: "validation", subtype: "failed_precondition",
-    message: "cannot start consumer: another consumer (pid 1039) is already running for this subscription" } }));
-  process.exit(2);
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.VK_LARK_BIN = bin;
-  try {
-    const res = await channel.probeEvents();
-    assert.equal(res.ok, true);
-    assert.match(res.detail, /已有消费者/);
-  } finally {
-    process.env.VK_LARK_BIN = BIN;
-  }
+  const res = await probeWithFixture(JSON.stringify({
+    ok: false,
+    error: {
+      type: "validation",
+      subtype: "failed_precondition",
+      message: "cannot start consumer: another consumer (pid 1039) is already running for this subscription",
+    },
+  }), 2);
+  assert.equal(res.ok, true);
+  assert.match(res.detail, /已有消费者/);
 });
 
 test("probeEvents(): 已订阅时返回 true", async () => {
-  const bin = join(DIR, "lark-probe-good");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "event") {
-  console.error("[source] feishu-websocket: connected");
-  return;
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.VK_LARK_BIN = bin;
-  try {
-    const res = await channel.probeEvents();
-    assert.equal(res.ok, true);
-  } finally {
-    process.env.VK_LARK_BIN = BIN;
-  }
+  const res = await probeWithFixture("[source] feishu-websocket: connected", 0);
+  assert.equal(res.ok, true, res.detail);
 });
 
 test("configure(): app_secret 只走 stdin，不进 argv、不落文件", async () => {
