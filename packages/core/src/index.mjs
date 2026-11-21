@@ -104,6 +104,7 @@ export function migrate() {
   conn.exec(schema); // 幂等：补齐第一遍因缺列而没建成的索引
   backfillCuts(conn);
   dropLegacyPublishUnique(conn);
+  backfillApprovedNow(conn);
   unsnapshotGenericCopy(conn);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(SCHEMA_VERSION);
   conn.prepare("INSERT INTO meta (key, value) VALUES ('installed_at', ?) ON CONFLICT(key) DO NOTHING").run(String(Date.now()));
@@ -118,7 +119,12 @@ export function migrate() {
 /** SQLite has no "ADD COLUMN IF NOT EXISTS"; keep re-runs cheap and idempotent. */
 const COLUMNS = {
   run: { lane: "TEXT" },
-  publish: { published_at: "INTEGER", cut_id: "TEXT REFERENCES cut(id)", version_id: "TEXT REFERENCES cut_version(id)" },
+  publish: {
+    published_at: "INTEGER",
+    cut_id: "TEXT REFERENCES cut(id)",
+    version_id: "TEXT REFERENCES cut_version(id)",
+    approved_now: "INTEGER NOT NULL DEFAULT 0 CHECK (approved_now IN (0, 1))",
+  },
   work: { source: "TEXT" },
   cut: { rev: "INTEGER NOT NULL DEFAULT 0 CHECK (rev >= 0)" },
   cut_version: { edited_fields: "TEXT CHECK (edited_fields IS NULL OR json_valid(edited_fields))" },
@@ -234,6 +240,7 @@ function dropLegacyPublishUnique(conn) {
       conn.exec("DROP TABLE publish");
       conn.exec("ALTER TABLE publish_new RENAME TO publish");
       conn.exec("CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at)");
+      conn.exec("CREATE INDEX IF NOT EXISTS idx_publish_effective_at ON publish(COALESCE(published_at, scheduled_at), id)");
       conn.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_cut_account ON publish(cut_id, account_id) WHERE cut_id IS NOT NULL");
       const bad = conn.prepare("PRAGMA foreign_key_check").all();
       if (bad.length) throw new Error(`迁移 publish 表后外键检查失败（${bad.length} 处），已回滚`);
@@ -244,6 +251,25 @@ function dropLegacyPublishUnique(conn) {
     }
   } finally {
     conn.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+/** Preserve the old calendar exclusions once, including publishes that have since changed state. */
+function backfillApprovedNow(conn) {
+  conn.exec("BEGIN IMMEDIATE");
+  try {
+    const migration = conn.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('backfilled_approved_now', '1')").run();
+    if (migration.changes) {
+      conn.exec(`UPDATE publish SET approved_now = 1
+                  WHERE id IN (
+                    SELECT publish_id FROM event
+                     WHERE payload_json LIKE '%"reason":"approved_now_by_operator"%'
+                  )`);
+    }
+    conn.exec("COMMIT");
+  } catch (err) {
+    conn.exec("ROLLBACK");
+    throw err;
   }
 }
 
@@ -348,6 +374,7 @@ export function transitionPublish(publishId, to, { reason = null, patch = {} } =
     throw new Error(`非法状态迁移：${row.state} → ${to}（允许：${allowed.join(", ") || "无"}）`);
   }
   const fields = { ...patch, state: to, updated_at: Date.now() };
+  if (reason === "approved_now_by_operator") fields.approved_now = 1;
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(", ");
   conn.prepare(`UPDATE publish SET ${sets} WHERE id = ?`).run(...Object.values(fields), publishId);
   const event = eventForTransition(to);

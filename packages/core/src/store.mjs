@@ -8,7 +8,7 @@ import { extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { open, newId, paths, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 import { withBaselines } from "./baseline.mjs";
-import { planRules, takenTimes, nearestAvailable, violationAt } from "./plan-rules.mjs";
+import { planRules, takenTimes, nearestAvailable, violationAt, PUBLISH_EFFECTIVE_AT } from "./plan-rules.mjs";
 
 export const PUBLISH_MODES = ["auto", "draft", "notify", "manual"];
 export const PUBLISH_VISIBILITIES = ["public", "private", "friends", "private_then_public"];
@@ -1159,23 +1159,22 @@ export function listCalendarPublishes({ from = null, to = null, groupId = null }
   if (Number.isNaN(lo) || Number.isNaN(hi)) fail("from / to 必须是毫秒时间戳");
   if (lo > hi) fail("from 不能晚于 to");
   const states = Object.keys(CAL_STATE);
+  // Drive the calendar from the visible time range even when SQLite prefers the state index.
   const rows = open()
     .prepare(
-      `SELECT p.id, p.state, p.error_code, COALESCE(p.published_at, p.scheduled_at) AS at,
+      `SELECT p.id, p.state, p.error_code, ${PUBLISH_EFFECTIVE_AT} AS at,
               p.work_id, p.cut_id, a.platform, a.handle, a.is_manual, w.title,
               c.title AS cut_title,
               (SELECT COUNT(*) FROM cut c2 WHERE c2.work_id = p.work_id) AS cut_count
-         FROM publish p
+         FROM publish p INDEXED BY idx_publish_effective_at
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
          LEFT JOIN cut c ON c.id = p.cut_id
-        WHERE COALESCE(p.published_at, p.scheduled_at) BETWEEN ? AND ?
+        WHERE ${PUBLISH_EFFECTIVE_AT} BETWEEN ? AND ?
           AND (? IS NULL OR a.group_id = ?)
           AND p.state IN (${states.map(() => "?").join(",")})
           AND COALESCE(p.fallback_reason, '') != 'self_publish'
-          AND NOT EXISTS (
-            SELECT 1 FROM event e
-             WHERE e.publish_id = p.id AND e.payload_json LIKE '%"reason":"approved_now_by_operator"%')
+          AND p.approved_now = 0
         ORDER BY at, p.id
         LIMIT ?`,
     )
