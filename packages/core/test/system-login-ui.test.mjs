@@ -41,12 +41,31 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
 
   // ── 脚本化的假发布机 ──────────────────────────────────────────────────
   const script = { qr: "waiting", polls: 0, qrCalls: 0, seen: [], opened: 0, updating: 0, updated: false };
+  // YouTube 官方接口的假适配器：应用凭证齐全与否由测试拨，connect 一被调用就记下来（缺凭证时不该调用）。
+  const youtube = { configured: false, connectCalls: 0, platformsFail: false };
+  const ytAdapter = {
+    platform: "youtube",
+    adapter: {
+      ready: () => (youtube.configured ? null : "YouTube 未配置：没有 YouTube 应用凭证"),
+      credentials: { status: () => ({ configured: youtube.configured, clientKey: null, hasSecret: false, source: null }) },
+      connect: async () => {
+        youtube.connectCalls++;
+        throw new Error("没有 YouTube 应用凭证：到系统页的账号里点「填应用凭证」，填 Google OAuth 客户端的 client id 和 client secret");
+      },
+    },
+  };
   const logs = [];
   const markOk = (id) => db.prepare("UPDATE account SET state='ok', last_checked_at=? WHERE id=?").run(Date.now(), id);
   const adapters = ["xiaohongshu", "douyin", "bilibili"].map((platform) => ({ platform, adapter: { ready: () => null } }));
+  adapters.push(ytAdapter);
   const core_ = createCoreHandlers({ adapters, log: (l) => logs.push(String(l)) });
   const handlers = {
     ...core_,
+    // /api/platforms 读失败：用来复现「读不到平台信息」不能显示成「Connect YouTube」。
+    "platform.list": () => {
+      if (youtube.platformsFail) throw new Error("读平台清单时后台出错了（测试注入）");
+      return core_["platform.list"]();
+    },
     "machine.status": (args) => ({ ...core_["machine.status"](args), name: "书房的 Mac" }), // 截图里不放真实主机名
     "account.login.qr": async ({ accountId }) => { script.qrCalls++; script.qr = "waiting"; script.polls = 0; script.seen.push({ cmd: "qr", accountId }); return { mode: "qr", state: "waiting", qr: QR }; },
     "account.login.status": async ({ accountId }) => {
@@ -184,6 +203,68 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     await shot("system-logout-confirm.png");
     await click("[data-logoutno]");
 
+    // ── ACC-youtube-02：缺应用凭证时给「填应用凭证」，不给点了必然失败的 Connect ──
+    // 所有者真机（2026-11-21）就是这样断的：新接一个 YouTube 账号→页面直接发起授权→后端说没有应用凭证→
+    // 只剩红框和「取消」。这里从「接入账号」走一遍，钉住新行为：直接摆出填写表单，一次授权都不发起。
+    youtube.configured = false;
+    await tab.goto(`${base}/system?r=yt1#pollms=200`);
+    await tab.waitFor(`document.getElementById("add-platform")`, [], { timeout: 15e3, what: "接入账号那一行" });
+    await watch();
+    await tab.eval(`(() => {
+      const s = document.getElementById("add-platform");
+      s.value = "youtube";
+      s.dispatchEvent(new Event("change", { bubbles: true }));
+      const i = document.getElementById("add-name");
+      i.value = "AssureLane";
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector("[data-add]").click();
+    })()`);
+    await tab.waitFor(`!!document.querySelector('tr[data-acc] td .pfn') && [...document.querySelectorAll("tr[data-acc]")].some((r) => /YouTube/.test(r.innerText))`, [], { timeout: 15e3, every: 150, what: "YouTube 账号行" });
+    const ytId = db.prepare("SELECT id FROM account WHERE platform = 'youtube'").get().id;
+    await waitText(/填你自己在 Google Cloud 控制台里建的 OAuth 客户端的凭证/, "缺凭证时直接给表单");
+    assert.equal(youtube.connectCalls, 0, "缺凭证时不该发起授权（发起了必然失败）");
+    assert.match(await rowText(ytId), /缺应用凭证/);
+    assert.match(await rowText(ytId), /填应用凭证/);
+    assert.doesNotMatch(await rowText(ytId), /Connect YouTube|没登上/, "不能显示成可 Connect 或显示上次的失败");
+    assert.equal(await tab.eval(`document.getElementById("cred-key")?.getAttribute("placeholder")`), "client id");
+    assert.equal(await tab.eval(`!!document.getElementById("cred-secret")`), true);
+    await shot("system-youtube-needs-credentials.png");
+
+    // 「账号曾失败」：平台清单晚一拍还说已配置（真实机上 /api/platforms 出错被吞成空列表就是这一类），
+    // 点了 Connect 后端才说缺凭证。页面要当场转成填写表单，不能退回「没登上 + 取消」的死路。
+    db.prepare("UPDATE account SET state='failed' WHERE id=?").run(ytId);
+    youtube.configured = true; // 清单说已配置，掩盖了真实情况
+    await tab.goto(`${base}/system?r=yt2#pollms=200`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row(ytId))})`, [], { timeout: 15e3, what: "账号曾在 failed 状态" });
+    await watch();
+    assert.match(await rowText(ytId), /Connect YouTube/, "清单说已配置时先给 Connect（复现旧入口）");
+    await click(`${row(ytId)} [data-login]`);
+    await waitText(/填你自己在 Google Cloud 控制台里建的 OAuth 客户端的凭证/, "Connect 撞上缺凭证后转成填表");
+    assert.equal(youtube.connectCalls, 1);
+    const afterFail = await rowText(ytId);
+    assert.match(afterFail, /缺应用凭证/, "不再显示「没登上」");
+    assert.match(afterFail, /填应用凭证/);
+    assert.doesNotMatch(afterFail, /重新连接|没登上/, "不出现页面上没有的按钮，也不留失败死路");
+    assert.equal(await tab.eval(`!!document.getElementById("cred-key")`), true);
+    await shot("system-youtube-credentials-after-fail.png");
+
+    // ── /api/platforms 读失败：说「读不到平台信息」，不能静默当空列表再显示 Connect ──
+    youtube.platformsFail = true;
+    youtube.configured = false;
+    await tab.goto(`${base}/system?r=yt3#pollms=200`);
+    await tab.waitFor(`!!document.querySelector("tr[data-acc]")`, [], { timeout: 15e3, what: "平台清单读失败时的账号表" });
+    await watch();
+    await waitText(/读不到平台信息/, "平台清单读失败要说出来");
+    assert.match(await text(), /读不到平台信息：读平台清单失败/);
+    assert.doesNotMatch(await text(), /Connect YouTube/, "读不到凭证状态时不给 Connect");
+    assert.match(await rowText(ytId), /读不到平台信息/);
+    await shot("system-platforms-unreadable.png");
+    youtube.platformsFail = false;
+    youtube.configured = false;
+    await tab.goto(`${base}/system?r=yt4#pollms=200`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row(ytId))})`, [], { timeout: 15e3, what: "恢复后的系统页" });
+    await watch();
+
     // ── 发布机不在线：登录按钮不可用并说明原因 ──
     store.recordHeartbeat(Date.now() - 3600e3);
     await tab.goto(`${base}/system?r=2#pollms=200`);
@@ -250,6 +331,39 @@ test("ACC-v3-login-02：手机号和验证码不写进页面状态、不进浏�
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
   // 手机号只在发送那一刻从输入框读出，页面状态里只留打了码的号
   assert.match(page, /masked: `\$\{phone\.slice\(0, 3\)\}\*\*\*\*\$\{phone\.slice\(-4\)\}`/);
+});
+
+test("ACC-youtube-02（静态）：缺应用凭证优先于登录失败态；平台清单读失败不静默；文案里没有不存在的按钮", () => {
+  const statusCell = page.match(/function statusCell\(a, st, lg\) \{[\s\S]*?\n  \}/);
+  assert.ok(statusCell, "找得到 statusCell");
+  assert.ok(statusCell[0].indexOf("credsMissing(a)") > -1, "状态词要看应用凭证");
+  assert.ok(statusCell[0].indexOf("credsMissing(a)") < statusCell[0].indexOf("if (lg)"), "缺凭证要排在「上次没登上」之前");
+
+  const accountActions = page.match(/function accountActions\(a, st, lg\) \{[\s\S]*?\n  \}/);
+  assert.ok(accountActions, "找得到 accountActions");
+  assert.ok(accountActions[0].indexOf("credsMissing(a)") < accountActions[0].indexOf("if (lg)"), "缺凭证的「填应用凭证」要优先于登录进行态/失败态");
+
+  // 表单在「账号曾失败」时也出现，而不是只给红框和取消。
+  assert.match(page, /credsMissing\(a\) \|\| ui\.credOpen === a\.id\) && \(ui\.credOpen === a\.id \|\| lg\?\.step === "fail"\)/);
+  // 新接入账号先填凭证，不跳过检查去发起授权。
+  assert.match(page, /if \(credsMissing\(a\)\) \{\s*ui\.credOpen = id;/);
+  // 后端说缺凭证时当场转成填表（平台清单可能晚一拍）。
+  assert.match(page, /if \(\/应用凭证\/\.test\(String\(err\.message\)\)\)/);
+
+  // 读失败不能 catch 成空列表。
+  assert.doesNotMatch(page, /\/api\/platforms"\)\.then\(\(d\) => d\.platforms \?\? \[\]\)\.catch\(\(\) => \[\]\)/);
+  assert.match(page, /platformsErr/);
+  assert.match(page, /读不到平台信息/);
+  assert.match(page, /读平台清单失败/);
+  // 页面上没有「重新连接」这个按钮，文案里也不要教人点它。
+  assert.doesNotMatch(page, /重新连接/);
+});
+
+test("ACC-youtube-02（静态）：vk account credentials 的用法写清 YouTube", () => {
+  const cli = readFileSync(new URL("../../cli/src/vk.mjs", import.meta.url), "utf8");
+  assert.match(cli, /vk account credentials tiktok\|youtube/);
+  assert.match(cli, /YOUTUBE_CLIENT_SECRET/);
+  assert.match(cli, /YOUTUBE_CLIENT_ID/);
 });
 
 test("login 命令不进审计：手机号、验证码经过命令层时不写 command_audit", async () => {

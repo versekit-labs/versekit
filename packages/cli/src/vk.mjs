@@ -1112,20 +1112,20 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
-  // 平台应用凭证（目前只有 TikTok 官方接口）。secret 不进命令行历史：优先 stdin / 环境变量，--client-secret 只是兜底。
+  // 平台应用凭证（TikTok 官方接口、YouTube）。secret 不进命令行历史：优先 stdin / 环境变量，--client-secret 只是兜底。
   if (sub === "credentials") {
     const platform = pos[2];
-    const usage = "用法：vk account credentials tiktok --client-key <key>（secret 从 stdin 或 TIKTOK_CLIENT_SECRET 读，也可 --client-secret <secret>）";
+    const usage = "用法：vk account credentials tiktok|youtube --client-key <key 或 client id>（secret 从 stdin、TIKTOK_CLIENT_SECRET 或 YOUTUBE_CLIENT_SECRET 读，也可 --client-secret <secret>）";
     if (!platform) throw new Error(usage);
-    const clientKey = val("--client-key") ?? process.env.TIKTOK_CLIENT_KEY;
-    let clientSecret = val("--client-secret") ?? process.env.TIKTOK_CLIENT_SECRET;
+    const platformId = platform === "tiktok" ? "tiktok-api" : platform;
+    const clientKey = val("--client-key") ?? (platformId === "youtube" ? process.env.YOUTUBE_CLIENT_ID : process.env.TIKTOK_CLIENT_KEY);
+    let clientSecret = val("--client-secret") ?? (platformId === "youtube" ? process.env.YOUTUBE_CLIENT_SECRET : process.env.TIKTOK_CLIENT_SECRET);
     if (!clientSecret && !process.stdin.isTTY) {
       const chunks = [];
       for await (const chunk of process.stdin) chunks.push(chunk);
       clientSecret = Buffer.concat(chunks).toString("utf8").trim();
     }
     if (!clientKey || !clientSecret) throw new Error(usage);
-    const platformId = platform === "tiktok" ? "tiktok-api" : platform;
     const data = await send("account.credentials", { platform: platformId, clientKey, clientSecret }, { log });
     if (human) console.log(`已保存 ${platformLabelOf(platformId)} 应用凭证（client key ${data.clientKey}），secret 只在本机 config.json（权限 600）。下一步：vk account connect <accountId>`);
     else out(data);

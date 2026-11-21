@@ -62,7 +62,7 @@ export function saveClientCredentials({ clientKey, clientSecret } = {}) {
   return credentialStatus();
 }
 
-export const MISSING_CLIENT_HINT = "没有 YouTube 应用凭证：到系统页的账号里填 Google OAuth 客户端的 client id 和 client secret";
+export const MISSING_CLIENT_HINT = "没有 YouTube 应用凭证：到系统页的账号里点「填应用凭证」，填 Google OAuth 客户端的 client id 和 client secret";
 
 export function requireClientCredentials() {
   const creds = clientCredentials();

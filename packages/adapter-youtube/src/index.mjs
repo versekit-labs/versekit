@@ -474,6 +474,8 @@ async function addToPlaylist({ token, id, playlist, signal, clientId, notes }) {
 // ------------------------------------------------------------------ 登录态
 
 async function check({ accountId } = {}) {
+  // 应用凭证被删掉/还没填时，续期和探测都做不了：先说「缺应用凭证」，不拿一个 unknown 或网络错误糊弄过去。
+  if (!credentialStatus().configured) return { state: "expired", detail: MISSING_CLIENT_HINT };
   const { clientId } = clientCredentials();
   const { token, record } = await ensureAccessToken(credentialRefOf(accountId));
   if (!hasScope(record, SCOPE_MANAGE)) return { state: "expired", detail: "YouTube 授权里缺「管理账号」权限：到系统页重新授权，并勾选全部权限" };

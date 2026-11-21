@@ -95,11 +95,12 @@
   const LEGACY_TAB = { plan: "plan", groups: "accounts", add: "accounts", problems: "accounts" };
   const ui = {
     tab: TABS.some(([k]) => k === HASH.tab) ? HASH.tab : (LEGACY_TAB[location.hash.slice(1)] ?? "accounts"),
-    accounts: [], platforms: [], covers: new Map(), today: null, groupsErr: null,
+    accounts: [], platforms: [], platformsErr: null, covers: new Map(), today: null, groupsErr: null,
     // accountId → { step: qr | scanned | qrold | sms1 | sms2 | win | auth | fail, qr, text, masked }
     login: {},
     logoutAsk: null,      // 正在二次确认「退出登录」的账号 id
     credOpen: null,       // 展开「填应用凭证」的账号 id
+    credsMissingIds: new Set(), // 后端明确说「没有应用凭证」的账号 id（平台清单可能晚一拍，别让状态盖回去）
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
@@ -119,7 +120,10 @@
   };
 
   const platformInfo = (p) => ui.platforms.find((x) => x.platform === p) ?? null;
-  const credsMissing = (a) => Boolean(OFFICIAL[a.platform]) && platformInfo(a.platform)?.credentials?.configured === false;
+  const credsMissing = (a) => Boolean(OFFICIAL[a.platform]) && (ui.credsMissingIds.has(a.id) || platformInfo(a.platform)?.credentials?.configured === false);
+  // 官方接口账号的应用凭证状态没读到（平台清单整份读失败、清单里没有这个平台、或没带凭证状态）：
+  // 这时不能猜「已配置」去显示 Connect——点了只会走到「没有应用凭证」的死路。
+  const credsUnknown = (a) => Boolean(OFFICIAL[a.platform]) && !credsMissing(a) && !platformInfo(a.platform)?.credentials;
   const connected = (a) => Boolean(a.credential_ref && a.state === "ok");
   const machineName = () => ui.machine?.name || "发布机";
   const publisherOffline = () => Boolean(ui.machine) && !ui.machine.online;
@@ -129,17 +133,19 @@
     const group = VK.current();
     const [accounts, platforms, today] = await Promise.all([
       group ? VK.groupAccounts(group.id) : [],
-      VK.request("/api/platforms").then((d) => d.platforms ?? []).catch(() => []),
+      // 读失败不能当成空列表：空列表会让官方接口账号被当成「已配置」而显示 Connect，点了就是死路（静默失败是 P0）。
+      VK.request("/api/platforms").then((d) => ({ list: d.platforms ?? [], error: null })).catch((err) => ({ list: [], error: err })),
       group ? VK.today().catch(() => null) : null,
     ]);
     ui.accounts = accounts;
-    ui.platforms = platforms;
+    ui.platforms = platforms.list;
+    ui.platformsErr = platforms.error ? (platforms.error.message || "未知错误") : null;
     ui.today = today;
     // 「最近出的问题」里的作品封面：按作品对上 coverVersionId，读不到就是占位。
     ui.covers = await VK.works().then((d) => new Map((d.works ?? []).map((w) => [w.id, w.coverVersionId]))).catch(() => new Map());
     await loadSections(group);
     const taken = (p) => accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
-    if (!ui.addPlatform || !platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (platforms.find((p) => !taken(p.platform)) ?? platforms[0])?.platform ?? "";
+    if (!ui.addPlatform || !ui.platforms.some((p) => p.platform === ui.addPlatform) || taken(ui.addPlatform)) ui.addPlatform = (ui.platforms.find((p) => !taken(p.platform)) ?? ui.platforms[0])?.platform ?? "";
   }
 
   /** 发布方案、发布机、更新、中转、最近出的问题：都来自 /api。一块读不到不拖垮别的块。 */
@@ -181,6 +187,10 @@
 
   /** 这一行的登录状态词和颜色：正常 / 要重新登录 / 登录到了别的号 / 等你扫码 / 二维码过期了 / 缺应用凭证。 */
   function statusCell(a, st, lg) {
+    // 缺应用凭证比「账号上次没登上」更靠前：凭证没填时 Connect 一定失败，状态词要指向能做的事。
+    if (credsMissing(a)) return '<span class="st wait">缺应用凭证</span>';
+    // 平台信息读不到时不猜状态：既不说正常，也不给一个点了必然失败的 Connect。
+    if (credsUnknown(a)) return '<span class="st wait">读不到平台信息</span>';
     if (lg) {
       const w = {
         qr: ["wait", "等你扫码"], scanned: ["wait", "已扫码，在手机上点确认"], qrold: ["bad", "二维码过期了"],
@@ -188,17 +198,20 @@
       }[lg.step] ?? ["wait", "等你登录"];
       return `<span class="st ${w[0]}">${w[1]}</span>`;
     }
-    if (credsMissing(a)) return '<span class="st wait">缺应用凭证</span>';
     if (a.identityConflict) return '<span class="st bad">登录到了别的号</span>';
     return `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>`;
   }
 
   function accountActions(a, st, lg) {
-    if (lg || a.identityConflict) return "";
+    if (a.identityConflict) return "";
+    // 缺凭证（或正开着填写表单）优先于任何登录进行态/失败态：这一行能做的只有填凭证。
+    if (credsMissing(a) || ui.credOpen === a.id) return B(`data-credopen="${esc(a.id)}"`, "填应用凭证");
+    if (credsUnknown(a)) return "";
+    if (lg) return "";
+    if (!platformInfo(a.platform)) return ""; // 平台清单读不到：不给点了必然失败的登录入口
     const off = publisherOffline();
     const dis = off ? ` disabled title="${OFFLINE_SAY}"` : "";
     let html;
-    if (credsMissing(a)) return B(`data-credopen="${esc(a.id)}"`, "填应用凭证");
     if (OFFICIAL[a.platform]) html = B(`data-login="${esc(a.id)}"`, connected(a) ? "重新授权" : `Connect ${OFFICIAL[a.platform].name}`, connected(a) ? "link" : "btn", dis);
     else if (st.key === "ok") html = (WEB_LOGIN(a.platform) ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, "重新登录", "link", dis);
     else html = (WEB_LOGIN(a.platform) && st.key !== "down" ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, st.key === "down" ? "登录" : "重新登录", "btn", dis);
@@ -244,15 +257,15 @@
       ? `<img class="av" src="${esc(a.avatar_url)}" alt="" width="20" height="20" referrerpolicy="no-referrer">${esc(name)}`
       : esc(name);
     const q = a.quota;
-    const sendable = !lg && !credsMissing(a) && !a.identityConflict && st.key === "ok";
+    const sendable = !lg && !credsMissing(a) && !credsUnknown(a) && !a.identityConflict && st.key === "ok";
     const quota = !q ? '<span class="sub">不限</span>' : sendable ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">现在发不了</span>';
     const note = [NOTE[a.platform], a.mode === "manual" ? "仅手动跟踪" : ""].filter(Boolean).join("，");
 
     let sub = "";
     if (ui.logoutAsk === a.id) {
       sub = subRow(6, `<p>退出后会清掉这个账号在发布机「${esc(machineName())}」上的登录数据，要重新登录才能发；排着要发的这个账号的内容，退出后不会发。</p><span class="acts">${B("data-logoutno", "取消", "link")}${B(`data-logoutyes="${esc(a.id)}"`, "退出登录")}</span>`);
-    } else if (lg) sub = loginSub(a, lg);
-    else if (credsMissing(a) && ui.credOpen === a.id) {
+    // 缺凭证时，就算上一次 Connect 已经失败（lg.step = fail），也直接给填写的表单，不留红框死路。
+    } else if ((credsMissing(a) || ui.credOpen === a.id) && (ui.credOpen === a.id || lg?.step === "fail")) {
       const c = ui.cred;
       const of = OFFICIAL[a.platform];
       sub = subRow(6, `<p>填${esc(of.where)}。它保存在发布机上，不会回显，也不进日志。</p>` +
@@ -260,7 +273,8 @@
         `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
         `<span class="acts">${B("data-credcancel", "取消", "link")}${B("data-credsave", "保存", "btn pri", c.busy ? " disabled" : "")}</span>` +
         (c.note ? `<span class="${c.bad ? "say bad" : "sub"}" role="status" style="flex:1 1 100%">${esc(c.note)}</span>` : ""), "wait");
-    } else if (a.identityConflict) {
+    } else if (lg && !credsUnknown(a)) sub = loginSub(a, lg);
+    else if (a.identityConflict) {
       sub = subRow(6, `<p>${esc(a.identityConflict)}</p><span class="acts">${B(`data-logoutyes="${esc(a.id)}"`, "退出登录，换一个号")}</span>`, "bad");
     }
     const row = `<tr${sub ? ' class="has-sub"' : ""} data-acc="${esc(a.id)}"><td>${pfn(a.platform)}</td><td class="acct">${who}</td><td>${statusCell(a, st, lg)}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${accountActions(a, st, lg)}</td></tr>`;
@@ -301,6 +315,8 @@
     const taken = (p) => ui.accounts.some((a) => a.platform === p || (TIKTOK_FAMILY.includes(p) && TIKTOK_FAMILY.includes(a.platform)));
     const none = !ui.platforms.length;
     const allTaken = !none && ui.platforms.every((p) => taken(p.platform));
+    // 「读失败」和「真的一个平台都没装」不是一回事：前者要说出来，不能显示成后者（静默失败是 P0）。
+    if (ui.platformsErr) return '<tr><td colspan="6" class="sub">读不到平台信息，先刷新页面再接入账号。</td></tr>';
     if (none) return '<tr><td colspan="6" class="sub">没有已安装的平台。</td></tr>';
     if (allTaken) return '<tr><td colspan="6" class="sub">这个组能接的平台都接上了。一个组里每个平台接一个号；要接第二个号，新建一个账号组。</td></tr>';
     const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
@@ -308,6 +324,16 @@
       `<td><input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}"></td>` +
       `<td colspan="3" class="sub"><span class="say${ui.addBad ? " bad" : ""}" role="status">${ui.addNote ? esc(ui.addNote) : `接入后当场登录，归到「${esc(group.name)}」。`}</span></td>` +
       `<td class="n">${B("data-add", "接入账号", "btn", ui.addBusy || !group ? " disabled" : "")}</td></tr>`;
+  }
+
+  /** 平台清单读不到时，账号表上方说清楚：不能把「读失败」显示成「都正常」或「没装平台」。 */
+  function platformsNote() {
+    const unknown = [...new Set(ui.accounts.filter((a) => OFFICIAL[a.platform] && !credsMissing(a) && !platformInfo(a.platform)?.credentials).map((a) => a.platform))];
+    if (!ui.platformsErr && !unknown.length) return "";
+    const why = ui.platformsErr
+      ? `读平台清单失败：${esc(ui.platformsErr)}`
+      : `平台清单里没有 ${unknown.map((p) => esc(labelOf(p))).join("、")} 的应用凭证状态`;
+    return `<div class="note bad" role="status" id="platforms-err">读不到平台信息：${why}。这几行的登录操作先不显示；刷新页面再试。</div>`;
   }
 
   function tabAccounts(group, pending) {
@@ -318,7 +344,7 @@
     const where = publisherOffline() ? `<span class="st bad" style="margin-left:10px">${OFFLINE_SAY}</span>` : `在发布机「${esc(machineName())}」上登录和发布`;
     const accountsTable = `<div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ui.accounts.map(accountRow).join("")}${addRow(group)}</tbody></table></div>`;
     return `<h2 class="sec">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>${groupsTable}` +
-      `<h2 class="sec" id="accounts">账号 · ${esc(group.name)} · ${where}</h2>${accountsTable}` +
+      `<h2 class="sec" id="accounts">账号 · ${esc(group.name)} · ${where}</h2>${platformsNote()}${accountsTable}` +
       `<div class="cmd">平台的登录数据只存在你自己的发布机上，这个服务拿不到。手机上的通知和确认都在飞书里。</div>`;
   }
 
@@ -624,7 +650,18 @@
       if (r.state !== "connected") throw new Error("等了很久还没有授权完成");
       await succeed(id);
     } catch (err) {
-      fail(id, `没连上：${err.message}。点「重新连接」再来一次。`);
+      // 后端说「没有应用凭证」不是授权失败，是还没填：直接摆出填写表单，不再给一个点不动的死路。
+      if (/应用凭证/.test(String(err.message))) {
+        ui.credsMissingIds.add(id);
+        delete ui.login[id];
+        ui.credOpen = id;
+        ui.cred.note = "";
+        await refresh().catch(() => draw());
+        toast("先填应用凭证，再 Connect");
+        return;
+      }
+      // 只留后端给的原因；不在文案里教人点一个页面上并不存在的按钮。
+      fail(id, `没连上：${err.message}`);
     }
   }
 
@@ -664,6 +701,17 @@
     const a = acc(id);
     if (!a) return;
     if (publisherOffline()) return toast(OFFLINE_SAY);
+    // 新接入的账号也会走到这里：缺凭证时先让人填，而不是打开发起不了的授权页再报「没连上」。
+    if (credsMissing(a)) {
+      ui.credOpen = id;
+      delete ui.login[id];
+      ui.cred.note = "";
+      draw();
+      document.getElementById("cred-key")?.focus();
+      return;
+    }
+    // 平台信息没读到：不猜、也不发起一次必然会失败的授权。
+    if (credsUnknown(a)) return toast("读不到平台信息，刷新页面再试");
     if (OFFICIAL[a.platform]) return connectOfficial(id);
     if (!platformInfo(a.platform)) return fail(id, `${machineName()}上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
     const how = method ?? (HEADLESS.has(a.platform) ? "qr" : "win");
@@ -750,9 +798,11 @@
     if (!c.key.trim() || !c.secret.trim()) { c.bad = true; c.note = `${OFFICIAL[acc(ui.credOpen)?.platform]?.idName ?? "client key"} 和 client secret 都要填`; return draw(); }
     c.busy = true; draw();
     try {
-      const platform = acc(ui.credOpen)?.platform ?? "tiktok-api";
+      const savedId = ui.credOpen;
+      const platform = acc(savedId)?.platform ?? "tiktok-api";
       const path = { "tiktok-api": "/api/platforms/tiktok-api/credentials", youtube: "/api/platforms/youtube/credentials" }[platform];
       await post(path, { platform, clientKey: c.key.trim(), clientSecret: c.secret.trim() });
+      ui.credsMissingIds.delete(savedId);
       c.key = ""; c.secret = ""; c.busy = false; c.note = ""; ui.credOpen = null;
       toast("应用凭证已保存，可以 Connect 了");
       await refresh();
