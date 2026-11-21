@@ -201,6 +201,8 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-codex-03 | `model:codex` 的 issue 造返工 round 1 与 round 2 派工 | round 1 仍走 Codex；round ≥ 2 升 Sonnet，日志写明「Codex 第 N 轮仍未过 → 升 Sonnet」；不自动升 Opus；同时带 `model:opus` 时 Opus 优先 |
 | ACC-harness-codex-04 | ① `PATH` 里没有 `codex`；② `codex login status` 显示未登录；③ 用假 `orca` 让在跑的 Codex worker 屏幕末尾出现用量上限提示（如 `You've hit your usage limit ... try again at <时间>`）；各跑一轮 | ①② 本单改派 Sonnet，日志写明原因；③ 循环记下「Codex 额度用完，到 <时间> 为止」（解析不出时间按 5 小时），停掉该 worker、issue 退回 `s:ready`，冷却期内 `model:codex` 的单子都改派 Sonnet，到点自动恢复；探测不花 token（不跑 `codex exec`），不打印凭据 |
 | ACC-harness-codex-05 | 读 `docs/COORDINATOR.md` §5.1 | 选模型的表里多一档 `model:codex`：写明适合（口径写得死、不靠看图判断的后端/脚本/测试单，如核心逻辑、CLI、适配器内部、不稳定测试排查）和不适合（界面还原、要看设计稿的单、对外文案、须人拍板的单），以及额度用完自动改派 Sonnet；协调器打这个 label 要在 issue 里写理由 |
+| ACC-harness-verdict-01 | `packages/core/test/agentctl.test.mjs` 用真实出现过的五种写法各造一条 PASS 判定评论（`acceptance:` 下的 ① `- id:` + `status:`；② `- item:` + `status:`（versekit #257/PR #260）；③ `- id:` + `result: pass`（trustbridge PR #683）；④ 行内 `- {id: ACC-x, status: pass}`（trustbridge PR #679）；⑤ 映射 `ACC-x: pass`（versekit #247）），调用 `parseVerdict` 和 `merge --pending --dry-run` | 五种都解析出同样的逐条结果，`merge --pending` 不再报「verdict 没有逐条覆盖」；只认 `acceptance:` 段，`failed:` 段里的 `- item:` 不会被当成 pass；同一条既有 pass 又有 fail 时按 fail；`status` 写成 pass/fail 以外的值（如 `待人工`）不算覆盖 |
+| ACC-harness-verdict-02 | 读 `bin/cycle.sh` 里验收任务书 | 判定 YAML 给出一份完整可抄的样例（PASS 一份、FAIL 一份），`acceptance:` 每条固定 `- id:` + `status:`，`failed:` 每条也用 `id:` 而不是 `item:`；`agentctl reject` 写出的 FAIL 评论同样改用 `id:`（旧评论里的 `item:` 仍能被读） |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
 
 ## 账号浏览器的内存（driver-browser）
