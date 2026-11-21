@@ -207,3 +207,32 @@ test('codex-04：非 Codex 通道的 usage limit 仍以 11 停下，不记冷却
   assert.equal(r.status, 11, r.stdout + r.stderr);
   assert.ok(!existsSync(join(dir, 'state', 'codex-exhausted')));
 });
+
+// ---- ACC-harness-codex-06：Codex 任务书写明 GitHub 交付物允许执行 ----
+function renderSpecs(channel) {
+  const script = [
+    'set -uo pipefail',
+    ...['claude_task_constraints', 'codex_github_note', 'engineer_spec', 'rework_spec'].map(fnSource),
+    `engineer_spec 1 t /wt 1 br body ${channel}`,
+    'echo "=====REWORK====="',
+    `rework_spec 1 t 5 br 2 http://c cbody /wt body ${channel}`,
+  ].join('\n');
+  const r = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout;
+}
+
+test('codex-06：Codex 实现与返工任务书写明 GitHub 交付物允许直接执行', () => {
+  const out = renderSpecs('codex');
+  assert.equal((out.match(/GitHub 交付物（本单要求，允许直接执行，不用先问）/g) || []).length, 2);
+  assert.match(out, /bin\/ghx pr create/);
+  assert.match(out, /推送本单分支/);
+  assert.match(out, /不拿 GitHub 当汇报渠道/);
+  assert.match(out, /不在别的 issue\/PR 上发评论/);
+});
+
+test('codex-06：claude 与 DeepSeek 通道的任务书不含这段说明', () => {
+  for (const ch of ['claude', 'volc', 'qwen']) {
+    assert.doesNotMatch(renderSpecs(ch), /GitHub 交付物/, ch);
+  }
+});

@@ -49,7 +49,7 @@
 #   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；Opus 只认 issue 的显式 model:opus label；
 #   - issue 带 model:deepseek label：实现与返工 round 1 走 DeepSeek（不探测、不调用 claude），
 #     返工 round >= 2 升 Sonnet；DeepSeek 不可用时本轮不派，不改用 claude；
-#   - issue 带 model:codex label：实现与返工 round 1 走 Codex（--agent codex --model $CODEX_MODEL），
+#   - issue 带 model:codex label：实现与返工 round 1 走 Codex（--agent codex --model ${CODEX_MODEL}），
 #     round >= 2 升 Sonnet；Codex 未安装/未登录/额度冷却中则本单改派 Sonnet；全程不探测 claude 之外的花钱请求；
 #   - 验收 worker 始终走 DeepSeek（bin/dsh-model.sh：volc 优先、qwen 兜底），绝不选 claude；
 #   - claude 不可用时实现 worker 自动降级 DeepSeek，日志写明原因。
@@ -88,7 +88,7 @@ WORKER_RETRIES="${CYCLE_WORKER_RETRIES:-2}"
 # 原生启动（默认开）：worker 由 Orca 自己启动（worker-start --agent），终端归 Dispatch 所有，
 # 交活后用 worker-release 回收——这是 Orca 官方的首选路径。
 #   claude 通道 → --agent claude --model sonnet|opus
-#   codex 通道（issue 带 model:codex，ACC-harness-codex-01）→ --agent codex --model $CODEX_MODEL（默认 gpt-6.2-sol）
+#   codex 通道（issue 带 model:codex，ACC-harness-codex-01）→ --agent codex --model ${CODEX_MODEL}（默认 gpt-6.2-sol）
 #   DeepSeek 通道（volc/qwen）→ --agent opencode（模型取 ~/.config/opencode/opencode.json 的 model，
 #   由 bin/opencode-model.sh 在派工前按探测结果写好；Orca 目前不能给 opencode 传 --model）
 # 设 CYCLE_NATIVE_AGENTS=0 回到旧路径（自建 dsh/claude 终端 + worker-start --terminal）。
@@ -395,6 +395,13 @@ terminal_field() {
 claude_task_constraints() {
   printf '%s' '- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径
 - 不改用户全局配置（~/.claude、~/.dsh 等）；临时文件放本 worktree 或 TMPDIR
+'
+}
+
+# Codex 通道的 GitHub 交付物说明（ACC-harness-codex-06）：
+# Codex 很守 Orca 前言里的「不要向 GitHub 发帖」，推分支、开 PR 前都先问，一单问两次；这里写明哪些是本单交付物。
+codex_github_note() {
+  printf '%s' '- GitHub 交付物（本单要求，允许直接执行，不用先问）：推送本单分支；用 bin/ghx pr create 开 PR；工单「完成定义」里明确要求的 PR/issue 评论。Orca 前言里「不要向 GitHub 发帖」指不拿 GitHub 当汇报渠道：进度、提问、完成都走 orca orchestration；除上述交付物外，不在别的 issue/PR 上发评论
 '
 }
 
@@ -1101,6 +1108,7 @@ engineer_spec() {
   local num="$1" title="$2" wt="$3" lane="$4" branch="$5" body="$6" channel="$7"
   local extra=""
   if [ "$channel" = "claude" ] || [ "$channel" = "codex" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  if [ "$channel" = "codex" ]; then extra="${extra}$(codex_github_note)"$'\n'; fi
   printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$extra" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body"
 }
@@ -1109,6 +1117,7 @@ rework_spec() {
   local num="$1" title="$2" pull="$3" branch="$4" round="$5" comment_url="$6" comment_body="$7" rwt="$8" body="$9" channel="${10}"
   local extra=""
   if [ "$channel" = "claude" ] || [ "$channel" = "codex" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  if [ "$channel" = "codex" ]; then extra="${extra}$(codex_github_note)"$'\n'; fi
   printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
     "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
