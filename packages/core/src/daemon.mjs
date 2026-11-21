@@ -18,7 +18,7 @@ import { findCommand, parseArgs } from "./commands.mjs";
 import { createRunner } from "./runner.mjs";
 import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publish-flow.mjs";
 import { publishTimeoutMs, readConfig } from "./config.mjs";
-import { startCheckSweeper } from "./scheduler.mjs";
+import { startCheckSweeper, startLoginChecker } from "./scheduler.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -753,7 +753,13 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   let heartbeatTimer = null;
   if (runQueue) {
     runner.loop();
-    stopSweeper = startCheckSweeper({ log, offline });
+    const stopGeneric = startCheckSweeper({ log, offline });
+    // 视频号：启动时查一次，之后只在每天的钟点和某条发布前 2 小时醒来，不做保活。
+    const stopLogin = startLoginChecker({ log, offline });
+    stopSweeper = () => {
+      stopGeneric();
+      stopLogin();
+    };
 
     // auto_running 的第二道保险（ACC-publish-05）：handler 的定时器只管进程还活着、run 还在
     // 手上的那一次。这里每 30 秒扫一遍「没有活 run 却还停在 auto_running」的行，按同一个

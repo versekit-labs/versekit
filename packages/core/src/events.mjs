@@ -15,6 +15,11 @@ export const EVENTS = {
   "account.expired": { severity: "critical", required: true, card: "account" },
   "account.banned": { severity: "critical", required: true, card: "account" },
 
+  // 登录要撑多久的原始记录（视频号，#275）：每次登录成功、每次检查的结果都记一条，页面和 `vk account show`
+  // 从这些记录算「这次登录已多久、平均撑多久」。内部事件，不推手机；过期那一下由 account.expired 负责提醒。
+  "account.login_ok": { severity: "info", required: false, internal: true },
+  "account.check_result": { severity: "info", required: false, internal: true },
+
   "publish.published": { severity: "info", required: false, card: null },
   "publish.failed": { severity: "warn", required: true, card: "publish" },
   "publish.degraded": { severity: "warn", required: false, card: "publish" },

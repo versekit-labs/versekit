@@ -205,6 +205,8 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-verdict-02 | 读 `bin/cycle.sh` 里验收任务书 | 判定 YAML 给出一份完整可抄的样例（PASS 一份、FAIL 一份），`acceptance:` 每条固定 `- id:` + `status:`，`failed:` 每条也用 `id:` 而不是 `item:`；`agentctl reject` 写出的 FAIL 评论同样改用 `id:`（旧评论里的 `item:` 仍能被读） |
 | ACC-harness-codex-06 | 读 `bin/cycle.sh` 给 Codex 通道的实现与返工任务书；`bin/cycle.sh --dry-run --no-consume` 看渲染结果 | 任务书写明：推本单分支、用 `bin/ghx pr create` 开 PR、工单「完成定义」里明确要求的 PR/issue 评论，都是本单交付物，允许执行，不用先问；Orca 前言里「不要向 GitHub 发帖」指不拿 GitHub 当汇报渠道（进度、提问、完成走 Orca）；除此之外不在别的 issue/PR 上发评论。2026-11-21 Codex 一单为此提问 2 次（#268、#269） |
 | ACC-harness-codex-07 | 用假 `orca` 让在跑的 Codex worker 屏幕末尾只有 Codex 自带的提示行 `Tip: When signed in with ChatGPT, use /usage to check your account usage and access available usage limit resets.`（2026-11-21 真实出现过），跑一轮 `bin/coordinator-loop.sh`；再让屏幕出现真正的用量上限提示各跑一轮 | 只有提示行时不报「额度用尽」、不写任何冷却、不要协调器处理；真正的用量上限照 ACC-harness-codex-04 处理。通用的额度识别（火山、claude 等）也不会被这行提示触发。停摆报警里的 issue 号取自 `dispatch-<id>.json` 的派工记录，不从 worktree 目录名猜（那次把 #284 报成了 #197）；取不到就写「issue 未知」。测试不得碰真实 GitHub：`AGENTCTL_BIN`、`ghx` 一律指向测试目录里的假脚本，派工记录里用不存在的 issue 号（如 99999），测试跑完 `git grep` 不到真实 issue 号（2026-11-21 测试用 #284 和真 agentctl，把真单子改回 s:ready 九十次，循环重复派工） |
+| ACC-harness-cycle-14 | 用假 `orca` 模拟「`git worktree add` 新建的 `rework-<issue>` 目录要过几秒才出现在 `orca worktree list` 里，在此之前 `worker-start --worktree path:…` 回 `selector_not_found`」（2026-11-21 #290 返工连败 6 次的真实情况）；跑一轮返工派工 | `bin/cycle.sh` 新建返工 worktree 后，先等它出现在 `orca worktree list` 里（有上限，如 60 秒，期间轮询）再 `worker-start`；等到上限还没出现就记一行人话（「Orca 还没认出新建的 worktree <路径>」）、不消耗 3 次重试、下一轮再派，不把任务标 failed。`selector_not_found` 的重试之间也要先确认 worktree 已被 Orca 认出。已有 worktree 的返工照旧。测试里不碰真实 orca、agentctl、GitHub（见 ACC-harness-codex-07）。 |
+| ACC-harness-merge-01 | 离线测试（假 GitHub 接口）造一张 `s:accept`、verdict PASS、门禁全绿，但 PR `mergeable=false`（跟 main 冲突，2026-11-21 抖音 #276 的 PR #303 在视频号 #275 先合并后就是这样）的 issue，跑 `node bin/agentctl.mjs merge --pending` | 不调 GitHub 的合并接口；把 issue 打回 `s:changes`，PR 上留一条 FAIL 评论，写明「跟 main 冲突，合并 main 解决冲突后重验」和冲突的文件；这类打回不算质量 FAIL，不推高返工轮次，也不触发换模型；`mergeable` 还在计算（null）时本轮跳过、下轮再看；退出码 0，不再每轮报同一个错 |
 | ACC-harness-arch-01 | 离线测试造两张 issue：「涉及」含 `packages/core/src/commands.mjs`、`schema.sql`、`store.mjs`、`handlers.mjs`、`daemon.mjs` 或 `packages/relay/` 之一，一张口径列了 ACC-arch-09、一张没列；再造一个对应 PR 描述里没有六问的情况，跑 `agentctl tick` 和 `merge --pending --dry-run` | 没列 ACC-arch-09 的那张被 tick 标「补口径」、不派工；PR 描述里没有六问（6 个编号答案）时 `merge --pending` 拒绝合并并写明「缺 ADR-0005 §13 六问」；不涉及这些文件的单子不受影响 |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
 
@@ -293,8 +295,19 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-douyin-03] 存草稿：对离线模拟页跑通（`fixtures/` 里手搭的页面，复现 SAU 依赖的发布页结构和文案；本开发机不能打开真实页面去录，真实页面上选择器对不对由 ACC-douyin-07 真机验证）：上传成片 → 填标题（不超过 55 字，超了在发布前就报错）→ 正文 → 话题（来自平台稿，逐个输入并回读）→ 封面（有入库封面用它，没有用平台默认）→ 点「存草稿」→ 到草稿箱回读出这一条，才记 `draft_pending`（状态「已送到抖音草稿箱，在手机上点发布」），不算已发布。每一步填完都回读，回读对不上就抛 `flaky_ui` 并留截图。
 - [ACC-douyin-04] 时间：第一版不用抖音页面自带的定时。「预约发」到计划时间由 VerseKit 把稿子送进草稿箱，并在今天页、飞书卡片提醒「去手机上发」；「现在发」立即送草稿箱。小红书逐条确认的规则不受影响。
 - [ACC-douyin-05] 登录与体检：`account.check` 打开创作者中心的一个只读页面判断登录态（正常 / 过期 / 被限），给人话；过期时账号变「需要重新登录」并发事件。登录走系统页已有的「在发布机上打开登录窗口」方式（ACC-v3-login-03），本单不做抖音扫码取二维码。
-- [ACC-douyin-06] 安全预算与错误：每个抖音账号每天送草稿箱的条数有上限，默认 3 条，可在发布方案里改（沿用现有「今天还能发」的按平台额度），到上限就不再送并说明原因。遇到验证码、滑块、「操作太频繁」这类风控页面立即停下、不重试，账号暂停到次日并发事件，人话写清「抖音要你在发布机的窗口里手动过一下验证」。每种失败都有 `AdapterError` 的 code + 截图 + 事件，测试逐个钉住。
+- [ACC-douyin-06] 风控与错误：适配器不另设每日条数上限（所有者 2026-11-21 定）。遇到验证码、滑块、「操作太频繁」这类风控页面立即停下、不重试，账号暂停到次日并发事件，人话写清「抖音要你在发布机的窗口里手动过一下验证」。每种失败都有 `AdapterError` 的 code + 截图 + 事件，测试逐个钉住。
 - [ACC-douyin-07] 待人工（所有者在和手机同网的电脑上做，agent 不做）：用所有者自己的抖音号在发布机上登录一次，送一条成片进草稿箱，在手机上确认草稿内容（标题、正文、话题、封面）都对，再手动发布。写进 PR 的「待人工」，不计 pass/fail。
+
+### 视频号（`packages/adapter-shipinhao`，登录提醒 + 存草稿，2026-11-21）
+
+所有者 2026-11-21 说明：视频工厂 10-24 起视频号改成手动发，原因是**登录撑不了多久，老要重新扫码**。所以本单的重点不是发布本身，而是：量清楚登录实际能撑多久、让重新扫码尽量省事、过期前后提醒到位（保活不管用，不做）；发布第一版只存草稿，人在手机上点发表。移植自 `trustbridge@1f9c92f videos/factory/publishers/channels.mjs` 和 `videos/factory/keepalive.mjs`（`docs/adr-0001-reuse.md` §4.1）。agent 只用离线模拟页和 stub driver 验证；真机（扫码登录、看几天里记下的登录时长、送一条进草稿箱）由所有者在和手机同网的电脑上做，写进 PR 的「待人工」，不计 pass/fail（第一节真机红线照旧，本开发机不打开 `channels.weixin.qq.com`）。
+
+- [ACC-shipinhao-01] 移植与契约：文件头写 `// ported from trustbridge@1f9c92f videos/factory/publishers/channels.mjs`（保活部分写 `keepalive.mjs`）；工厂里的硬编码剥离干净，仓库里 grep 不到 `assurelane`、`channels-error.png`、`filesOf(`、从 `youtube.json` 取 `short_title` 的约定、`ffmpeg` 调用；通知不直接调飞书，只发事件。不引入运行时依赖。按 `docs/adapter-contract.md` 导出，`capabilities.draft` 为 true，`npm run check:contract` 通过。dry-run 停在「保存草稿」前一步并截图，无平台副作用。
+- [ACC-shipinhao-02] 存草稿：对离线模拟页（`fixtures/` 里手搭，复现视频号助手的 wujie 微前端 shadow root 结构和文案）跑通：上传成片 → 按工厂的判定等上传完成（封面卡片出现「编辑」且没有上传中/生成中/百分比，超时 20 分钟）→ 短标题 → 描述 → 封面（入库清单有就用，没有用平台默认；9:16 一张、16:9 两张的分支都有测试）→ 位置、「含 AI 生成内容」标注（平台稿参数，默认「不显示位置」「标注」）→ 填完逐项回读 → 点「保存草稿」→ 到草稿列表回读出这一条，才记 `draft_pending`（「已送到视频号草稿箱，在手机上点发表」）。短标题不合规（超过 16 字含空格，或有 `《》“”：+？%°` 以外的标点）、描述超 950 字，在人确认之前就拦下并说明，不等到发布时失败。回读对不上抛 `flaky_ui` 并留截图。
+- [ACC-shipinhao-03] 登录检查：`account.check` 打开视频号助手的一个只读页面判断登录态；落到二维码页就是「过期」，人话写「视频号登录过期了，请重新扫码」，不能报成找不到元素。发布途中落到二维码页同样处理，抛 `auth`。
+- [ACC-shipinhao-04] 量登录能撑多久：每次登录成功、每次检查的结果（正常 / 过期）都记成账号事件。系统页视频号账号那一行显示「这次登录已 X 小时」，以及「最近几次登录平均撑 Y 小时」（从登录成功到第一次查到过期）；`vk account show <id>` 输出同样的数字。不足一次完整记录时显示「还在记录」。用假时钟测试。
+- [ACC-shipinhao-05] 不做保活，只在需要时查登录（所有者 2026-11-21：工厂的保活不管用）：不定时打开页面「续命」。登录检查只在这几个时机做：发布机启动时、每天早上一次（时间可在系统页设置里改，默认 08:00）、人确认视频号平台稿时、计划发布前 2 小时（见 06）。每次检查都进 04 的记录。登录态已是过期时不再反复打开页面，等人重新扫码。用 stub driver 和假时钟测试这几个时机和停止条件；仓库里不出现按固定小时间隔反复检查视频号的定时任务。
+- [ACC-shipinhao-06] 提醒与重新扫码：查到过期立即发事件，今天页「要处理」和系统页账号行显示「视频号要重新扫码」，飞书通道按事件推送。有已确认、排了时间的视频号平台稿时，在计划时间前 2 小时额外查一次登录，过期就提前提醒，不等到发布失败。重新扫码走网页二维码（ACC-v3-login-01 的做法）：发布机取回视频号登录页的二维码，显示在账号那一行下面，用手机微信扫完自己变「正常」，不需要去发布机前开窗口。用录制页面 / stub 测试「出码 → 已扫 → 确认成功」与「二维码过期 → 换一个」。
 
 ### 飞书卡片
 
@@ -479,7 +492,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 ### 出口位置
 
-- [ACC-v3-egress-01] 发布机用账号的浏览器探测出口 IP（不是 Node 的 `fetch`），国内、海外各一条线路；位置在云端查离线库（DB-IP City Lite 查国家城市，IPinfo Lite 查线路是不是机房），不请求第三方；库文件不进仓库，按月更新；系统页设备分段底部写明数据来源。有测试：浏览器走代理而 Node 不走时，报上来的是代理的出口。
+- [ACC-v3-egress-01] 发布机用账号的浏览器探测出口 IP（不是 Node 的 `fetch`），国内、海外各一条线路；位置在**发布机本机**查离线库（所有者 2026-11-21 定：云端那一块先不做，改本机）：DB-IP City Lite 查国家城市，IPinfo Lite 查线路是不是机房；查询不把 IP 发给任何第三方；库文件不进仓库，发布机每月自动下载一次新库（下载失败沿用旧库并在系统页写明库的日期，没有库时位置写「查不到」、不暂停发布、要说明原因）；探测出口 IP 用到的回显地址写进 PR（国内、海外各一个），请求里不带任何账号或个人信息；系统页设备分段底部写明数据来源。有测试：浏览器走代理而 Node 不走时，报上来的是代理的出口。
 - [ACC-v3-egress-02] 侧栏底部每一页都有发布机一行：在线与否 + 国家 城市 + IP。位置正常时是灰字加墨色地名；和账号平时的国家不一样时变成黄点「出口位置变了」。和 `screenshots/v3/today-ip-moved.png` 左下角对照。
 - [ACC-v3-egress-03] 出口位置和账号上次登录成功时不在同一个国家：这个账号的自动发布暂停（队列不领取）；「今天」最上面（确认面板之上）出现一条待办，点「去处理」到系统页的设备分段；已确认的平台稿不丢。有测试钉住：位置变了之后跑一轮队列，没有任何发布尝试。
 - [ACC-v3-egress-05] 暂停期间确认面板写明哪些平台暂停，暂停的行时间列是「暂停中」；确认后的提示是「其中 N 条等位置处理完再发」，不说「现在开始发」。侧栏第一行是「N 个账号暂停发布」。

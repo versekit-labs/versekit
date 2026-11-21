@@ -6,7 +6,7 @@
 //   · 动作幂等：同一张卡点两次只会执行一次（command_audit.idempotency_key 唯一）
 
 import { open, newId } from "./index.mjs";
-import { findCommand, parseArgs } from "./commands.mjs";
+import { findCommand, findCardView, parseArgs } from "./commands.mjs";
 import {
   buildEventCard,
   buildNewWorkCard,
@@ -212,7 +212,11 @@ export async function executeAction({ action, operator, binding, handlers = {}, 
 // 真正改数据的只有 publish.* 命令，走 executeAction（四道闸）；这里只管翻页、拼卡片、原地更新。
 // ---------------------------------------------------------------------------------------------
 
-const NAV_COMMANDS = new Set(["card.review", "card.edit", "card.show", "card.save_edit"]);
+// 翻页按钮来自 commands.mjs 的 CARD_VIEWS（单一来源）。表单提交是 publish.edit 命令本身（带 cutId、没有
+// publishId）；card.save_edit 是改造前发出去的旧卡片上的提交按钮，24 小时内仍要能点。
+const LEGACY_SAVE = "card.save_edit";
+const isFormSubmit = (cmd, args) => cmd === LEGACY_SAVE || (cmd === "publish.edit" && args?.cutId != null && args?.publishId == null);
+const isNav = (cmd) => Boolean(findCardView(cmd));
 const STATE_COMMANDS = new Set(["publish.approve", "publish.skip", "publish.now", "publish.manual"]);
 
 const peekCmd = (action) => {
@@ -423,7 +427,7 @@ function resultFor(cmd, res, args, cutTitle, now) {
 export async function handleCardEvent({ evt, channel, binding, handlers = {}, log = () => {}, now = Date.now() } = {}) {
   const gate = preflight({ action: evt.action_value, operator: evt.operator_id, binding, now });
   const cmd = gate.parsed?.cmd ?? peekCmd(evt.action_value);
-  const inFlow = NAV_COMMANDS.has(cmd) || STATE_COMMANDS.has(cmd);
+  const inFlow = isNav(cmd) || isFormSubmit(cmd, gate.parsed?.args) || STATE_COMMANDS.has(cmd);
 
   // 别人点的（或没配对）：照旧拒绝，但不动这张卡片——不该因为别人乱点，把你的确认卡弄没了。
   if (!gate.ok && inFlow && ["operator", "unbound"].includes(gate.code)) {
@@ -443,7 +447,7 @@ export async function handleCardEvent({ evt, channel, binding, handlers = {}, lo
   const args = parsed.args ?? {};
   const op = evt.operator_id;
 
-  if (NAV_COMMANDS.has(cmd)) {
+  if (isNav(cmd) || isFormSubmit(cmd, args)) {
     if (parsed.key && open().prepare("SELECT 1 FROM command_audit WHERE idempotency_key=?").get(parsed.key)) {
       log(`[channel] 重复点击已忽略：${cmd}`);
       return { ok: true, duplicate: true, message: "已经处理过。" };
@@ -502,7 +506,15 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     return done;
   };
 
-  if (cmd === "card.review") {
+  // 翻页的处理函数按 CARD_VIEWS 的名字登记；表里多一项、这里没登记，下面会直接抛错而不是静默没反应。
+  const views = { "card.review": reviewView, "card.show": showView, "card.edit": editView };
+  if (findCardView(cmd)) {
+    if (!views[cmd]) throw new Error(`CARD_VIEWS 里的 ${cmd} 没有对应的处理函数`);
+    return views[cmd]();
+  }
+  return submitForm();
+
+  async function reviewView() {
     const eventId = String(parsed.key ?? "").replace(/:card\.review$/, "");
     const summary = newWorkSummary(args.workId);
     try {
@@ -526,17 +538,18 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     return done;
   }
 
-  const cutId = args.cutId;
-  if (cmd === "card.show") {
-    const card = renderConfirm(cutId, { now, when: whenOf(args) });
-    return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
+  async function showView() {
+    const card = renderConfirm(args.cutId, { now, when: whenOf(args) });
+    return card ? (await updateCard(channel, evt, card, log), done) : gone(args.cutId);
   }
-  if (cmd === "card.edit") {
-    const card = renderEdit(cutId, { now, when: whenOf(args) });
-    return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
+  async function editView() {
+    const card = renderEdit(args.cutId, { now, when: whenOf(args) });
+    return card ? (await updateCard(channel, evt, card, log), done) : gone(args.cutId);
   }
 
-  // card.save_edit：逐条把改动交给 publish.edit（平台规则、留痕都在命令里）。这里只校验格式。
+  async function submitForm() {
+  const cutId = args.cutId;
+  // 表单提交（publish.edit 带 cutId）：逐条把改动交给 publish.edit（平台规则、留痕都在命令里）。这里只校验格式。
   const { batch } = loadCut(cutId);
   if (!batch.length) return gone(cutId);
   const form = evt.form_value ?? {};
@@ -582,9 +595,10 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     await updateCard(channel, evt, renderEdit(cutId, { now, when, note: { error: true, text: failures.join("\n") } }), log);
     return { ok: false, message: failures.join("；") };
   }
-  recordNav({ cmd, parsed, args, operator: evt.operator_id, now, text: `edited ${edits.length}` });
+  recordNav({ cmd: "publish.edit", parsed, args, operator: evt.operator_id, now, text: `edited ${edits.length}` });
   const card = renderConfirm(cutId, { now, when, note: { text: edits.length ? `已改好 ${edits.length} 处，下面是现在的样子。` : "没有改动。" } });
   if (!card) return gone(cutId);
   await updateCard(channel, evt, card, log);
   return done;
+  }
 }

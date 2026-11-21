@@ -142,6 +142,10 @@
       `<div class="bd"><div class="t">${esc(p.workTitle)}</div><div class="sub why">${esc(pfName(p.platform))}：${esc(p.state === "published_limited" ? "已发出，但" : "")}${esc(p.error?.message ?? "没有发出去，原因还没记下来")}</div></div>` +
       `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(p.workId)}${p.cutId ? "&cut=" + encodeURIComponent(p.cutId) : ""}">看经过</a>` +
       `${p.state === "published_limited" ? "" : `<button class="btn" type="button" data-retry="${esc(p.publishId)}">再试一次</button>`}</div></div>`).join("");
+    // 要重新扫码的账号（视频号）：登录过期了，提前放进「要处理」，不等到发布失败才知道。
+    const relogin = (data.relogin ?? []).map((r) => `<div class="oth bad"><span class="st bad"></span>` +
+      `<div class="bd"><div class="t">${esc(r.text)}</div><div class="sub why">登录过期了：用开通视频号的微信扫一下码。扫完之前，排着要发的视频号内容发不出去。</div></div>` +
+      `<div class="a"><a class="btn" href="system.html#tab=accounts">去扫码</a></div></div>`).join("");
     const groupRows = (data.others ?? []).map((o) => `<div class="oth" style="margin-top:14px"><span class="st wait"></span>` +
       `<div class="bd"><div class="t">账号组「${esc(o.group.name)}」里还有 ${o.total} 件事等你</div>` +
       `<div class="sub">这一页只显示当前账号组${current ? "「" + esc(current.name) + "」" : ""}的内容</div></div>` +
@@ -166,7 +170,7 @@
       `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
       (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/system#groups">先建一个账号组 →</a></div>`) +
       focus +
-      `<div class="others" ${more || badOnes ? "" : "hidden"}>${more}${badOnes}</div>` +
+      `<div class="others" ${more || badOnes || relogin ? "" : "hidden"}>${relogin}${more}${badOnes}</div>` +
       groupRows +
       `<h2 class="sec">最近结果 · 发布 24 小时的播放，和这个账号最近 20 条的中位数比</h2>` +
       (results

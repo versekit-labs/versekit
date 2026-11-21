@@ -13,6 +13,8 @@ import { AdapterError, toAdapterError } from "./errors.mjs";
 import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow, publishInputFor } from "./publish-flow.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
+import { LOGIN_TRACKED, takeCheckTrigger } from "./scheduler.mjs";
+import { computeLoginClock, loginRecords } from "./overview.mjs";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -56,7 +58,21 @@ export async function loadAdapters({ only = null, root = PACKAGES } = {}) {
  * adapters would eventually disagree about the order of "外部 id 落库" and "转 published", and the
  * difference would only show up as a publish stuck mid-flight for one platform.
  */
-export async function checkAccount(adapters, accountId) {
+/**
+ * 登录时长的原始记录（视频号，#275）：每次检查的结果记一条 account.check_result；登录成功（上次不是正常、
+ * 或者还没有一次开着的登录）再记一条 account.login_ok。由 core 记，适配器不碰库。时间用传入的时钟，能用假时钟测。
+ */
+export function recordLoginCheck(account, result, { at = Date.now(), trigger = "manual", publishId = null, wasOk = true } = {}) {
+  if (!account || !LOGIN_TRACKED.has(account.platform)) return;
+  const base = { accountId: account.id, platform: account.platform, handle: account.handle, at };
+  if (result === "ok") {
+    const open_ = computeLoginClock(loginRecords(account.id), at).since != null;
+    if (!wasOk || !open_) emit({ type: "account.login_ok", severity: "info", payload: { ...base, source: wasOk ? "observed" : "relogin" } });
+  }
+  emit({ type: "account.check_result", severity: "info", payload: { ...base, result, trigger, ...(publishId ? { publishId } : {}) } });
+}
+
+export async function checkAccount(adapters, accountId, { now = Date.now } = {}) {
   {
     const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
     let account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
@@ -64,7 +80,10 @@ export async function checkAccount(adapters, accountId) {
     const adapter = byPlatform.get(account.platform);
     // 定时暂停（YouTube 配额）到点了：先放开，检查结果才是账号现在真实的状态。
     if (adapter && resumeLapsedPauses(adapter).includes(accountId)) account = open().prepare("SELECT * FROM account WHERE id=?").get(accountId);
-    const at = Date.now();
+    const at = now();
+    const tracked = LOGIN_TRACKED.has(account.platform);
+    const why = tracked ? takeCheckTrigger(accountId) : null;
+    const wasOk = account.state === "ok";
     const mark = (patch) => {
       const sets = Object.keys(patch).map((k) => `${k}=?`).join(", ");
       open().prepare(`UPDATE account SET ${sets} WHERE id=?`).run(...Object.values(patch), accountId);
@@ -85,6 +104,7 @@ export async function checkAccount(adapters, accountId) {
       if (health.state === "ok") patch.last_ok_at = at;
       if (Number.isInteger(health.expiresAt)) patch.expires_at = health.expiresAt;
       mark(patch);
+      if (tracked && ["ok", "expired"].includes(health.state)) recordLoginCheck(account, health.state, { at, trigger: why.trigger, publishId: why.publishId, wasOk });
 
       if (health.state !== account.state && ["expiring", "expired", "banned"].includes(health.state)) {
         emit({
@@ -100,6 +120,7 @@ export async function checkAccount(adapters, accountId) {
       const error = toAdapterError(err);
       if (error.code === "auth") {
         mark({ state: "expired", last_checked_at: at });
+        if (tracked) recordLoginCheck(account, "expired", { at, trigger: why.trigger, publishId: why.publishId, wasOk });
         emit({
           type: "account.expired",
           severity: "critical",
@@ -272,12 +293,16 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending" };
       }
 
-      // 只存草稿的平台（抖音第一版）：「自动发」也按「存草稿」跑——否则 auto_running 之后拿到 draft_pending，
-      // 会撞上非法迁移（auto_running → draft_pending 不存在）。notify / manual 仍是人的选择，照旧。
-      const mode = adapter.adapter.draftOnly === true && row.mode === "auto" ? "draft" : row.mode;
+      // 只能存草稿的平台（视频号、抖音第一版）：auto 模式的平台稿也按草稿跑——到草稿箱为止，发表由人在手机上点。
+      // 把 mode 写回库（而不是只改局部变量）：重试、界面和事件看到的都是 draft，不会出现库里 auto、实际按草稿跑的两种说法。
+      // auto_running 之后拿到 draft_pending 会撞非法迁移，所以必须在迁移前改。
+      if (adapter.adapter.draftOnly && row.mode === "auto") {
+        open().prepare("UPDATE publish SET mode = 'draft' WHERE id = ?").run(publishId);
+        row.mode = "draft";
+      }
 
       // Draft requested but the platform has no draft box: say so, do not pretend to try.
-      if (mode === "draft" && adapter.draft !== true) {
+      if (row.mode === "draft" && adapter.draft !== true) {
         if (row.state === "queued") transitionPublish(publishId, "draft_running");
         transitionPublish(publishId, "notify_pending", {
           reason: "no_upload_path",
@@ -286,7 +311,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending", fallback: "no_upload_path" };
       }
 
-      const running = mode === "draft" ? "draft_running" : "auto_running";
+      const running = row.mode === "draft" ? "draft_running" : "auto_running";
       if (row.state === "queued") transitionPublish(publishId, running);
 
       // 发布总时限（ACC-publish-05）：适配器可能永远不返回（页面停在「上传视频」，文件根本
@@ -343,6 +368,11 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       } catch (err) {
         if (err?.pause?.until) pauseAccountUntil(publishId, row, err);
         else if (err?.pause) pauseAccountFor(publishId, row, err);
+        // 视频号发布途中落到二维码页（auth）：同样记一次「过期」，登录时长才算得准。
+        if (LOGIN_TRACKED.has(row.platform) && toAdapterError(err).code === "auth") {
+          const acct = open().prepare("SELECT * FROM account WHERE id = ?").get(row.account_id);
+          recordLoginCheck(acct, "expired", { trigger: "publish", publishId, wasOk: acct?.state === "ok" });
+        }
         const disposition = applyPublishError(publishId, err);
         // 适配器给了平台自己的错误码（uploadLimitExceeded、视频被拒、预估配额不够……）：留一条带原码的事件，
         // 光有 error_code=platform_reject 分不清是哪一种。暂停类已在上面单独发过事件。

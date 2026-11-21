@@ -1,0 +1,9 @@
+{
+  "name": "@versekit-app/adapter-shipinhao",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "视频号适配器：视频号助手网页存草稿（人在手机上点发表）+ 登录检查与网页扫码",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}

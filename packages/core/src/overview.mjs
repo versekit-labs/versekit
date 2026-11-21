@@ -12,6 +12,7 @@
 import { open } from "./index.mjs";
 import { currentGroup, listAccounts, listGroups, deriveStatus, statusState, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
 import { withBaselines } from "./baseline.mjs";
+import { LOGIN_TRACKED } from "./scheduler.mjs";
 
 /** 1 小时内采集算「新鲜」；超过 24 小时仍未采集算「坏掉」。与总览页的 5/8 口径一致。 */
 export const FRESH_AFTER_MS = 3600e3;
@@ -22,6 +23,75 @@ export const COUNT_DEFINITIONS = {
   publishes: "平台发布数：publish 行数；同一作品每上一个平台账号算 1 条",
   publishedPublishes: "已发布成功的平台发布数：state 为 published / published_limited 的行",
 };
+
+// ------------------------------------------------------------------ 登录要撑多久（视频号，#275）
+//
+// 视频号的登录撑不了多久，所有者要的第一件事是「量清楚到底能撑多久」。原始数据是账号事件：
+// account.login_ok（每次登录成功）和 account.check_result（每次检查，正常 / 过期）。
+// 一次「登录」= 从 login_ok 到之后第一次查到过期；中间再扫一次码就重新计时，被打断的那次不算数。
+// 全部用事件里的时间算（payload.at），传入 now，所以能用假时钟测。
+
+export const RECENT_LOGINS = 5;
+const LOGIN_PLATFORM_LABEL = { shipinhao: "视频号" };
+export const loginPlatformLabel = (platform) => LOGIN_PLATFORM_LABEL[platform] ?? platform;
+
+export const hoursText = (ms) => (ms < 3600e3 ? "不到 1 小时" : `${Math.round(ms / 3600e3)} 小时`);
+
+/** records：[{ kind: "login" | "expired", at }]，按时间从早到晚。 */
+export function computeLoginClock(records, now = Date.now()) {
+  let start = null;
+  const done = [];
+  for (const r of records) {
+    if (r.kind === "login") start = r.at;
+    else if (r.kind === "expired" && start != null) {
+      done.push(Math.max(0, r.at - start));
+      start = null;
+    }
+  }
+  const recent = done.slice(-RECENT_LOGINS);
+  const avgMs = recent.length ? recent.reduce((a, b) => a + b, 0) / recent.length : null;
+  const currentMs = start != null ? Math.max(0, now - start) : null;
+  const parts = [];
+  if (currentMs != null) parts.push(`这次登录已 ${hoursText(currentMs)}`);
+  parts.push(avgMs != null ? `平均撑 ${hoursText(avgMs)}` : "还在记录");
+  return {
+    since: start,
+    currentMs,
+    currentHours: currentMs == null ? null : Math.round((currentMs / 3600e3) * 10) / 10,
+    completed: done.length,
+    averageMs: avgMs,
+    averageHours: avgMs == null ? null : Math.round((avgMs / 3600e3) * 10) / 10,
+    label: parts.join(" · "),
+  };
+}
+
+export function loginRecords(accountId) {
+  return open()
+    .prepare(
+      `SELECT type, payload_json, created_at FROM event
+        WHERE type IN ('account.login_ok', 'account.check_result') AND payload_json LIKE ?
+        ORDER BY created_at, rowid`,
+    )
+    .all(`%"accountId":${JSON.stringify(accountId)}%`)
+    .map((r) => {
+      let p = {};
+      try {
+        p = JSON.parse(r.payload_json) ?? {};
+      } catch {
+        /* 坏记录当作没有 */
+      }
+      return { type: r.type, p, at: Number.isFinite(p.at) ? p.at : r.created_at };
+    })
+    .filter((r) => r.p.accountId === accountId)
+    .map((r) => (r.type === "account.login_ok" ? { kind: "login", at: r.at } : r.p.result === "expired" ? { kind: "expired", at: r.at } : null))
+    .filter(Boolean);
+}
+
+/** 这个账号的登录时长；不是「只在需要时查登录」的平台返回 null。 */
+export function loginClockOf(account, now = Date.now()) {
+  if (!account || !LOGIN_TRACKED.has(account.platform)) return null;
+  return computeLoginClock(loginRecords(account.id), now);
+}
 
 /** 矩阵固定五列。设计稿用 xhs / bili 简称，真实账号用 xiaohongshu / bilibili，别名在这里收口。 */
 export const MATRIX_COLUMNS = [
@@ -416,6 +486,7 @@ export const TODAY_DEFINITIONS = {
   problems: "出了问题的平台稿：failed / blocked / expired；以及已发出但被 YouTube 锁成私享的（published_limited + visibility_forced_private）",
   scheduled: "已确认等时间的队列：按计划时间从早到晚，没有时间的排最后",
   results: "最近发布满 24 小时的结果：发布已满 24 小时，最近的在前；倍数见 baseline",
+  relogin: "要重新扫码的账号：只在需要时查登录的平台（视频号）登录过期了，扫完码自己消失",
   others: "其他每个账号组各有几件事等处理：待确认的成片数 + 出了问题的平台稿数",
 };
 const RESULTS_LIMIT = 20;
@@ -512,10 +583,22 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
         })
     : [];
 
+  // 要重新扫码的账号（视频号）：和出问题的平台稿一样进「要处理」，不用等到发布失败才知道。
+  const relogin = listAccounts({ groupId })
+    .filter((a) => LOGIN_TRACKED.has(a.platform) && a.state === "expired")
+    .map((a) => ({
+      accountId: a.id,
+      platform: a.platform,
+      handle: a.handle,
+      state: a.state,
+      text: `${loginPlatformLabel(a.platform)}要重新扫码`,
+    }));
+
   return {
     group: scope ? { id: scope.id, name: scope.name } : null,
     awaiting,
     problems,
+    relogin,
     scheduled,
     results,
     others,
