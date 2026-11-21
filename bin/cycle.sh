@@ -41,6 +41,7 @@
 #   IMPL_MODEL=sonnet|opus        实现/返工 worker 的 claude 模型覆盖
 #   CYCLE_WORKER_RETRIES          worker-start 首次失败后的重试次数（默认 2）
 #   CYCLE_RETRY_BACKOFF_1/_2      第 1/2 次失败后的等待秒数（默认 2 / 4）
+#   CYCLE_REWORK_WAIT_SECONDS    等 Orca 认出新建返工 worktree 的秒数上限（默认 60）
 #   CYCLE_MAX_STALE_TERMINALS     已完成未关 worker 终端的上限（默认 lane 数 + 2）；
 #                                 超过就先回收，清完仍超则本轮不开新终端。
 #                                 重启后已不存在的 handle 按已关处理，不占这个上限。
@@ -1023,12 +1024,12 @@ set_issue_state() {
 }
 
 # worker-start 统一入口：首次失败后**用同一个 task** 退避重试至多 N 次。
-# 成功时把 dispatch 放在 START_DISPATCH，失败返回 1（调用方负责回滚工单/放弃 task）。
+# 成功时把 dispatch 放在 START_DISPATCH；失败返回 1；新建返工 worktree 待识别返回 2。
 # 失败日志必须含 stderr 与 failedStage/residualResources——上一次事故就是 stderr 被吞了。
 START_DISPATCH=""
 START_RESIDUAL_DISPATCH=""
 worker_start_with_retry() {
-  local taskid="$1" handle="$2" wt="$3" label="${4:-worker}"
+  local taskid="$1" handle="$2" wt="$3" label="${4:-worker}" rework_path="${5:-}"
   local total=$((WORKER_RETRIES + 1)) attempt=1 out err rc dispatch fields delay
   START_DISPATCH=""
   START_RESIDUAL_DISPATCH=""
@@ -1072,10 +1073,19 @@ worker_start_with_retry() {
       log "      ⚠ 回执含 dispatch=${dispatch}，不再重试（避免重复 Dispatch）"
       break
     fi
-    [ "$attempt" -lt "$total" ] || break
-    delay=$(retry_backoff "$attempt")
-    log "      ↻ ${delay}s 后用同一 task 重试（不重建 task）"
-    sleep "$delay"
+    if [ "$attempt" -lt "$total" ]; then
+      delay=$(retry_backoff "$attempt")
+      log "      ↻ ${delay}s 后用同一 task 重试（不重建 task）"
+      sleep "$delay"
+    fi
+    # 新建返工 worktree 可能还没被 Orca 稳定识别；等到可见才再用一次派工机会。
+    case "$out $err" in
+      *selector_not_found*)
+        if [ -n "$rework_path" ] && ! wait_for_rework_worktree "$rework_path"; then
+          return 2
+        fi
+        ;;
+    esac
     attempt=$((attempt + 1))
   done
 
@@ -1338,6 +1348,35 @@ ensure_rework_worktree() {
   printf 'path:%s' "$dir"
 }
 
+# `git worktree add` 返回时 Orca 未必已认出目录。只认列表里的完整路径，单次查询也受总时限约束。
+wait_for_rework_worktree() {
+  local dir="$1" seconds="${CYCLE_REWORK_WAIT_SECONDS:-60}"
+  case "$seconds" in ''|0|*[!0-9]*) seconds=60 ;; esac
+  if python3 -c '
+import json, os, subprocess, sys, time
+
+path = os.path.realpath(sys.argv[1])
+deadline = time.monotonic() + int(sys.argv[2])
+while (remaining := deadline - time.monotonic()) > 0:
+    try:
+        raw = subprocess.check_output(
+            ["orca", "worktree", "list", "--json", "--limit", "200"],
+            stderr=subprocess.DEVNULL, timeout=remaining,
+        )
+        listing = json.loads(raw)
+        if listing["ok"] and any(w["path"] == path for w in listing["result"]["worktrees"]):
+            sys.exit(0)
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
+        pass
+    time.sleep(max(0, min(1, deadline - time.monotonic())))
+sys.exit(1)
+' "$dir" "$seconds"; then
+    return 0
+  fi
+  logerr "    · Orca 还没认出新建的 worktree ${dir}（等了 ${seconds} 秒，下轮再派）"
+  return 1
+}
+
 # 验收专用 worktree：detached 在 origin/main，验收 worker 在里面再建自己的临时 worktree。
 ensure_acceptance_worktree() {
   local dir
@@ -1418,11 +1457,17 @@ print(",".join(d.get("files") or []))
 ' 2>/dev/null || true)
   comment_body=${comment_body:0:1200}
 
-  local rwt="$ENGINEER_WT" resolved
+  local rwt="$ENGINEER_WT" resolved rework_path=""
   if resolved=$(worktree_for_branch "$branch"); then
     rwt="$resolved"
   elif [ "$DRY" != "1" ] && resolved=$(ensure_rework_worktree "$num" "$branch"); then
     rwt="$resolved"
+    # 上轮超时留下的目录也走这里，直到 Orca 认出分支。
+    rework_path=${resolved#path:}
+    if ! wait_for_rework_worktree "$rework_path"; then
+      set_issue_state "$num" changes force
+      return $?
+    fi
   else
     log "    · 没找到分支 ${branch} 的 worktree，仍在 ${ENGINEER_WT} 里派工（任务书要求先切到该分支）"
   fi
@@ -1467,17 +1512,37 @@ print(",".join(d.get("files") or []))
   fi
   spec=$(rework_spec "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$rwt" "$body" "$ch")
 
-  local task taskid
-  task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 返工（round ${round}）" --spec "$spec" --json 2>&1) || task=""
-  taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
+  local task taskid="" saved_key=""
+  local pending="$STATE_DIR/rework-$num.pending-task" task_key="$RUN_ID $pull $head $round"
+  # 首次探测通过、但重试时 Orca 又丢失路径：下一轮接着派同一份 task。
+  if [ -s "$pending" ]; then
+    IFS=$'\t' read -r saved_key taskid < "$pending" || taskid=""
+    [ "$saved_key" = "$task_key" ] || taskid=""
+  fi
   if [ -z "$taskid" ]; then
-    log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
-    log "    退回 s:changes（补偿迁移）"
-    set_issue_state "$num" changes force || true
-    return 1
+    task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "issue #$num 返工（round ${round}）" --spec "$spec" --json 2>&1) || task=""
+    taskid=$(printf '%s' "$task" | jpick result.task.id taskId result.id)
+    if [ -z "$taskid" ]; then
+      log "    ✗ task-create 失败：$(printf '%s' "$task" | head -c 300)"
+      log "    退回 s:changes（补偿迁移）"
+      set_issue_state "$num" changes force || true
+      return 1
+    fi
   fi
 
-  if ! worker_start_with_retry "$taskid" "$handle" "$rwt" "返工 #$num"; then
+  rc=0
+  worker_start_with_retry "$taskid" "$handle" "$rwt" "返工 #$num" "$rework_path" || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    if ! printf '%s\t%s\n' "$task_key" "$taskid" > "$pending"; then
+      log "    ✗ 无法保存待派 task=${taskid}"
+      set_issue_state "$num" changes force || true
+      return 1
+    fi
+    set_issue_state "$num" changes force
+    return $?
+  fi
+  [ ! -e "$pending" ] || rm -f "$pending"
+  if [ "$rc" -ne 0 ]; then
     log "    ✗ worker-start 连续失败 $((WORKER_RETRIES + 1)) 次，放弃 task=${taskid}，退回 s:changes"
     abandon_task "$taskid" "$num" "worker-start failed after $((WORKER_RETRIES + 1)) attempts (rework issue #$num)"
     # doing → changes 不在自动迁移表里；这是派工失败的补偿，用 --force 并留告警。
