@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -79,6 +80,34 @@ test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
 });
 
 const verdictHead = "abc12345".repeat(5);
+
+test("cycle.sh：验收任务书在 UTF-8 Bash 中保留 PR 号、head 和判定样例", async () => {
+  const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
+  const template = /^  (spec=\$\(cat <<EOF\n[\s\S]*?\nEOF\n\))$/m.exec(script)?.[1];
+  assert.ok(template, "找不到验收任务书 heredoc");
+
+  const { stdout } = await promisify(execFile)("/bin/bash", ["-eu", "-c", `${template}\nprintf '%s\\n' "$spec"`], {
+    env: {
+      ...process.env,
+      LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
+      num: "264",
+      pull: "265",
+      head: verdictHead,
+      ACCEPTANCE_WT: "/acceptance",
+      acc: "ACC-example-01, ACC-example-02",
+    },
+  });
+  // 新版 Bash 可能正常展开，仍禁止会破坏 Bash 3.2 的相邻写法。
+  assert.doesNotMatch(template, /\$[A-Za-z_]\w*[^\x00-\x7F]/);
+  assert.equal(stdout.split("\n")[0], `目标：验收 issue #264 的 PR #265（head ${verdictHead}）。`);
+
+  const verdicts = [...stdout.matchAll(/```yaml\n[\s\S]*?\n```/g)].map(([block]) => parseVerdict(block));
+  assert.deepEqual(verdicts.map(({ verdict, headSha }) => [verdict, headSha]), [
+    ["PASS", verdictHead],
+    ["FAIL", verdictHead],
+  ]);
+});
+
 const verdictFormats = [
   ["id/status", "  - id: ACC-x\n    status: pass\n  - id: ACC-y\n    status: pass"],
   ["item/status", "  - item: ACC-x\n    status: pass\n  - item: ACC-y\n    status: pass"],

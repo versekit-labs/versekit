@@ -1566,7 +1566,7 @@ for q in (json.load(sys.stdin).get("queue") or []):
 
   local spec
   spec=$(cat <<EOF
-目标：验收 issue #$num 的 PR #$pull（head $head）。
+目标：验收 issue #$num 的 PR #${pull}（head ${head}）。
 
 改动：不改实现代码，只产出判定。
 
