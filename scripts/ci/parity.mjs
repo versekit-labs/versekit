@@ -12,6 +12,7 @@
 //      按钮能远程触发 = 它能写东西，所以必须有 remote / 幂等 / 审计三件套。
 //   3b. 每种卡片（cards.mjs 的 sampleCards）上所有按钮的 cmd，都必须是 remote 命令，或在 CARD_VIEWS 里
 //      声明过的翻页。绕开命令表自己发明 callback（如旧的 card.save_edit）会在这里失败。
+//   3c. cards.mjs 源码里不许手写 callback：按钮只能经 commandButton / viewButton（commands.mjs 校验）造出。
 //   4. 真正 spawn `node packages/cli/src/vk.mjs commands`，解析 JSON，与注册表投影逐字段比对：
 //      命令集合、http「方法 路径」、卡片 label（外加 remote，防止按钮语义漂移）。
 //      这是三端一致的执行版：不是读同一份源码，而是读产品真实吐出来的东西。
@@ -214,6 +215,38 @@ try {
   }
 } catch (err) {
   bad("parity.cards.actions-in-table", `枚举卡片按钮失败：${err.message}`, "cards.mjs 必须能独立 import，sampleCards() 要能造出每种卡片");
+}
+
+// ---------------------------------------------------------------- 3c. cards.mjs 不许手写 callback 的 cmd
+
+try {
+  const { readFileSync } = await import("node:fs");
+  const { CARD_VIEWS, cardActionProblems } = await import("../../packages/core/src/commands.mjs");
+  const { cardActions, sampleCards } = await import("../../packages/core/src/cards.mjs");
+  const src = process.env.VK_PARITY_CARDS_SOURCE_APPEND
+    ? readFileSync(join(ROOT, "packages/core/src/cards.mjs"), "utf8") + "\n" + process.env.VK_PARITY_CARDS_SOURCE_APPEND
+    : readFileSync(join(ROOT, "packages/core/src/cards.mjs"), "utf8");
+  const problems = [];
+  // 按钮只能经 commandButton / viewButton 造；直接调 callback(...) 或手写 { type: "callback" } 都是绕开命令表。
+  // 先剔掉 callback 的定义与两个唯一合法的包装（commandButton / viewButton），剩下的调用就都是绕开的。
+  const rest = src.replace(/^function callback\(.*$/m, "").replace(/^const (?:commandButton|viewButton) = .*$/gm, "");
+  const direct = [...rest.matchAll(/(?<![A-Za-z.])callback\(/g)].length;
+  if (direct) problems.push(`cards.mjs 里有 ${direct} 处直接调用 callback(...)，按钮必须经 commandButton / viewButton 造`);
+  if ((rest.match(/type:\s*"callback"/g) ?? []).length > 1) problems.push('cards.mjs 里有手写的 { type: "callback" }');
+  for (const m of src.matchAll(/(?:viewButton|commandButton)\(\s*"([^"]+)"/g)) {
+    const bad1 = cardActionProblems([{ cmd: m[1] }]);
+    if (bad1.length) problems.push(...bad1);
+  }
+  // 每个声明过的翻页都得真有卡片在用，否则表和卡片已经漂开。
+  const used = new Set(Object.values(sampleCards()).flatMap(cardActions).map((a) => a.cmd));
+  for (const v of CARD_VIEWS) if (!used.has(v.name)) problems.push(`CARD_VIEWS 声明了 ${v.name}，但没有任何样例卡片用到它`);
+  if (problems.length) {
+    bad("parity.cards.derived", problems.join("；"), "卡片按钮只能由 commands.mjs 派生：命令走 commandButton，翻页走 viewButton（名字来自 CARD_VIEWS）；表里没用到的翻页要删掉");
+  } else {
+    ok("parity.cards.derived", `cards.mjs 没有手写 callback；${CARD_VIEWS.length} 个翻页都被卡片用到`);
+  }
+} catch (err) {
+  bad("parity.cards.derived", `检查 cards.mjs 源码失败：${err.message}`, "cards.mjs 必须能独立 import");
 }
 
 // ---------------------------------------------------------------- 4. CLI 投影（真 spawn）

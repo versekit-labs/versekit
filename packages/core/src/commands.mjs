@@ -893,6 +893,17 @@ export const CARD_VIEWS = [
 export const findCardView = (name) => CARD_VIEWS.find((v) => v.name === name);
 
 /**
+ * 卡片按钮 value 的唯一造法：cmd 必须是 remote 命令，或 CARD_VIEWS 里声明过的翻页，否则当场抛错。
+ * cards.mjs 不再自己手写 callback 的 cmd 字面量——翻页用 viewButton(name, ...)，命令用 commandButton(name, ...)，
+ * 两者都经过这里，所以卡片上不可能出现表外动作（check:parity 再从源码层面兜一道）。
+ */
+export function cardCallbackValue(cmd, args, { key = null, now, ttlMs }) {
+  const problems = cardActionProblems([{ cmd }]);
+  if (problems.length) throw new Error(`卡片按钮不合法：${problems.join("；")}`);
+  return { cmd, args, exp: now + ttlMs, ...(key ? { key } : {}) };
+}
+
+/**
  * 一组卡片按钮 value（{ cmd, ... }）里，哪些动作在表里找不到。每条返回人话。
  * 合法 = 远程命令，或 CARD_VIEWS 里声明过且 serves 指向远程命令的翻页。
  */

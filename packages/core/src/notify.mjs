@@ -506,7 +506,15 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     return done;
   };
 
-  if (cmd === "card.review") {
+  // 翻页的处理函数按 CARD_VIEWS 的名字登记；表里多一项、这里没登记，下面会直接抛错而不是静默没反应。
+  const views = { "card.review": reviewView, "card.show": showView, "card.edit": editView };
+  if (findCardView(cmd)) {
+    if (!views[cmd]) throw new Error(`CARD_VIEWS 里的 ${cmd} 没有对应的处理函数`);
+    return views[cmd]();
+  }
+  return submitForm();
+
+  async function reviewView() {
     const eventId = String(parsed.key ?? "").replace(/:card\.review$/, "");
     const summary = newWorkSummary(args.workId);
     try {
@@ -530,16 +538,17 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
     return done;
   }
 
-  const cutId = args.cutId;
-  if (cmd === "card.show") {
-    const card = renderConfirm(cutId, { now, when: whenOf(args) });
-    return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
+  async function showView() {
+    const card = renderConfirm(args.cutId, { now, when: whenOf(args) });
+    return card ? (await updateCard(channel, evt, card, log), done) : gone(args.cutId);
   }
-  if (cmd === "card.edit") {
-    const card = renderEdit(cutId, { now, when: whenOf(args) });
-    return card ? (await updateCard(channel, evt, card, log), done) : gone(cutId);
+  async function editView() {
+    const card = renderEdit(args.cutId, { now, when: whenOf(args) });
+    return card ? (await updateCard(channel, evt, card, log), done) : gone(args.cutId);
   }
 
+  async function submitForm() {
+  const cutId = args.cutId;
   // 表单提交（publish.edit 带 cutId）：逐条把改动交给 publish.edit（平台规则、留痕都在命令里）。这里只校验格式。
   const { batch } = loadCut(cutId);
   if (!batch.length) return gone(cutId);
@@ -591,4 +600,5 @@ async function handleNav({ cmd, parsed, args, evt, channel, binding, log, now, h
   if (!card) return gone(cutId);
   await updateCard(channel, evt, card, log);
   return done;
+  }
 }

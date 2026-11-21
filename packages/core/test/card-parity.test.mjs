@@ -60,3 +60,20 @@ test("check:parity 通过；故意塞一个表外卡片动作时失败并点名"
   assert.match(rogue.stdout, /parity\.cards\.actions-in-table/);
   assert.match(rogue.stdout, /card\.rogue/);
 });
+
+test("cards.mjs 手写 callback 会被 check:parity 抓到", () => {
+  const r = spawnSync(process.execPath, ["scripts/ci/parity.mjs"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { ...process.env, VK_PARITY_CARDS_SOURCE_APPEND: 'const x = callback("card.rogue", {}, { now });' },
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /parity\.cards\.derived/);
+  assert.match(r.stdout, /直接调用 callback/);
+});
+
+test("卡片按钮 value 只能经命令表造：表外 cmd 当场抛错", async () => {
+  const { cardCallbackValue } = await import("../src/commands.mjs");
+  assert.throws(() => cardCallbackValue("card.rogue", {}, { now: 0, ttlMs: 1 }), /不合法/);
+  assert.equal(cardCallbackValue("card.edit", { cutId: "c" }, { now: 1, ttlMs: 2 }).exp, 3);
+});

@@ -4,6 +4,7 @@
 // 这样卡片文案可以在没有飞书、没有网络的情况下被测试。
 
 import { ERROR_CODES } from "./errors.mjs";
+import { CARD_VIEWS, cardCallbackValue, findCommand } from "./commands.mjs";
 
 export const CARD_TTL_MS = 24 * 3600e3;
 
@@ -209,8 +210,11 @@ const grey = (text) => `<font color='grey'>${text}</font>`;
 
 /** value 里的 key 是幂等键：同一次渲染的同一个按钮只执行一次；重新渲染（now 不同）才是新的一次。 */
 function callback(cmd, args, { key = null, now }) {
-  return [{ type: "callback", value: { cmd, args, exp: now + CARD_TTL_MS, ...(key ? { key } : {}) } }];
+  return [{ type: "callback", value: cardCallbackValue(cmd, args, { key, now, ttlMs: CARD_TTL_MS }) }];
 }
+// 两种按钮都经 commands.mjs 校验造出：命令按钮是 remote 命令本身，翻页按钮来自 CARD_VIEWS（名字取自表，不手写）。
+const commandButton = (name, args, opts) => callback(findCommand(name).name, args, opts);
+const viewButton = (name, args, opts) => callback(CARD_VIEWS.find((v) => v.name === name).name, args, opts);
 
 const v2Card = ({ template = "yellow", title, subtitle = null, elements }) => ({
   schema: "2.0",
@@ -238,7 +242,7 @@ export function buildNewWorkCard({ workId, workTitle, cutCount, publishCount, gr
         type: "primary",
         width: "fill",
         text: { tag: "plain_text", content: "开始确认" },
-        behaviors: callback("card.review", { workId }, { key: `${eventId}:card.review`, now }),
+        behaviors: viewButton("card.review", { workId }, { key: `${eventId}:card.review`, now }),
       },
     ],
   });
@@ -290,7 +294,7 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
         type: "primary",
         width: "fill",
         text: { tag: "plain_text", content: `确认这 ${rows.length} 条，${immediate ? "现在发" : "按时间发"}` },
-        behaviors: callback("publish.approve", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.approve`, now }),
+        behaviors: commandButton("publish.approve", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.approve`, now }),
       },
       {
         tag: "column_set",
@@ -299,7 +303,7 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
             tag: "column",
             width: "weighted",
             weight: 1,
-            elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: "改标题或时间" }, behaviors: callback("card.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }) }],
+            elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: "改标题或时间" }, behaviors: viewButton("card.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }) }],
           },
           {
             tag: "column",
@@ -310,7 +314,7 @@ export function buildConfirmCard({ cut, index, total, workTitle, rows, groupName
                 tag: "button",
                 width: "fill",
                 text: { tag: "plain_text", content: "这支先不发" },
-                behaviors: callback("publish.skip", { cutId: cut.id }, { key: `${cardKey}:publish.skip`, now }),
+                behaviors: commandButton("publish.skip", { cutId: cut.id }, { key: `${cardKey}:publish.skip`, now }),
               },
             ],
           },
@@ -365,7 +369,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
         width: "fill",
         type: (mode === "now") === immediate ? "primary" : "default",
         text: { tag: "plain_text", content: label },
-        behaviors: callback("card.edit", { cutId: cut.id, ...(mode === "now" ? { when: "now" } : {}) }, { now }),
+        behaviors: viewButton("card.edit", { cutId: cut.id, ...(mode === "now" ? { when: "now" } : {}) }, { now }),
       },
     ],
   });
@@ -387,7 +391,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
             name: "save",
             text: { tag: "plain_text", content: "改好了" },
             form_action_type: "submit",
-            behaviors: callback("publish.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.edit`, now }),
+            behaviors: commandButton("publish.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.edit`, now }),
           },
         ],
       },
@@ -395,7 +399,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
         tag: "button",
         width: "fill",
         text: { tag: "plain_text", content: "取消" },
-        behaviors: callback("card.show", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }),
+        behaviors: viewButton("card.show", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { now }),
       },
     ],
   });
@@ -409,7 +413,7 @@ export function buildXhsCard({ publishId, workTitle, cutTitle, title, body = "",
     tag: "column",
     width: "weighted",
     weight: 1,
-    elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: label }, behaviors: callback(cmd, { publishId }, { key: `${cardKey}:${cmd}`, now }) }],
+    elements: [{ tag: "button", width: "fill", text: { tag: "plain_text", content: label }, behaviors: commandButton(cmd, { publishId }, { key: `${cardKey}:${cmd}`, now }) }],
   });
   return v2Card({
     title: withGroup("小红书，要你单独确认", groupName),
@@ -421,7 +425,7 @@ export function buildXhsCard({ publishId, workTitle, cutTitle, title, body = "",
         type: "primary",
         width: "fill",
         text: { tag: "plain_text", content: Number.isFinite(at) ? `${when} 发` : "按建议时间发" },
-        behaviors: callback("publish.approve", { publishId }, { key: `${cardKey}:publish.approve`, now }),
+        behaviors: commandButton("publish.approve", { publishId }, { key: `${cardKey}:publish.approve`, now }),
       },
       { tag: "column_set", columns: [half("现在发", "publish.now"), half("我自己发", "publish.manual")] },
     ],
