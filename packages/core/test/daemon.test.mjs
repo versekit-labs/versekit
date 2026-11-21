@@ -182,7 +182,7 @@ test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布
   }
   assert.match(works, /cover\(w\.coverVersionId/);
   assert.match(panel, /data-cover=/);
-  assert.match(panel, /cover\(c\.versions\?\.\[0\]\?\.id, 44, 44\)/, "成片列表用成片自己的封面");
+  assert.match(panel, /cover\(\(c\.versions\?\.find\(\(v\) => v\.cover\) \?\? c\.versions\?\.\[0\]\)\?\.id, 44, 44\)/, "成片列表优先用有入库封面的那个语言版本");
   // 一屏至多一个墨色主按钮：今天和作品详情里只有「确认这 N 条」是 pri
   const inkOn = (src) => [...src.matchAll(/class="btn pri[^"]*"[^>]*>([^<]*)/g)].map((m) => m[1]);
   assert.deepEqual(inkOn(today), [], "今天页自己不画墨色按钮");

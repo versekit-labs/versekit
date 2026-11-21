@@ -128,3 +128,31 @@ test("ACC-v3-fid-10 没有封面的版本要 ?cover=1：404", async () => {
     await d.close();
   }
 });
+
+test("ACC-v3-fid-03 图片目录图文：/media 与 ?cover=1 都给目录里排序第一张图；成片列表取有封面的那个版本", async () => {
+  as(MAKER);
+  const dir = join(ROOT, "src", "imgs");
+  mkdirSync(dir, { recursive: true });
+  const FIRST = Buffer.from("89504e470d0a1a0a-first", "utf8");
+  writeFileSync(join(dir, "02-second.png"), Buffer.from("second"));
+  writeFileSync(join(dir, "01-first.png"), FIRST);
+  maker["work.add"]({ title: "图文目录", cuts: [{ title: "图文", versions: [{ language: "zh", asset: dir }] }] });
+  maker["work.add"]({ title: "封面在英文", cuts: [{ title: "长片", versions: [{ language: "zh", asset: src("a.mp4") }, { language: "en", asset: src("b.mp4"), cover: src("v.png") }] }] });
+  const d = await startDaemon({ runQueue: false, port: 0, socketPath: join(MAKER, "vk.sock"), handlers: maker });
+  try {
+    const base = `http://127.0.0.1:${d.port}`;
+    const row = store.listWorks().find((w) => w.title === "图文目录");
+    for (const q of ["", "?cover=1"]) {
+      const res = await fetch(`${base}/media/${row.coverVersionId}${q}`);
+      assert.equal(res.status, 200, q);
+      assert.equal(res.headers.get("content-type"), "image/png");
+      assert.deepEqual(Buffer.from(await res.arrayBuffer()), FIRST);
+    }
+    const w = store.listWorks().find((x) => x.title === "封面在英文");
+    const vs = maker["work.show"]({ workId: w.id }).work.cuts[0].versions;
+    assert.equal(vs.find((v) => v.cover)?.id, w.coverVersionId);
+    assert.notEqual(vs[0].id, w.coverVersionId);
+  } finally {
+    await d.close();
+  }
+});

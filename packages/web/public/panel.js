@@ -865,7 +865,7 @@ window.VKPanel = function createPanel(state) {
       const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
       const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
       const [cls, txt] = bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
-      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover(c.versions?.[0]?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
+      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover((c.versions?.find((v) => v.cover) ?? c.versions?.[0])?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
     }).join("")}</div>`;
   }
 
