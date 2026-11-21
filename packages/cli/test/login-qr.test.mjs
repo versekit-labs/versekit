@@ -147,7 +147,7 @@ before(async () => {
 });
 after(() => server.close());
 
-const ACCOUNT = "xhs-qr-fixture";
+const ACCOUNT = `xhs-qr-fixture-${process.pid}`;
 async function open() {
   const tab = await openAccount({ accountId: ACCOUNT, url: base, headless: true });
   await tab.waitFor(`!!document.querySelector('#corner')`, [], { timeout: 15e3, what: "假登录页" });

@@ -38,13 +38,28 @@ const freePort = () =>
     });
   });
 /** 等到 port 上的 Chrome 真的在监听、且 lsof/ps 能读出它的 profile——取代固定 sleep，全量并行时 node 启动可能很慢。 */
-async function waitReady(port, timeoutMs = 15000) {
+async function waitReady(port, timeoutMs = 15000, expectProfile) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
-    if (d.chromeUserDataDirOnPort(port)) return;
+    const dir = d.chromeUserDataDirOnPort(port);
+    if (dir && (!expectProfile || dir === expectProfile)) return;
     await sleep(50);
   }
   throw new Error(`端口 ${port} 上的假 Chrome 在 ${timeoutMs}ms 内没起来`);
+}
+/** 找一个此刻首选端口空闲的账号 id：别的并行进程占着时换一个，避免把别人的 Chrome 当成 A 的。 */
+async function idWithFreePort(prefix) {
+  for (let i = 0; i < 200; i++) {
+    const id = `${prefix}_${process.pid}_${i}`;
+    const port = d.accountPort(id);
+    const free = await new Promise((resolve) => {
+      const srv = createServer();
+      srv.once("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+    if (free && !d.chromeUserDataDirOnPort(port)) return id;
+  }
+  throw new Error("找不到首选端口空闲的账号 id");
 }
 const markerOf = (id) => JSON.parse(readFileSync(join(d.accountProfile(id), ".vk-driver.json"), "utf8"));
 
@@ -67,25 +82,26 @@ test("chromeUserDataDirOnPort 能读出监听端口上 Chrome 的 --user-data-di
 });
 
 test("ACC-acct-iso-01：B 的标记指向 A 的 Chrome 的端口 → B 起自己的 Chrome，A 不受影响，B 过期标记被清", async () => {
-  const portA = d.accountPort("acc_b_iso"); // 让 A 的 Chrome 占着 B 的首选端口：最坏情形
+  const idB = await idWithFreePort("acc_b_iso");
+  const portA = d.accountPort(idB); // 让 A 的 Chrome 占着 B 的首选端口：最坏情形
   const pidA = startChromeFor("acc_a_iso", portA);
   writeFileSync(join(d.accountProfile("acc_a_iso"), ".vk-driver.json"), JSON.stringify({ accountId: "acc_a_iso", port: portA, pid: pidA, headless: false }));
   // B 的标记过期，却写着 A 占着的端口
-  mkdirSync(d.accountProfile("acc_b_iso"), { recursive: true });
-  writeFileSync(join(d.accountProfile("acc_b_iso"), ".vk-driver.json"), JSON.stringify({ accountId: "acc_b_iso", port: portA, pid: 999999, headless: false }));
-  await waitReady(portA);
+  mkdirSync(d.accountProfile(idB), { recursive: true });
+  writeFileSync(join(d.accountProfile(idB), ".vk-driver.json"), JSON.stringify({ accountId: idB, port: portA, pid: 999999, headless: false }));
+  await waitReady(portA, 15000, d.accountProfile("acc_a_iso"));
 
-  const tab = await d.openAccount({ accountId: "acc_b_iso" });
-  const m = markerOf("acc_b_iso");
+  const tab = await d.openAccount({ accountId: idB });
+  const m = markerOf(idB);
   assert.notEqual(m.port, portA, "B 不能连到 A 的端口");
   assert.notEqual(m.pid, pidA);
   assert.equal(tab.port, m.port);
-  assert.equal(d.chromeUserDataDirOnPort(m.port), d.accountProfile("acc_b_iso"), "B 的端口上跑的是 B 自己的 profile");
+  assert.equal(d.chromeUserDataDirOnPort(m.port), d.accountProfile(idB), "B 的端口上跑的是 B 自己的 profile");
   assert.ok(alive(pidA), "A 的 Chrome 不受影响");
   assert.equal(d.chromeUserDataDirOnPort(portA), d.accountProfile("acc_a_iso"));
   await tab.close();
 
-  await d.closeAccount("acc_b_iso");
+  await d.closeAccount(idB);
   assert.ok(alive(pidA), "关 B 不会动 A");
   process.kill(pidA);
 });

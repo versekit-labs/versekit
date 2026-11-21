@@ -54,7 +54,7 @@ after(async () => {
 });
 
 test("弹窗带空格且外层也含「验证」时，仍能点到真正的按钮", { skip: skipNoChrome }, async () => {
-  const tab = await openAccount({ accountId: "click-fixture", url: `http://127.0.0.1:${port}/`, headless: true });
+  const tab = await openAccount({ accountId: `click-fixture-${process.pid}`, url: `http://127.0.0.1:${port}/`, headless: true });
   try {
     const spot = await tab.eval(FIND);
     assert.ok(spot, "应该找到按钮坐标");
@@ -63,6 +63,6 @@ test("弹窗带空格且外层也含「验证」时，仍能点到真正的按�
     assert.equal(await tab.eval("window.hit"), 1);
   } finally {
     await tab.close();
-    await closeAccount("click-fixture");
+    await closeAccount(`click-fixture-${process.pid}`);
   }
 });
