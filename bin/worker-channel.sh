@@ -10,7 +10,7 @@
 #     DeepSeek 两个通道都不可用时退出码 1、本轮不派，**绝不自动改用 claude**。
 #   - 同时带 model:opus 与 model:deepseek 时，显式 Opus 优先。
 #   - issue 带 model:codex label（2026-11-21 所有者加了 Codex 账号，ACC-harness-codex-01/03/04）：
-#     实现与返工 round 1 走 codex 通道（Orca 原生 --agent codex --model $CODEX_MODEL，默认 gpt-6.2-sol）；
+#     实现与返工 round 1 走 codex 通道（Orca 原生 --agent codex --model ${CODEX_MODEL}，默认 gpt-6.2-sol）；
 #     返工 round >= 2 升 Sonnet；同时带 model:opus 时 Opus 优先；优先于 model:deepseek。
 #     Codex 不可用（没有 codex 命令 / codex login status 显示未登录 / 冷却期内额度用完）→ 本单改派 Sonnet。
 #     探测只看 `command -v codex` 与 `codex login status`，**不跑 codex exec**（一次最小请求就约 1.2 万 token）。
