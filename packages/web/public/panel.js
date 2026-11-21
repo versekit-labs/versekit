@@ -13,11 +13,25 @@ window.VKPanel = function createPanel(state) {
    * 封面（ACC-v3-fid-03）：用这支成片的第一个语言版本。入库不生成缩略图，所以视频直接取第一帧
    * （video + #t=0.1，只读元数据），图片素材退到 <img>，都读不到才用占位。没有版本 id 就是占位。
    */
-  // 入库封面优先（ACC-v3-fid-10）：先试 /media/<id>?cover=1；没有封面（404）再退回首帧。
-  const cover = (versionId, w, h) => versionId
-    ? `<img class="cv" src="${esc(VK.media(versionId))}?cover=1" width="${w}" height="${h}" alt="" data-cover-try="${esc(versionId)}">`
-    : `<img class="cv" src="${BLANK}" width="${w}" height="${h}" alt="">`;
+  // 入库封面优先（ACC-v3-fid-10）：有封面才请求 /media/<id>?cover=1。
+  // /api/works 已经说了没有封面（cover: null）的版本直接用首帧，不再去请求、也就没有 404。
+  // 没人告诉过的（比如成片详情里没带 cover 字段的）仍先试封面，404 再退回首帧。
+  const noCover = (window.__vkNoCover ??= new Set());
+  if (VK.works && !VK.works.__vkNote) {
+    const orig = VK.works;
+    VK.works = async (...a) => {
+      const d = await orig(...a);
+      for (const w of d?.works ?? []) if (w.coverVersionId) (w.cover ? noCover.delete(w.coverVersionId) : noCover.add(w.coverVersionId));
+      return d;
+    };
+    VK.works.__vkNote = true;
+  }
   const frameCover = (versionId, w, h) => `<video class="cv" src="${esc(VK.media(versionId))}#t=0.1" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" width="${w}" height="${h}" data-cover="${esc(versionId)}"></video>`;
+  const cover = (versionId, w, h) => !versionId
+    ? `<img class="cv" src="${BLANK}" width="${w}" height="${h}" alt="">`
+    : noCover.has(versionId)
+      ? frameCover(versionId, w, h)
+      : `<img class="cv" src="${esc(VK.media(versionId))}?cover=1" width="${w}" height="${h}" alt="" data-cover-try="${esc(versionId)}">`;
   // 没有入库封面（/media?cover=1 回 404）：退回首帧。
   const toFrame = (img) => {
     const tpl = document.createElement("template");
@@ -52,7 +66,7 @@ window.VKPanel = function createPanel(state) {
       const dur = box.querySelector("[data-dur]");
       if (dur && Number.isFinite(v.duration)) {
         const sec = Math.round(v.duration);
-        dur.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+        dur.textContent = `${dur.dataset.sep ? " · " : ""}${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
       }
     }, true);
   }
@@ -298,7 +312,7 @@ window.VKPanel = function createPanel(state) {
       const body = open
         ? `<div class="eb">${FIELDS.map(([f, n]) => `<div class="fl"><label class="lab" for="p-${esc(id)}-${f}">${n}</label><span class="fs" data-fs="${esc(id)}:${f}"></span>` +
             `<button class="link" type="button" data-ed="follow" data-arg="${esc(id)}:${f}">改回跟通用</button></div>` +
-            field(id, f, `id="p-${esc(id)}-${f}" data-edf="p" data-id="${esc(id)}" data-f="${f}" aria-label="${esc(name)} ${n}"`) +
+            field(id, f, `id="p-${esc(id)}-${f}"${d.own[f] != null ? "" : ' class="fol"'} data-edf="p" data-id="${esc(id)}" data-f="${f}" aria-label="${esc(name)} ${n}"`) +
             `<div data-perr="${esc(id)}:${f}"></div>`).join("")}` +
           `<div class="fl"><label class="lab" for="p-${esc(id)}-at">按时间发的话，什么时候发</label></div>` +
           `<div class="tmr"><input type="datetime-local" id="p-${esc(id)}-at" data-edf="at" data-id="${esc(id)}" value="${esc(d.atText)}"><span class="sub" data-trel="${esc(id)}"></span></div>` +
@@ -309,7 +323,7 @@ window.VKPanel = function createPanel(state) {
     }).join("");
     const hasSolo = (cut.publishes ?? []).some((p) => PER_ITEM.has(p.platform) && p.state === "pending_confirm");
     return `<section class="cp" aria-label="改内容" data-ed-root>` +
-      `<div class="cph"><h3>改内容</h3><span class="sub">${one ? "" : esc(cut.title) + " · "}<span data-dur></span></span>` +
+      `<div class="cph"><h3>改内容</h3><span class="sub">${one ? "" : esc(cut.title)}<span data-dur${one ? "" : ' data-sep="1"'}></span></span>` +
       (langs.length > 1 ? `<span class="seg" role="group" aria-label="改哪个语言版本的文案">${langs.map((v) => `<button type="button" data-ed="lang" data-arg="${esc(v.id)}" aria-pressed="${v.id === ed.vid}">${esc(v.language)}</button>`).join("")}</span>` : "") + `</div>` +
       `<div class="edc"><div class="edt"><h2>通用文案${langs.length > 1 ? " · " + esc(langOf(ed, ed.vid)) : ""}</h2><span class="sub" data-folnote></span></div>` +
       FIELDS.map(([f, n]) => `<label class="lab" for="c-${f}">${n}${f === "tags" ? "（用空格分开）" : ""}</label>` +
@@ -601,11 +615,13 @@ window.VKPanel = function createPanel(state) {
       const name = pfName(p.platform);
       const bad = ["failed", "blocked", "expired"].includes(p.state);
       const late = p.shifted && p.state === "pending_confirm" ? `<span class="sub"> · 原定${esc(when(p.originalAt).text)}，已顺延</span>` : "";
-      const tm = sendingNow(p) ? "现在发" : w.text;
+      // 底栏选了「现在发」：还没确认的整批时间列都写「现在发」，切回「预约发」恢复时间（ACC-v3-fid-11）。
+      const nowCol = sendingNow(p) || (mode === "now" && batch.includes(p));
+      const tm = nowCol ? "现在发" : w.text;
       return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform, bad ? "err" : ["published", "published_limited"].includes(p.state) ? "" : "off")}` +
         `<span class="nm">${esc(name)}</span>` +
         `<button class="ti tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}" title="${esc(p.title)}">${esc(p.title)}${late}</button>` +
-        `<span class="tm${!sendingNow(p) && p.scheduledAt == null && !isPub ? " unset" : ""}">${esc(tm)}</span>${rowState(p)}${isOpen(p.id) ? detHtml(p) : ""}</div>`;
+        `<span class="tm${!nowCol && p.scheduledAt == null && !isPub ? " unset" : ""}">${esc(tm)}</span>${rowState(p)}${isOpen(p.id) ? detHtml(p) : ""}</div>`;
     }).join("");
 
     const soloBlocks = solo.map((p) => {
@@ -864,7 +880,9 @@ window.VKPanel = function createPanel(state) {
       const conf = c.publishes.filter((p) => p.state === "queued").length;
       const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
       const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
-      const [cls, txt] = bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
+      // 没有平台稿的成片不是「已发布」：和页头的「还没有平台稿」同一句（ACC-v3-fid-12）。
+      const [cls, txt] = !c.publishes.length ? ["", c.status?.label ?? "还没有平台稿"] : bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
+      if (c.versions?.length && !c.versions.some((v) => v.cover)) noCover.add(c.versions[0].id); // 没有入库封面：直接用首帧，不请求 ?cover=1
       return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover((c.versions?.find((v) => v.cover) ?? c.versions?.[0])?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
     }).join("")}</div>`;
   }

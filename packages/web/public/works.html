@@ -196,9 +196,10 @@
     for (const id of ["seg", "q"]) document.getElementById(id).hidden = cal;
     document.getElementById("calnav").hidden = !cal;
     document.querySelector(".legend").hidden = cal;
-    document.getElementById("cmd").textContent = cal
-      ? "日历只看不改：点一行进那支成片。"
-      : "新作品由 Claude 送进来，送来后在这里出现，等你确认。";
+    // 日历底部没有说明（定稿没有，ACC-v3-fid-13）；列表视图的那句保留。
+    const cmd = document.getElementById("cmd");
+    cmd.textContent = cal ? "" : "新作品由 Claude 送进来，送来后在这里出现，等你确认。";
+    cmd.hidden = cal;
     if (cal) return void drawCal();
     const q = state.q.toLowerCase();
     const rows = state.works.filter((w) => (state.filter === "all" || keyOf(w) === state.filter) && w.title.toLowerCase().includes(q));

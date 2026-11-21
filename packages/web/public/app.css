@@ -329,7 +329,7 @@ video.cv{pointer-events:none}
 .lab{font-size:12px;color:var(--ink2)}
 .edc input[type=text],.eb input[type=text]{width:100%}
 .edc textarea,.eb textarea{width:100%;min-height:84px;border:1px solid var(--ctl);border-radius:7px;padding:7px 9px;font:inherit;font-size:14px;line-height:1.5;background:var(--paper);color:var(--ink);resize:vertical;display:block}
-.edh2{margin:18px 0 8px}
+.app h2.edh2{margin:20px 0 10px}
 .erow{border-bottom:1px solid var(--line2)}
 .erow:last-child{border-bottom:0}
 .eh{display:grid;grid-template-columns:20px 64px minmax(0,1fr) auto 12px;gap:10px;align-items:center;width:100%;min-height:44px;padding:5px 12px;border:0;background:none;text-align:left;font:inherit;font-size:13px;color:inherit;cursor:pointer}
@@ -347,7 +347,7 @@ video.cv{pointer-events:none}
 .fl .fs{font-size:12px;color:var(--ink2);margin-left:auto}
 .fl .fs.own{color:var(--ink);font-weight:600}
 .fl .link[hidden]{display:none}
-.eb .fol{color:var(--ink2)}
+.app .eb .fol{color:var(--ink2)}
 .tmr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .cfoot .ask{margin-right:auto;font-size:14px;font-weight:600}
 .err{font-size:13px;color:var(--bad);display:flex;gap:4px 10px;align-items:center;flex-wrap:wrap}

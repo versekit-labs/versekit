@@ -823,7 +823,7 @@ function genericCopyOf(metaJson) {
 
 function workView(work) {
   const conn = open();
-  const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c) => {
+  const cuts = conn.prepare("SELECT * FROM cut WHERE work_id = ? ORDER BY position, created_at").all(work.id).map((c, ci) => {
     const versions = conn
       .prepare("SELECT id, language, asset_path, created_at, meta_json FROM cut_version WHERE cut_id = ? ORDER BY rowid")
       .all(c.id)
@@ -838,9 +838,11 @@ function workView(work) {
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
-          WHERE p.cut_id = ? ORDER BY p.created_at, p.id`,
+          WHERE p.cut_id = ? OR (? = 1 AND p.cut_id IS NULL AND p.work_id = ?)
+          ORDER BY p.created_at, p.id`,
       )
-      .all(c.id)
+      // 没挂成片的平台稿（早期数据、手工入库）算在作品的第一支成片上：和数据页、今天页数的是同一批发布，倍数才对得上（ACC-v3-fid-12）。
+      .all(c.id, ci === 0 ? 1 : 0, work.id)
       .map((p) => {
         const copy = effectiveCopy({ overrides: p.overrides_json, versionMeta: p.version_meta, workMeta: work.meta_json, cutTitle: c.title, workTitle: work.title });
         const schedule = effectiveSchedule({ id: p.id, state: p.state, scheduled_at: p.scheduled_at, account_id: p.account_id, platform: p.platform });

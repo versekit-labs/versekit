@@ -37,7 +37,7 @@
   const mult = (r) => r.baseline?.multiple ?? null;
   const play = (r) => r.baseline?.play24h ?? null;
   const workHref = (r) => `/work?id=${encodeURIComponent(r.workId)}${r.cutId ? "&cut=" + encodeURIComponent(r.cutId) : ""}`;
-  const label = (r) => `${esc(r.title)}${r.cutCount > 1 && r.cutTitle ? `（${esc(r.cutTitle)}）` : ""}`;
+  const label = (r) => `${esc(r.title)}${r.cutTitle ? `（${esc(r.cutTitle)}）` : ""}`;
 
   async function load() {
     const data = await VK.stats();
@@ -87,12 +87,11 @@
       const q = mult(r);
       const typ = q == null ? '<span class="sub">—</span>'
         : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${esc(r.baseline.verdictLabel ?? "")}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${Math.min(100, q * 40)}%"></i><u></u></div>`;
-      const verdict = q == null ? `<div class="sub" title="${esc(r.baseline.reason ?? "")}">还没法比</div>` : `<div class="sub">${esc(r.baseline.verdictLabel ?? "")}</div>`;
       return `<tr><td><a class="wcell" href="${workHref(r)}">${cover(state.covers.get(r.workId), 48, 36)}<span><b>${esc(r.title)}</b>` +
-        `${r.cutCount > 1 && r.cutTitle ? `<span class="sub">${esc(r.cutTitle)}</span>` : ""}</span></a></td>` +
+        `${r.cutTitle ? `<span class="sub">${esc(r.cutTitle)}</span>` : ""}</span></a></td>` +
         `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span></td>` +
         `<td class="sub">${esc(when(r.publishedAt).day)}</td><td class="n">${fmt(play(r))}</td><td class="n sub">${fmt(r.baseline.baselineMedian)}</td>` +
-        `<td>${typ}</td><td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span>${verdict}</td></tr>`;
+        `<td>${typ}</td><td class="n"><span class="x ${ratioCls(q)}"${q == null ? ` title="${esc(r.baseline.reason ?? "还没法比")}"` : ""}>${ratioText(q)}</span></td></tr>`;
     }).join("");
 
     const seg = (attr, items, on, aria) => `<span class="seg" role="group" aria-label="${aria}">${items.map(([v, t]) => `<button type="button" data-${attr}="${esc(v)}" aria-pressed="${String(v) === String(on)}">${esc(t)}</button>`).join("")}</span>`;
