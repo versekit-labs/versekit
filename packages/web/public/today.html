@@ -235,7 +235,10 @@
     if (d.solo && d.pub) {
       const map = { approve: VK.approvePublish, now: VK.publishNow, manual: VK.publishManual };
       const done = { approve: "小红书这条已确认", now: "好，现在就发这一条", manual: "好，这条你自己发" };
-      act(() => map[d.solo](d.pub), done[d.solo], { advance: true });
+      // 出口位置暂停的平台：不说「现在就发」，说等位置处理完再发（ACC-v3-egress-05）。
+      const pf = d.pf ?? "";
+      const msg = panel.isPaused?.(pf) && d.solo !== "manual" ? "已确认，等位置处理完再发" : done[d.solo];
+      act(() => map[d.solo](d.pub), msg, { advance: true });
       return;
     }
     if (d.group) {

@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
-import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
+import { loadAdapters, buildHandlers, checkAccount, notifyLogin } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
@@ -316,6 +316,8 @@ async function qrStatus(accountId, account, session, log = () => {}) {
         return { mode: "qr", state: "failed", reason: "identity_conflict", note: identity.message, conflict: true };
       }
       if (account.state !== "ok") setAccountState(accountId, "ok");
+      // 登录成功的这一刻记出口国家作为这个账号平时的位置（#310，ACC-v3-egress-03）。
+      await notifyLogin(accountId);
       await endQrSession(accountId, session);
       log(`[login.qr] ${accountId} 扫码登录成功，登录态已保存`);
       return { mode: "qr", state: "ok", persisted: true, next: "登录成功，登录态已保存到这个账号的浏览器资料里" };
@@ -564,6 +566,7 @@ function daemonHandlers(adapters, log) {
         const identity = await bindXhsIdentity(accountId, await openAccount({ accountId, headless: true, reuse: "creator.xiaohongshu.com" }), log).catch(() => ({ ok: true }));
         if (!identity.ok) return { state: "failed", mode: "manual", reason: "identity_conflict", note: identity.message, conflict: true };
         if (account.state !== "ok") setAccountState(accountId, "ok");
+        await notifyLogin(accountId);
         closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => {});
         return { state: "ok", mode: "manual" };
       }
@@ -588,6 +591,8 @@ function daemonHandlers(adapters, log) {
           loginSessions.delete(accountId);
           const identity = await bindXhsIdentity(accountId, tab, log);
           if (!identity.ok) throw new Error(identity.message);
+          if (getAccount(accountId)?.state !== "ok") setAccountState(accountId, "ok");
+          await notifyLogin(accountId);
           // 会话 cookie 已持久化才收登录窗口；小红书若只有内存态会话，closeLoginWindow 会保留窗口。
           const closing = await closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => false);
           return { ok: true, state: "ok", next: closing ? "登录成功（登录窗口几秒后自动关闭，登录态已保存）" : "登录成功（浏览器保持登录态，不用再点验证）" };
