@@ -1292,9 +1292,11 @@ async function cmdWork() {
         cuts: (manifest.cuts ?? []).map((c) => ({
           title: c.title,
           ...(c.copy ? { copy: c.copy } : {}),
+          ...(c.cover ? { cover: resolve(base, c.cover) } : {}),
           versions: (c.versions ?? []).map((v) => ({
             language: v.language,
             asset: v.asset ? resolve(base, v.asset) : v.asset,
+            ...(v.cover ? { cover: resolve(base, v.cover) } : {}),
             ...(v.meta ? { meta: v.meta } : {}),
             ...(v.copy ? { copy: v.copy } : {}),
           })),

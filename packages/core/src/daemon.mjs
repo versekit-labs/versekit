@@ -9,7 +9,7 @@
 // that looks like business logic belongs in handlers.mjs, not here.
 
 import { createServer } from "node:http";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths, newId, open } from "./index.mjs";
@@ -122,11 +122,34 @@ const MEDIA_TYPES = new Map([
   [".gif", "image/gif"],
 ]);
 
+/** 图文素材是一个图片目录：取文件名排序后的第一张图（ACC-v3-fid-03「图文用第一张图」）。不是目录就原样返回。 */
+function firstImageOf(p) {
+  try {
+    if (!statSync(p).isDirectory()) return p;
+    const name = readdirSync(p).filter((n) => !n.startsWith(".") && /^image\//.test(MEDIA_TYPES.get(extname(n).toLowerCase()) ?? "")).sort()[0];
+    return name ? join(p, name) : p;
+  } catch {
+    return p;
+  }
+}
+
 /** versionId → 素材绝对路径。只认 cut_version 表里的行；不认识的一律 null。 */
-function resolveMediaPath(versionId) {
+function resolveMediaPath(versionId, { cover = false } = {}) {
   if (typeof versionId !== "string" || !versionId.trim()) return null;
   try {
-    return open().prepare("SELECT asset_path FROM cut_version WHERE id = ?").get(versionId)?.asset_path ?? null;
+    const row = open().prepare("SELECT asset_path, meta_json FROM cut_version WHERE id = ?").get(versionId);
+    // 入库封面（ACC-v3-fid-10）：只认库里这个版本 meta.cover 指向的文件，URL 不带任何路径。
+    let c = null;
+    if (cover) {
+      try { c = JSON.parse(row?.meta_json ?? "null")?.cover; } catch { c = null; }
+      if (typeof c === "string" && c) return c;
+    }
+    const asset = row?.asset_path ?? null;
+    if (!asset) return null;
+    // 图片目录：不管要封面还是要素材，都给第一张图；视频与单图没有入库封面时 cover=1 保持 404（页面退首帧）。
+    const img = firstImageOf(asset);
+    if (cover && img === asset) return null;
+    return img;
   } catch {
     return null;
   }
@@ -154,8 +177,8 @@ function parseRange(header, size) {
   return { start, end: Math.min(end, size - 1) };
 }
 
-function serveMedia(req, res, { versionId }) {
-  const asset = resolveMediaPath(versionId);
+function serveMedia(req, res, { versionId, cover = false }) {
+  const asset = resolveMediaPath(versionId, { cover });
   if (!asset) {
     return send(res, 404, {
       ok: false,
@@ -529,7 +552,7 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
       } catch {
         versionId = "";
       }
-      return serveMedia(req, res, { versionId });
+      return serveMedia(req, res, { versionId, cover: url.searchParams.get("cover") === "1" });
     }
 
     // 浏览器打开的是本地控制台；/api/* 之外只有静态页。

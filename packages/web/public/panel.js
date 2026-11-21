@@ -13,15 +13,26 @@ window.VKPanel = function createPanel(state) {
    * 封面（ACC-v3-fid-03）：用这支成片的第一个语言版本。入库不生成缩略图，所以视频直接取第一帧
    * （video + #t=0.1，只读元数据），图片素材退到 <img>，都读不到才用占位。没有版本 id 就是占位。
    */
+  // 入库封面优先（ACC-v3-fid-10）：先试 /media/<id>?cover=1；没有封面（404）再退回首帧。
   const cover = (versionId, w, h) => versionId
-    ? `<video class="cv" src="${esc(VK.media(versionId))}#t=0.1" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" width="${w}" height="${h}" data-cover="${esc(versionId)}"></video>`
+    ? `<img class="cv" src="${esc(VK.media(versionId))}?cover=1" width="${w}" height="${h}" alt="" data-cover-try="${esc(versionId)}">`
     : `<img class="cv" src="${BLANK}" width="${w}" height="${h}" alt="">`;
+  const frameCover = (versionId, w, h) => `<video class="cv" src="${esc(VK.media(versionId))}#t=0.1" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" width="${w}" height="${h}" data-cover="${esc(versionId)}"></video>`;
+  // 没有入库封面（/media?cover=1 回 404）：退回首帧。
+  const toFrame = (img) => {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = frameCover(img.dataset.coverTry, img.width, img.height);
+    const v = tpl.content.firstElementChild;
+    v.className = img.className;
+    img.replaceWith(v);
+  };
   if (!window.__vkCover) {
     window.__vkCover = true;
     // error 不冒泡，用捕获：视频读不了 → 试图片 → 再不行才占位。
     document.addEventListener("error", (e) => {
       const t = e.target;
-      if (t?.matches?.("video[data-cover]")) {
+      if (t?.matches?.("img[data-cover-try]")) toFrame(t);
+      else if (t?.matches?.("video[data-cover]")) {
         const img = document.createElement("img");
         img.className = t.className; img.width = t.width; img.height = t.height; img.alt = "";
         img.dataset.coverImg = t.dataset.cover; img.src = t.currentSrc.split("#")[0] || t.src.split("#")[0];
@@ -854,7 +865,7 @@ window.VKPanel = function createPanel(state) {
       const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
       const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
       const [cls, txt] = bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
-      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover(c.versions?.[0]?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
+      return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover((c.versions?.find((v) => v.cover) ?? c.versions?.[0])?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
     }).join("")}</div>`;
   }
 
