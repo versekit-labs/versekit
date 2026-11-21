@@ -17,6 +17,9 @@ export const DEFAULT_PLAN_RULES = Object.freeze({ daily_cap: 10, min_gap_minutes
 /** 不占名额的状态：人没打算发，或已经没发出去。 */
 export const SLOT_FREE_STATES = ["skipped", "canceled", "failed", "blocked", "expired"];
 
+// Both range queries must match the expression in idx_publish_effective_at.
+export const PUBLISH_EFFECTIVE_AT = "COALESCE(p.published_at, p.scheduled_at)";
+
 const ALIAS_OF = { "tiktok-api": "tiktok" };
 
 const posInt = (v) => (Number.isInteger(v) && v > 0 ? v : null);
@@ -156,10 +159,10 @@ export function dayUsage({ from, to, groupId = null, config } = {}) {
   const placeholders = SLOT_FREE_STATES.map(() => "?").join(",");
   const rows = open()
     .prepare(
-      `SELECT p.account_id, a.platform, COALESCE(p.published_at, p.scheduled_at) AS t
+      `SELECT p.account_id, a.platform, ${PUBLISH_EFFECTIVE_AT} AS t
          FROM publish p JOIN account a ON a.id = p.account_id
         WHERE p.state NOT IN (${placeholders})
-          AND COALESCE(p.published_at, p.scheduled_at) BETWEEN ? AND ?
+          AND ${PUBLISH_EFFECTIVE_AT} BETWEEN ? AND ?
           AND (? IS NULL OR a.group_id = ?)`,
     )
     .all(...SLOT_FREE_STATES, from, to, groupId, groupId);

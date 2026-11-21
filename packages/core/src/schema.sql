@@ -94,11 +94,13 @@ CREATE TABLE IF NOT EXISTS publish (
   updated_at      INTEGER NOT NULL,
   published_at    INTEGER,           -- 首次进入 published/published_limited；采集节奏从它起算
   cut_id          TEXT REFERENCES cut(id),          -- 平台稿挂在哪支成片下
-  version_id      TEXT REFERENCES cut_version(id)   -- 用的是哪个语言版本
+  version_id      TEXT REFERENCES cut_version(id),  -- 用的是哪个语言版本
+  approved_now    INTEGER NOT NULL DEFAULT 0 CHECK (approved_now IN (0, 1))  -- 曾经确认「现在发」，不上日历
 );
 -- 每支成片在每个账号上最多一条平台稿（ACC-v2-cut-02）。旧库的 UNIQUE(work_id, account_id) 由 migrate() 重建表去掉。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_cut_account ON publish(cut_id, account_id) WHERE cut_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_publish_state ON publish(state, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_publish_effective_at ON publish(COALESCE(published_at, scheduled_at), id);
 
 CREATE TABLE IF NOT EXISTS snapshot (
   id           TEXT PRIMARY KEY,
@@ -147,6 +149,7 @@ CREATE TABLE IF NOT EXISTS event (
   dedupe_key   TEXT UNIQUE,
   created_at   INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_event_publish_id ON event(publish_id);
 
 CREATE TABLE IF NOT EXISTS delivery (
   id              TEXT PRIMARY KEY,
