@@ -528,3 +528,4 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-test-iso-01] `packages/driver-browser/test/isolation.test.mjs` 在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败。查清楚原因（端口、Chrome 启动、并行抢资源）写进 PR；不许用加长固定等待或跳过测试的办法掩盖。
 - [ACC-test-update-01] `packages/cli/test/update.test.mjs` 的「ACC-update-03 自动更新关掉：服务启动后不检查、不更新」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-18 起 CI 上偶发失败）。查清原因写进 PR（端口、计时、与别的测试抢资源、服务启动顺序）；修测试或修实现都可以，但不许加长固定等待、放宽断言或跳过。`packages/core/test/update.test.mjs` 的 ACC-update-03 照旧通过。
+- [ACC-test-browser-01] `packages/driver-browser` 里「ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies 表有行、重开仍在」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-21 前 15 次 main CI 挂过 2 次，PR #266 也挂过 1 次）。查清原因写进 PR（Chrome 落盘 Cookies 的时机、关浏览器的顺序、端口或 profile 目录竞争）；不许加长固定等待、放宽断言或跳过。
