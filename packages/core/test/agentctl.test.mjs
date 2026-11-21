@@ -1,10 +1,15 @@
 // harness 的判定规则必须被钉住：这些函数决定"能不能派工、能不能合并"，
 // 一旦漂了，流水线会静默放行——比报错危险得多。
 //
-// 这里只测纯函数，不碰网络。agentctl 作为脚本执行时才跑 main()，import 无副作用。
+// 判定规则用纯函数测试，CLI 用本地 mock API。import agentctl 无副作用。
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { TRANSITIONS, canTransition, issueAccIds, parseVerdict, validateScope } from "../../../bin/agentctl.mjs";
 
@@ -74,6 +79,157 @@ test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
   assert.equal(parseVerdict(undefined), null);
 });
 
+const verdictHead = "abc12345".repeat(5);
+
+test("cycle.sh：验收任务书在 UTF-8 Bash 中保留 PR 号、head 和判定样例", async () => {
+  const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
+  const template = /^  (spec=\$\(cat <<EOF\n[\s\S]*?\nEOF\n\))$/m.exec(script)?.[1];
+  assert.ok(template, "找不到验收任务书 heredoc");
+
+  const { stdout } = await promisify(execFile)("/bin/bash", ["-eu", "-c", `${template}\nprintf '%s\\n' "$spec"`], {
+    env: {
+      ...process.env,
+      LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
+      num: "264",
+      pull: "265",
+      head: verdictHead,
+      ACCEPTANCE_WT: "/acceptance",
+      acc: "ACC-example-01, ACC-example-02",
+    },
+  });
+  // 新版 Bash 可能正常展开，仍禁止会破坏 Bash 3.2 的相邻写法。
+  assert.doesNotMatch(template, /\$[A-Za-z_]\w*[^\x00-\x7F]/);
+  assert.equal(stdout.split("\n")[0], `目标：验收 issue #264 的 PR #265（head ${verdictHead}）。`);
+
+  const verdicts = [...stdout.matchAll(/```yaml\n[\s\S]*?\n```/g)].map(([block]) => parseVerdict(block));
+  assert.deepEqual(verdicts.map(({ verdict, headSha }) => [verdict, headSha]), [
+    ["PASS", verdictHead],
+    ["FAIL", verdictHead],
+  ]);
+});
+
+const verdictFormats = [
+  ["id/status", "  - id: ACC-x\n    status: pass\n  - id: ACC-y\n    status: pass"],
+  ["item/status", "  - item: ACC-x\n    status: pass\n  - item: ACC-y\n    status: pass"],
+  ["id/result", "  - id: ACC-x\n    result: pass\n  - id: ACC-y\n    result: pass"],
+  ["行内列表", "  - {id: ACC-x, status: pass}\n  - {id: ACC-y, status: pass}"],
+  ["映射", "  ACC-x: pass\n  ACC-y: pass"],
+];
+const verdictComment = (yaml) => `\`\`\`yaml\nverdict: PASS\nhead_sha: ${verdictHead}\n${yaml}\n\`\`\``;
+
+for (const [name, entries] of verdictFormats) {
+  test(`parseVerdict：${name} 解析成相同的逐条结果`, () => {
+    const parsed = parseVerdict(verdictComment(`acceptance:\n${entries}`));
+    assert.deepEqual(parsed.acceptance, [
+      { id: "ACC-x", status: "pass" },
+      { id: "ACC-y", status: "pass" },
+    ]);
+  });
+}
+
+const uncoveredVerdicts = [
+  ["failed 段", `acceptance:
+  - id: ACC-y
+    status: pass
+failed:
+  - item: ACC-x
+    status: pass`],
+  ["冲突", `acceptance:
+  - id: ACC-x
+    status: pass
+  - item: ACC-x
+    result: fail
+  - {id: ACC-x, status: pass}
+  - id: ACC-y
+    status: pass`],
+  ["非法状态", `acceptance:
+  - id: ACC-x
+    status: 待人工
+  - id: ACC-y
+    status: pass`],
+];
+
+test("parseVerdict：只读 acceptance，fail 优先，只认完整的 pass/fail", () => {
+  const [outside, conflict, invalid] = uncoveredVerdicts.map(([, yaml]) => parseVerdict(verdictComment(yaml)).acceptance);
+  assert.deepEqual(outside, [{ id: "ACC-y", status: "pass" }]);
+  assert.deepEqual(conflict, [{ id: "ACC-x", status: "fail" }, { id: "ACC-y", status: "pass" }]);
+  assert.deepEqual(invalid, [{ id: "ACC-x", status: null }, { id: "ACC-y", status: "pass" }]);
+
+  const nearMisses = parseVerdict(verdictComment(`acceptance:
+  - id: ACC-x
+    status: pass-later
+  - id: ACC-y
+    note:
+      status: pass
+  - id: ACC-z
+failed:
+  - id: ACC-z
+    status: pass`));
+  assert.deepEqual(nearMisses.acceptance.map(({ status }) => status), [null, null, null]);
+});
+
+test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍被拦下", async (t) => {
+  const verdicts = [
+    ...verdictFormats.map(([, entries]) => verdictComment(`acceptance:\n${entries}`)),
+    ...uncoveredVerdicts.map(([, yaml]) => verdictComment(yaml)),
+  ];
+  const issues = verdicts.map((_, index) => ({ number: index + 1, labels: ["s:accept"], body: "ACC-x、ACC-y" }));
+  const pulls = issues.map(({ number }) => ({
+    number: number + 100,
+    body: `Closes #${number}`,
+    head: { sha: verdictHead },
+    state: "open",
+  }));
+  const routes = new Map([
+    ["issues", issues],
+    ["pulls", pulls],
+    [`commits/${verdictHead}/check-runs`, {
+      check_runs: [
+        "test / npm test",
+        "parity / 命令表 = 路由 = 卡片 = CLI",
+        "adapter-contract / 形状 + ready + dry-run 无副作用",
+        "no-backdoor / web 与 channel 不得直连数据库",
+        "design / 任务书 · 导航 · 死链 · 检测器 · 触控",
+      ].map((name) => ({ name, status: "completed", conclusion: "success" })),
+    }],
+    ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{ id: number, body: verdicts[index] }]]),
+    ["issues/1", issues[0]],
+  ]);
+  const server = createServer((req, res) => {
+    const path = new URL(req.url, "http://localhost").pathname.replace(/^\/repos\/example\/versekit\//, "");
+    const data = req.method === "GET" && routes.get(path);
+    res.writeHead(data ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(data || `${req.method} ${path}`));
+  });
+  t.after(() => server.close());
+  await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+
+  const script = fileURLToPath(new URL("../../../bin/agentctl.mjs", import.meta.url));
+  const run = async (...args) => {
+    const { stdout } = await promisify(execFile)(process.execPath, [script, ...args, "--dry-run", "--json"], {
+      env: {
+        ...process.env,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.url",
+        GIT_CONFIG_VALUE_0: "https://github.com/example/versekit.git",
+        GH_TOKEN: "fixture",
+        AGENTCTL_API_BASE: `http://127.0.0.1:${server.address().port}`,
+      },
+      timeout: 10_000,
+    });
+    return JSON.parse(stdout);
+  };
+  const { results } = await run("merge", "--pending");
+  assert.deepEqual(results, issues.map(({ number }, index) => index < verdictFormats.length
+    ? { issue: number, merged: false, dryRun: true, pull: number + 100, head: verdictHead }
+    : { issue: number, merged: false, problems: ["verdict 没有逐条覆盖：ACC-x"] }));
+
+  const { body } = await run("reject", "--issue", "1", "--item", "ACC-harness-verdict-02",
+    "--expected", "显示确认消息", "--observed", "没有提示", "--repro", "修改标题并保存");
+  assert.match(body, /\nfailed:\n  - id: ACC-harness-verdict-02\n/);
+  assert.equal(parseVerdict(body).verdict, "FAIL");
+});
+
 test("validateScope：引用不到的 ACC 条目不算口径齐", () => {
   const ok = validateScope({ body: "口径：ACC-account-01" });
   assert.equal(ok.ok, true);
@@ -89,7 +245,7 @@ test("validateScope：引用不到的 ACC 条目不算口径齐", () => {
 });
 test("作废的 FAIL：不再是最新判定，也不计返工轮次", async () => {
   const { latestVerdict, latestFail, effectiveFailCount, voidedCommentIds } = await import("../../../bin/agentctl.mjs");
-  const fail = (id, round) => ({ id, body: "```yaml\nverdict: FAIL\nround: " + round + "\nhead_sha: abc1234\n```" });
+  const fail = (id, round) => ({ id, body: "```yaml\nverdict: FAIL\nround: " + round + "\nhead_sha: abc1234\nfailed:\n  - item: ACC-x\n```" });
   const voidOf = (id, target) => ({ id, body: "<!-- agent-verdict-void -->\n原因：账号掉线\n\nvoids: " + target });
   // listComments 的顺序：新的在前。
   const comments = [voidOf(40, 30), fail(30, 3), fail(20, 2), { id: 15, body: "随便聊聊" }, fail(10, 1)];
@@ -97,6 +253,7 @@ test("作废的 FAIL：不再是最新判定，也不计返工轮次", async () 
   assert.deepEqual([...voidedCommentIds(comments)], ["30"]);
   assert.equal(latestVerdict(comments).commentId, 20, "被作废的那条不能再当最新判定");
   assert.equal(latestFail(comments).commentId, 20);
+  assert.equal(latestFail(comments).body, fail(20, 2).body, "返工任务书仍拿到旧 item 格式的 FAIL 原文");
   assert.equal(effectiveFailCount(comments), 2, "环境原因的 FAIL 不计轮次");
 
   // 没有作废评论时行为不变。

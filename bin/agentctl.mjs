@@ -1163,6 +1163,57 @@ const REQUIRED_GATES = [
   "design / 任务书 · 导航 · 死链 · 检测器 · 触控",
 ];
 
+/** 解析判定块中 acceptance 下的列表和映射，重复条目以 fail 为准。 */
+function parseVerdictAcceptance(text) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^acceptance:[ \t]*(?:#.*)?$/.test(line));
+  if (start < 0) return [];
+
+  const statuses = new Map();
+  const record = (idValue, statusValue = "") => {
+    const id = /^(["']?)(ACC-[A-Za-z0-9_-]+)\1$/.exec(idValue.trim())?.[2];
+    if (!id) return;
+    const status = /^(["']?)(pass|fail)\1$/i.exec(statusValue.trim())?.[2].toLowerCase() ?? null;
+    if (!statuses.has(id) || (status && statuses.get(id) !== "fail")) statuses.set(id, status);
+  };
+
+  let entryIndent = null;
+  let fieldIndent = null;
+  let currentId = null;
+  for (const raw of lines.slice(start + 1)) {
+    const line = raw.replace(/[ \t]+#.*$/, "").trimEnd();
+    if (!line || /^ *#/.test(line)) continue;
+    const indent = /^ */.exec(line)[0].length;
+    const content = line.slice(indent);
+    const listItem = /^-( +)(.*)$/.exec(content);
+    if (indent === 0 && !listItem) break;
+    entryIndent ??= indent;
+    if (indent < entryIndent) break;
+
+    if (indent === entryIndent) {
+      currentId = null;
+      if (listItem) {
+        const blockId = /^(?:id|item):[ \t]+(.+)$/.exec(listItem[2]);
+        if (blockId) {
+          currentId = blockId[1];
+          fieldIndent = indent + 1 + listItem[1].length;
+          record(currentId);
+          continue;
+        }
+        const flow = /^\{\s*(?:id|item):\s*([^,{}]+),\s*(?:status|result):\s*([^,{}]+)\}$/.exec(listItem[2]);
+        if (flow) record(flow[1], flow[2]);
+      } else {
+        const mapping = /^([^:]+):[ \t]+(.*)$/.exec(content);
+        if (mapping) record(mapping[1], mapping[2]);
+      }
+    } else if (currentId && indent === fieldIndent) {
+      const status = /^(?:status|result):[ \t]+(.+)$/.exec(content);
+      if (status) record(currentId, status[1]);
+    }
+  }
+  return Array.from(statuses, ([id, status]) => ({ id, status }));
+}
+
 /** 从评论里解析 ```yaml 块。解析不出 verdict 就当没有判定，不猜。 */
 function parseVerdict(body) {
   // 一条评论里可能同时有证据包 YAML 和判定 YAML——必须扫完所有块，
@@ -1175,19 +1226,7 @@ function parseVerdict(body) {
   const headSha = /^head_sha:\s*"?([0-9a-fA-F]{7,40})"?\s*$/im.exec(text)?.[1] ?? null;
   const round = Number(/^round:\s*(\d+)/im.exec(text)?.[1] ?? 0) || null;
 
-  const acceptance = [];
-  let cur = null;
-  for (const line of text.split("\n")) {
-    const idm = /^\s*-\s*id:\s*(ACC-[A-Za-z0-9_-]+)/.exec(line);
-    if (idm) {
-      cur = { id: idm[1], status: null };
-      acceptance.push(cur);
-      continue;
-    }
-    const sm = /^\s*status:\s*(pass|fail)\b/i.exec(line);
-    if (sm && cur) cur.status = sm[1].toLowerCase();
-  }
-  return { verdict, headSha, round, acceptance };
+  return { verdict, headSha, round, acceptance: parseVerdictAcceptance(text) };
 }
 
 /** 最新一条带判定的评论。FAIL 之后又 PASS 是合法的，所以必须取最新。 */
@@ -1313,7 +1352,7 @@ async function cmdReject(repo, opts) {
     `head_sha: ${q(pull.head.sha)}`,
     "source: human-verification",
     "failed:",
-    `  - item: ${item}`,
+    `  - id: ${item}`,
     `    expected: ${q(expected)}`,
     `    observed: ${q(observed)}`,
     "    repro:",
