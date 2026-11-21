@@ -196,14 +196,17 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
 
 const base = (port) => `http://127.0.0.1:${port}`;
 
-async function up(port) {
+async function probeVersion(port) {
   try {
     const r = await fetch(`${base(port)}/json/version`, { signal: AbortSignal.timeout(1500) });
-    return r.ok;
+    void r.body?.cancel().catch(() => {});
+    return r.ok ? "ok" : "occupied";
   } catch {
-    return false;
+    return "unreachable";
   }
 }
+
+const up = async (port) => (await probeVersion(port)) === "ok";
 
 const MARKER = ".vk-driver.json";
 
@@ -344,7 +347,8 @@ async function pickPort(accountId, profile) {
   for (let i = 0; i < 64; i++) {
     const port = BASE_PORT + ((preferred - BASE_PORT + i) % span);
     if (claimedPorts.has(port)) continue;
-    if (await up(port)) {
+    const status = await probeVersion(port);
+    if (status === "ok") {
       if (claimedPorts.has(port)) continue;
       const marker = readMarker(profile);
       // 只接管「标记对得上」的实例；端口上如果住着别人，顺延，绝不借用。
@@ -360,7 +364,7 @@ async function pickPort(accountId, profile) {
       continue;
     }
     // /json/version 不通只说明没有可用的 CDP。普通服务或临时 TCP 连接也可能占着端口。
-    if ((await canBindPort(port)) && !claimedPorts.has(port)) {
+    if (status === "unreachable" && (await canBindPort(port)) && !claimedPorts.has(port)) {
       claimedPorts.set(port, accountId);
       return { port, adopted: false, pid: null };
     }
