@@ -22,6 +22,13 @@ export const PUBLISH_EFFECTIVE_AT = "COALESCE(p.published_at, p.scheduled_at)";
 
 const ALIAS_OF = { "tiktok-api": "tiktok" };
 
+/**
+ * 平台自己的内置默认（比全局默认更保守的那几个）。抖音每个账号每天最多送 3 条草稿（ACC-douyin-06）：
+ * 新号、新设备批量往草稿箱送东西本身就是风控信号。优先级：config 里这个平台的覆盖 > 这里 > config 的 default > 全局默认。
+ * 要调高就在发布方案 / config 里写 plan.rules.platforms.douyin.daily_cap，不要改这张表。
+ */
+export const PLATFORM_DEFAULT_RULES = Object.freeze({ douyin: Object.freeze({ daily_cap: 3 }) });
+
 const posInt = (v) => (Number.isInteger(v) && v > 0 ? v : null);
 
 /** 某平台生效的规则：平台覆盖 > 配置里的 default > 内置默认。返回 { dailyCap, minGapMs, minGapMinutes }。 */
@@ -30,7 +37,7 @@ export function planRules(platform, config = readConfig()) {
   // 同一个对人展示的平台的另一个后端沿用它的覆盖：tiktok-api（官方接口）与 tiktok 用同一套每日上限、最小间隔。
   const pick = (key) =>
     posInt(rules.platforms?.[platform]?.[key])
-    ?? posInt(rules.platforms?.[ALIAS_OF[platform]]?.[key]) ?? posInt(rules.default?.[key]) ?? DEFAULT_PLAN_RULES[key];
+    ?? posInt(rules.platforms?.[ALIAS_OF[platform]]?.[key]) ?? PLATFORM_DEFAULT_RULES[platform]?.[key] ?? posInt(rules.default?.[key]) ?? DEFAULT_PLAN_RULES[key];
   const dailyCap = pick("daily_cap");
   const minGapMinutes = pick("min_gap_minutes");
   return { dailyCap, minGapMinutes, minGapMs: minGapMinutes * 60e3 };
@@ -137,9 +144,11 @@ export function describeRules(platform, config = readConfig()) {
     platform,
     dailyCap: r.dailyCap,
     minGapMinutes: r.minGapMinutes,
-    capIsDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap,
+    // 「还是内置默认」对这个平台而言：有平台内置默认的（抖音 3 条）按它比，不是和全局 10 条比。
+    capIsDefault: r.dailyCap === (PLATFORM_DEFAULT_RULES[platform]?.daily_cap ?? DEFAULT_PLAN_RULES.daily_cap),
     gapIsDefault: r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
-    isDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
+    isDefault:
+      r.dailyCap === (PLATFORM_DEFAULT_RULES[platform]?.daily_cap ?? DEFAULT_PLAN_RULES.daily_cap) && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
   };
 }
 

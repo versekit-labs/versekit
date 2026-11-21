@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>模拟：抖音创作者中心 · 作品管理</title></head>
+<body>
+<h1>作品管理</h1>
+<nav>
+  <span id="tabWorks">全部作品</span>
+  <span id="tabDrafts" style="cursor:pointer">草稿箱</span>
+</nav>
+<p id="hint">共 0 个作品</p>
+<ul id="list"></ul>
+<div id="riskTip" hidden>操作过于频繁，请稍后再试</div>
+<script type="module">
+const cfg = await (await fetch("/__config")).json().catch(() => ({ mode: "ok" }));
+if (cfg.mode === "login") location.href = "/login";
+if (cfg.mode === "risk-on-manage") document.getElementById("riskTip").hidden = false;
+document.getElementById("tabDrafts").addEventListener("click", () => {
+  const drafts = JSON.parse(localStorage.getItem("sim.drafts") || "[]");
+  document.getElementById("hint").textContent = `共 ${drafts.length} 条草稿`;
+  document.getElementById("list").innerHTML = drafts.map((d) => `<li><a href="/creator-micro/content/post/video?draft=${d.at}">${d.title.replace(/</g, "&lt;")}</a> <small>草稿</small></li>`).join("");
+});
+</script>
+</body></html>

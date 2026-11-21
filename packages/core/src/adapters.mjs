@@ -272,8 +272,12 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending" };
       }
 
+      // 只存草稿的平台（抖音第一版）：「自动发」也按「存草稿」跑——否则 auto_running 之后拿到 draft_pending，
+      // 会撞上非法迁移（auto_running → draft_pending 不存在）。notify / manual 仍是人的选择，照旧。
+      const mode = adapter.adapter.draftOnly === true && row.mode === "auto" ? "draft" : row.mode;
+
       // Draft requested but the platform has no draft box: say so, do not pretend to try.
-      if (row.mode === "draft" && adapter.draft !== true) {
+      if (mode === "draft" && adapter.draft !== true) {
         if (row.state === "queued") transitionPublish(publishId, "draft_running");
         transitionPublish(publishId, "notify_pending", {
           reason: "no_upload_path",
@@ -282,7 +286,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending", fallback: "no_upload_path" };
       }
 
-      const running = row.mode === "draft" ? "draft_running" : "auto_running";
+      const running = mode === "draft" ? "draft_running" : "auto_running";
       if (row.state === "queued") transitionPublish(publishId, running);
 
       // 发布总时限（ACC-publish-05）：适配器可能永远不返回（页面停在「上传视频」，文件根本

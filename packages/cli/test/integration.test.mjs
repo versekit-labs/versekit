@@ -125,14 +125,14 @@ test("没有适配器的平台会在第一条发布时明确报错，而不是�
   const { daemon } = await boot();
   const asset = join(HOME, "ep3.mp4");
   writeFileSync(asset, "x");
-  const { id: accountId } = store.addAccount({ platform: "douyin", handle: "@dy", groupId: newGroup() }); // 还没有适配器的平台（YouTube 已经有了）
+  const { id: accountId } = store.addAccount({ platform: "shipinhao", handle: "@sph", groupId: newGroup() }); // 还没有适配器的平台（YouTube、抖音都已经有了）
   const work = store.createWork({ title: "没有适配器", assetPath: asset });
   const { id: publishId } = store.createPublish({ workId: work.id, accountId });
   store.approvePublishes({ publishId }); // 人确认后才进队列（#146）
   try {
     await drain(daemon.runner, () => db().prepare("SELECT state FROM run WHERE target_id=?").get(publishId)?.state === "queued");
     const run = db().prepare("SELECT state, last_error, attempts FROM run WHERE target_id=?").get(publishId);
-    assert.match(run.last_error, /没有 douyin 适配器/);
+    assert.match(run.last_error, /没有 shipinhao 适配器/);
     assert.ok(run.attempts >= 1);
     assert.ok(existsSync(join(HOME, ".local", "state", "versekit", "vk.db")));
   } finally {
