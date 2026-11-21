@@ -15,6 +15,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
@@ -195,14 +196,17 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
 
 const base = (port) => `http://127.0.0.1:${port}`;
 
-async function up(port) {
+async function probeVersion(port) {
   try {
     const r = await fetch(`${base(port)}/json/version`, { signal: AbortSignal.timeout(1500) });
-    return r.ok;
+    void r.body?.cancel().catch(() => {});
+    return r.ok ? "ok" : "occupied";
   } catch {
-    return false;
+    return "unreachable";
   }
 }
+
+const up = async (port) => (await probeVersion(port)) === "ok";
 
 const MARKER = ".vk-driver.json";
 
@@ -232,19 +236,25 @@ function removeMarker(profile) {
   }
 }
 
-/**
- * 这个端口上监听的进程实际用的 `--user-data-dir`（按监听端口查 pid，再读命令行）。
- * 查不出来返回 null——调用方一律当「对不上」处理：宁可多起一个 Chrome，也不能连到别人的号。
- */
+function chromeUserDataDirForPid(pid) {
+  if (!Number.isInteger(Number(pid)) || Number(pid) <= 1) return null;
+  try {
+    const cmd = execFileSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return cmd.match(/--user-data-dir=(.*?)(?=\s--[a-z]|\s*$)/)?.[1].trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 这个端口上监听的进程实际用的 `--user-data-dir`。查不出来按归属不明处理。 */
 export function chromeUserDataDirOnPort(port) {
   try {
     const pids = execFileSync("lsof", ["-nP", `-iTCP:${Number(port)}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] })
       .split(/\s+/)
       .filter(Boolean);
     for (const pid of pids) {
-      const cmd = execFileSync("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-      const m = cmd.match(/--user-data-dir=(.*?)(?=\s--[a-z]|\s*$)/);
-      if (m) return m[1].trim();
+      const profile = chromeUserDataDirForPid(pid);
+      if (profile) return profile;
     }
   } catch {
     /* lsof/ps 不可用或超时：当作查不出来 */
@@ -273,6 +283,7 @@ function portBelongsToProfile(port, profile) {
 const instances = new Map();
 const claimedPorts = new Map();
 const starting = new Map();
+const closing = new Map();
 
 let activeInstances = 0;
 const slotWaiters = [];
@@ -317,13 +328,28 @@ function forget(accountId) {
   return instance;
 }
 
+function canBindPort(port) {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", (err) => {
+      if (err.code === "EADDRINUSE" || err.code === "EACCES") resolve(false);
+      else reject(err);
+    });
+    probe.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+      probe.close((err) => (err ? reject(err) : resolve(true)));
+    });
+  });
+}
+
 async function pickPort(accountId, profile) {
   const preferred = accountPort(accountId);
   const span = PORT_TOP - BASE_PORT;
   for (let i = 0; i < 64; i++) {
     const port = BASE_PORT + ((preferred - BASE_PORT + i) % span);
-    if (claimedPorts.has(port) && claimedPorts.get(port) !== accountId) continue;
-    if (await up(port)) {
+    if (claimedPorts.has(port)) continue;
+    const status = await probeVersion(port);
+    if (status === "ok") {
+      if (claimedPorts.has(port)) continue;
       const marker = readMarker(profile);
       // 只接管「标记对得上」的实例；端口上如果住着别人，顺延，绝不借用。
       if (marker?.accountId === accountId && Number(marker.port) === port) {
@@ -332,11 +358,16 @@ async function pickPort(accountId, profile) {
           removeMarker(profile);
           continue;
         }
+        claimedPorts.set(port, accountId);
         return { port, adopted: true, pid: marker.pid ?? null, headless: marker.headless };
       }
       continue;
     }
-    return { port, adopted: false, pid: null };
+    // /json/version 不通只说明没有可用的 CDP。普通服务或临时 TCP 连接也可能占着端口。
+    if (status === "unreachable" && (await canBindPort(port)) && !claimedPorts.has(port)) {
+      claimedPorts.set(port, accountId);
+      return { port, adopted: false, pid: null };
+    }
   }
   throw new Error(`账号 ${accountId} 没有可用端口（从 ${preferred} 起探测了 64 个）`);
 }
@@ -370,6 +401,7 @@ async function startInstance(accountId, { headless = false } = {}) {
         { detached: true, stdio: "ignore" },
       );
       child.unref();
+      instance.child = child;
       instance.pid = child.pid ?? null;
       // 先写标记再等端口：否则另一个进程可能在这段窗口里误以为 profile 空闲。
       writeMarker(profile, { accountId, port, pid: instance.pid, startedAt: Date.now(), headless });
@@ -406,7 +438,6 @@ async function startInstance(accountId, { headless = false } = {}) {
       }
     }
 
-    claimedPorts.set(port, accountId);
     instances.set(accountId, instance);
     if (adopted) scheduleIdleClose(instance);
     return instance;
@@ -422,17 +453,21 @@ async function startInstance(accountId, { headless = false } = {}) {
 }
 
 async function ensureInstance(accountId, opts = {}) {
+  const shutdown = closing.get(accountId);
+  if (shutdown) await shutdown;
   const live = instances.get(accountId);
   if (live) {
     // 想看得见（headless:false）却只有一个无头实例时，必须换：否则用户点了
     // 「打开登录窗口」，屏幕上什么都不会出现。
     const wantsVisible = opts.headless === false;
     if (wantsVisible && live.headless) {
-      await closeAccount(accountId).catch(() => {});
-    } else if (await up(live.port)) {
-      return live;
+      await closeAccount(accountId);
+    } else {
+      const ready = await up(live.port);
+      if (closing.has(accountId) || instances.get(accountId) !== live) return ensureInstance(accountId, opts);
+      if (ready) return live;
+      forget(accountId); // Chrome 已经挂了，重新起
     }
-    forget(accountId); // Chrome 已经挂了，重新起
   }
   const pending = starting.get(accountId);
   if (pending) return pending;
@@ -441,35 +476,52 @@ async function ensureInstance(accountId, opts = {}) {
   return task;
 }
 
-async function closeBrowser(port) {
+async function browserSocket(port) {
   const res = await fetch(`${base(port)}/json/version`, { signal: AbortSignal.timeout(3000) });
   if (!res.ok) throw new Error(`读取 Chrome 版本失败：HTTP ${res.status}`);
   const { webSocketDebuggerUrl } = await res.json();
   if (!webSocketDebuggerUrl) throw new Error("Chrome 没有返回浏览器级调试地址");
   const ws = new WebSocket(webSocketDebuggerUrl);
-  // Chrome 约 30 秒才批量把 cookie 写一次盘；Browser.close 走正常退出流程会把内存里的写完。
-  // 所以必须优先 Browser.close 并等它自己退，SIGTERM 只作最后兜底（见 closeAccount）。
-  await new Promise((resolveOpen, rejectOpen) => {
-    const timer = setTimeout(() => rejectOpen(new Error("连不上 Chrome 浏览器目标")), 5000);
-    timer.unref?.();
-    ws.onopen = () => {
-      clearTimeout(timer);
-      resolveOpen();
-    };
-    ws.onerror = () => {
-      clearTimeout(timer);
-      rejectOpen(new Error("连不上 Chrome 浏览器目标"));
-    };
-  });
-  ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
-  // 等它真的退出：Chrome 是在退出流程里把 cookie 刷到磁盘的，
-  // 400ms 就返回会让后面的读取（和下次启动）看不到刚登录的会话。
-  await sleep(400);
-  await waitDown(port, 15e3);
   try {
+    await new Promise((resolveOpen, rejectOpen) => {
+      const failed = () => rejectOpen(new Error("连不上 Chrome 浏览器目标"));
+      const timer = setTimeout(failed, 5000);
+      timer.unref?.();
+      ws.onopen = () => {
+        clearTimeout(timer);
+        resolveOpen();
+      };
+      ws.onerror = ws.onclose = () => {
+        clearTimeout(timer);
+        failed();
+      };
+    });
+    return ws;
+  } catch (err) {
     ws.close();
-  } catch {
-    /* 浏览器先断了也无所谓 */
+    throw err;
+  }
+}
+
+async function closeBrowser(port, pid) {
+  const hasPid = Number.isInteger(Number(pid)) && Number(pid) > 1;
+  const waitForExit = (timeout) => hasPid ? waitPidGone(pid, timeout) : waitDown(port, timeout);
+  let ws;
+  try {
+    try {
+      ws = await browserSocket(port);
+      ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+    } catch {
+      // Chrome 可能已在退出，仍等进程结束再决定要不要兜底。
+    }
+
+    // CDP 监听先关闭，Chrome 还可能在刷 cookie。以进程退出为准，再允许读盘或重开 profile。
+    if (await waitForExit(15e3)) return;
+    killByPid(pid);
+    if (await waitForExit(2e3)) return;
+    throw new Error(`Chrome 关闭超时（端口 ${port}，PID ${pid ?? "未知"}）`);
+  } finally {
+    ws?.close();
   }
 }
 
@@ -492,33 +544,31 @@ function killByPid(pid) {
   }
 }
 
-/**
- * Chrome 通过 Browser.close 退出后，SingletonLock 偶尔会留在 profile 里（Chrome 157 实测）。
- * 下一次用同一个 profile 启动会直接以退出码 21（PROFILE_IN_USE）死掉——账号看起来「第二次登录
- * 必失败」。只在进程确实退出后清，别在它还活着时把锁拆了。
- */
-async function waitPidGone(pid, timeout = 3e3) {
-  const n = Number(pid);
-  if (!Number.isInteger(n) || n <= 1) return true;
+async function waitPidGone(pid, timeout) {
   const end = Date.now() + timeout;
-  while (Date.now() < end) {
+  for (;;) {
     try {
-      process.kill(n, 0);
-    } catch {
-      return true;
+      process.kill(Number(pid), 0);
+    } catch (err) {
+      if (err.code === "ESRCH") return true;
+      throw err;
     }
+    if (Date.now() >= end) return false;
     await sleep(100);
   }
-  return false;
 }
 
+/**
+ * Chrome 通过 Browser.close 退出后，SingletonLock 偶尔会留在 profile 里（Chrome 157 实测）。
+ * 下一次用同一个 profile 启动会直接以退出码 21（PROFILE_IN_USE）死掉。只在进程退出后清理。
+ */
 function clearStaleSingleton(profile, pid) {
   if (!(Number.isInteger(Number(pid)) && Number(pid) > 1)) return;
   try {
     process.kill(Number(pid), 0);
     return; // 进程还在，锁不能动
-  } catch {
-    /* 已经退出，可以清理 */
+  } catch (err) {
+    if (err.code !== "ESRCH") return;
   }
   for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
     rmSync(join(profile, name), { force: true });
@@ -1121,49 +1171,32 @@ export async function openTab(url) {
  */
 export async function closeAccount(accountId) {
   const id = requireAccountId(accountId);
+  const pending = closing.get(id);
+  if (pending) return pending;
+  const task = finishCloseAccount(id).finally(() => closing.delete(id));
+  closing.set(id, task);
+  return task;
+}
+
+async function finishCloseAccount(id) {
   const instance = instances.get(id);
-
-  if (!instance) {
-    const profile = accountProfile(id);
-    const marker = readMarker(profile);
-    if (!marker || marker.accountId !== id || !Number.isInteger(Number(marker.port))) return false;
-    const port = Number(marker.port);
-    if ((await up(port)) && !portBelongsToProfile(port, profile)) {
-      // 标记过期，端口上是别人的 Chrome：绝不关它、不按 pid 杀，只清自己的标记。
-      removeMarker(profile);
-      return false;
-    }
-    try {
-      await closeBrowser(port);
-    } catch {
-      /* 下面用 pid 兜底 */
-    }
-    if (!(await waitDown(port, 15e3))) killByPid(marker.pid);
-    await waitPidGone(marker.pid, 2e3);
-    clearStaleSingleton(profile, marker.pid);
+  const profile = instance?.profile ?? accountProfile(id);
+  const marker = readMarker(profile);
+  const port = instance?.port ?? Number(marker?.port);
+  if (!instance && (marker?.accountId !== id || !Number.isInteger(port))) return false;
+  if (!instance && (await up(port)) && !portBelongsToProfile(port, profile)) {
+    // 标记过期，端口上是别人的 Chrome：绝不关它、不按 pid 杀，只清自己的标记。
     removeMarker(profile);
-    return true;
+    return false;
   }
 
-  await Promise.allSettled([...instance.tabs].map((t) => t.close()));
-  try {
-    await closeBrowser(instance.port);
-  } catch {
-    /* 下面用 pid 兜底 */
-  }
-  const marker = readMarker(instance.profile);
-  const pid = instance.pid ?? marker?.pid;
-  if (!(await waitDown(instance.port, 15e3))) {
-    killByPid(pid);
-    await waitDown(instance.port, 2e3);
-  }
-  if (!(await waitPidGone(pid, 2e3))) {
-    killByPid(pid);
-    await waitPidGone(pid, 2e3);
-  }
-  clearStaleSingleton(instance.profile, pid);
+  const pid = instance?.pid ?? marker?.pid;
+  // 接管来的标记可能留着已被复用的 PID。只等待或给确认属于该 profile 的进程发信号。
+  const ownsPid = instance?.child || samePath(chromeUserDataDirForPid(pid), profile);
+  await closeBrowser(port, ownsPid ? pid : null);
+  clearStaleSingleton(profile, pid);
   forget(id);
-  removeMarker(instance.profile);
+  removeMarker(profile);
   return true;
 }
 
@@ -1175,7 +1208,7 @@ export async function closeAccount(accountId) {
 export async function logoutAccount(accountId) {
   const id = requireAccountId(accountId);
   const profile = accountProfile(id);
-  const closed = await closeAccount(id).catch(() => false);
+  const closed = await closeAccount(id);
   const root = resolve(browserRoot());
   if (!resolve(profile).startsWith(root + sep)) return { closed, removed: false };
   const existed = existsSync(profile);
