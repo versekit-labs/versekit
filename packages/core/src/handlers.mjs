@@ -1035,10 +1035,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "stats.works": ({ range = "all", publishId = null, group = null }) => {
       const g = overview.resolveScope(group);
-      return {
-        group: g,
-        rows: overview.statsWithBaseline(store.listStats({ range, publishId, groupId: g?.id ?? null })),
-      };
+      const rows = overview.statsWithBaseline(store.listStats({ range, publishId, groupId: g?.id ?? null }));
+      const sole = store.soleCutTitles(rows.filter((r) => !r.cutTitle).map((r) => r.workId));
+      return { group: g, rows: rows.map((r) => (r.cutTitle || !sole.has(r.workId) ? r : { ...r, cutTitle: sole.get(r.workId) })) };
     },
 
     "stats.series": ({ publishId }) => ({ publishId, points: store.seriesFor({ publishId }) }),

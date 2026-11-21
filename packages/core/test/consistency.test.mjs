@@ -81,3 +81,18 @@ test("fid-11/13/14 页面里的文案与细节", () => {
   assert.match(panel, /noCover/, "封面为空不请求 ?cover=1");
   assert.match(panel, /data-sep/, "没时长时不出现孤立的「·」");
 });
+
+test("④ ACC-v3-fid-14 数据页每一条都有成片名（平台稿没记 cut_id 时用作品唯一那支成片）", () => {
+  for (const range of ["all", "30d"]) {
+    const rows = handlers["stats.works"]({ range }).rows;
+    const missing = rows.filter((r) => !r.cutTitle && (r.cutCount ?? 0) === 1);
+    assert.deepEqual(missing.map((r) => r.title), [], `${range}：只有一支成片的作品行都该带成片名`);
+  }
+});
+
+test("⑤ ACC-v3-fid-11 系统页没有写在普通引号里的 ${} 模板（会原样显示）", () => {
+  const src = PUB("system.html");
+  const bad = src.split("\n").filter((l) => /(?<![`])'[^'`\n]*\$\{[^'`\n]*'/.test(l) && !/`/.test(l));
+  assert.deepEqual(bad, []);
+  assert.ok(!src.includes(`'<div class="sub">\${`) && !src.includes(`' disabled title="\${`), "离线提示的模板要用反引号");
+});

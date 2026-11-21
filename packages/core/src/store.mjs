@@ -1099,6 +1099,19 @@ export function rangeCutoff(range = "all", now = Date.now()) {
 }
 
 /** Latest snapshot per publish, joined with what the row is. One row per work, not per capture. */
+/**
+ * 平台稿没记 cut_id 时，作品只有一支成片就用它的名字（数据页每条标题下的成片名）；
+ * 有多支又说不清是哪支的，不猜，返回 null。
+ */
+export function soleCutTitles(workIds) {
+  const ids = [...new Set(workIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const rows = open()
+    .prepare(`SELECT work_id, MIN(title) AS title FROM cut WHERE work_id IN (${ids.map(() => "?").join(",")}) GROUP BY work_id HAVING COUNT(*) = 1`)
+    .all(...ids);
+  return new Map(rows.map((r) => [r.work_id, r.title]));
+}
+
 export function listStats({ range = "all", publishId = null, groupId = null } = {}) {
   const cutoff = rangeCutoff(range);
   const conn = open();

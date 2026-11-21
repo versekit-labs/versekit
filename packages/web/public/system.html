@@ -421,8 +421,8 @@
     const behind = u?.lastCheck && !u.lastCheck.up_to_date;
     let act = "";
     if (!ui.upd && u) {
-      const dis = !online ? ' disabled title="${esc(machineName())}不在线，上线后才能更新"' : "";
-      act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? '<div class="sub">${esc(machineName())}不在线，上线后才能更新</div>' : ""}`;
+      const dis = !online ? ` disabled title="${esc(machineName())}不在线，上线后才能更新"` : "";
+      act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? `<div class="sub">${esc(machineName())}不在线，上线后才能更新</div>` : ""}`;
     }
     const lu = ui.update?.lastUpdate;
     const notes = ui.notesOpen && lu?.commits?.length
