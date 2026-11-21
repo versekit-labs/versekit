@@ -83,25 +83,44 @@ test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
 
 const verdictHead = "abc12345".repeat(5);
 
-test("cycle.sh：验收任务书在 UTF-8 Bash 中保留 PR 号、head 和判定样例", async () => {
+test("cycle.sh：dry-run 在 UTF-8 Bash 中渲染验收任务书、落后 main 的判定规则和判定样例", async () => {
   const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
-  const template = /^  (spec=\$\(cat <<EOF\n[\s\S]*?\nEOF\n\))$/m.exec(script)?.[1];
-  assert.ok(template, "找不到验收任务书 heredoc");
+  const template = /^acceptance_spec\(\) \{\n[\s\S]*?^\}$/m.exec(script)?.[0];
+  const dispatch = /^dispatch_acceptance\(\) \{\n[\s\S]*?^\}$/m.exec(script)?.[0];
+  assert.ok(template, "找不到验收任务书函数");
+  assert.ok(dispatch, "找不到验收派工函数");
 
-  const { stdout } = await promisify(execFile)("/bin/bash", ["-eu", "-c", `${template}\nprintf '%s\\n' "$spec"`], {
+  const { stdout } = await promisify(execFile)("/bin/bash", ["-euo", "pipefail", "-c", `
+    ${template}
+    ${dispatch}
+    node() { printf '%s\\n' "$QUEUE"; }
+    log() { printf '%s\\n' "$*"; }
+    choose_worker_channel() { CHOSEN_CHANNEL=volc; CHOSEN_MODEL=deepseek-v4.1-flash; }
+    dispatch_acceptance
+  `], {
     env: {
       ...process.env,
       LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
-      num: "264",
-      pull: "265",
-      head: verdictHead,
+      DRY: "1",
+      LOCK_DIR: "/dev/null",
+      STATE_DIR: "/dev/null",
       ACCEPTANCE_WT: "/acceptance",
-      acc: "ACC-example-01, ACC-example-02",
+      QUEUE: JSON.stringify({ queue: [{
+        number: 264,
+        pull: 265,
+        head: verdictHead,
+        acc: ["ACC-example-01", "ACC-example-02"],
+        title: "验收样例",
+      }] }),
     },
   });
   // 新版 Bash 可能正常展开，仍禁止会破坏 Bash 3.2 的相邻写法。
   assert.doesNotMatch(template, /\$[A-Za-z_]\w*[^\x00-\x7F]/);
-  assert.equal(stdout.split("\n")[0], `目标：验收 issue #264 的 PR #265（head ${verdictHead}）。`);
+  assert.equal(stdout.split("\n")[1], `目标：验收 issue #264 的 PR #265（head ${verdictHead}）。`);
+  assert.match(
+    stdout,
+    /PR head 落后 main 时，.*只在 head 上失败.*本 PR 没改过的文件.*main 上已修好.*CLEAN.*按合并 main 后的结果判定.*note.*head 上的现象、合并后的现象和两边各自的复现命令.*本 PR 改过的文件.*按 head 上的结果判定.*无需发 question/,
+  );
 
   const verdicts = [...stdout.matchAll(/```yaml\n[\s\S]*?\n```/g)].map(([block]) => parseVerdict(block));
   assert.deepEqual(verdicts.map(({ verdict, headSha }) => [verdict, headSha]), [

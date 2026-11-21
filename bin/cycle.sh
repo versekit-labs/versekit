@@ -1567,93 +1567,16 @@ dispatch_rework || FAILED=1
 # ---------------------------------------------------------------- 4. 验收派工
 log "== 4/6 验收派工 =="
 
-dispatch_acceptance() {
-  local queue
-  queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
-    log "  ✗ acceptance: 取队列失败"; return 1
-  }
-  # 队列里可能有多条。旧实现只看 queue[0]：队首有锁（已验过这个 head，或被协调器暂停）
-  # 就整队停派，后面的 PR 永远等不到验收。现在逐条找第一个没锁的。
-  local num="" pull="" head="" acc="" title="" total=0 skipped=0
-  while IFS=$'\t' read -r q_num q_pull q_head q_acc q_title; do
-    [ -n "$q_num" ] || continue
-    total=$((total + 1))
-    if [ -d "$LOCK_DIR/accept-$q_num-${q_head:0:8}.lock" ]; then
-      skipped=$((skipped + 1))
-      log "  · 验收 #$q_num @${q_head:0:7} 已派过（锁存在），看下一条"
-      continue
-    fi
-    num="$q_num"; pull="$q_pull"; head="$q_head"; acc="$q_acc"; title="$q_title"
-    break
-  done < <(printf '%s' "$queue" | python3 -c '
-import json,sys
-for q in (json.load(sys.stdin).get("queue") or []):
-    print("\t".join([str(q.get("number") or ""), str(q.get("pull") or ""), str(q.get("head") or ""), ", ".join(q.get("acc") or []), str(q.get("title") or "").replace("\t"," ")]))
-' 2>/dev/null || true)
-  if [ -z "$num" ]; then
-    if [ "$total" -eq 0 ]; then log "  · acceptance: 没有待验收的"; else log "  · acceptance: 队列 ${total} 条都已派过，等结果"; fi
-    return 0
-  fi
-
-  # 验收共用一个终端：上一单还没结算就不派下一单（否则 worker-start 会被拒）。
-  local prev rc_prev=0
-  prev=$(cat "$STATE_DIR/acceptance.dispatch" 2>/dev/null || true)
-  if [ -n "$prev" ]; then
-    worker_settled "$prev" || rc_prev=$?
-    if [ "$rc_prev" -eq 1 ]; then
-      log "  · 验收终端还在跑上一单（dispatch ${prev}），#$num 等下一轮"
-      return 0
-    fi
-  fi
-
-  if [ "$DRY" = "1" ]; then
-    if choose_worker_channel acceptance "" "" 1; then
-      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（head ${head:0:7}，口径 ${acc}；角色 验收 → 通道 ${CHOSEN_CHANNEL} → 模型 ${CHOSEN_MODEL}）"
-    else
-      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}；但 DeepSeek 通道不可用"
-    fi
-    return 0
-  fi
-
-  # 锁按 issue + head_sha：打回后同一 issue 的新 head 能立刻复审，不会被 TTL 误伤。
-  local lock="$LOCK_DIR/accept-$num-${head:0:8}.lock"
-  if ! mkdir "$lock" 2>/dev/null; then
-    log "  · 验收 #$num @${head:0:7} 刚被别的进程派走，跳过"
-    return 0
-  fi
-
-  log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
-  local handle
-  if [ -z "$ACCEPTANCE_WT" ]; then
-    ACCEPTANCE_WT=$(ensure_acceptance_worktree) || { log "    ✗ 建验收 worktree 失败"; rm -rf "$lock"; return 1; }
-  fi
-  if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
-    log "    ✗ 起验收终端失败"
-    rm -rf "$lock"
-    return 1
-  fi
-
-  # 验收固定 DeepSeek：日志写明「角色 → 通道 → 模型」，并证明不会选 claude。
-  local ch md rsn
-  ch=$(terminal_field acceptance channel)
-  md=$(terminal_field acceptance model)
-  rsn=$(terminal_field acceptance reason)
-  if [ -n "$ch" ]; then
-    log "    · 角色 验收 → 通道 ${ch} → 模型 ${md}（${rsn}）"
-  fi
-  # 火山额度用尽记录由 coordinator-loop 写、dsh-model.sh 读；这里只把它写进日志，方便对上「为什么是千问」。
-  if [ -s "$STATE_DIR/volc-exhausted" ]; then
-    log "    · 火山额度用尽记录：$(cut -f2 "$STATE_DIR/volc-exhausted")（到期前 dsh-model.sh 直接选千问，到期自动恢复火山）"
-  fi
-
-  local spec
-  spec=$(cat <<EOF
+acceptance_spec() {
+  local num="$1" pull="$2" head="$3" acc="$4" ACCEPTANCE_WT="$5"
+  cat <<EOF
 目标：验收 issue #$num 的 PR #${pull}（head ${head}）。
 
 改动：不改实现代码，只产出判定。
 
 约束：
 - 只按 docs/design/ACCEPTANCE.md 的条目判定，条目外的「我觉得」不阻塞 PR
+- PR head 落后 main 时，如果某条口径只在 head 上失败、失败来自本 PR 没改过的文件、main 上已修好，且 PR 与 main 的合并状态为 CLEAN，按合并 main 后的结果判定。在该条的 note 里记录 head 上的现象、合并后的现象和两边各自的复现命令。如果失败来自本 PR 改过的文件，按 head 上的结果判定。这两种情况直接判定，无需发 question。
 - 不改实现代码、不合并 PR、不改 s:* label
 - 需要看界面时用 8788 端口，避开实现方可能占用的 8787
 - 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）
@@ -1704,7 +1627,90 @@ failed:
 8. 真机红线（docs/design/ACCEPTANCE.md 开头）：本机是开发机，不得让任何平台（小红书、B 站、抖音等）的真实站点被访问——包括未登录打开平台页面、账号检查、体检、采集、登录、发布；会走真实平台适配器的 vk 命令与 /api 调用一律不跑；起 vk 服务只能用 VK_HOME=\$(mktemp -d) vk serve --offline（演示数据用 vk demo seed），不带 --offline 的服务启动就会自己体检、访问真实平台（2026-11-16 事故）。只用 stub driver、fixture、录制页面验证判定逻辑，能用 stub 跑的必须自己跑、留自己的证据，不得只读实现方证据包。口径里需要真实平台的部分在 PR 评论里列为「待人工」（用户在自己电脑上做），不计 pass 也不计 fail；没有 stub 就无法验证的条目发 escalation，由协调器处理
 9. 收尾必须关闭自己起的 Chrome 与测试服务：只按自己启动时的 pid/端口关（kill <pid> 或 lsof -ti :<端口> 后 kill），不碰 ~/.local/state/versekit/browser/ 下的登录窗口；验收结束时 ps 里不得有自己遗留的测试 Chrome
 EOF
-)
+}
+
+dispatch_acceptance() {
+  local queue
+  queue=$(node bin/agentctl.mjs claim --role acceptance --json 2>/dev/null) || {
+    log "  ✗ acceptance: 取队列失败"; return 1
+  }
+  # 队列里可能有多条。旧实现只看 queue[0]：队首有锁（已验过这个 head，或被协调器暂停）
+  # 就整队停派，后面的 PR 永远等不到验收。现在逐条找第一个没锁的。
+  local num="" pull="" head="" acc="" title="" total=0 skipped=0
+  while IFS=$'\t' read -r q_num q_pull q_head q_acc q_title; do
+    [ -n "$q_num" ] || continue
+    total=$((total + 1))
+    if [ -d "$LOCK_DIR/accept-$q_num-${q_head:0:8}.lock" ]; then
+      skipped=$((skipped + 1))
+      log "  · 验收 #$q_num @${q_head:0:7} 已派过（锁存在），看下一条"
+      continue
+    fi
+    num="$q_num"; pull="$q_pull"; head="$q_head"; acc="$q_acc"; title="$q_title"
+    break
+  done < <(printf '%s' "$queue" | python3 -c '
+import json,sys
+for q in (json.load(sys.stdin).get("queue") or []):
+    print("\t".join([str(q.get("number") or ""), str(q.get("pull") or ""), str(q.get("head") or ""), ", ".join(q.get("acc") or []), str(q.get("title") or "").replace("\t"," ")]))
+' 2>/dev/null || true)
+  if [ -z "$num" ]; then
+    if [ "$total" -eq 0 ]; then log "  · acceptance: 没有待验收的"; else log "  · acceptance: 队列 ${total} 条都已派过，等结果"; fi
+    return 0
+  fi
+
+  # 验收共用一个终端：上一单还没结算就不派下一单（否则 worker-start 会被拒）。
+  local prev rc_prev=0
+  prev=$(cat "$STATE_DIR/acceptance.dispatch" 2>/dev/null || true)
+  if [ -n "$prev" ]; then
+    worker_settled "$prev" || rc_prev=$?
+    if [ "$rc_prev" -eq 1 ]; then
+      log "  · 验收终端还在跑上一单（dispatch ${prev}），#$num 等下一轮"
+      return 0
+    fi
+  fi
+
+  if [ "$DRY" = "1" ]; then
+    if choose_worker_channel acceptance "" "" 1; then
+      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}（head ${head:0:7}，口径 ${acc}；角色 验收 → 通道 ${CHOSEN_CHANNEL} → 模型 ${CHOSEN_MODEL}）"
+    else
+      log "  · [dry-run] 会派验收：issue #$num / PR #${pull}；但 DeepSeek 通道不可用"
+    fi
+    log "$(acceptance_spec "$num" "$pull" "$head" "$acc" "${ACCEPTANCE_WT:-path:$(wt_parent)/acceptance}")"
+    return 0
+  fi
+
+  # 锁按 issue + head_sha：打回后同一 issue 的新 head 能立刻复审，不会被 TTL 误伤。
+  local lock="$LOCK_DIR/accept-$num-${head:0:8}.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    log "  · 验收 #$num @${head:0:7} 刚被别的进程派走，跳过"
+    return 0
+  fi
+
+  log "  → 验收 #${num}（PR #${pull}，head ${head:0:7}）$title"
+  local handle
+  if [ -z "$ACCEPTANCE_WT" ]; then
+    ACCEPTANCE_WT=$(ensure_acceptance_worktree) || { log "    ✗ 建验收 worktree 失败"; rm -rf "$lock"; return 1; }
+  fi
+  if ! handle=$(ensure_terminal acceptance "$ACCEPTANCE_WT" "verify: #$num"); then
+    log "    ✗ 起验收终端失败"
+    rm -rf "$lock"
+    return 1
+  fi
+
+  # 验收固定 DeepSeek：日志写明「角色 → 通道 → 模型」，并证明不会选 claude。
+  local ch md rsn
+  ch=$(terminal_field acceptance channel)
+  md=$(terminal_field acceptance model)
+  rsn=$(terminal_field acceptance reason)
+  if [ -n "$ch" ]; then
+    log "    · 角色 验收 → 通道 ${ch} → 模型 ${md}（${rsn}）"
+  fi
+  # 火山额度用尽记录由 coordinator-loop 写、dsh-model.sh 读；这里只把它写进日志，方便对上「为什么是千问」。
+  if [ -s "$STATE_DIR/volc-exhausted" ]; then
+    log "    · 火山额度用尽记录：$(cut -f2 "$STATE_DIR/volc-exhausted")（到期前 dsh-model.sh 直接选千问，到期自动恢复火山）"
+  fi
+
+  local spec
+  spec=$(acceptance_spec "$num" "$pull" "$head" "$acc" "$ACCEPTANCE_WT")
 
   local task taskid
   task=$(orca orchestration task-create --run "$RUN_ID" --from "$SENDER" --task-title "验收 #$num" --spec "$spec" --json 2>&1) || task=""
