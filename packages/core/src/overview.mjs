@@ -10,7 +10,7 @@
 // 一个作品发三端 = 1 个作品 + 3 条平台发布，这两个数不能互相替代。
 
 import { open } from "./index.mjs";
-import { currentGroup, listAccounts, listGroups, deriveStatus, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
+import { currentGroup, listAccounts, listGroups, deriveStatus, statusState, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
 import { withBaselines } from "./baseline.mjs";
 
 /** 1 小时内采集算「新鲜」；超过 24 小时仍未采集算「坏掉」。与总览页的 5/8 口径一致。 */
@@ -342,7 +342,7 @@ export function listWorksInScope(works, groupId) {
   if (!groupId) return works;
   const rows = open()
     .prepare(
-      `SELECT p.id AS publishId, p.work_id AS workId, p.state, p.cut_id AS cutId, a.platform, a.group_id AS groupId
+      `SELECT p.id AS publishId, p.work_id AS workId, p.state, p.error_code, p.cut_id AS cutId, a.platform, a.group_id AS groupId
          FROM publish p JOIN account a ON a.id = p.account_id`,
     )
     .all();
@@ -353,7 +353,7 @@ export function listWorksInScope(works, groupId) {
     everWithPublishes.add(r.workId);
     if (r.groupId !== groupId) continue;
     if (!mine.has(r.workId)) mine.set(r.workId, []);
-    mine.get(r.workId).push(r.state);
+    mine.get(r.workId).push(statusState(r));
     if (!mineRows.has(r.workId)) mineRows.set(r.workId, []);
     mineRows.get(r.workId).push({ publishId: r.publishId, platform: r.platform, state: r.state, cutId: r.cutId });
   }
@@ -385,9 +385,9 @@ export function showWorkInScope(workId, groupId) {
   );
   const cuts = work.cuts.map((c) => {
     const publishes = c.publishes.filter((p) => ids.has(p.id));
-    return { ...c, publishes, status: deriveStatus(publishes.map((p) => p.state)) };
+    return { ...c, publishes, status: deriveStatus(publishes.map(statusState)) };
   });
-  return { ...work, cuts, status: deriveStatus(cuts.flatMap((c) => c.publishes.map((p) => p.state))) };
+  return { ...work, cuts, status: deriveStatus(cuts.flatMap((c) => c.publishes.map(statusState))) };
 }
 
 /**
@@ -413,7 +413,7 @@ export function statsWithBaseline(rows) {
 
 export const TODAY_DEFINITIONS = {
   awaiting: "等确认的作品：有平台稿停在待确认的作品，按成片分；「这支先不发」的不催",
-  problems: "出了问题的平台稿：failed / blocked / expired",
+  problems: "出了问题的平台稿：failed / blocked / expired；以及已发出但被 YouTube 锁成私享的（published_limited + visibility_forced_private）",
   scheduled: "已确认等时间的队列：按计划时间从早到晚，没有时间的排最后",
   results: "最近发布满 24 小时的结果：发布已满 24 小时，最近的在前；倍数见 baseline",
   others: "其他每个账号组各有几件事等处理：待确认的成片数 + 出了问题的平台稿数",
@@ -421,6 +421,8 @@ export const TODAY_DEFINITIONS = {
 const RESULTS_LIMIT = 20;
 const AWAITING = new Set(["pending_confirm", "notify_pending", "draft_pending"]);
 const PROBLEM = new Set(["failed", "blocked", "expired"]);
+// 已发出但被平台锁成私享：视频在，可见性不是人要的。不能算「都发完了」，要留在今天页让人去改。
+const isProblem = (r) => PROBLEM.has(r.state) || (r.state === "published_limited" && r.error_code === "visibility_forced_private");
 const SCHEDULED = new Set(["queued", "auto_running", "draft_running"]);
 
 function todayRows(conn, groupId) {
@@ -475,7 +477,7 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
   const awaiting = [...works.values()].map((w) => ({ ...w, cuts: [...w.cuts.values()] }));
 
   const problems = rows
-    .filter((r) => PROBLEM.has(r.state))
+    .filter(isProblem)
     .map((r) => ({ ...item(r), error: r.error_code ? { code: r.error_code, message: r.error_message } : null }));
 
   const byTime = (a, b) => (a.scheduledAt ?? Infinity) - (b.scheduledAt ?? Infinity) || a.publishId.localeCompare(b.publishId);
@@ -505,7 +507,7 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
         .map((g) => {
           const theirs = todayRows(conn, g.id);
           const cuts = new Set(theirs.filter((r) => AWAITING.has(r.state)).map((r) => r.cutId ?? `none:${r.id}`));
-          const problemCount = theirs.filter((r) => PROBLEM.has(r.state)).length;
+          const problemCount = theirs.filter(isProblem).length;
           return { group: { id: g.id, name: g.name }, awaiting: cuts.size, problems: problemCount, total: cuts.size + problemCount };
         })
     : [];

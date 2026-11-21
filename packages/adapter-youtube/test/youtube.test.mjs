@@ -763,3 +763,62 @@ test("collect：视频读不到（被删或还是私享）→ 带人话的错，
   mock.state.videos.clear();
   await assert.rejects(adapterModule.default.collect({ publishId: id }), /读不到视频/);
 });
+
+// ------------------------------------------------------------------ 返工：CLI dry-run 真走到适配器；强制私享在今天页和作品页看得到
+
+test("ACC-youtube-01 vk publish <素材> --to youtube --dry-run：走到适配器彩排，给出标题/简介/标签/类目/可见性/预约/预计配额，且不写库不联网", async () => {
+  reset();
+  const a = await connectedAccount();
+  const file = fakeMp4(20);
+  const when = Date.now() + 3 * 3600e3;
+  const counts = () => ["work", "publish", "event"].map((t) => db().prepare(`SELECT COUNT(*) n FROM ${t}`).get().n);
+  const before = counts();
+  mock.state.requests.length = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => { throw new Error("dry-run 不应联网"); };
+  let out;
+  try {
+    out = await coreHandlers["publish.create"]({ asset: file, to: ["youtube"], group: a.groupId, title: "预演标题", body: "预演正文", tags: ["a", "b"], schedule: when, visibility: "public", dryRun: true });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(out.dryRun, true);
+  assert.deepEqual(counts(), before, "没有写任何行");
+  assert.equal(mock.state.requests.length, 0);
+  const v = out.publishes[0].preview;
+  assert.equal(v.resource.snippet.title, "预演标题");
+  assert.match(v.resource.snippet.description, /预演正文/);
+  assert.deepEqual(v.resource.snippet.tags, ["a", "b"]);
+  assert.ok(v.resource.snippet.categoryId);
+  assert.equal(v.resource.status.privacyStatus, "private", "预约发先私享");
+  assert.equal(v.resource.status.publishAt, new Date(when).toISOString());
+  assert.ok(v.estimatedQuota.inserts >= 1 && v.estimatedQuota.units >= 1);
+});
+
+test("ACC-youtube-01 dry-run 里就发不出去的（没有标题）照实写进预览，不吞掉", async () => {
+  reset();
+  const a = await connectedAccount();
+  const out = await coreHandlers["publish.create"]({ asset: fakeMp4(5), to: ["youtube"], group: a.groupId, title: "   ", dryRun: true });
+  assert.equal(out.publishes[0].preview.error.code, "asset_invalid");
+});
+
+test("ACC-youtube-04 强制私享：今天页列出、作品状态算出了问题、作品页有人话，不再是「都发完了」", async () => {
+  reset({ forcePrivate: true });
+  const a = await connectedAccount();
+  const id = plan(a, { title: "被锁私享" });
+  await drain();
+  assert.equal(row(id).state, "published_limited");
+  assert.equal(row(id).error_code, "visibility_forced_private");
+  const overview = await import("../../core/src/overview.mjs");
+  const today = overview.buildToday({ groupId: a.groupId });
+  const hit = today.problems.find((p) => p.publishId === id);
+  assert.ok(hit, "今天页的 problems 里有这条");
+  assert.equal(hit.error.code, "visibility_forced_private");
+  assert.match(hit.error.message, /锁成了私享/);
+  const work = overview.showWorkInScope(row(id).work_id, a.groupId);
+  assert.equal(work.status.key, "problem");
+  assert.equal(work.cuts[0].status.key, "problem");
+  const html = readFileSync(join(ROOT, "../web/public/work.html"), "utf8");
+  assert.match(html, /forcedPrivate/);
+  assert.match(readFileSync(join(ROOT, "../web/public/today.html"), "utf8"), /published_limited/);
+});

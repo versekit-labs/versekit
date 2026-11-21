@@ -312,8 +312,12 @@ function withPause(err, { clientId, accountId }) {
   return e;
 }
 
-async function publish({ publishId, asset, copy: givenCopy = null, dryRun = false, signal, onStep } = {}) {
-  const row = loadRow(publishId);
+async function publish({ publishId, asset, copy: givenCopy = null, dryRun = false, preview = null, signal, onStep } = {}) {
+  // CLI 的 `vk publish --dry-run` 还没有平台稿（不写任何行）：core 传 preview 和文案，只走到彩排为止。
+  if (!publishId && !(dryRun && preview && givenCopy)) throw new AdapterError("unknown", "缺少发布 id");
+  const row = publishId
+    ? loadRow(publishId)
+    : { id: null, mode: "auto", visibility: preview.visibility ?? "public", scheduled_at: preview.scheduledAt ?? null, external_id: null, overrides_json: null, published_at: null, account_id: preview.accountId ?? null, credential_ref: null };
   const copy = givenCopy ?? resolvePublishCopy(publishId);
   const meta = asObject(copy.metaJson);
   const overrides = asObject(row.overrides_json);
@@ -540,6 +544,8 @@ export default {
   },
   /** 暂停中的账号不再发（core 的 publish handler 读它）；暂停原因的人话由 pausedWhy 给。 */
   respectsPause: true,
+  /** 声明：publish({ dryRun, preview, copy }) 不需要平台稿也能彩排——core 的 vk publish --dry-run 据此输出「真发会提交什么」。 */
+  dryRunPreview: true,
   pausedWhy: "YouTube 今天的接口配额用完了",
   /** 预约发是上传时带 publishAt、由 YouTube 到点公开：core 在确认时就让它上传，而不是等到发布时间才开始传。 */
   nativeSchedule: true,

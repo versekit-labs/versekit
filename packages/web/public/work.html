@@ -43,7 +43,9 @@
 
   const PROBLEM = new Set(["failed", "blocked", "expired"]);
   const PUBLISHED = new Set(["published", "published_limited"]);
-  const hasProblem = (c) => c.publishes.some((p) => PROBLEM.has(p.state));
+  // 已发出但被平台锁成私享：不是「都发完了」，要让人去平台上改可见性；重试会重传，所以不给「再试一次」。
+  const forcedPrivate = (p) => p.state === "published_limited" && p.error?.code === "visibility_forced_private";
+  const hasProblem = (c) => c.publishes.some((p) => PROBLEM.has(p.state) || forcedPrivate(p));
 
   function pickCut(work, prefer) {
     if (prefer && work.cuts.some((c) => c.id === prefer)) return prefer;
@@ -62,10 +64,13 @@
     const ps = work.cuts.flatMap((c) => c.publishes);
     const n = (set) => ps.filter((p) => set.has(p.state)).length;
     switch (work.status?.key) {
-      case "problem": return ["bad", `有 ${n(PROBLEM)} 条出了问题`];
+      case "problem": return ["bad", `有 ${n(PROBLEM) + ps.filter(forcedPrivate).length} 条出了问题`];
       case "awaiting_confirm": return ["wait", `${n(new Set(["pending_confirm", "notify_pending", "draft_pending"]))} 条等你确认`];
       case "scheduled": return ["sched", `${n(new Set(["queued", "auto_running", "draft_running"]))} 条已确认，等时间`];
-      case "done": return ["pub", "都发完了"];
+      case "done": {
+        const forced = ps.filter(forcedPrivate).length;
+        return forced ? ["bad", `${forced} 条被锁成了私享`] : ["pub", "都发完了"];
+      }
       default: return ["", work.status?.label ?? ""];
     }
   }
@@ -111,7 +116,7 @@
     }
     const multi = work.cuts.length > 1;
     const [cls, txt] = workState(work);
-    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state) || p.state === "notify_pending");
+    const issues = cut.publishes.filter((p) => PROBLEM.has(p.state) || p.state === "notify_pending" || forcedPrivate(p));
     const current = VK.current();
 
     main.innerHTML =
@@ -122,9 +127,9 @@
       `<div>${cutSteps(work, cut.id)}<div class="sidebox ${multi ? "" : "first"}"><h2>经过${multi ? " · " + esc(cut.title) : ""}</h2>` +
       `<div class="tl" style="margin-top:6px">${events(work, cut).map(([at, t, bad]) => `<b>${esc(when(at).text)}</b><span class="${bad ? "bad" : ""}">${esc(t)}</span>`).join("")}</div></div></div></div>` +
       `<div class="below">` +
-      issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：${p.state === "notify_pending" && !p.error ? "需要你手动处理" : "没有发出去"}</b>` +
+      issues.map((p) => `<div class="note bad"><b>${esc(pfName(p.platform))}：${forcedPrivate(p) ? "已发出，但被锁成了私享" : p.state === "notify_pending" && !p.error ? "需要你手动处理" : "没有发出去"}</b>` +
         `<div class="why">${esc(p.error?.message ?? (p.state === "notify_pending" ? "这条停在待人工确认，处理好后可以直接再试一次" : "原因还没记下来"))}</div>` +
-        `<div class="acts"><button class="btn" type="button" data-retry="${esc(p.id)}">再试一次</button></div></div>`).join("") +
+        (forcedPrivate(p) ? "" : `<div class="acts"><button class="btn" type="button" data-retry="${esc(p.id)}">再试一次</button></div>`) + `</div>`).join("") +
       resultsTable(cut, multi) + `</div>` +
       ``;
 

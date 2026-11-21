@@ -1701,6 +1701,23 @@ async function cmdPublish() {
     for (const w of data.warnings ?? []) console.log(`注意：${w.reason}`);
     if (data.dryRun) {
       console.log(`试运行：${data.work.title} → ${data.publishes.map((p) => p.platform).join("、")}`);
+      for (const p of data.publishes) {
+        const v = p.preview;
+        if (!v) continue;
+        if (v.error) {
+          console.log(`  ${p.platform}：发不出去（${v.error.code}）${v.error.message}`);
+          continue;
+        }
+        const sn = v.resource?.snippet ?? {};
+        const st = v.resource?.status ?? {};
+        console.log(`  ${p.platform} 将提交：`);
+        console.log(`    标题：${sn.title ?? ""}`);
+        console.log(`    简介：${(sn.description ?? "").replace(/\n/g, " ⏎ ")}`);
+        console.log(`    标签：${(sn.tags ?? []).join("、") || "（无）"}`);
+        console.log(`    类目：${sn.categoryId ?? "（默认）"}`);
+        console.log(`    可见性：${st.privacyStatus ?? ""}${st.publishAt ? `，预约 ${st.publishAt} 公开` : ""}`);
+        if (v.estimatedQuota != null) console.log(`    预计配额：${typeof v.estimatedQuota === "object" ? `上传 ${v.estimatedQuota.inserts} 次 + 其余 ${v.estimatedQuota.units} 单位` : v.estimatedQuota}`);
+      }
       console.log("没有写入任何行，也没有对外动作");
     } else {
       console.log(`已创建 ${data.publishes.length} 条发布，等你确认（确认前不会发）：`);

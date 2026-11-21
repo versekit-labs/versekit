@@ -239,7 +239,31 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
       // Dry-run answers "what would happen" without writing rows or touching a network.
       if (dryRun) {
-        return { accounts, result: { ...base, dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false } };
+        const result = { ...base, dryRun: true, work: { title: workTitle, asset }, publishes: planned, queued: false };
+        // 适配器声明了 dryRunPreview 的，真的调它的彩排：输出这条真发会提交的元数据。彩排不联网、不写库。
+        const previewers = accounts.filter((a) => byPlatform.get(a.platform)?.adapter?.dryRunPreview === true);
+        if (!previewers.length) return { accounts, result };
+        return {
+          accounts,
+          result: Promise.all(
+            previewers.map(async (a) => {
+              const entry = planned.find((p) => p.accountId === a.id);
+              try {
+                const out = await byPlatform.get(a.platform).adapter.publish({
+                  publishId: null,
+                  asset,
+                  dryRun: true,
+                  preview: { accountId: a.id, visibility, scheduledAt: schedule ?? null },
+                  copy: { title: workTitle, body: body ?? "", tags: tags ?? [], language: null, metaJson: null },
+                });
+                entry.preview = out?.request ?? out ?? null;
+              } catch (err) {
+                // 彩排里就发现发不出去（标题超长、文件不对……）：照实写进这条的预览，不吞掉。
+                entry.preview = { error: { code: err?.code ?? "unknown", message: String(err?.message ?? err) } };
+              }
+            }),
+          ).then(() => result),
+        };
       }
 
     const commit = (extra) => {
