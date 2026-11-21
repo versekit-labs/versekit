@@ -6,9 +6,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { TRANSITIONS, canTransition, issueAccIds, parseVerdict, validateScope } from "../../../bin/agentctl.mjs";
@@ -178,12 +180,18 @@ const greenChecks = {
   ].map((name) => ({ name, status: "completed", conclusion: "success" })),
 };
 
-async function mockAgentctl(t, routes) {
-  const server = createServer((req, res) => {
+async function mockAgentctl(t, routes, env = {}) {
+  const server = createServer(async (req, res) => {
     const path = new URL(req.url, "http://localhost").pathname.replace(/^\/repos\/example\/versekit\//, "");
-    const data = req.method === "GET" && routes.get(path);
-    res.writeHead(data ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(data || `${req.method} ${path}`));
+    const route = routes.get(req.method === "GET" ? path : `${req.method} ${path}`);
+    let data = route;
+    if (typeof route === "function") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      data = route(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined);
+    }
+    res.writeHead(data === undefined ? 404 : 200, { "content-type": "application/json" });
+    res.end(JSON.stringify(data ?? `${req.method} ${path}`));
   });
   t.after(() => server.close());
   await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
@@ -198,6 +206,8 @@ async function mockAgentctl(t, routes) {
         GIT_CONFIG_VALUE_0: "https://github.com/example/versekit.git",
         GH_TOKEN: "fixture",
         AGENTCTL_API_BASE: `http://127.0.0.1:${server.address().port}`,
+        GIT_ALLOW_PROTOCOL: "file",
+        ...env,
       },
       timeout: 10_000,
     });
@@ -221,6 +231,7 @@ test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍�
     ["issues", issues],
     ["pulls", pulls],
     [`commits/${verdictHead}/check-runs`, greenChecks],
+    ...pulls.map((pull) => [`pulls/${pull.number}`, { ...pull, mergeable: true }]),
     ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{ id: number, body: verdicts[index] }]]),
     ["issues/1", issues[0]],
   ]));
@@ -233,6 +244,151 @@ test("merge --pending --dry-run：五种写法都通过覆盖检查，缺项仍�
     "--expected", "显示确认消息", "--observed", "没有提示", "--repro", "修改标题并保存", "--dry-run");
   assert.match(body, /\nfailed:\n  - id: ACC-harness-verdict-02\n/);
   assert.equal(parseVerdict(body).verdict, "FAIL");
+});
+
+async function mergeFixture(t, { head = verdictHead, base, mergeable, env } = {}) {
+  const issue = { number: 1, labels: ["s:accept", "model:codex"], body: "ACC-harness-merge-01", state: "open" };
+  const pull = {
+    number: 101, state: "open", body: "Closes #1",
+    base: { ref: "main", sha: base }, head: { ref: "issue-1", sha: head },
+  };
+  const detail = { ...pull, mergeable };
+  const comments = [{ id: 1, created_at: "2026-01-02", body: verdictComment("acceptance:\n  ACC-harness-merge-01: pass").replace(verdictHead, head) }];
+  const writes = [];
+  const record = (action, fn) => (body) => {
+    writes.push({ action, body });
+    return fn(body);
+  };
+  const routes = new Map([
+    ["issues", [issue]],
+    ["issues/1", issue],
+    ["pulls", [pull]],
+    ["pulls/101", detail],
+    [`commits/${head}/check-runs`, greenChecks],
+    ["issues/101/comments", comments],
+    ["POST issues/101/comments", record("comment", ({ body }) => {
+      const comment = { id: 2, created_at: "2026-01-03", html_url: "https://example.test/comment/2", body };
+      comments.push(comment);
+      return comment;
+    })],
+    ["POST issues/1/labels", record("addLabels", ({ labels }) => {
+      issue.labels.push(...labels);
+      return issue.labels;
+    })],
+    ["PUT issues/1/labels", record("setLabels", ({ labels }) => {
+      issue.labels = labels;
+      return labels;
+    })],
+    ["PUT pulls/101/merge", record("merge", () => {
+      detail.merge_commit_sha = "1234567";
+      return { merged: true };
+    })],
+    ["PATCH issues/1", record("close", (body) => Object.assign(issue, body))],
+  ]);
+  for (const label of ["s:review", "s:accept", "s:changes"]) {
+    routes.set(`DELETE issues/1/labels/${encodeURIComponent(label)}`, record("removeLabel", () => {
+      issue.labels = issue.labels.filter((name) => name !== label);
+      return {};
+    }));
+  }
+  const run = await mockAgentctl(t, routes, env);
+  return { run, issue, detail, comments, writes };
+}
+
+test("ACC-harness-merge-01：冲突转 s:changes，列出冲突文件且不增加质量返工轮次", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "agentctl-conflict-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const git = async (...args) => (await promisify(execFile)("git", [
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+    "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", ...args,
+  ], { cwd: dir })).stdout.trim();
+  const file = join(dir, "shared file.txt");
+  await git("init", "-b", "main");
+  await writeFile(file, "common\n");
+  await git("add", ".");
+  await git("commit", "-m", "common");
+  await git("switch", "-c", "issue-1");
+  await writeFile(file, "head\n");
+  await writeFile(join(dir, "head-only.txt"), "no conflict\n");
+  await git("add", ".");
+  await git("commit", "-m", "head");
+  const head = await git("rev-parse", "HEAD");
+  await git("switch", "main");
+  await writeFile(file, "base\n");
+  await git("commit", "-am", "base");
+  const base = await git("rev-parse", "HEAD");
+  const cache = join(dir, ".coordinator.git");
+  await git("init", "--bare", cache);
+  const { run, issue, comments, writes } = await mergeFixture(t, {
+    head, base, mergeable: false,
+    env: {
+      GIT_DIR: cache,
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_1: `url.${pathToFileURL(dir).href}.insteadOf`,
+      GIT_CONFIG_VALUE_1: "https://github.com/example/versekit.git",
+    },
+  });
+
+  issue.labels[0] = "s:review";
+  const dry = await run("merge", "--pending", "--dry-run");
+  assert.match(dry.results[0].problems[0], /跟 main 冲突，会打回 s:changes/);
+  assert.deepEqual(writes, []);
+  issue.labels[0] = "s:accept";
+  const { results } = await run("merge", "--pending");
+  assert.deepEqual(results, [{ issue: 1, merged: false, handback: true, pull: 101 }]);
+  assert.deepEqual(writes.map(({ action }) => action), ["comment", "setLabels"]);
+  assert.deepEqual(issue.labels.sort(), ["model:codex", "s:changes"]);
+  const comment = comments.at(-1);
+  assert.equal(parseVerdict(comment.body).verdict, "FAIL");
+  assert.equal(parseVerdict(comment.body).headSha, head);
+  assert.match(comment.body, /跟 main 冲突，合并 main 解决冲突后重验/);
+  assert.match(comment.body, /冲突文件\n\n    "shared file\.txt"/);
+  assert.doesNotMatch(comment.body, /head-only/);
+  assert.deepEqual((await run("merge", "--pending")).results, []);
+  assert.equal(comments.length, 2, "再次巡检不会重复发表评论");
+  issue.labels = ["s:accept", "model:codex"]; // 评论已经写入，但上次状态迁移未落地。
+  assert.deepEqual((await run("merge", "--pending")).results, results);
+  assert.deepEqual(writes.map(({ action }) => action), ["comment", "setLabels", "setLabels"]);
+
+  const firstClaim = (await run("claim", "--role", "rework", "--dry-run")).wouldClaim[0];
+  assert.equal(firstClaim.round, 0);
+  assert.equal(firstClaim.commentBody, comment.body);
+  comments.unshift({ id: 3, created_at: "2026-01-01", body: " ```yaml\nverdict: FAIL\nhead_sha: abc1234\n```" });
+  const nextClaim = (await run("claim", "--role", "rework", "--dry-run")).wouldClaim[0];
+  assert.equal(nextClaim.round, 1, "一次历史质量 FAIL 加一次合并冲突仍为第一轮，不触发升模型");
+  assert.equal(nextClaim.commentBody, comment.body);
+
+  const cycle = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
+  const spec = /^rework_spec\(\) \{\n[\s\S]*?^\}/m.exec(cycle)?.[0];
+  assert.ok(spec);
+  const { stdout } = await promisify(execFile)("/bin/bash", [
+    "-eu", "-c", `${spec}\nrework_spec "$@"`, "fixture",
+    "1", "example", "101", "issue-1", "1", comment.html_url, comment.body, dir, issue.body, "",
+  ]);
+  assert.match(stdout, /在原分支拉取并合并 PR 的目标分支.*推送新 head 供重新验收/);
+  assert.doesNotMatch(stdout, /按最近验收意见/);
+});
+
+test("ACC-harness-merge-01：mergeable 为 null 时跳过，下轮为 true 时用已验收的 SHA 合并", async (t) => {
+  const { run, issue, detail, writes } = await mergeFixture(t, { mergeable: null });
+
+  const waiting = await run("merge", "--pending");
+  assert.match(waiting.results[0].problems[0], /正在计算.*下轮再检查/);
+  assert.deepEqual(writes, []);
+  assert.equal(issue.state, "open");
+
+  detail.mergeable = true;
+  detail.head = { ...detail.head, sha: "def12345".repeat(5) };
+  const stale = await run("merge", "--pending");
+  assert.match(stale.results[0].problems[0], /head 已变更/);
+  assert.deepEqual(writes, []);
+
+  detail.head = { ...detail.head, sha: verdictHead };
+  const { results } = await run("merge", "--pending");
+  assert.deepEqual(results, [{ issue: 1, merged: true, pull: 101, head: verdictHead, mergeSha: "1234567" }]);
+  assert.deepEqual(writes[0], { action: "merge", body: { merge_method: "squash", sha: verdictHead } });
+  assert.deepEqual(issue.labels.sort(), ["model:codex", "s:done"]);
+  assert.equal(issue.state, "closed");
 });
 
 const coreIssue = (path, acceptance = "- [ACC-arch-09]") =>
@@ -294,11 +450,13 @@ test("ACC-harness-arch-01：merge 只认 PR 正文六问小节内的全部六个
     number: number + 100,
     body: `Closes #${number}\n\n${cases[index].description}`,
     head: { sha: verdictHead },
+    state: "open",
   }));
   const run = await mockAgentctl(t, new Map([
     ["issues", issues],
     ["pulls", pulls],
     [`commits/${verdictHead}/check-runs`, greenChecks],
+    ...pulls.map((pull) => [`pulls/${pull.number}`, { ...pull, mergeable: true }]),
     ...pulls.map(({ number }, index) => [`issues/${number}/comments`, [{
       id: number,
       body: verdictComment(`acceptance:\n  ACC-account-01: pass${cases[index].ordinary ? "" : "\n  ACC-arch-09: pass"}`),

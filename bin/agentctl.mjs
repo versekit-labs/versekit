@@ -786,11 +786,11 @@ async function claimRework(repo, candidates, pulls, { json, dryRun }) {
       });
       continue;
     }
-    // 轮次只数仍然有效的 FAIL：被协调器作废的（环境原因）不算。验收人自报的 round
-    // 会把作废的那几轮也数进去，所以不采信它。
-    const round = effectiveFailCount(comments) || 1;
+    // 轮次只数仍然有效的质量 FAIL；合并冲突和已作废判定都不计。
+    const mergeConflict = fail.body.startsWith(MERGE_CONFLICT_MARKER);
+    const round = effectiveFailCount(comments) || (mergeConflict ? 0 : 1);
 
-    if (round >= MAX_ROUNDS) {
+    if (!mergeConflict && round >= MAX_ROUNDS) {
       if (!dryRun) {
         await replaceState(repo, issue.number, "blocked");
         await addHumanHold(repo, issue.number);
@@ -1195,6 +1195,7 @@ async function cmdSet(repo, { issue, to, json, force }) {
 const MAX_ROUNDS = 3;
 const HANDOVER_MARKER = "<!-- agent-handback -->";
 const MERGE_MARKER = "<!-- agent-merge -->";
+const MERGE_CONFLICT_MARKER = "<!-- agent-merge-conflict -->";
 /** 协调器作废一条验收判定时留的评论标记（`agentctl void`）。 */
 const VOID_MARKER = "<!-- agent-verdict-void -->";
 
@@ -1317,9 +1318,10 @@ function latestFail(comments) {
   return null;
 }
 
-/** 有效 FAIL 的条数 = 已经真正打回过几轮。 */
+/** 有效质量 FAIL 的条数，用于返工轮次与模型选择。 */
 function effectiveFailCount(comments) {
-  return effectiveVerdictComments(comments).filter((c) => parseVerdict(c.body)?.verdict === "FAIL").length;
+  return effectiveVerdictComments(comments)
+    .filter((c) => !c.body.startsWith(MERGE_CONFLICT_MARKER) && parseVerdict(c.body)?.verdict === "FAIL").length;
 }
 
 async function listComments(repo, number) {
@@ -1348,10 +1350,17 @@ async function gateStatus(repo, sha) {
   return { ok: results.every((r) => r.status === "completed" && r.conclusion === "success"), results };
 }
 
-async function replaceState(repo, number, to) {
+async function replaceState(repo, number, to, { from } = {}) {
   const base = `/repos/${repo.owner}/${repo.repo}/issues/${number}/labels`;
   const cur = await api(`/repos/${repo.owner}/${repo.repo}/issues/${number}`);
-  const labels = (cur.data.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
+  const { names: labels, state, hold, problem } = readState(cur.data);
+  if (from) {
+    if (state !== from || hold || problem) return false;
+    // 一次请求完成冲突打回，避免失败时丢掉源 label，下一轮才能补做迁移。
+    const next = labels.map((name) => name === `s:${from}` ? `s:${to}` : name);
+    await api(base, { method: "PUT", body: { labels: next } });
+    return true;
+  }
   for (const name of labels.filter((n) => n.startsWith("s:"))) {
     try {
       await api(`${base}/${encodeURIComponent(name)}`, { method: "DELETE" });
@@ -1360,6 +1369,7 @@ async function replaceState(repo, number, to) {
     }
   }
   await api(base, { method: "POST", body: { labels: [`s:${to}`] } });
+  return true;
 }
 
 /**
@@ -1553,6 +1563,62 @@ function acceptanceLocks(number) {
     .map((n) => join(dir, n));
 }
 
+/** GitHub 只回报是否冲突；用同一对提交计算实际冲突路径，不切分支、不动索引。 */
+function mergeConflictFiles(pull) {
+  const commits = [pull.base.sha, pull.head.sha];
+  const git = (args) => execFileSync("git", args, {
+    cwd: ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 30_000,
+  });
+  const missing = commits.filter((sha) => {
+    try {
+      git(["cat-file", "-e", `${sha}^{commit}`]);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (missing.length) {
+    git(["fetch", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--refmap=", "origin", ...missing]);
+  }
+  try {
+    git(["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", ...commits]);
+  } catch (err) {
+    if (err.status !== 1) throw err;
+    return err.stdout.split("\0").slice(1).filter(Boolean);
+  }
+  return [];
+}
+
+async function postMergeConflict(repo, pull) {
+  const reason = `跟 ${pull.base.ref} 冲突，合并 ${pull.base.ref} 解决冲突后重验。`;
+  let files = [];
+  try {
+    files = mergeConflictFiles(pull);
+  } catch (err) {
+    process.stderr.write(`PR #${pull.number} 无法读取冲突文件：${err.stderr?.trim() || err.message}\n`);
+  }
+  const body = [
+    MERGE_CONFLICT_MARKER,
+    "## 合并检查：FAIL",
+    "",
+    reason,
+    "",
+    ...(files.length
+      ? ["冲突文件", "", ...files.map((file) => `    ${JSON.stringify(file)}`)]
+      : ["未能列出冲突文件，请合并目标分支后用 git diff --name-only --diff-filter=U 查看。"]),
+    "",
+    "```yaml",
+    "verdict: FAIL",
+    `head_sha: ${pull.head.sha}`,
+    "source: merge-conflict",
+    "```",
+  ].join("\n");
+  await api(`/repos/${repo.owner}/${repo.repo}/issues/${pull.number}/comments`, { method: "POST", body: { body } });
+}
+
 async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
   const board = await loadBoard(repo);
   let targets;
@@ -1580,16 +1646,25 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
       verdict = latestVerdict(comments);
     }
 
+    const headOk = verdict?.headSha && pull?.head.sha.startsWith(verdict.headSha);
+    const conflictHandback = verdict?.body.startsWith(MERGE_CONFLICT_MARKER);
+    if (!hold && headOk && verdict?.verdict === "FAIL" && (state === "review" || (state === "accept" && conflictHandback))) {
+      // 合并冲突评论已落地时，重试只补迁移，避免重复发表评论。
+      if (dryRun) {
+        results.push({ issue: issue.number, merged: false, problems: ["[dry-run] 会打回 s:changes"] });
+      } else {
+        const changed = await replaceState(repo, issue.number, "changes", { from: conflictHandback ? state : undefined });
+        results.push(changed
+          ? { issue: issue.number, merged: false, handback: true, pull: pull.number }
+          : { issue: issue.number, merged: false, problems: ["issue 状态已变更，跳过打回"] });
+      }
+      continue;
+    }
+
     // review → accept 的迁移由这里做：verdict=PASS 且 head 对得上才算验收通过。
     if (state === "review") {
-      const headOk = verdict?.headSha && pull?.head.sha.startsWith(verdict.headSha);
       if (verdict?.verdict === "PASS" && headOk) {
-        await replaceState(repo, issue.number, "accept");
-      } else if (verdict?.verdict === "FAIL" && headOk) {
-        // 验收方只给判定，迁移由协调器做——否则"谁改了状态"永远说不清。
-        await replaceState(repo, issue.number, "changes");
-        results.push({ issue: issue.number, merged: false, handback: true, pull: pull?.number ?? null });
-        continue;
+        if (!dryRun && !hold) await replaceState(repo, issue.number, "accept");
       } else {
         continue; // 还在验收中（没有 verdict）或 verdict 与 head 不匹配
       }
@@ -1634,17 +1709,41 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
       continue;
     }
 
+    // PR 列表没有 mergeable；详情也可能比列表更新，必须沿用已验收的 head。
+    const pullPath = `/repos/${repo.owner}/${repo.repo}/pulls/${pull.number}`;
+    const { data: current } = await api(pullPath);
+    if (current.state !== "open" || current.draft || current.head.sha !== pull.head.sha) {
+      results.push({ issue: issue.number, merged: false, problems: ["PR 状态或 head 已变更，下轮重新检查"] });
+      continue;
+    }
+    if (current.mergeable === false) {
+      if (dryRun) {
+        results.push({ issue: issue.number, merged: false, problems: [`[dry-run] 跟 ${current.base.ref} 冲突，会打回 s:changes`] });
+      } else {
+        await postMergeConflict(repo, current);
+        const changed = await replaceState(repo, issue.number, "changes", { from: "accept" });
+        results.push(changed
+          ? { issue: issue.number, merged: false, handback: true, pull: pull.number }
+          : { issue: issue.number, merged: false, problems: ["issue 状态已变更，跳过打回"] });
+      }
+      continue;
+    }
+    if (current.mergeable !== true) {
+      results.push({ issue: issue.number, merged: false, problems: ["GitHub 正在计算 PR 的 mergeable，下轮再检查"] });
+      continue;
+    }
+
     if (dryRun) {
       results.push({ issue: issue.number, merged: false, dryRun: true, pull: pull.number, head: pull.head.sha });
       continue;
     }
 
     // sha 作为守卫：合并瞬间 head 变了，GitHub 会拒绝，而不是合进没验过的代码。
-    await api(`/repos/${repo.owner}/${repo.repo}/pulls/${pull.number}/merge`, {
+    await api(`${pullPath}/merge`, {
       method: "PUT",
       body: { merge_method: "squash", sha: pull.head.sha },
     });
-    const receipt = await api(`/repos/${repo.owner}/${repo.repo}/pulls/${pull.number}`);
+    const receipt = await api(pullPath);
     const mergeSha = receipt.data.merge_commit_sha ?? null;
 
     await replaceState(repo, issue.number, "done");
@@ -1678,7 +1777,7 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
   } else {
     for (const r of results) {
       if (r.merged) process.stdout.write(`✓ 合并 #${r.issue}（PR #${r.pull} → ${(r.mergeSha ?? "").slice(0, 7)}）\n`);
-      else if (r.handback) process.stdout.write(`↩ #${r.issue} 判定 FAIL → s:changes（PR #${r.pull}，回原分支改）\n`);
+      else if (r.handback) process.stdout.write(`↩ #${r.issue} 已打回 s:changes（PR #${r.pull}，按评论在原分支处理）\n`);
       else if (r.dryRun) process.stdout.write(`· [dry-run] 会合并 #${r.issue}（PR #${r.pull}，head ${String(r.head).slice(0, 7)}）\n`);
       else process.stdout.write(`✗ 不合并 #${r.issue}：\n${r.problems.map((p) => `    - ${p}`).join("\n")}\n`);
     }
