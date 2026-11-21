@@ -35,6 +35,7 @@ vk publish approve --cut <cutId>   # 人确认后才发
   "cuts": [
     {
       "title": "长片",
+      "cover": "long-cover.jpg",
       "copy": {
         "bilibili":    { "title": "……", "body": "……", "tags": ["话题1", "话题2"] },
         "xiaohongshu": { "title": "……", "body": "……", "tags": ["话题1"] },
@@ -56,6 +57,7 @@ vk publish approve --cut <cutId>   # 人确认后才发
 ```
 
 - `asset` 相对清单所在目录；可以是视频文件，或图片目录（图文）。
+- `cover`（可选）：封面图片路径，相对清单所在目录，jpg / png / webp / gif。写在成片上，所有语言版本共用；某个语言版本要自己的封面就写在那个版本上。作品列表、今天页等处有封面就显示它，没写才退回成片视频的首帧。`vk work add` 和 `vk work push` 都会带上它（push 时封面和成片一起传到中转，发布机拉取后还在）。路径不是图片或文件不存在会被拒绝。trustbridge 做好的封面直接写这里。
 - `copy` 可以写在成片上（所有语言版本共用），也可以写在语言版本上（按平台覆盖成片级的）。
 - `copy` 里 `title` / `body` / `tags` 三个键直接写 = **默认文案**；以平台名为键 = 该平台文案；两种可以并用，平台文案按字段盖住默认文案。
 - `tags` 是字符串数组，**不带 `#`**（写了也会去掉）。

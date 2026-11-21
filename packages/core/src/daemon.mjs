@@ -123,10 +123,15 @@ const MEDIA_TYPES = new Map([
 ]);
 
 /** versionId → 素材绝对路径。只认 cut_version 表里的行；不认识的一律 null。 */
-function resolveMediaPath(versionId) {
+function resolveMediaPath(versionId, { cover = false } = {}) {
   if (typeof versionId !== "string" || !versionId.trim()) return null;
   try {
-    return open().prepare("SELECT asset_path FROM cut_version WHERE id = ?").get(versionId)?.asset_path ?? null;
+    const row = open().prepare("SELECT asset_path, meta_json FROM cut_version WHERE id = ?").get(versionId);
+    if (!cover) return row?.asset_path ?? null;
+    // 入库封面（ACC-v3-fid-10）：只认库里这个版本 meta.cover 指向的文件，URL 不带任何路径。
+    let c = null;
+    try { c = JSON.parse(row?.meta_json ?? "null")?.cover; } catch { c = null; }
+    return typeof c === "string" && c ? c : null;
   } catch {
     return null;
   }
@@ -154,8 +159,8 @@ function parseRange(header, size) {
   return { start, end: Math.min(end, size - 1) };
 }
 
-function serveMedia(req, res, { versionId }) {
-  const asset = resolveMediaPath(versionId);
+function serveMedia(req, res, { versionId, cover = false }) {
+  const asset = resolveMediaPath(versionId, { cover });
   if (!asset) {
     return send(res, 404, {
       ok: false,
@@ -529,7 +534,7 @@ export function createDispatcher({ handlers, log = () => {}, doctor = null, webR
       } catch {
         versionId = "";
       }
-      return serveMedia(req, res, { versionId });
+      return serveMedia(req, res, { versionId, cover: url.searchParams.get("cover") === "1" });
     }
 
     // 浏览器打开的是本地控制台；/api/* 之外只有静态页。

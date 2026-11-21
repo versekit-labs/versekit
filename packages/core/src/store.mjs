@@ -4,7 +4,7 @@
 // same five things everywhere (work row, publish row, queue entry, validation, readable error).
 
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { open, newId, paths, DEFAULT_LANGUAGE, transitionPublish, emit } from "./index.mjs";
 import { queuePublish } from "./runner.mjs";
 import { withBaselines } from "./baseline.mjs";
@@ -429,7 +429,9 @@ export function checkWorkPlan({ title, source = null, cuts }) {
         seenLang.add(language);
         const where = `成片「${cutTitle}」${language} 版本`;
         const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`));
-        const meta = copy ? { ...(v?.meta ?? {}), copy } : v?.meta ?? null;
+        const cover = normaliseCover(v, c, where);
+        const meta0 = copy ? { ...(v?.meta ?? {}), copy } : v?.meta ?? null;
+        const meta = cover ? { ...(meta0 ?? {}), cover } : meta0;
         return { language, asset: requireString(v?.asset ?? "", `${where}的素材路径`, { max: 4096 }), meta };
       }),
     };
@@ -437,6 +439,17 @@ export function checkWorkPlan({ title, source = null, cuts }) {
   const src = source == null ? plan[0].versions[0].asset : requireString(source, "来源", { max: 4096 });
   const sourceKey = resolve(src);
   return { t, plan, sourceKey };
+}
+
+const COVER_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
+
+/** 清单里的 cover：图片路径（成片级打底、版本级覆盖）。没写是 null，写了就必须是图片。 */
+function normaliseCover(v, c, where) {
+  const raw = v?.cover ?? c?.cover;
+  if (raw == null || raw === "") return null;
+  const path = requireString(raw, `${where}的封面路径`, { max: 4096 });
+  if (!COVER_EXTS.has(extname(path).toLowerCase())) fail(`${where}的封面要是图片（jpg / png / webp / gif）：${path}`);
+  return path;
 }
 
 const editedList = (json) => {
@@ -814,7 +827,10 @@ function workView(work) {
     const versions = conn
       .prepare("SELECT id, language, asset_path, created_at, meta_json FROM cut_version WHERE cut_id = ? ORDER BY rowid")
       .all(c.id)
-      .map((v) => ({ id: v.id, language: v.language, asset: v.asset_path, generic: genericCopyOf(v.meta_json) }));
+      .map((v) => {
+        const cover = asObject(v.meta_json)?.cover;
+        return { id: v.id, language: v.language, asset: v.asset_path, generic: genericCopyOf(v.meta_json), ...(typeof cover === "string" && cover ? { cover: `/media/${v.id}?cover=1` } : {}) };
+      });
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
@@ -889,7 +905,9 @@ export function listWorks({ limit = 100 } = {}) {
         publishes: v.cuts.reduce((n, c) => n + c.publishes.length, 0),
         createdAt: v.createdAt,
         platformList: v.cuts.flatMap((c) => c.publishes.map((p) => ({ publishId: p.id, platform: p.platform, state: p.state, cutId: c.id }))),
-        coverVersionId: v.cuts.flatMap((c) => c.versions)[0]?.id ?? null,
+        coverVersionId: (v.cuts.flatMap((c) => c.versions).find((x) => x.cover) ?? v.cuts.flatMap((c) => c.versions)[0])?.id ?? null,
+        // 入库封面（ACC-v3-fid-10）：有就给地址，没有是 null，页面退回首帧。
+        cover: v.cuts.flatMap((c) => c.versions).find((x) => x.cover)?.cover ?? null,
         // 有倍数的已发平台稿（页面取最大的一条当「最好的一条」；按组过滤要靠 publishId，所以带上）。
         compared: v.cuts.flatMap((c) =>
           c.publishes.filter((p) => p.multiple != null).map((p) => ({ publishId: p.id, platform: p.platform, cutId: c.id, multiple: p.multiple, verdictLabel: p.verdictLabel })),
