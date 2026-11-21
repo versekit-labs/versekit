@@ -25,7 +25,6 @@ const { AdapterError } = await import("../../core/src/errors.mjs");
 const { publishInputFor } = await import("../../core/src/publish-flow.mjs");
 const { buildHandlers, checkAccount } = await import("../../core/src/adapters.mjs");
 const { planRules, describeRules } = await import("../../core/src/plan-rules.mjs");
-const { updateConfig } = await import("../../core/src/config.mjs");
 const { createSim } = await import("./sim-page.mjs");
 
 core.migrate();
@@ -155,7 +154,6 @@ test("[02] 真实站点上的 dry-run 只出计划：不开浏览器、不联网
     assert.equal(out.request.title, "离线模拟页：AI 剪辑工作流");
     assert.deepEqual(out.request.topics, ["AI工具", "效率"]);
     assert.equal(out.request.cover, "平台默认封面");
-    assert.equal(out.request.quota.cap, 3);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -183,7 +181,6 @@ test("[02] 本机模拟页上的 dry-run 真走一遍，停在「存草稿」前
   assert.equal(sim.site.form.title, "彩排标题");
   assert.match(sim.site.form.coverSrc, /封面\.png/, "封面已经设上了，才算彩排到「存草稿」前一步");
   assert.equal(sim.site.closed, sim.site.opened, "tab 要关");
-  assert.equal(state.draftsToday(acc, sim.now()), 0, "dry-run 不占今天的额度");
   void adapter;
 });
 
@@ -215,7 +212,6 @@ test("[03] 存草稿全流程：上传 → 标题 → 正文 → 话题 → 封�
   assert.ok(site.log.indexOf("click save-draft") > site.log.indexOf("cover done"));
   assert.ok(site.log.lastIndexOf("open drafts") > site.log.indexOf("click save-draft"), "存完要回草稿箱核实");
   assert.deepEqual(steps.slice(0, 3), ["数草稿箱里已有的同名草稿", "打开上传页并选择视频", "填写标题"]);
-  assert.equal(state.draftsToday(acc, sim.now()), 1, "回读成功才记一条额度");
 });
 
 test("[03] 标题刚好 55 字可以，56 字在开浏览器之前就报错（asset_invalid，没有截图因为没开页面）", async () => {
@@ -278,7 +274,6 @@ test("[03] 点了存草稿，草稿箱里没多出这一条 → flaky_ui + 截�
   const err = await rejects(adapter.publish(input()), "flaky_ui");
   assert.match(err.message, /草稿箱里没有多出/);
   assert.ok(hasShot(err));
-  assert.equal(state.draftsToday(acc, sim.now()), 0);
 });
 
 test("[03] 草稿箱里已经有同名草稿时，按「多出一条」核实，不会把旧的当成这一条", async () => {
@@ -445,44 +440,23 @@ test("[05] 发布时被踢回登录页 → auth + 截图；core 把账号转需�
 
 // ------------------------------------------------------------------ ACC-douyin-06 安全预算与错误
 
-test("[06] 每个账号每天送草稿箱默认 3 条，沿用按平台额度；别的平台不受影响；可改", () => {
-  assert.equal(planRules("douyin").dailyCap, 3);
-  assert.equal(planRules("xiaohongshu").dailyCap, 10);
-  assert.equal(planRules("tiktok").dailyCap, 10);
+test("[06] 适配器不另设每日条数上限：同一账号当天第 4、5 条照样送进草稿箱，抖音沿用全局默认额度", async () => {
+  assert.equal(planRules("douyin").dailyCap, planRules("xiaohongshu").dailyCap, "抖音没有比别的平台更小的内置上限");
   assert.equal(describeRules("douyin").isDefault, true);
-  assert.equal(describeRules("douyin").dailyCap, 3);
-  updateConfig({ plan: { rules: { platforms: { douyin: { daily_cap: 5 } } } } });
-  try {
-    assert.equal(planRules("douyin").dailyCap, 5);
-    assert.equal(describeRules("douyin").isDefault, false);
-    assert.equal(planRules("tiktok").dailyCap, 10);
-  } finally {
-    updateConfig({ plan: { rules: { platforms: { douyin: null } } } });
-  }
-  assert.equal(planRules("douyin").dailyCap, 3, "改回去后恢复默认");
-});
-
-test("[06] 到每日上限就不再送：说明原因、不开浏览器；第二天重新计数", async () => {
   const acc = `acc_dy_cap_${++seq}`;
   const start = new Date(2026, 10, 21, 9, 0, 0).getTime();
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const s = setup({ accountId: acc, clockStart: start + i * 60e3 });
-    assert.equal((await s.adapter.publish(s.input())).state, "draft_pending");
+    const out = await s.adapter.publish(s.input());
+    assert.equal(out.state, "draft_pending", `第 ${i + 1} 条照送`);
+    assert.equal(s.sim.site.drafts.length, 1);
   }
-  const fourth = setup({ accountId: acc, clockStart: start + 600e3 });
-  const err = await rejects(fourth.adapter.publish(fourth.input()), "platform_reject");
-  assert.match(err.message, /今天已经送了 3 条到抖音草稿箱，达到每日上限 3 条/);
-  assert.match(err.message, /调高上限/);
-  assert.equal(fourth.sim.site.opened, 0, "到上限不开浏览器");
-  assert.equal(fourth.sim.site.drafts.length, 0);
-
-  // core 对 platform_reject：转「待人处理」，人话进事件
-  const handlers = buildHandlers([validateAdapter(fourth.adapter, "adapter-douyin")]);
-  await handlers.publish({ id: `run_${fourth.pub}`, target_id: fourth.pub });
-  assert.equal(rowOf(fourth.pub).state, "notify_pending");
-
-  const nextDay = setup({ accountId: acc, clockStart: new Date(2026, 10, 22, 9, 0, 0).getTime() });
-  assert.equal((await nextDay.adapter.publish(nextDay.input())).state, "draft_pending", "次日重新计数");
+  // 预约到点的发布同样照送（core 走的是同一个 publish）
+  const sched = setup({ accountId: acc, clockStart: start + 600e3 });
+  const handlers = buildHandlers([validateAdapter(sched.adapter, "adapter-douyin")]);
+  await handlers.publish({ id: `run_${sched.pub}`, target_id: sched.pub });
+  assert.notEqual(rowOf(sched.pub).state, "notify_pending");
+  assert.equal(sched.sim.site.drafts.length, 1, "第 6 条也送进草稿箱");
 });
 
 test("[06] 风控页面（验证码 / 滑块 / 操作太频繁）：立即停下、不重试、账号暂停到次日零点、有截图和人话", async () => {

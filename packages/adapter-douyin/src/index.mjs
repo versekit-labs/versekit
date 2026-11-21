@@ -19,7 +19,6 @@
 import { writeFileSync } from "node:fs";
 import { AdapterError, toAdapterError } from "../../core/src/errors.mjs";
 import { open } from "../../core/src/index.mjs";
-import { planRules } from "../../core/src/plan-rules.mjs";
 import * as realDriver from "../../driver-browser/src/index.mjs";
 import * as page from "./page.mjs";
 import { COVER_EXTENSIONS, MAX_TOPICS, VIDEO_EXTENSIONS, compact, planDraft, requireMedia, squash, titleKey } from "./plan.mjs";
@@ -378,8 +377,6 @@ export function createAdapter({ driver = realDriver, sleep = driver.sleep, now =
       const media = requireMedia(given, "成片", VIDEO_EXTENSIONS);
       const cover = plan.cover ? requireMedia(plan.cover, "封面", COVER_EXTENSIONS) : null;
       const base = page.baseUrl(env);
-      const cap = planRules(PLATFORM).dailyCap;
-      const used = accountId ? ledger.draftsToday(accountId, now()) : 0;
 
       const request = {
         mode: "draft",
@@ -388,7 +385,6 @@ export function createAdapter({ driver = realDriver, sleep = driver.sleep, now =
         topics: plan.topics,
         cover: cover ?? "平台默认封面",
         asset: media,
-        quota: { cap, used },
         steps: ["打开抖音上传页并选择视频", "填写标题", "填写正文与话题", "等视频上传完成", ...(cover ? ["设置封面"] : []), "点「存草稿」", "回草稿箱核实"],
         ...(plan.droppedTopics.length ? { droppedTopics: plan.droppedTopics } : {}),
       };
@@ -405,21 +401,14 @@ export function createAdapter({ driver = realDriver, sleep = driver.sleep, now =
 
       if (!publishId || !accountId) throw new AdapterError("unknown", "publish 需要 publishId");
 
-      // 每天送草稿箱的条数有上限（ACC-douyin-06）：到上限就不再送，原因写清楚，不开浏览器。
+      // 适配器不另设每日条数上限（ACC-douyin-06，所有者 2026-11-21 定）：只有风控暂停才停。
       const pausedTo = ledger.pausedUntil(accountId, now());
       if (pausedTo) {
         throw new AdapterError("platform_reject", `这个抖音账号因验证 / 风控暂停到 ${new Date(pausedTo).toLocaleString("zh-CN")}：这条没有送草稿箱，到点或验证通过后再试`);
       }
-      if (used >= cap) {
-        throw new AdapterError(
-          "platform_reject",
-          `${row.handle ?? "这个抖音账号"}今天已经送了 ${used} 条到抖音草稿箱，达到每日上限 ${cap} 条：这条没有送，明天再送，或在发布方案里调高上限`,
-        );
-      }
 
       tab = await driver.openAccount({ accountId });
       const out = await run({ tab, accountId, plan, asset: media, cover, signal, onStep, stopBeforeSave: false });
-      ledger.recordDraft(accountId, now());
 
       return {
         // 草稿没有公开作品 id：用平台稿 id 派生一个稳定的，人在手机上发出去之后的真实 id 属于后续采集单。

@@ -1,4 +1,4 @@
-// 抖音适配器的本机记账：每个账号今天送了几条草稿、因风控暂停到几点。
+// 抖音适配器的本机记账：每个账号因风控暂停到几点。
 //
 // 记账文件放在本机凭证目录（douyin/_state.json，权限 600），经 core 的 paths() 拼路径，
 // 适配器不碰数据库（和 YouTube 的配额记账同一套做法）。「一天」按本机时区的自然日，
@@ -46,22 +46,6 @@ export const nextLocalMidnight = (t = Date.now()) => {
 };
 
 const entry = (data, accountId) => data.accounts[accountId] ?? {};
-
-/** 这个账号今天已送进草稿箱的条数（跨日自动归零）。 */
-export function draftsToday(accountId, now = Date.now()) {
-  const e = entry(readAll(), accountId);
-  return e.day === dayKey(now) ? (e.drafts ?? 0) : 0;
-}
-
-/** 草稿确认回读成功后记一条。失败的尝试不记：没送进去就不占额度。 */
-export function recordDraft(accountId, now = Date.now()) {
-  const data = readAll();
-  const e = entry(data, accountId);
-  const day = dayKey(now);
-  data.accounts[accountId] = { ...e, day, drafts: (e.day === day ? (e.drafts ?? 0) : 0) + 1 };
-  writeAll(data);
-  return data.accounts[accountId].drafts;
-}
 
 /** 风控暂停：到哪个时刻为止。 */
 export function pauseUntil(accountId, until) {
