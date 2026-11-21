@@ -27,6 +27,10 @@ case "$2" in
     META='"cursor":"c1","status":"active","projection":{"a":"agent_status","b":"fresh","c":"owned","d":"wtr_x","e":"ctx_x","f":"not_requested","g":"active","h":"none","i":"released","j":"root_completion","k":"unavailable","l":"x1","m":"x2","n":"x3","o":"x4","p":"x5","q":"x6","r":"x7","s":"x8","t":"x9","u":"y1","v":"y2","w":"y3"}'
     if [ "${readMode}" = quota ]; then
       echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"handle\\":\\"t\\",\\"tail\\":[\\"working...\\",\\"Error: exceeded the weekly usage quota\\"]},$META}}"
+    elif [ "${readMode}" = tip ]; then
+      echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"tail\\":[\\"working...\\",\\"Tip: When signed in with ChatGPT, use /usage to check your account usage and access available usage limit resets.\\"]},$META}}"
+    elif [ "${readMode}" = codexquota ]; then
+      echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"tail\\":[\\"working...\\",\\"You've hit your usage limit. Try again at 2099-01-01 10:00:00 +0800.\\"]},$META}}"
     elif [ "${readMode}" = same ]; then
       echo "{\\"ok\\":true,\\"result\\":{\\"terminal\\":{\\"tail\\":[\\"thinking...\\"]},$META}}"
     else
@@ -44,12 +48,19 @@ function run(dir, extra = {}) {
     cwd: ROOT, encoding: 'utf8', timeout: 60000,
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RUN_FILE: join(dir, 'run-id'),
       CYCLE_BIN: join(dir, 'cycle.sh'), CYCLE_LOG: join(dir, 'cycle.log'),
-      COORD_STATE_DIR: join(dir, 'state'), COORD_WAIT_MS: '100', ...extra },
+      COORD_STATE_DIR: join(dir, 'state'), STATE_DIR: join(dir, 'vstate'), COORD_WAIT_MS: '100', ...extra },
   });
 }
 
+function dispatchRecord(dir, rec) {
+  mkdirSync(join(dir, 'vstate'), { recursive: true });
+  writeFileSync(join(dir, 'vstate', 'dispatch-ctx_fake.json'), JSON.stringify(rec));
+}
+
 test('worker-read 末尾含 exceeded quota → 退出码 11，日志含 issue / dispatch / 原因', () => {
-  const r = run(setup('quota'));
+  const dir = setup('quota');
+  dispatchRecord(dir, { issue: 132, role: 'engineer' });
+  const r = run(dir);
   assert.equal(r.status, 11, r.stdout + r.stderr);
   assert.match(r.stdout, /issue=#132/);
   assert.match(r.stdout, /dispatch=ctx_fake/);
@@ -57,6 +68,31 @@ test('worker-read 末尾含 exceeded quota → 退出码 11，日志含 issue / 
   assert.match(r.stdout, /exceeded the weekly usage quota/);
   assert.doesNotMatch(r.stdout, /agent_status|root_completion/); // 末尾是终端输出，不是投影元数据
   assert.doesNotMatch(r.stdout, /无需处理/); // 默认阈值 1800s 下也在下一次检查就停
+});
+
+// ACC-harness-codex-07
+test('只有 Codex 自带的 /usage 提示行 → 不报额度用尽、不写冷却', () => {
+  const dir = setup('tip');
+  dispatchRecord(dir, { issue: 284, role: 'engineer', channel: 'codex' });
+  const r = run(dir);
+  assert.notEqual(r.status, 11, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /额度用尽|额度用完/);
+  assert.ok(!existsSync(join(dir, 'vstate', 'codex-exhausted')));
+});
+
+test('Codex 真用量上限 → 仍判额度用完并写冷却，issue 取自派工记录而非目录名', () => {
+  const dir = setup('codexquota');
+  dispatchRecord(dir, { issue: 284, role: 'engineer', channel: 'codex' });
+  const r = run(dir);
+  assert.match(r.stdout, /Codex 额度用完（#284/, r.stdout + r.stderr);
+  assert.ok(existsSync(join(dir, 'vstate', 'codex-exhausted')));
+});
+
+test('没有派工记录 → 报「issue 未知」，不从 worktree 目录名猜', () => {
+  const r = run(setup('quota'));
+  assert.equal(r.status, 11, r.stdout + r.stderr);
+  assert.match(r.stdout, /issue 未知/);
+  assert.doesNotMatch(r.stdout, /#132/);
 });
 
 test('输出超过阈值不变 → 退出码 11（疑似卡住）', () => {
