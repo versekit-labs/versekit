@@ -284,6 +284,18 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-youtube-06] 采集：`collect()` 用 `videos.list`（statistics）回填播放、点赞、评论；授权里有 Analytics 权限时再取观看时长，没有时不报错。数据页能看到 YouTube 的行，倍数口径和别的平台一致。有测试。
 - [ACC-youtube-07] 待人工（所有者在同网电脑上做，agent 不做）：用所有者的 Google 账号真机授权一次、发一条私享视频，核对回读、强制私享提示和数据回填。写进 PR 的「待人工」，不计 pass/fail。
 
+### 抖音（`packages/adapter-douyin`，第一版只存草稿，2026-11-21）
+
+所有者 2026-11-21 定：先把自动发布跑通。流程参考 `dreammis/social-auto-upload@3847fff uploader/douyin_uploader/main.py`（MIT），按 `docs/adr-0002-sau-backend.md` §4.1 方式 B 带声明移植，用现有 `driver-browser` 重写，不走 Python sidecar。用哪个抖音号由用户自己在发布机上登录决定，适配器不写死账号。agent 只用录制页面和 stub driver 验证；真机由所有者在和手机同网的电脑上做（第一节真机红线照旧，本开发机不打开 `creator.douyin.com`）。
+
+- [ACC-douyin-01] 许可与移植：仓库根先有 `THIRD_PARTY_NOTICES.md`，收录 social-auto-upload 的 MIT 全文、版本 `3847fff` 和移植了哪个文件；适配器文件头写 `// ported from dreammis/social-auto-upload@3847fff uploader/douyin_uploader/main.py`。SAU 里的账号名、cookie 目录、固定话题、写死的等待秒数等硬编码全部剥离，仓库里 grep 不到。不引入运行时依赖（不装 Python、patchright）。
+- [ACC-douyin-02] 契约：按 `docs/adapter-contract.md` 导出，`capabilities.draft` 为 true，`npm run check:contract` 通过；遵守 14 条硬规则里适用的那些（持久 profile、真实鼠标事件、点前 `scrollIntoView`、中英文案双匹配、每步回读、按真实耗时给超时、失败留截图）。`vk publish --platform douyin --dry-run` 能单独跑，停在「存草稿」前一步并截图，不产生任何平台副作用。
+- [ACC-douyin-03] 存草稿：对离线模拟页跑通（`fixtures/` 里手搭的页面，复现 SAU 依赖的发布页结构和文案；本开发机不能打开真实页面去录，真实页面上选择器对不对由 ACC-douyin-07 真机验证）：上传成片 → 填标题（不超过 55 字，超了在发布前就报错）→ 正文 → 话题（来自平台稿，逐个输入并回读）→ 封面（有入库封面用它，没有用平台默认）→ 点「存草稿」→ 到草稿箱回读出这一条，才记 `draft_pending`（状态「已送到抖音草稿箱，在手机上点发布」），不算已发布。每一步填完都回读，回读对不上就抛 `flaky_ui` 并留截图。
+- [ACC-douyin-04] 时间：第一版不用抖音页面自带的定时。「预约发」到计划时间由 VerseKit 把稿子送进草稿箱，并在今天页、飞书卡片提醒「去手机上发」；「现在发」立即送草稿箱。小红书逐条确认的规则不受影响。
+- [ACC-douyin-05] 登录与体检：`account.check` 打开创作者中心的一个只读页面判断登录态（正常 / 过期 / 被限），给人话；过期时账号变「需要重新登录」并发事件。登录走系统页已有的「在发布机上打开登录窗口」方式（ACC-v3-login-03），本单不做抖音扫码取二维码。
+- [ACC-douyin-06] 安全预算与错误：每个抖音账号每天送草稿箱的条数有上限，默认 3 条，可在发布方案里改（沿用现有「今天还能发」的按平台额度），到上限就不再送并说明原因。遇到验证码、滑块、「操作太频繁」这类风控页面立即停下、不重试，账号暂停到次日并发事件，人话写清「抖音要你在发布机的窗口里手动过一下验证」。每种失败都有 `AdapterError` 的 code + 截图 + 事件，测试逐个钉住。
+- [ACC-douyin-07] 待人工（所有者在和手机同网的电脑上做，agent 不做）：用所有者自己的抖音号在发布机上登录一次，送一条成片进草稿箱，在手机上确认草稿内容（标题、正文、话题、封面）都对，再手动发布。写进 PR 的「待人工」，不计 pass/fail。
+
 ### 飞书卡片
 
 - [ACC-v2-card-01] 新作品入库后 1 分钟内发"新作品，等你确认"卡片。点"开始确认"后按成片一支一支发确认卡片：上一支处理完（确认或先不发）才发下一支。
