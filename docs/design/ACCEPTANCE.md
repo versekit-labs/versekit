@@ -196,6 +196,11 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-claude-08 | 读 `docs/COORDINATOR.md` | 有「选哪个模型」一节：给出 `model:deepseek`（简单活）/ 默认 Sonnet / `model:opus`（须人点头）三档的判定表与例子；写新 issue 时协调器必须按它打 label，并在 issue 里写明理由 |
 | ACC-harness-lane-01 | 从 market-research #40/#189（78a1dec）移植。离线测试造一个不能复用的 lane worktree（有已跟踪改动），调用 `prepare_lane_worktree` / `reset_lane_worktree` | 函数 stdout 只有 worktree 路径（或为空），说明性日志全部走 stderr，含原因与路径（如「有未提交或未跟踪文件：<前 5 个路径>」）。起因：versekit 2026-11-17 lane 1 每次派工都失败，「不能安全复用」这行日志混进了路径，`worker-start` 报 `selector_not_found`（#196、#197 都先在 lane 1 失败） |
 | ACC-harness-lane-02 | 离线测试用临时 git 仓库覆盖三种情况，再跑 `node bin/agentctl.mjs tick` | ① 旧 worktree 只有未跟踪文件（无已跟踪改动、无未推送提交）→ `git clean -fd`（不带 `-x`）后复用；② 有已跟踪改动或未推送提交 → 不复用、不删，新建并写日志和 `cycle-owner-alert.txt`（同轮不被清掉）；③ 新建成功后旧的若已干净 → `orca worktree rm --force` 回收，失败只告警不阻塞派工；④ tick 列出「未登记 worktree」（排除主仓库、lane 登记、验收 worktree、协调器 worktree），不自动删除。lane 1 修好后实际派一单成功 |
+| ACC-harness-codex-01 | 给 issue 打 `model:codex` label 后派实现；用假 `orca` 记录 `worker-start` 参数，跑 `bin/cycle.sh --max 1`（2026-11-21 所有者加了 Codex 账号） | 实现 worker 走 `--agent codex --model <CODEX_MODEL>`（默认 `gpt-6.2-sol`，环境变量可改）；日志写明「issue 带 model:codex label → Codex」；全程不调用、不探测 claude；不带这个 label 的单子照旧 Sonnet，验收照旧 DeepSeek |
+| ACC-harness-codex-02 | 真机：派一张 `model:codex` 的小单，看 Orca 起的 Codex 终端 | 无人值守跑完：不停在登录、信任目录、权限确认或沙箱拦截（`git push`、`bin/ghx pr create` 能执行）；按任务书开 PR 带证据包并发 `worker_done`；Dispatch 正常结算、`worker-release` 后终端关闭 |
+| ACC-harness-codex-03 | `model:codex` 的 issue 造返工 round 1 与 round 2 派工 | round 1 仍走 Codex；round ≥ 2 升 Sonnet，日志写明「Codex 第 N 轮仍未过 → 升 Sonnet」；不自动升 Opus；同时带 `model:opus` 时 Opus 优先 |
+| ACC-harness-codex-04 | ① `PATH` 里没有 `codex`；② `codex login status` 显示未登录；③ 用假 `orca` 让在跑的 Codex worker 屏幕末尾出现用量上限提示（如 `You've hit your usage limit ... try again at <时间>`）；各跑一轮 | ①② 本单改派 Sonnet，日志写明原因；③ 循环记下「Codex 额度用完，到 <时间> 为止」（解析不出时间按 5 小时），停掉该 worker、issue 退回 `s:ready`，冷却期内 `model:codex` 的单子都改派 Sonnet，到点自动恢复；探测不花 token（不跑 `codex exec`），不打印凭据 |
+| ACC-harness-codex-05 | 读 `docs/COORDINATOR.md` §5.1 | 选模型的表里多一档 `model:codex`：写明适合（口径写得死、不靠看图判断的后端/脚本/测试单，如核心逻辑、CLI、适配器内部、不稳定测试排查）和不适合（界面还原、要看设计稿的单、对外文案、须人拍板的单），以及额度用完自动改派 Sonnet；协调器打这个 label 要在 issue 里写理由 |
 | ACC-harness-ci-01 | `npm run ci` | 五道门禁全绿，不新增 skip |
 
 ## 账号浏览器的内存（driver-browser）
@@ -509,3 +514,4 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 ### 测试稳定（2026-11-18）
 
 - [ACC-test-iso-01] `packages/driver-browser/test/isolation.test.mjs` 在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败。查清楚原因（端口、Chrome 启动、并行抢资源）写进 PR；不许用加长固定等待或跳过测试的办法掩盖。
+- [ACC-test-update-01] `packages/cli/test/update.test.mjs` 的「ACC-update-03 自动更新关掉：服务启动后不检查、不更新」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-18 起 CI 上偶发失败）。查清原因写进 PR（端口、计时、与别的测试抢资源、服务启动顺序）；修测试或修实现都可以，但不许加长固定等待、放宽断言或跳过。`packages/core/test/update.test.mjs` 的 ACC-update-03 照旧通过。
