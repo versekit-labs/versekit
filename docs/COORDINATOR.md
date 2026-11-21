@@ -135,6 +135,10 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 3. **涉及与不可动**：改哪些文件/模块，不改什么（api 形状、schema、`commands.mjs` 命令定义）
 4. **完成定义**：可观察的证据
 
+「涉及」列出要改 `packages/core/src/` 下的 `commands.mjs`、`schema.sql`、`store.mjs`、`handlers.mjs`、`daemon.mjs`，或 `packages/relay/` 时，在 issue 的「验收口径」里单列 `- [ACC-arch-09]`。漏列时，`agentctl tick` 会显示「补口径」，认领也会跳过这张单。
+
+实现者在 PR 正文用 `##` 或 `###` 写一个含「六问」的标题，例如 `## ADR-0005 §13 六问`，在该节用 `1.` 到 `6.` 各写一条非空答案。不适用的题也要写明原因。`agentctl merge --pending` 缺任一答案会拒绝合并，只检查这个小节里的编号。问题见 [ADR-0005 §13](adr-0005-saas-architecture.md#13-架构验收进-ci也进每个实现单的口径)。
+
 写完**先给人确认**，人说可以再打 `s:ready`。`s:ready` 一打，下一轮 `cycle.sh` 就会派工。
 一次只放 1 个 issue 进 `s:ready`——这套流程还在练熟阶段，别急着并行。
 
