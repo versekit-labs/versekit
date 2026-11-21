@@ -60,6 +60,7 @@ export const EVENTS = {
   "egress.moved": { severity: "warn", required: false, internal: true },
   "egress.restored": { severity: "info", required: false, internal: true },
   "egress.accepted": { severity: "info", required: false, internal: true },
+  "egress.login_baseline": { severity: "info", required: false, internal: true },
   "egress.probe_failed": { severity: "warn", required: false, internal: true },
   "egress.geodb_failed": { severity: "warn", required: false, internal: true },
 

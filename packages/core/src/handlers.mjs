@@ -20,7 +20,7 @@ import { setupStatus } from "./setup.mjs";
 import { readConfig, updateConfig } from "./config.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
-import { checkAccount } from "./adapters.mjs";
+import { checkAccount, notifyLogin } from "./adapters.mjs";
 import * as updates from "./update.mjs";
 import * as egress from "./egress.mjs";
 import { LOGIN_TRACKED, loginCheckTime, normaliseClock, queueLoginChecks, rearmLoginChecker, DEFAULT_LOGIN_CHECK_TIME } from "./scheduler.mjs";
@@ -838,6 +838,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         connectSessions.delete(accountId);
         const r = session.result;
         store.applyAccountConnection({ accountId, credentialRef: r.credentialRef, displayName: r.displayName, expiresAt: r.expiresAt });
+        await notifyLogin(accountId);
         log(`[connect] ${account.platform} ${accountId} 授权完成`);
         return { accountId, state: "connected", displayName: r.displayName, avatarUrl: r.avatarUrl };
       }

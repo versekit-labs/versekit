@@ -72,6 +72,23 @@ export function recordLoginCheck(account, result, { at = Date.now(), trigger = "
   emit({ type: "account.check_result", severity: "info", payload: { ...base, result, trigger, ...(publishId ? { publishId } : {}) } });
 }
 
+/**
+ * 「账号登录成功」的钩子（出口位置要在这一刻记基线，#310）。守护进程启动时注册；没注册（测试、离线）就什么都不做。
+ * 钩子出错只记事件，不让登录/检查失败。
+ */
+let loginHook = null;
+export const setLoginHook = (fn) => {
+  loginHook = fn ?? null;
+};
+export async function notifyLogin(accountId, at = Date.now()) {
+  if (!loginHook) return;
+  try {
+    await loginHook(accountId, { at });
+  } catch (err) {
+    emit({ type: "egress.probe_failed", severity: "warn", payload: { code: "egress_login_probe_failed", message: `登录时记录出口位置失败：${err.message}` }, dedupeKey: `egress.login_hook:${accountId}:${Math.floor(at / 36e5)}` });
+  }
+}
+
 export async function checkAccount(adapters, accountId, { now = Date.now } = {}) {
   {
     const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
@@ -104,6 +121,8 @@ export async function checkAccount(adapters, accountId, { now = Date.now } = {})
       if (health.state === "ok") patch.last_ok_at = at;
       if (Number.isInteger(health.expiresAt)) patch.expires_at = health.expiresAt;
       mark(patch);
+      // 从「没登录过 / 掉线」变成正常 = 一次新的登录成功；平时每次检查正常不算。
+      if (health.state === "ok" && (!wasOk || account.last_ok_at == null)) await notifyLogin(accountId, at);
       if (tracked && ["ok", "expired"].includes(health.state)) recordLoginCheck(account, health.state, { at, trigger: why.trigger, publishId: why.publishId, wasOk });
 
       if (health.state !== account.state && ["expiring", "expired", "banned"].includes(health.state)) {

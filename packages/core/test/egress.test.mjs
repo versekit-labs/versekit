@@ -14,6 +14,7 @@ process.env.VK_HOME = HOME;
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
 const egress = await import("../src/egress.mjs");
+const adaptersMod = await import("../src/adapters.mjs");
 const { createRunner } = await import("../src/runner.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
 const { buildToday } = await import("../src/overview.mjs");
@@ -202,6 +203,45 @@ const queuePublishRun = (publishId, accountId) => {
   core.open().prepare("INSERT INTO publish (id, work_id, account_id, state, scheduled_at, created_at, updated_at) VALUES (?,?,?,'queued',NULL,1,1)").run(publishId, "w1", accountId);
   core.enqueue({ kind: "publish", targetType: "publish", targetId: publishId, lane: accountId });
 };
+
+test("ACC-v3-egress-03 基线取自登录成功那一刻：中国登录、之后第一次探测在日本 → 暂停（不是把日本当平时）", async () => {
+  // 登录那一刻出口在中国
+  await egress.recordLogin("xhs", { getText: fakeBrowser({ cn: BJ, intl: LA }).getText });
+  const b = store.getEgressBaselines().xhs;
+  assert.equal(b.country, "CN");
+  assert.equal(b.source, "login");
+  // 之后发布机开了代理，出口在日本
+  const r = await probe({ cn: TYO, intl: LA });
+  assert.deepEqual(r.paused, ["xhs"], "闸门触发");
+  assert.equal(store.getEgressBaselines().xhs.country, "CN", "基线没被探测改掉");
+  assert.equal(store.getEgressBaselines().tt.country, "US", "没有登录记录的账号仍按第一次探测兜底");
+  assert.equal(store.getEgressBaselines().tt.source, "first_probe");
+  assert.match(egress.view().notes.join(" "), /按第一次探测定的/);
+});
+
+test("ACC-v3-egress-03 重新登录换成新位置的基线；登录那一刻探测失败时保留原基线", async () => {
+  await egress.recordLogin("xhs", { getText: fakeBrowser({ cn: BJ, intl: LA }).getText });
+  await egress.recordLogin("xhs", { getText: fakeBrowser({ cn: new Error("断网"), intl: new Error("断网") }).getText });
+  assert.equal(store.getEgressBaselines().xhs.country, "CN", "探测失败不动基线");
+  await egress.recordLogin("xhs", { getText: fakeBrowser({ cn: TYO, intl: LA }).getText });
+  assert.equal(store.getEgressBaselines().xhs.country, "JP", "重新登录 = 新的平时位置");
+  assert.deepEqual(egress.view().paused, []);
+});
+
+test("ACC-v3-egress-03 checkAccount 从掉线变正常算一次登录，平时检查正常不算", async () => {
+  const calls = [];
+  adaptersMod.setLoginHook(async (id) => calls.push(id));
+  try {
+    const adapters = [{ platform: "xiaohongshu", adapter: { check: async () => ({ state: "ok" }) } }];
+    core.open().prepare("UPDATE account SET state='expired', last_ok_at=NULL WHERE id='xhs'").run();
+    await adaptersMod.checkAccount(adapters, "xhs");
+    assert.deepEqual(calls, ["xhs"], "掉线 → 正常：记基线");
+    await adaptersMod.checkAccount(adapters, "xhs");
+    assert.deepEqual(calls, ["xhs"], "正常 → 正常：不重记");
+  } finally {
+    adaptersMod.setLoginHook(null);
+  }
+});
 
 test("ACC-v3-egress-03 第一次探测把当时的国家定为平时的位置，不暂停", async () => {
   const r = await probe({ cn: BJ, intl: LA });

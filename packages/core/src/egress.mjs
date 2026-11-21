@@ -362,6 +362,7 @@ export function judge({ accounts, state, baselines, waits = {} }) {
       paused: status === "paused",
       waiting: status === "paused" && Boolean(waits[a.id]),
       baseline: base ? { country: base.country, countryName: base.countryName ?? base.country, city: base.city ?? null, at: base.at } : null,
+      baselineSource: base?.source ?? null,
       now: line && !line.error ? { country: line.countryCode, countryName: line.country, city: line.city, ip: line.ip } : null,
       note,
     };
@@ -389,7 +390,8 @@ export function recordProbe(result) {
   const adopted = [];
   for (const row of judge({ accounts, state: result, baselines, waits: {} })) {
     if (row.status !== "adopt") continue;
-    baselines[row.accountId] = { country: row.now.country, countryName: row.now.countryName, city: row.now.city, at: result.at };
+    // 兜底：这个账号没有登录时记下的位置（功能上线前登录的、或登录那一刻探测失败），先用这次探测的国家，标明来源。
+    baselines[row.accountId] = { country: row.now.country, countryName: row.now.countryName, city: row.now.city, at: result.at, source: "first_probe" };
     adopted.push(row.accountId);
   }
   if (adopted.length) store.setEgressBaselines(baselines);
@@ -432,6 +434,39 @@ export function recordProbe(result) {
   return { paused: paused.map((r) => r.accountId), resumed, adopted };
 }
 
+/**
+ * 账号登录成功的那一刻：把「这一刻的出口国家」记成这个账号平时的位置（ADR-0005 §8）。
+ * 基线必须来自登录，不是第一次探测——否则账号在中国登录、第一次探测时发布机恰好开着代理（日本），
+ * 基线就成了日本，闸门正好漏过去。重新登录（掉线后再登）会换成新的基线，等于所有者确认过新位置。
+ * 这一刻查不到国家（没库、探测失败）时，原有基线原样保留，没有基线的等下一次探测补上，并在 view 里标明来源。
+ */
+export async function recordLogin(accountId, { at = Date.now(), ...options } = {}) {
+  const account = store.getAccount(accountId);
+  if (!account || account.removed_at) return { baseline: null };
+  const result = await probeEgress({ geo: loadGeoDb(), ...options });
+  const line = result.lines.find((l) => l.key === lineOf(account.platform));
+  let baseline = null;
+  if (line && !line.error && line.countryCode) {
+    baseline = { country: line.countryCode, countryName: line.country, city: line.city, at, source: "login" };
+    const baselines = store.getEgressBaselines();
+    baselines[accountId] = baseline;
+    store.setEgressBaselines(baselines);
+    const waits = store.getEgressWaits();
+    if (waits[accountId]) {
+      delete waits[accountId];
+      store.setEgressWaits(waits);
+    }
+    emit({
+      type: "egress.login_baseline",
+      severity: "info",
+      payload: { accountId, platform: account.platform, country: baseline.country, message: `登录成功：以 ${baseline.countryName} 作为这个账号平时的位置` },
+      dedupeKey: `egress.login_baseline:${accountId}:${at}`,
+    });
+  }
+  recordProbe(result);
+  return { baseline };
+}
+
 /** 探测一次并记下来。 */
 export async function probeNow(options = {}) {
   const result = await probeEgress({ geo: loadGeoDb(), ...options });
@@ -449,6 +484,8 @@ export function view({ groupId = null } = {}) {
   if (!geo.hasCity) notes.push("没有 IP 库（国家城市），出口位置写「查不到」，不会因为位置暂停发布。发布机联网后会自动下载。");
   if (geo.error) notes.push(`IP 库上次没下载成功，继续用旧库：${geo.error}`);
   for (const l of lines) if (l.error) notes.push(`${l.label}：${l.error}`);
+  const approx = accounts.filter((a) => a.baselineSource === "first_probe").length;
+  if (approx) notes.push(`${approx} 个账号平时的位置是按第一次探测定的（没有登录时的记录）；重新登录一次会改成登录时的位置。`);
   return {
     probedAt: state?.at ?? null,
     lines,
