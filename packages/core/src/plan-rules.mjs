@@ -137,9 +137,11 @@ export function describeRules(platform, config = readConfig()) {
     platform,
     dailyCap: r.dailyCap,
     minGapMinutes: r.minGapMinutes,
+    // 「还是内置默认」对这个平台而言：有平台内置默认的（抖音 3 条）按它比，不是和全局 10 条比。
     capIsDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap,
     gapIsDefault: r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
-    isDefault: r.dailyCap === DEFAULT_PLAN_RULES.daily_cap && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
+    isDefault:
+      r.dailyCap === DEFAULT_PLAN_RULES.daily_cap && r.minGapMinutes === DEFAULT_PLAN_RULES.min_gap_minutes,
   };
 }
 

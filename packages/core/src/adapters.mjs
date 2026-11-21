@@ -293,7 +293,9 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending" };
       }
 
-      // 只能存草稿的平台（视频号第一版）：auto 模式的平台稿也按草稿跑——到草稿箱为止，发表由人在手机上点。
+      // 只能存草稿的平台（视频号、抖音第一版）：auto 模式的平台稿也按草稿跑——到草稿箱为止，发表由人在手机上点。
+      // 把 mode 写回库（而不是只改局部变量）：重试、界面和事件看到的都是 draft，不会出现库里 auto、实际按草稿跑的两种说法。
+      // auto_running 之后拿到 draft_pending 会撞非法迁移，所以必须在迁移前改。
       if (adapter.adapter.draftOnly && row.mode === "auto") {
         open().prepare("UPDATE publish SET mode = 'draft' WHERE id = ?").run(publishId);
         row.mode = "draft";

@@ -1,0 +1,9 @@
+{
+  "name": "@versekit-app/adapter-douyin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "抖音适配器：创作者中心网页自动化，第一版只把成片和文案存进抖音草稿箱（移植自 social-auto-upload，MIT）",
+  "exports": { ".": { "import": "./src/index.mjs" } },
+  "main": "./src/index.mjs"
+}

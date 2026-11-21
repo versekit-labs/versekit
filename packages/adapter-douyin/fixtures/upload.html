@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>模拟：抖音创作者中心 · 上传</title></head>
+<body>
+<!-- 手搭的模拟页：复现 social-auto-upload 依赖的上传页结构与文案。不是抖音的页面，不含任何抖音资源。 -->
+<h1>发布视频</h1>
+<div class="container-sim">
+  <p>点击上传 或直接将视频文件拖入此区域</p>
+  <input type="file" accept="video/mp4,video/quicktime,video/webm" class="upload-btn-input" id="video">
+</div>
+<div id="riskTip" hidden>请完成滑块验证</div>
+<script type="module">
+const cfg = await (await fetch("/__config")).json().catch(() => ({ mode: "ok" }));
+if (cfg.mode === "login") location.href = "/login";
+if (cfg.mode === "risk") document.getElementById("riskTip").hidden = false;
+document.getElementById("video").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  sessionStorage.setItem("sim.upload", JSON.stringify({ name: f.name, at: Date.now() }));
+  location.href = "/creator-micro/content/post/video?enter_from=publish_page";
+});
+</script>
+</body></html>

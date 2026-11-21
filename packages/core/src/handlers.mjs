@@ -149,6 +149,9 @@ export function loginHint(platform, accountId) {
   if (platform === "youtube") {
     return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用你的 Google 账号登录并同意）`;
   }
+  if (platform === "douyin") {
+    return `下一步：到系统页点「在发布机上打开登录窗口」，在窗口里登录抖音一次（需要验证码、滑块时在窗口里手动过；命令行：vk account reauth ${accountId}）`;
+  }
   return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
 }
 

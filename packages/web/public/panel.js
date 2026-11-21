@@ -149,6 +149,24 @@ window.VKPanel = function createPanel(state) {
   const batchOf = (cut) => pending(cut).filter((p) => !PER_ITEM.has(p.platform));
   const soloOf = (cut) => (cut?.publishes ?? []).filter((p) => PER_ITEM.has(p.platform) && !["published", "published_limited"].includes(p.state));
   const cutHasPending = (cut) => pending(cut).length > 0;
+  // 已经送进草稿箱、要人去手机上点发布的平台稿（抖音第一版）。不是已发布，也不该再催「确认」。
+  const draftsOf = (work) => (work?.cuts ?? []).flatMap((c) => c.publishes ?? []).filter((p) => p.state === "draft_pending");
+  const draftText = (n) => `${n} 条已送到草稿箱，去手机上发`;
+  /** 今天页作品卡右上角的进度：等确认与「去手机上发」分开数，别把草稿说成「都处理完了」。 */
+  function progressText(work) {
+    const cuts = work?.cuts ?? [];
+    const left = cuts.filter(cutHasPending);
+    const total = cuts.reduce((n, c) => n + pending(c).length, 0);
+    const drafts = draftsOf(work).length;
+    const bits = [];
+    if (left.length) {
+      const multi = cuts.length > 1;
+      const done = cuts.length - left.length;
+      bits.push(multi ? `${done} / ${cuts.length} 支成片已处理，还有 ${total} 条等你` : `${total} 条等你确认`);
+    }
+    if (drafts) bits.push(draftText(drafts));
+    return bits.length ? bits.join(" · ") : "都处理完了";
+  }
 
   function mediaBox(cut) {
     const versions = cut.versions ?? [];
@@ -171,7 +189,7 @@ window.VKPanel = function createPanel(state) {
     if (p.state === "queued") return `<span class="st sched">${sendingNow(p) ? "正在发" : "已确认"}</span>`;
     if (p.state === "auto_running" || p.state === "draft_running") return '<span class="st sched">发布中</span>';
     if (p.state === "notify_pending") return '<span class="st wait">待人工确认</span>';
-    if (p.state === "draft_pending") return '<span class="st wait">待确认草稿</span>';
+    if (p.state === "draft_pending") return '<span class="st wait">已送到草稿箱，去手机上发</span>';
     if (p.state === "skipped") return '<span class="st">不发</span>';
     if (["failed", "blocked", "expired"].includes(p.state)) return '<span class="st bad">出了问题</span>';
     // 已发布的行自己写结果：和这个账号平时比的倍数；满 24 小时但基线不足写「还没法比」。
@@ -877,11 +895,12 @@ window.VKPanel = function createPanel(state) {
     if (work.cuts.length < 2) return "";
     return `<div class="steps">${work.cuts.map((c) => {
       const n = pending(c).length;
+      const drafts = (c.publishes ?? []).filter((p) => p.state === "draft_pending").length;
       const conf = c.publishes.filter((p) => p.state === "queued").length;
       const bad = c.publishes.some((p) => ["failed", "blocked", "expired"].includes(p.state));
       const skipped = c.publishes.some((p) => p.state === "skipped") && !n;
       // 没有平台稿的成片不是「已发布」：和页头的「还没有平台稿」同一句（ACC-v3-fid-12）。
-      const [cls, txt] = !c.publishes.length ? ["", c.status?.label ?? "还没有平台稿"] : bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", n + " 条等你确认"] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
+      const [cls, txt] = !c.publishes.length ? ["", c.status?.label ?? "还没有平台稿"] : bad ? ["bad", "有 1 条出了问题"] : n ? ["wait", drafts ? `${n} 条等你确认 · ${drafts} 条去手机上发` : n + " 条等你确认"] : drafts ? ["wait", `${drafts} 条去手机上发`] : skipped ? ["", "先不发"] : conf ? ["sched", "已确认，等时间"] : ["pub", "已发布"];
       if (c.versions?.length && !c.versions.some((v) => v.cover)) noCover.add(c.versions[0].id); // 没有入库封面：直接用首帧，不请求 ?cover=1
       return `<button class="step" type="button" data-cut="${esc(c.id)}" aria-current="${c.id === curId}">${cover((c.versions?.find((v) => v.cover) ?? c.versions?.[0])?.id, 44, 44)}<span><b>${esc(c.title)}</b><span class="st ${cls}">${txt}</span></span></button>`;
     }).join("")}</div>`;
@@ -890,6 +909,6 @@ window.VKPanel = function createPanel(state) {
   return {
     bind: (c) => { ctx = c; }, guard, startEdit,
     esc, BLANK, cover, pfOf, ORDER, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD,
-    pending, batchOf, soloOf, cutHasPending, fallback, confirmPanel, cutSteps,
+    pending, batchOf, soloOf, cutHasPending, draftsOf, progressText, fallback, confirmPanel, cutSteps,
   };
 };

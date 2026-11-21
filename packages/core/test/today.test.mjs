@@ -3,9 +3,10 @@
 // 只用临时库和假数据：不登录、不发布、不采集任何真实账号。
 import { test, after, mock } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import vm from "node:vm";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-today-"));
 process.env.VK_HOME = HOME;
@@ -308,4 +309,64 @@ test("ACC-v3-fid-02 stats.works 每条带作品 / 成片 / 发布时间，数据
   assert.equal(row.platform, "tiktok");
   assert.equal(row.baseline.play24h, 800);
   assert.ok(!("accountId" in row), "accountId 是内部键，不外泄");
+});
+
+// ---------------------------------------------------------------- 抖音只存草稿（ACC-douyin-04）
+
+test("ACC-douyin-04 draft_pending 的抖音稿进今天页的 awaiting，口径写清去手机上发", () => {
+  const g = group("抖音草稿组");
+  const dy = account(g, "douyin", "@douyin-draft");
+  const w = newWork("抖音草稿作品");
+  const cutId = w.work.cuts[0].id;
+  const pid = insertPublish({ workId: w.id, accountId: dy, state: "draft_pending", cutId });
+
+  const today = handlers["today"]({ group: g.name });
+  const hit = today.awaiting
+    .flatMap((x) => x.cuts)
+    .flatMap((c) => c.publishes)
+    .find((p) => p.publishId === pid);
+  assert.ok(hit, "已送到草稿箱的抖音稿要留在今天页，不能当作没事了");
+  assert.equal(hit.platform, "douyin");
+  assert.equal(hit.state, "draft_pending");
+  assert.match(today.definitions.awaiting, /草稿箱/);
+  assert.match(today.definitions.awaiting, /去手机上发/);
+});
+
+test("ACC-douyin-04 共用面板与今天页把草稿说成「去手机上发」，不再写「都处理完了」", () => {
+  // 直接跑生产用的 panel.js / today.html，不靠 grep 文案：改坏了渲染函数这一条会红。
+  const panelSrc = readFileSync(new URL("../../web/public/panel.js", import.meta.url), "utf8");
+  const todaySrc = readFileSync(new URL("../../web/public/today.html", import.meta.url), "utf8");
+  const win = {
+    VK: { works: async () => ({ works: [] }), media: (id) => `/media/${id}`, parseTags: () => [] },
+    addEventListener: () => {},
+  };
+  const doc = { addEventListener: () => {}, querySelectorAll: () => [], documentElement: {} };
+  const sandbox = { window: win, document: doc, MutationObserver: class { observe() {} }, console };
+  vm.createContext(sandbox);
+  vm.runInContext(panelSrc, sandbox);
+  const panel = win.VKPanel({ opened: new Set(), ver: new Map(), mode: new Map() });
+
+  const cut = {
+    id: "c_draft", title: "抖音成片", versions: [],
+    publishes: [{ id: "p_draft", platform: "douyin", state: "draft_pending", title: "草稿标题", scheduledAt: null }],
+  };
+  const work = { id: "w_draft", title: "抖音草稿作品", cuts: [cut] };
+
+  const html = panel.confirmPanel(work, cut);
+  assert.match(html, /已送到草稿箱，去手机上发/, "平台行要说清下一步在手机上");
+  assert.doesNotMatch(html, /都处理完了/);
+
+  assert.equal(panel.progressText(work), "1 条已送到草稿箱，去手机上发");
+  assert.match(panel.progressText(work), /去手机上发/);
+  assert.doesNotMatch(panel.progressText(work), /都处理完了/);
+
+  const second = { ...cut, id: "c2", publishes: [] };
+  const multi = { ...work, cuts: [cut, second] };
+  const steps = panel.cutSteps(multi, cut.id);
+  assert.match(steps, /去手机上发/, "成片步骤条也不能把草稿写成「已发布」");
+  assert.doesNotMatch(steps, /已发布/);
+
+  // 今天页的作品卡与服务端同一份状态词；确认没退回「都处理完了」。
+  assert.match(todaySrc, /progressText\(work\)/);
+  assert.ok(panel.draftsOf(work).length === 1);
 });

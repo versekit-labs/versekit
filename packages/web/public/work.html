@@ -65,7 +65,14 @@
     const n = (set) => ps.filter((p) => set.has(p.state)).length;
     switch (work.status?.key) {
       case "problem": return ["bad", `有 ${n(PROBLEM) + ps.filter(forcedPrivate).length} 条出了问题`];
-      case "awaiting_confirm": return ["wait", `${n(new Set(["pending_confirm", "notify_pending", "draft_pending"]))} 条等你确认`];
+      case "awaiting_confirm": {
+        // 草稿箱不是「已发布」，也不是普通「等确认」：要说清得去手机上点发布（ACC-douyin-04）。
+        const drafts = n(new Set(["draft_pending"]));
+        const confirms = n(new Set(["pending_confirm", "notify_pending"]));
+        if (drafts && !confirms) return ["wait", `${drafts} 条已送到草稿箱，去手机上发`];
+        if (drafts) return ["wait", `${confirms} 条等你确认 · ${drafts} 条去手机上发`];
+        return ["wait", `${confirms} 条等你确认`];
+      }
       case "scheduled": return ["sched", `${n(new Set(["queued", "auto_running", "draft_running"]))} 条已确认，等时间`];
       case "done": {
         const forced = ps.filter(forcedPrivate).length;

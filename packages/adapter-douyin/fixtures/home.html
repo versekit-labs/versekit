@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>模拟：抖音创作者中心 · 首页</title></head>
+<body>
+<h1>创作者中心首页</h1>
+<p>欢迎回来，这里是数据概览：近 7 日播放、粉丝、互动。</p>
+<div id="tip"></div>
+<script type="module">
+const cfg = await (await fetch("/__config")).json().catch(() => ({ mode: "ok" }));
+if (cfg.mode === "login") location.href = "/login";
+if (cfg.mode === "limited") document.getElementById("tip").textContent = "账号已被限制，部分功能不可用";
+if (cfg.mode === "risk") document.getElementById("tip").textContent = "请完成滑块验证";
+</script>
+</body></html>

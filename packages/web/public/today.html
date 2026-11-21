@@ -44,7 +44,7 @@
   const main = document.getElementById("main");
   const state = { covers: new Map(), data: null, focusId: null, cutId: null, cache: new Map(), opened: new Set(), ver: new Map() };
   const panel = window.VKPanel(state);
-  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, pending, cutHasPending, fallback, confirmPanel, cutSteps } = panel;
+  const { esc, cover, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD, cutHasPending, draftsOf, progressText, fallback, confirmPanel, cutSteps } = panel;
 
   async function loadWork(id) {
     if (!id) return null;
@@ -95,17 +95,15 @@
     const work = state.focusId ? state.cache.get(state.focusId) : null;
     const cut = work?.cuts.find((c) => c.id === state.cutId) ?? work?.cuts[0] ?? null;
     const left = work ? work.cuts.filter(cutHasPending) : [];
+    const awaitingMe = left.length + (work ? draftsOf(work).length : 0);
     const heading = `${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日 ${WD[new Date().getDay()]}`;
 
     let focus = "";
     if (work && cut) {
-      const multi = work.cuts.length > 1;
-      const done = work.cuts.length - left.length;
-      const total = work.cuts.reduce((n, c) => n + pending(c).length, 0);
-      focus = `<div class="panel focus"><div class="fh"><span class="st ${left.length ? "wait" : "done"}"></span>` +
+      focus = `<div class="panel focus"><div class="fh"><span class="st ${awaitingMe ? "wait" : "done"}"></span>` +
         `<a class="t" href="/work?id=${encodeURIComponent(work.id)}">${esc(work.title)}</a>` +
         `<span class="sub">${esc(when(work.createdAt).day)} 入库</span>` +
-        `<span class="prog">${left.length ? (multi ? `${done} / ${work.cuts.length} 支成片已处理，还有 ${total} 条等你` : `${total} 条等你确认`) : "都处理完了"}</span></div>` +
+        `<span class="prog">${progressText(work)}</span></div>` +
         confirmPanel(work, cut) +
         `<div>${cutSteps(work, cut.id)}${upcomingBox(scheduled)}</div></div>`;
     } else if (awaiting.length) {
@@ -123,6 +121,12 @@
       const pend = w.cuts.flatMap((c) => c.publishes.filter((p) => p.state === "pending_confirm"));
       const n = pend.length;
       const x = pend[0];
+      const drafts = draftsOf(w);
+      if (!n && drafts.length) {
+        return `<div class="oth"><span class="st wait"></span>${cover(state.covers.get(w.workId), 52, 39)}` +
+          `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${drafts.length} 条已送到草稿箱，去手机上发</div></div>` +
+          `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(w.workId)}">看草稿</a></div></div>`;
+      }
       if (n === 1 && x.platform === "xiaohongshu") {
         const t = when(x.scheduledAt);
         return `<div class="oth"><span class="st wait"></span>${cover(state.covers.get(w.workId), 52, 39)}` +
@@ -131,7 +135,7 @@
           `<button class="btn" type="button" data-solo="approve" data-pub="${esc(x.publishId)}">${esc(t.t || "按建议时间")} 发</button></div></div>`;
       }
       return `<div class="oth"><span class="st wait"></span>${cover(state.covers.get(w.workId), 52, 39)}` +
-        `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认</div></div>` +
+        `<div class="bd"><div class="t">${esc(w.title)}</div><div class="sub">${n} 条等你确认${drafts.length ? ` · ${drafts.length} 条已送到草稿箱，去手机上发` : ""}</div></div>` +
         `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
     }).join("");
     const badOnes = problems.map((p) => `<div class="oth bad"><span class="st bad"></span>${cover(state.covers.get(p.workId), 52, 39)}` +
