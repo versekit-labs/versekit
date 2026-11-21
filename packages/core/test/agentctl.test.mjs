@@ -52,7 +52,7 @@ test("issueAccIds：去重、保序、去掉尾随标点", () => {
   assert.deepEqual(issueAccIds(null), []);
 });
 
-test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
+test("parseVerdict：读结构化 YAML，不从散文里猜", () => {
   const pass = parseVerdict(
     "## 结论\n\n```yaml\nverdict: PASS\nround: 2\nhead_sha: \"abc1234\"\nacceptance:\n  - id: ACC-account-01\n    status: pass\n  - id: ACC-account-02\n    status: pass\n```\n",
   );
@@ -67,6 +67,7 @@ test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
   const fail = parseVerdict("```yaml\nverdict: FAIL\nhead_sha: def5678\nfailed:\n  - item: ACC-x-01\n```");
   assert.equal(fail.verdict, "FAIL");
   assert.deepEqual(fail.acceptance, []);
+  assert.deepEqual(fail.failed, [{ id: "ACC-x-01" }]);
 
   // 证据包 YAML 在前、判定 YAML 在后：必须找到带 verdict 的那块
   const mixed = parseVerdict(
@@ -77,11 +78,67 @@ test("parseVerdict：只认 yaml 块，不从散文里猜", () => {
 
   // 散文里写"全部通过"但没有机器可读块 = 没有判定
   assert.equal(parseVerdict("我检查过了，全部通过。"), null);
+  assert.equal(parseVerdict("判定示例\n\nverdict: PASS\nhead_sha: abc1234"), null);
   assert.equal(parseVerdict("```yaml\nround: 1\n```"), null);
   assert.equal(parseVerdict(undefined), null);
 });
 
 const verdictHead = "abc12345".repeat(5);
+
+// PR #320 评论 7065173194 的原始 YAML，协调器补上的围栏和说明未包含在内。
+const bareFailVerdict = String.raw`verdict: FAIL
+round: 2
+head_sha: "c1dccb775674d9d0a39d702989bea83162f6c9a6"
+acceptance:
+  - id: ACC-v3-egress-01
+    status: pass
+  - id: ACC-v3-egress-02
+    status: pass
+  - id: ACC-v3-egress-03
+    status: fail
+  - id: ACC-v3-egress-04
+    status: pass
+  - id: ACC-v3-egress-05
+    status: fail
+  - id: ACC-v3-egress-06
+    status: pass
+  - id: ACC-v3-device-04
+    status: pass
+  - id: ACC-arch-09
+    status: pass
+  - id: ACC-harness-ci-01
+    status: pass
+failed:
+  - id: ACC-v3-egress-03
+    expected: "上次在 CN 登录成功后，第一次探测如果是 JP 代理出口，这个账号应暂停自动发布（队列不领取）"
+    observed: "小红书扫码/短信/窗口登录成功时只把 account.state 写成 ok（store.setAccountState），从不调用 egress.recordLogin；account.check 在 state 已是 ok 且 last_ok_at 非空时也不会补记。首次探测把 JP 当成基线（source=first_probe），paused=[]，闸门不触发；即使稍后补一次 check，也是在 check 那一刻探测，代理开着时仍会记成 JP。实现方测试直接调用 recordLogin，绕过了真实登录路径。"
+    repro:
+      - "VK_HOME=$(mktemp -d) npm run vk -- demo seed"
+      - "把演示小红书账号置 state='expired', last_ok_at=NULL，然后只执行 store.setAccountState(id,'ok')（vk.mjs 的 qrStatus/窗口登录成功时唯一的账号写操作）"
+      - "在 $VK_HOME/.local/state/versekit/geo 放一个把 192.0.2.0/24 标成 JP 的小 mmdb；egress.setPageText 返回 {\"ip\":\"192.0.2.7\"}，再调 egress.probeNow()"
+      - "实测 paused=[]，egress.baselines[id]={country:'JP',source:'first_probe'}；期望 paused 包含该账号、基线是登录时的 CN"
+  - id: ACC-v3-egress-05
+    expected: "暂停期间确认面板写明所有暂停平台；暂停行的确认提示是「其中 N 条等位置处理完再发」，不说「现在开始发」"
+    observed: "批量底栏只写「TikTok、B站的出口位置变了」，漏掉同样暂停的小红书；小红书暂停时确认面板的块仍显示正常时间，点「现在发」的 toast 是「好，现在就发这一条」，随后块内显示「已确认，正在发」，没有「暂停中」，也没有「等位置处理完再发」。"
+    repro:
+      - "VK_HOME=$(mktemp -d) npm run vk -- demo seed"
+      - "给长片补一条小红书 pending_confirm 平台稿；把 meta 的 egress.state 设成两条线路都在 JP，egress.baselines 设成 CN"
+      - "VK_HOME=... npm run vk -- serve --offline --port 8788，打开 http://127.0.0.1:8788/today"
+      - "点小红书那条的「现在发」：toast「好，现在就发这一条」，块内变「已确认，正在发」；底部只写「TikTok、B站的出口位置变了」"`;
+const bareFailHead = "c1dccb775674d9d0a39d702989bea83162f6c9a6";
+
+test("ACC-harness-verdict-04：解析 PR #320 原始裸 YAML 判定及失败详情", () => {
+  const { verdict, headSha, round, acceptance, failed } = parseVerdict(bareFailVerdict);
+  assert.deepEqual({ verdict, headSha, round }, { verdict: "FAIL", headSha: bareFailHead, round: 2 });
+  assert.equal(acceptance.length, 9);
+  assert.deepEqual(acceptance.filter(({ status }) => status === "fail").map(({ id }) => id),
+    ["ACC-v3-egress-03", "ACC-v3-egress-05"]);
+  assert.deepEqual(failed.map(({ id }) => id), ["ACC-v3-egress-03", "ACC-v3-egress-05"]);
+  assert.match(failed[0].expected, /第一次探测如果是 JP/);
+  assert.match(failed[0].observed, /paused=\[\]/);
+  assert.match(failed[0].repro[2], /返回 \{"ip":"192\.0\.2\.7"\}/);
+  assert.equal(failed[1].repro.length, 4);
+});
 
 test("cycle.sh：dry-run 在 UTF-8 Bash 中渲染验收任务书、落后 main 的判定规则和判定样例", async () => {
   const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
@@ -199,7 +256,7 @@ const greenChecks = {
   ].map((name) => ({ name, status: "completed", conclusion: "success" })),
 };
 
-async function mockAgentctl(t, routes, env = {}) {
+async function mockAgentctlEnv(t, routes, env = {}) {
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, "http://localhost").pathname.replace(/^\/repos\/example\/versekit\//, "");
     const route = routes.get(req.method === "GET" ? path : `${req.method} ${path}`);
@@ -215,19 +272,24 @@ async function mockAgentctl(t, routes, env = {}) {
   t.after(() => server.close());
   await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
 
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "remote.origin.url",
+    GIT_CONFIG_VALUE_0: "https://github.com/example/versekit.git",
+    GH_TOKEN: "fixture",
+    AGENTCTL_API_BASE: `http://127.0.0.1:${server.address().port}`,
+    GIT_ALLOW_PROTOCOL: "file",
+    ...env,
+  };
+}
+
+async function mockAgentctl(t, routes, overrides) {
+  const env = await mockAgentctlEnv(t, routes, overrides);
   const script = fileURLToPath(new URL("../../../bin/agentctl.mjs", import.meta.url));
   return async (...args) => {
     const { stdout } = await promisify(execFile)(process.execPath, [script, ...args, "--json"], {
-      env: {
-        ...process.env,
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "remote.origin.url",
-        GIT_CONFIG_VALUE_0: "https://github.com/example/versekit.git",
-        GH_TOKEN: "fixture",
-        AGENTCTL_API_BASE: `http://127.0.0.1:${server.address().port}`,
-        GIT_ALLOW_PROTOCOL: "file",
-        ...env,
-      },
+      env,
       timeout: 10_000,
     });
     return JSON.parse(stdout);
@@ -313,6 +375,93 @@ async function mergeFixture(t, { head = verdictHead, base, mergeable, env } = {}
   const run = await mockAgentctl(t, routes, env);
   return { run, issue, detail, comments, writes };
 }
+
+test("ACC-harness-verdict-04：merge --pending 读裸 FAIL 并打回 s:changes", async (t) => {
+  const { run, issue, comments, writes } = await mergeFixture(t, { head: bareFailHead });
+  issue.labels[0] = "s:review";
+  comments[0].body = bareFailVerdict;
+
+  const { results: dryRun } = await run("merge", "--pending", "--dry-run");
+  assert.deepEqual(dryRun, [{ issue: 1, merged: false, problems: ["[dry-run] 会打回 s:changes"] }]);
+  assert.deepEqual(writes, []);
+
+  const { results } = await run("merge", "--pending");
+  assert.deepEqual(results, [{ issue: 1, merged: false, handback: true, pull: 101 }]);
+  assert.deepEqual(writes.map(({ action }) => action), ["removeLabel", "addLabels"]);
+  assert.deepEqual(issue.labels, ["model:codex", "s:changes"]);
+});
+
+test("ACC-harness-verdict-04：已判定的 head 不复派，坏判定告警，旧 head 和作废判定可重验", async (t) => {
+  const invalidVerdict = bareFailVerdict.replace("verdict: FAIL", "verdict: BLOCKED");
+  const missingHead = bareFailVerdict.replace(/^head_sha:.*\n/m, "");
+  const cases = [
+    { body: bareFailVerdict },
+    { body: `\`\`\`yml\n${bareFailVerdict}\n\`\`\``, newer: bareFailVerdict.replace(bareFailHead, verdictHead) },
+    { body: invalidVerdict, problem: /判定 YAML 无法解析/ },
+    { body: missingHead, problem: /判定评论缺 head_sha/ },
+    { body: bareFailVerdict.replace(bareFailHead, "invalid"), problem: /判定评论缺 head_sha/ },
+    { body: bareFailVerdict.replace(bareFailHead, verdictHead), eligible: true },
+    { body: invalidVerdict.replace(bareFailHead, verdictHead), eligible: true },
+    { body: `意见：等验收结果。\nhead_sha: ${bareFailHead}`, eligible: true },
+    { body: missingHead, voided: true, eligible: true },
+  ];
+  const issues = cases.map((_, i) => ({ number: 99990 + i, title: "验收回归", labels: ["s:review"], body: "ACC-harness-verdict-04" }));
+  const pulls = issues.map(({ number }) => ({ number: number + 100, body: `Closes #${number}`, head: { sha: bareFailHead } }));
+  const commentUrl = (i) => `https://example.test/comment/${99990 + i}`;
+  const comments = cases.map(({ body, newer, voided }, i) => [
+    { id: 99990 + i, body, html_url: commentUrl(i), created_at: "2026-01-01" },
+    ...(newer ? [{ id: 99980, body: newer, created_at: "2026-01-02" }] : []),
+    ...(voided ? [{ id: 99981, body: `<!-- agent-verdict-void -->\nvoids: ${99990 + i}` }] : []),
+  ]);
+  const env = await mockAgentctlEnv(t, new Map([
+    ["issues", issues], ["pulls", pulls],
+    ...pulls.map(({ number }, i) => [`issues/${number}/comments`, comments[i]]),
+  ]));
+  const cwd = fileURLToPath(new URL("../../../", import.meta.url));
+  const exec = promisify(execFile);
+  const args = ["bin/agentctl.mjs", "claim", "--role", "acceptance", "--dry-run", "--json"];
+  const { stdout } = await exec(process.execPath, args, { env, cwd, timeout: 10_000 });
+  const eligible = issues.filter((_, i) => cases[i].eligible).map(({ number }) => number);
+  assert.deepEqual(JSON.parse(stdout).queue.map(({ number }) => number), eligible);
+
+  const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
+  const functions = ["acceptance_spec", "dispatch_acceptance", "write_acceptance_verdict_alerts"].map((name) => {
+    const body = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, "m").exec(script)?.[0];
+    assert.ok(body, name);
+    return body;
+  });
+  const state = await mkdtemp(join(tmpdir(), "agentctl-verdict-"));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const alert = join(state, "cycle-owner-alert.txt");
+  const otherAlert = "[lane-worktree] /fixture\n";
+  await writeFile(alert, otherAlert);
+  const cycle = () => exec("/bin/bash", ["-euo", "pipefail", "-c", `
+    ${functions.join("\n")}
+    node() { "$NODE_BIN" "$@"; }
+    log() { printf '%s\\n' "$*"; }
+    choose_worker_channel() { CHOSEN_CHANNEL=volc; CHOSEN_MODEL=fixture; }
+    dispatch_acceptance
+    write_acceptance_verdict_alerts
+  `], {
+    cwd, timeout: 10_000,
+    env: { ...env, NODE_BIN: process.execPath, DRY: "1", LOCK_DIR: state, STATE_DIR: state, ACCEPTANCE_WT: state },
+  });
+  const dryRun = (await cycle()).stdout;
+  assert.deepEqual([...dryRun.matchAll(/会派验收：issue #(\d+)/g)].map((m) => Number(m[1])), [eligible[0]]);
+
+  const alerts = (await readFile(alert, "utf8")).split("\n");
+  assert.equal(alerts.filter((line) => line.startsWith("[验收判定]")).length, 3);
+  for (const [i, { problem }] of cases.entries()) {
+    if (!problem) continue;
+    const url = commentUrl(i);
+    assert.match(alerts.find((line) => line.includes(url)), problem);
+    assert.match(dryRun.split("\n").find((line) => line.includes(url)), problem);
+    comments[i][0].body = bareFailVerdict; // 协调器补正后仍已验收，告警应清除。
+  }
+  const fixed = (await cycle()).stdout;
+  assert.doesNotMatch(fixed, /\[验收判定\]/);
+  assert.equal(await readFile(alert, "utf8"), otherAlert);
+});
 
 test("ACC-harness-merge-01：冲突转 s:changes，列出冲突文件且不增加质量返工轮次", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "agentctl-conflict-"));

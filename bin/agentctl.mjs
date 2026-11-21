@@ -1110,7 +1110,7 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
   }
 
   if (role === "acceptance") {
-    const queue = candidates
+    const review = candidates
       .filter((i) => readState(i).state === "review" && !readState(i).hold)
       .map((i) => {
         const pull = findPull(pulls, i);
@@ -1127,6 +1127,18 @@ async function cmdClaim(repo, { role, milestone, json, dryRun }) {
       })
       .filter((x) => x.pull)
       .sort((a, b) => a.number - b.number);
+
+    const queue = [];
+    for (const q of review) {
+      const comments = await listComments(repo, q.pull);
+      const verdicts = [...acceptanceVerdictComments(comments, q.head ?? "")];
+      if (!verdicts.length) queue.push(q);
+      for (const { comment, problem } of verdicts) {
+        if (!problem) continue;
+        const url = comment.html_url ?? `https://github.com/${repo.full}/pull/${q.pull}#issuecomment-${comment.id}`;
+        process.stderr.write(`[验收判定] issue #${q.number} / PR #${q.pull}（head ${q.head?.slice(0, 7) ?? "未知"}）：${problem}，暂停派验收，请补正或作废评论。${url}\n`);
+      }
+    }
 
     if (json) process.stdout.write(JSON.stringify({ queue }, null, 2) + "\n");
     else if (queue.length === 0) process.stdout.write("no-work\n");
@@ -1190,7 +1202,7 @@ async function cmdSet(repo, { issue, to, json, force }) {
 //   2. 合并靠人点 —— 人会忘、会看图省事。合并必须由脚本按机器可校验的条件执行：
 //      head_sha 对得上、verdict=PASS、ACC 条目逐条覆盖、五道 CI 门禁全绿。
 //
-// 判定只认 PR 评论里那块 ```yaml```，不认散文。散文可以写得很像 PASS。
+// 判定读 PR 评论的 YAML 块，或直接以 verdict 开头的裸 YAML。
 
 const MAX_ROUNDS = 3;
 const HANDOVER_MARKER = "<!-- agent-handback -->";
@@ -1283,11 +1295,61 @@ function parseVerdictAcceptance(text) {
   return Array.from(statuses, ([id, status]) => ({ id, status }));
 }
 
-/** 从评论里解析 ```yaml 块。解析不出 verdict 就当没有判定，不猜。 */
+/** 读取 failed 下的失败详情，兼容旧评论的 item 字段。 */
+function parseVerdictFailures(text) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^failed:[ \t]*(?:#.*)?$/.test(line));
+  if (start < 0) return [];
+
+  const scalar = (value) => {
+    const raw = value.trim();
+    if (raw.startsWith('"')) {
+      try { return JSON.parse(raw); } catch { return raw; }
+    }
+    return raw;
+  };
+  const failed = [];
+  let entryIndent;
+  let fieldIndent;
+  let failure;
+  let inRepro = false;
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim() || /^ *#/.test(line)) continue;
+    if (/^\S/.test(line) && !/^- +/.test(line)) break;
+    const item = /^( *)(- +)(?:id|item):[ \t]+(.+)$/.exec(line);
+    if (item && (entryIndent === undefined || item[1].length === entryIndent)) {
+      entryIndent = item[1].length;
+      fieldIndent = entryIndent + item[2].length;
+      failure = { id: scalar(item[3]) };
+      failed.push(failure);
+      inRepro = false;
+      continue;
+    }
+    if (!failure) continue;
+    const indent = /^ */.exec(line)[0].length;
+    const content = line.slice(indent);
+    if (indent === fieldIndent) {
+      const field = /^(expected|observed|note):[ \t]+(.+)$/.exec(content);
+      if (field) failure[field[1]] = scalar(field[2]);
+      inRepro = /^repro:[ \t]*$/.test(content);
+      if (inRepro) failure.repro = [];
+    } else if (inRepro && indent > fieldIndent && /^- +/.test(content)) {
+      failure.repro.push(scalar(content.replace(/^- +/, "")));
+    }
+  }
+  return failed;
+}
+
+/** 从评论里解析带围栏或直接以 verdict 开头的 YAML。 */
 function parseVerdict(body) {
+  body = String(body ?? "");
   // 一条评论里可能同时有证据包 YAML 和判定 YAML——必须扫完所有块，
   // 只认带 verdict 的那一块。只看第一块会把"证据包在前"的评论误判成没有判定。
-  const blocks = [...String(body ?? "").matchAll(/```ya?ml\s*\n([\s\S]*?)```/gi)].map((m) => m[1]);
+  const blocks = [...body.matchAll(/```ya?ml\s*\n([\s\S]*?)```/gi)].map((m) => m[1]);
+  const bare = body.replace(/^(?:[ \t]*\r?\n)*/, "");
+  if (/^verdict:[ \t]*(PASS|FAIL)[ \t]*(?:\r?\n|$)/i.test(bare)) {
+    blocks.unshift(bare.split(/^ {0,3}(?:`{3,}|~{3,})/m, 1)[0]);
+  }
   const text = blocks.find((b) => /^verdict:\s*(PASS|FAIL)\s*$/im.test(b));
   if (!text) return null;
   const verdict = /^verdict:\s*(PASS|FAIL)\s*$/im.exec(text)?.[1]?.toUpperCase();
@@ -1295,7 +1357,25 @@ function parseVerdict(body) {
   const headSha = /^head_sha:\s*"?([0-9a-fA-F]{7,40})"?\s*$/im.exec(text)?.[1] ?? null;
   const round = Number(/^round:\s*(\d+)/im.exec(text)?.[1] ?? 0) || null;
 
-  return { verdict, headSha, round, acceptance: parseVerdictAcceptance(text) };
+  return { verdict, headSha, round, acceptance: parseVerdictAcceptance(text), failed: parseVerdictFailures(text) };
+}
+
+/** 派工要识别有判定意图的坏评论；只有结构化判定能驱动状态迁移。 */
+function* acceptanceVerdictComments(comments, head) {
+  const voided = voidedCommentIds(comments);
+  for (const comment of comments) {
+    if (voided.has(String(comment.id))) continue;
+    const body = comment.body ?? "";
+    const verdict = parseVerdict(body);
+    if (!verdict && !/^[ \t]*verdict[ \t]*:/im.test(body)) continue;
+    // 仅用于判断是否要暂停派工，允许缩进、单引号、行尾注释等写法，以便排除旧 head。
+    const mentionedHead = verdict?.headSha ?? /^[ \t]*head_sha[ \t]*:[ \t]*(["']?)([0-9a-f]{7,40})\1[ \t]*(?:#.*)?$/im.exec(body)?.[2];
+    if (mentionedHead && !head.toLowerCase().startsWith(mentionedHead.toLowerCase())) continue;
+    const problem = !mentionedHead
+      ? "判定评论缺 head_sha 或其格式无效"
+      : verdict?.headSha && head.startsWith(verdict.headSha) ? null : "判定 YAML 无法解析";
+    yield { comment, problem };
+  }
 }
 
 /** 最新一条带判定的评论。FAIL 之后又 PASS 是合法的，所以必须取最新。 */
@@ -1678,7 +1758,7 @@ async function cmdMerge(repo, { issue: number, pending, dryRun, json }) {
       if (requiresArchitectureChecklist(issue.body) && !hasArchitectureAnswers(pull.body)) {
         problems.push("PR 描述缺 ADR-0005 §13 六问（在「六问」小节逐条填写 1. 到 6.）");
       }
-      if (!verdict) problems.push("PR 里没有可解析的 verdict（需要 ```yaml 块，含 verdict/head_sha）");
+      if (!verdict) problems.push("PR 里没有可解析的 verdict（YAML 需包含 verdict 和 head_sha）");
       else if (verdict.verdict !== "PASS") problems.push(`最新判定是 ${verdict.verdict}`);
       else if (!verdict.headSha || !pull.head.sha.startsWith(verdict.headSha)) {
         problems.push(`判定针对的是 ${verdict.headSha ?? "<无>"}，当前 head 是 ${pull.head.sha.slice(0, 7)}（验收后又改过代码）`);
@@ -1853,7 +1933,7 @@ async function main(argv) {
 
   engineer  抢 s:ready，抢到即改 s:doing；口径不合格（ACC 引用不到）不抢。
   rework    抢 s:changes，抢到即改 s:doing；附原 PR/分支/最近验收 FAIL 评论，round 到顶转 s:blocked + hold:human。
-  acceptance 列出 s:review 且已有 PR 的队列（不抢单；附该 issue 的口径 id 与 head）。
+  acceptance 列出 s:review 且当前 PR head 待验的队列（不抢单；附该 issue 的口径 id 与 head）。
 
 退出码：0 正常（含"没活"）；1 配置/网络/API 出错，或迁移/认领/合并失败。
          "有活要干"不算失败——那会让定时任务误判。
