@@ -196,9 +196,13 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
 
 const base = (port) => `http://127.0.0.1:${port}`;
 
-async function probeVersion(port) {
+async function probeVersion(port, expectedSocket = null) {
   try {
     const r = await fetch(`${base(port)}/json/version`, { signal: AbortSignal.timeout(1500) });
+    if (r.ok && expectedSocket) {
+      const { webSocketDebuggerUrl } = await r.json();
+      return webSocketDebuggerUrl === expectedSocket ? "ok" : "occupied";
+    }
     void r.body?.cancel().catch(() => {});
     return r.ok ? "ok" : "occupied";
   } catch {
@@ -380,8 +384,24 @@ async function startChrome({ accountId, port, profile, headless, deadline }) {
   if (!chrome) throw new Error(browserReady() ?? "没有可用的 Chrome");
   if (process.env.VK_CHROME_BIN && !existsSync(chrome)) throw new Error(`VK_CHROME_BIN 不存在：${chrome}`);
 
-  const child = spawn(chrome, chromeArgs({ port, profile, headless }), { detached: true, stdio: "ignore" });
+  const child = spawn(chrome, chromeArgs({ port, profile, headless }), {
+    detached: true, stdio: ["ignore", "ignore", "pipe"],
+  });
   child.unref();
+  child.stderr.unref();
+  child.stderr.setEncoding("utf8");
+  let startupLog = "";
+  let listeningSocket = null;
+  let bindFailed = false;
+  child.stderr.on("data", (chunk) => {
+    if (listeningSocket || bindFailed) return;
+    startupLog = (startupLog + chunk).slice(-4096);
+    listeningSocket = startupLog.match(/DevTools listening on (ws:\/\/\S+)\s/)?.[1] ?? null;
+    // IPv4 绑定失败时，Chrome 也可能只监听 ::1，而驱动只走 127.0.0.1。
+    bindFailed = listeningSocket
+      ? !listeningSocket.startsWith(`ws://127.0.0.1:${port}/`)
+      : startupLog.includes("Cannot start http server for devtools");
+  });
   let spawnError;
   child.once("error", (err) => { spawnError = err; });
   child.once("exit", () => {
@@ -392,13 +412,16 @@ async function startChrome({ accountId, port, profile, headless, deadline }) {
   try {
     do {
       if (spawnError) throw new Error(`Chrome 启动失败：${spawnError.message}`);
-      const status = await probeVersion(port);
-      if (status === "occupied") return null;
+      const expectedSocket = listeningSocket;
+      if (bindFailed) return null;
+      const status = await probeVersion(port, expectedSocket);
+      if (bindFailed || status === "occupied") return null;
       if (status === "ok") {
         // canBindPort 放掉探测 socket 后，其他进程可能先绑定。确认回答 CDP 的是刚启动的进程。
-        const pids = portListenerPids(port, "4");
+        // Chrome 自报的浏览器目标已由 probeVersion 核对；无日志的可执行文件则查监听 PID。
+        const pids = expectedSocket ? [] : portListenerPids(port, "4");
         if (pids.some((pid) => pid !== String(child.pid))) return null;
-        if (pids.includes(String(child.pid))) {
+        if (expectedSocket || pids.includes(String(child.pid))) {
           ready = true;
           return child;
         }
