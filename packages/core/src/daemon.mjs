@@ -19,6 +19,7 @@ import { createRunner } from "./runner.mjs";
 import { applyTerminalFailure, getPublishRow, sweepStuckPublishes } from "./publish-flow.mjs";
 import { publishTimeoutMs, readConfig } from "./config.mjs";
 import { startCheckSweeper, startLoginChecker } from "./scheduler.mjs";
+import { startEgressWatcher } from "./egress.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -641,7 +642,7 @@ function listen(server, options) {
  */
 export const OFFLINE_BLOCKED = new Set([
   "publish", "check", "collect", // runner 的 kind
-  "account.check", "account.connect", "account.creator", "account.logout", "collect.now",
+  "account.check", "account.connect", "egress.recheck", "account.creator", "account.logout", "collect.now",
 ]);
 const OFFLINE_BLOCKED_PREFIXES = ["account.login."];
 
@@ -756,9 +757,12 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     const stopGeneric = startCheckSweeper({ log, offline });
     // 视频号：启动时查一次，之后只在每天的钟点和某条发布前 2 小时醒来，不做保活。
     const stopLogin = startLoginChecker({ log, offline });
+    // 发布机出口位置（#310）：启动时、之后每 10 分钟探测一次；位置变了的账号，队列不再领取它们的发布。
+    const stopEgress = startEgressWatcher({ log, offline });
     stopSweeper = () => {
       stopGeneric();
       stopLogin();
+      stopEgress();
     };
 
     // auto_running 的第二道保险（ACC-publish-05）：handler 的定时器只管进程还活着、run 还在

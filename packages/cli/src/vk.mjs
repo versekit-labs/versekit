@@ -1804,6 +1804,27 @@ async function cmdMachine() {
   return data;
 }
 
+/** 发布机出口位置（#310）：vk egress [recheck|accept --yes|wait]。 */
+async function cmdEgress() {
+  const sub = pos[1] ?? "status";
+  const group = val("--group") ? { group: val("--group") } : {};
+  const account = val("--account") ? { accountId: val("--account") } : {};
+  const data =
+    sub === "recheck" ? await send("egress.recheck", group)
+    : sub === "accept" ? await send("egress.accept", { ...group, ...account, confirm: has("--yes") })
+    : sub === "wait" ? await send("egress.wait", { ...group, ...account })
+    : sub === "status" ? await send("egress.status", group)
+    : (() => { throw new Error(`没有 vk egress ${sub}：可用 status、recheck、accept --yes、wait`); })();
+  if (human) {
+    for (const l of data.lines) console.log(`${l.label}：${l.error ? l.error : `${l.place}  ${l.ip}${l.datacenter ? "  机房线路，可能是代理" : ""}`}`);
+    if (!data.lines.length) console.log("还没有探测过出口位置");
+    for (const a of data.paused) console.log(`暂停发布：${a.platform} ${a.handle}（平时 ${a.baseline?.countryName}，现在 ${a.now?.countryName}）${a.waiting ? "，等发布机复查" : ""}`);
+    for (const n of data.notes) console.log(n);
+    console.log(data.source);
+  } else out(data);
+  return data;
+}
+
 async function cmdEvents() {
   const data = await send("event.list", {
     ...(val("--since") ? { since: Number(val("--since")) } : {}),
@@ -2040,6 +2061,7 @@ function usage() {
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
       "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
       "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
+      "  vk egress [recheck | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、继续用新位置、等我关掉代理",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
@@ -2095,6 +2117,7 @@ try {
   else if (cmd === "setup") await cmdSetup();
   else if (cmd === "runs") await cmdRuns();
   else if (cmd === "machine") await cmdMachine();
+  else if (cmd === "egress") await cmdEgress();
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();
   else if (cmd === "approval") await cmdApproval();

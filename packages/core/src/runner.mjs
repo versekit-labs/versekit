@@ -10,6 +10,7 @@
 
 import { enqueue, emit, open, newId } from "./index.mjs";
 import { ERROR_CODES } from "./errors.mjs";
+import { pausedAccountIds } from "./egress.mjs";
 
 export const BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
 export const MAX_ATTEMPTS = 3;
@@ -23,6 +24,8 @@ export function createRunner({
   uploadLeaseMs = 30 * 60_000,
   heartbeatMs = 30_000,
   maxAttempts = MAX_ATTEMPTS,
+  // 出口位置变了的账号（#310）：它们的发布留在队列里不领取，位置处理完再发；不烧重试次数，也不丢。
+  heldLanes = pausedAccountIds,
   onRunFailed = null,
   log = () => {},
 } = {}) {
@@ -59,6 +62,7 @@ export function createRunner({
    * `state='queued'` guard fails.
    */
   function claim() {
+    const held = JSON.stringify([...heldLanes()]);
     return db()
       .prepare(
         `UPDATE run SET state='running', lease_until=?, heartbeat_at=?
@@ -67,12 +71,13 @@ export function createRunner({
            WHERE r.state='queued'
              AND (r.run_after IS NULL OR r.run_after <= ?)
              AND (r.lane IS NULL OR r.lane NOT IN (SELECT lane FROM run WHERE state='running' AND lane IS NOT NULL))
+             AND NOT (r.kind='publish' AND r.lane IN (SELECT value FROM json_each(?)))
            ORDER BY r.priority ASC, r.created_at ASC
            LIMIT 1)
            AND state='queued'
          RETURNING *`,
       )
-      .get(now() + leaseMs, now(), now());
+      .get(now() + leaseMs, now(), now(), held);
   }
 
   function beat(runId) {

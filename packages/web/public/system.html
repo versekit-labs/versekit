@@ -110,6 +110,7 @@
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
     checktime: null,      // { time, value, busy, note }：视频号每天检查登录的钟点
+    egress: null, ipStep: null, ipBusy: false, // 出口位置：/api/egress；ipStep = null | stay（继续用新位置，行内再确认）
     plan: null, machine: null, update: null, relay: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
     notesOpen: false, upd: null, updNote: "", updBusy: false,
     relayForm: null,      // { url, token, busy, note }：接入中转
@@ -157,16 +158,18 @@
   /** 发布方案、发布机、更新、中转、最近出的问题：都来自 /api。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
-    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; ui.checktime = null; return; }
+    if (!group) { ui.egress = null; ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; ui.checktime = null; return; }
     const q = `group=${encodeURIComponent(group.id)}`;
-    const [plan, machine, runs, update, relay, ct] = await Promise.all([
+    const [plan, machine, runs, update, relay, ct, egress] = await Promise.all([
       VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
       VK.request(`/api/machine?${q}`).catch(() => null),
       VK.request(`/api/runs?state=failed&limit=100&${q}`).catch(() => null),
       VK.request("/api/update").catch(() => null),
       VK.request("/api/relay").catch(() => null),
       VK.request("/api/login-check/time").catch(() => null),
+      VK.request(`/api/egress?${q}`).catch(() => null),
     ]);
+    ui.egress = egress;
     if (ct) ui.checktime = { ...(ui.checktime ?? {}), time: ct.time, value: ui.checktime?.dirty ? ui.checktime.value : ct.time, busy: false, note: ui.checktime?.note ?? "" };
     ui.plan = plan;
     ui.machine = machine;
@@ -457,6 +460,64 @@
     return `${ver} ${state}${checked}${auto}`;
   }
 
+  // ── 出口位置：平台看到的你在哪（ACC-v3-egress-01/04/06）─────────────────────
+  const egressPaused = () => ui.egress?.paused ?? [];
+  const pfLabel = (a) => labelOf(a.platform);
+  const placeOf = (side) => side ? `${side.countryName ?? side.country}${side.city ? " " + side.city : ""}` : "";
+
+  /** 「出口位置」这一格：每条线路一行（两条一样只写一行）；机房线路黄点「可能是代理」；位置变了黄点。 */
+  function egressCell(online) {
+    const e = ui.egress;
+    if (!e) return '<span class="sub">读不到出口位置</span>';
+    const moved = egressPaused().length > 0;
+    const shown = e.split ? e.lines : e.lines.filter((l) => !l.error).slice(0, 1).concat(e.lines.filter((l) => l.error));
+    const rows = shown.map((l) => {
+      if (l.error) return `<div class="sub">${e.split ? esc(l.label) + "：" : ""}${esc(l.error)}</div>`;
+      const net = l.datacenter === true ? `<span class="st wait">机房线路，可能是代理</span>` : l.datacenter === false ? '<span class="sub">家庭或办公室线路</span>' : '<span class="sub">线路类型查不到</span>';
+      return `<div>${e.split ? `<span class="sub">${esc(l.label)}：</span>` : ""}${esc(l.place)} ${l.ip ? `<span class="mono">${esc(l.ip)}</span>` : ""} ${net}</div>`;
+    }).join("");
+    const stale = e.probedAt && !online ? `<div class="sub">发布机不在线，这是 ${esc(ago(Date.now() - e.probedAt))}查到的</div>` : "";
+    return `${moved ? '<span class="st wait">出口位置变了</span>' : ""}${rows || '<span class="sub">还没探测过</span>'}${stale}${e.notes.map((n) => `<div class="sub">${esc(n)}</div>`).join("")}`;
+  }
+
+  /** 位置变了：写清平时在哪、现在在哪、哪几个平台先暂停；两条路——继续用新位置（行内再确认）/ 我去关掉代理。 */
+  function ipRow() {
+    const paused = egressPaused();
+    if (!paused.length) return "";
+    const first = paused[0];
+    const names = [...new Set(paused.map(pfLabel))].join("、");
+    const from = placeOf(first.baseline), to = placeOf(first.now);
+    const busy = ui.ipBusy ? " disabled" : "";
+    if (ui.ipStep === "stay") {
+      return subRow(6, `<p><b>以后把${esc(to)}当作这 ${paused.length} 个账号平时的位置，并恢复发布。</b>如果${esc(machineName())}其实开着代理，平台会看到这些账号突然换了国家，有被处罚的风险。确定是你自己换了地方再点。</p><span class="acts">${B('data-ipx="back"', "取消", "link")}${B('data-ipx="stay-ok"', "就用新位置，恢复发布", "btn", busy)}</span>`, " wait");
+    }
+    if (paused.every((a) => a.waiting)) {
+      return subRow(6, `<p><span class="st wait">等发布机复查</span>　关掉代理后，发布机 1 分钟内会自己再查一次；位置回到${esc(from)}就自动恢复发布，不用再回来点。</p><span class="acts">${B('data-ipx="recheck"', "现在再查一次", "btn", busy)}</span>`, " wait");
+    }
+    return subRow(6, `<p><b>平时在${esc(from)}，现在是${esc(to)}。</b>平台看到的位置突然变了，容易被当成异常登录。${esc(names)}先暂停发布，已确认的不会丢。多半是${esc(machineName())}开了代理。</p><span class="acts">${B('data-ipx="stay"', "继续用新位置")}${B('data-ipx="fix"', "我去关掉代理")}</span>`, " wait");
+  }
+
+  async function ipAction(x) {
+    if (x === "back") { ui.ipStep = null; return draw(); }
+    if (x === "stay") { ui.ipStep = "stay"; return draw(); }
+    ui.ipBusy = true; draw();
+    try {
+      if (x === "stay-ok") {
+        await post("/api/egress/accept", { group: VK.current()?.id, confirm: true });
+        toast("好，以后把新位置当作平时的位置，已恢复发布");
+      } else if (x === "fix") {
+        await post("/api/egress/wait", { group: VK.current()?.id });
+        toast("好，关掉代理后发布机会自己复查");
+      } else if (x === "recheck") {
+        await post("/api/egress/recheck", { group: VK.current()?.id });
+        toast(ui.egress?.pausedCount ? "还没回到平时的位置，继续暂停" : "位置回到平时的国家了，已恢复发布");
+      }
+      ui.ipStep = null;
+    } catch (err) { toast(`没成功：${err.message}`); }
+    ui.ipBusy = false;
+    await refresh();
+  }
+
   function deviceRow() {
     const m = ui.machine;
     const u = ui.update;
@@ -474,23 +535,23 @@
     }
     const lu = ui.update?.lastUpdate;
     const notes = ui.notesOpen && lu?.commits?.length
-      ? subRow(5, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
+      ? subRow(6, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
       : "";
-    const updMsg = ui.upd ? subRow(5, `<p role="status">正在更新到最新版本，更新时${esc(machineName())}的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
-      : ui.updNote ? subRow(5, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
-    const sub = updMsg || notes;
+    const updMsg = ui.upd ? subRow(6, `<p role="status">正在更新到最新版本，更新时${esc(machineName())}的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
+      : ui.updNote ? subRow(6, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
+    const sub = ipRow() || updMsg || notes;
     return `<tr${sub ? ' class="has-sub"' : ""}><td><b class="nm">${esc(machineName())}</b><span class="sub">发布机</span></td>` +
-      `<td>${status}${relayRows()}</td><td>${accountsN ? `${accountsN} 个` : '<span class="sub">没有</span>'}</td><td>${versionCell()}</td><td class="n">${act}</td></tr>${sub}`;
+      `<td>${status}${relayRows()}</td><td>${egressCell(online)}</td><td>${accountsN ? `${accountsN} 个` : '<span class="sub">没有</span>'}</td><td>${versionCell()}</td><td class="n">${act}</td></tr>${sub}`;
   }
 
   /** 接入 / 断开中转：放在设备表的最后一行。 */
   function relayAction() {
     const r = ui.relay;
-    if (ui.relayAsk) return subRow(5, `<p>断开后${esc(machineName())}不再拉取制作机送来的作品，已经入库的作品不受影响。</p><span class="acts">${B("data-relayno", "取消", "link")}${B("data-relayoff", "断开")}</span>`);
-    if (r?.configured) return `<tr><td colspan="5"><button class="link" data-relayask>断开中转</button> <span class="sub">制作机送来的作品经中转交给${esc(machineName())}</span></td></tr>`;
+    if (ui.relayAsk) return subRow(6, `<p>断开后${esc(machineName())}不再拉取制作机送来的作品，已经入库的作品不受影响。</p><span class="acts">${B("data-relayno", "取消", "link")}${B("data-relayoff", "断开")}</span>`);
+    if (r?.configured) return `<tr><td colspan="6"><button class="link" data-relayask>断开中转</button> <span class="sub">制作机送来的作品经中转交给${esc(machineName())}</span></td></tr>`;
     const f = ui.relayForm;
-    if (!f) return `<tr><td colspan="5"><button class="link" data-relayadd>接入中转</button> <span class="sub">让别的电脑上做好的作品送到${esc(machineName())}</span></td></tr>`;
-    return subRow(5, `<div class="how"><b>接入中转</b><span class="sub">填中转的地址和它给你的拉取令牌。令牌只保存在发布机上，不会回显。</span>${f.note ? `<span class="say bad" role="status">${esc(f.note)}</span>` : ""}</div>` +
+    if (!f) return `<tr><td colspan="6"><button class="link" data-relayadd>接入中转</button> <span class="sub">让别的电脑上做好的作品送到${esc(machineName())}</span></td></tr>`;
+    return subRow(6, `<div class="how"><b>接入中转</b><span class="sub">填中转的地址和它给你的拉取令牌。令牌只保存在发布机上，不会回显。</span>${f.note ? `<span class="say bad" role="status">${esc(f.note)}</span>` : ""}</div>` +
       `<input type="text" id="relay-url" placeholder="中转地址" aria-label="中转地址" autocomplete="off" value="${esc(f.url)}">` +
       `<input type="password" id="relay-token" placeholder="拉取令牌" aria-label="拉取令牌" autocomplete="new-password" value="${esc(f.token)}">` +
       `<span class="acts">${B("data-relaycancel", "取消", "link")}${B("data-relaysave", "接入", "btn pri", f.busy ? " disabled" : "")}</span>`);
@@ -498,7 +559,8 @@
 
   function tabDevices() {
     return `<h2 class="sec">发布机 · 你的平台账号在${esc(machineName())}上登录和发布，登录数据只存在它上面</h2>` +
-      `<div class="tblwrap"><table class="dev"><thead><tr><th>电脑</th><th>状态</th><th>账号</th><th>版本</th><th class="n"></th></tr></thead><tbody>${deviceRow()}${relayAction()}</tbody></table></div>` +
+      `<div class="tblwrap"><table class="dev"><thead><tr><th>电脑</th><th>状态</th><th>出口位置 · 平台看到的你在哪</th><th>账号</th><th>版本</th><th class="n"></th></tr></thead><tbody>${deviceRow()}${relayAction()}</tbody></table></div>` +
+      `<div class="cmd">出口位置每 10 分钟查一次。它和账号平时的位置不在同一个国家时，会先暂停那个账号的发布并告诉你。${ui.egress ? esc(ui.egress.source) : ""}${ui.egress?.geoDb?.cityDate ? ` 位置库的日期：${esc(new Date(ui.egress.geoDb.cityDate).toLocaleDateString())}。` : ""}</div>` +
       `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>`;
   }
 
@@ -555,7 +617,7 @@
     const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + ui.problems.length + (updFailure() ? 1 : 0) + (ui.relay?.failures ?? []).length;
     const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
     const behind = ui.update?.lastCheck && !ui.update.lastCheck.up_to_date;
-    const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0);
+    const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0) + (egressPaused().length ? 1 : 0);
     const counts = { accounts: group ? ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length : 0, plan: 0, devices: devN };
     const tabs = `<div class="seg tabs" role="group" aria-label="系统的哪一部分">${TABS.map(([k, n]) => `<button data-tab="${k}" aria-pressed="${k === ui.tab}">${n}${counts[k] ? ` ${counts[k]}` : ""}</button>`).join("")}</div>`;
     const body = { accounts: () => tabAccounts(group, pending), plan: () => tabPlan(group), devices: tabDevices }[ui.tab]();
@@ -892,7 +954,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave],[data-ipx]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -979,6 +1041,7 @@
         await refresh();
       } catch (err) { f.busy = false; f.note = err.message; draw(); }
     }
+    else if (d.ipx) await ipAction(d.ipx);
     else if ("relayask" in d) { ui.relayAsk = true; draw(); }
     else if ("relayno" in d) { ui.relayAsk = false; draw(); }
     else if ("relayoff" in d) {

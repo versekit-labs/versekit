@@ -60,6 +60,7 @@
 
   async function refresh({ advance = false } = {}) {
     state.data = await VK.today();
+    panel.refreshPaused?.();
     // 今天的待办、结果里没有成片，封面从作品列表（coverVersionId）按作品对上；读不到就退回占位。
     try {
       state.covers = new Map(((await VK.works()).works ?? []).map((w) => [w.id, w.coverVersionId]));
@@ -76,10 +77,13 @@
   }
 
 
+  const egressWhere = (a) => `平时在${a.baseline?.countryName ?? "?"}${a.baseline?.city ? " " + a.baseline.city : ""}，现在是${a.now?.countryName ?? "?"}${a.now?.city ? " " + a.now.city : ""}`;
+
   function upcomingBox(all) {
     // 现在发的确认后已经在发，不出现在「接下来要发」（ACC-v3-time-07）。
     const scheduled = all.filter((r) => r.scheduledAt == null || r.scheduledAt > Date.now());
-    const list = scheduled.slice(0, 7).map((r) => `<div class="nx"><b>${esc(when(r.scheduledAt).text)}</b>${pfBadge(r.platform)}` +
+    // 出口位置变了的账号：时间列写「暂停中」，位置处理完才会发（ACC-v3-egress-05）。
+    const list = scheduled.slice(0, 7).map((r) => `<div class="nx"><b>${esc(r.paused ? "暂停中" : when(r.scheduledAt).text)}</b>${pfBadge(r.platform)}` +
       `<span class="ti" title="${esc(r.workTitle)}">${esc(r.workTitle)}</span></div>`).join("");
     return `<div class="sidebox"><h2>接下来要发 · 你确认过的</h2>${scheduled.length ? "" : '<div class="sub">还没有确认过的。</div>'}${list}` +
       `${scheduled.length > 7 ? `<div class="sub" style="padding-top:4px">还有 ${scheduled.length - 7} 条在后面</div>` : ""}</div>`;
@@ -166,9 +170,19 @@
         `<td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span><div class="sub"${verdictTitle}>${verdict}</div></td></tr>`;
     }).join("");
 
+    // 出口位置变了：最上面（确认面板之上）一条待办，点「去处理」到系统页的设备分段（ACC-v3-egress-03）。
+    const eg = data.egress;
+    const egressTodo = eg?.pausedCount
+      ? `<div class="others" data-egress-todo><div class="oth"><span class="st wait"></span>` +
+        `<div class="bd"><div class="t">出口位置变了：${esc(egressWhere(eg.paused[0]))}</div>` +
+        `<div class="sub why">${esc([...new Set(eg.paused.map((a) => pfName(a.platform)))].join("、"))}先暂停发布，已确认的不会丢。多半是发布机开了代理。</div></div>` +
+        `<div class="a"><a class="btn" href="system.html#tab=devices">去处理</a></div></div></div>`
+      : "";
+
     main.innerHTML =
       `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
       (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/system#groups">先建一个账号组 →</a></div>`) +
+      egressTodo +
       focus +
       `<div class="others" ${more || badOnes || relogin ? "" : "hidden"}>${relogin}${more}${badOnes}</div>` +
       groupRows +
