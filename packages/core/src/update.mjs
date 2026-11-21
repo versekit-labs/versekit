@@ -222,12 +222,20 @@ export function startAutoUpdate({ apply, busy = () => 0, log = () => {}, startDe
   };
 
   async function tick() {
-    const cfg = autoConfig();
     const next = () => schedule(autoConfig().intervalHours * 3600e3);
     try {
-      if (!cfg.auto) return next();
+      if (!autoConfig().auto) {
+        log("[update] 自动更新已关闭，跳过检查");
+        return next();
+      }
       const r = await recordCheck({ fetchImpl, env });
+      if (stopped) return;
       if (r.upToDate) return next();
+      // 网络检查期间，用户可能已经从 CLI 或系统页关掉自动更新。
+      if (!autoConfig().auto) {
+        log("[update] 检查期间关闭了自动更新，跳过安装");
+        return next();
+      }
       const state = readState();
       if (state.last_failure?.to === r.latest) {
         log(`[update] ${shortCommit(r.latest)} 上次自动更新失败过，不再自动重试（在系统页点「现在更新」可以再试）`);

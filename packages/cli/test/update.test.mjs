@@ -46,6 +46,16 @@ const freePort = () =>
   });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function waitFor(predicate, message) {
+  const end = Date.now() + 10000;
+  do {
+    const value = await predicate();
+    if (value) return value;
+    await sleep(50);
+  } while (Date.now() < end);
+  assert.fail(message());
+}
+
 function buildFakeNode() {
   const dir = join(WORK, "node-pkg", "node");
   mkdirSync(join(dir, "bin"), { recursive: true });
@@ -329,15 +339,63 @@ test("ACC-update-03 后台服务自己更新：启动后检查，空闲就更新
   assert.equal(json(await vk(h, "version", "--json")).commit, B);
 });
 
-test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", { timeout: 120000 }, async () => {
-  const h = await newHome({ VERSEKIT_UPDATE_START_DELAY_MS: "500" });
-  latest = A;
+test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", { timeout: 120000 }, async (t) => {
+  const requests = [];
+  const comparePath = `/api/compare/${A}...${B}`;
+  const comparison = JSON.stringify({ status: "ahead", ahead_by: 1, commits: [] });
+  let firstCompare;
+  const updateServer = createServer((req, res) => {
+    requests.push(req.url);
+    if (req.url === "/api/commits/main") return res.end(JSON.stringify({ sha: B }));
+    if (req.url === comparePath) {
+      // 卡住旧进程的检查，保证开关先落盘、GitHub 响应后到。
+      if (!firstCompare) {
+        firstCompare = res;
+        return;
+      }
+      return res.end(comparison);
+    }
+    res.writeHead(404).end();
+  });
+  t.after(() => {
+    updateServer.close();
+    updateServer.closeAllConnections();
+  });
+  await new Promise((resolve) => updateServer.listen(0, "127.0.0.1", resolve));
+
+  const h = await newHome({
+    VERSEKIT_UPDATE_API: `http://127.0.0.1:${updateServer.address().port}/api`,
+    VERSEKIT_UPDATE_START_DELAY_MS: "500",
+  });
   await installV1(h);
-  await vk(h, "update", "--auto", "off");
-  latest = B;
+  const initial = json(await vk(h, "service", "status"));
+  assert.equal(initial.running && initial.reachable, true);
+  await waitFor(() => firstCompare, () => `启动检查未到达 compare：${JSON.stringify(requests)}`);
+  const off = await vk(h, "update", "--auto", "off");
+  assert.equal(off.code, 0, off.stdout + off.stderr);
+  assert.equal(json(await vk(h, "version", "--json")).auto, false);
+
+  const log = () => readFileSync(initial.log, "utf8");
+  const discarded = /\[update\] 检查期间关闭了自动更新，跳过安装/;
   appTarball = "app-2";
-  await vk(h, "service", "restart");
-  await sleep(4000);
+  firstCompare.end(comparison);
+  const outcome = await waitFor(
+    () => log().match(/\[update\] (?:检查期间关闭了自动更新，跳过安装|.*空闲，开始更新)/)?.[0],
+    () => `旧进程没有处理完检查：\n${log()}`,
+  );
+  assert.match(outcome, discarded);
+
+  const logOffset = log().length;
+  const restarted = await vk(h, "service", "restart");
+  assert.equal(restarted.code, 0, restarted.stdout + restarted.stderr);
+  const service = json(restarted);
+  assert.equal(service.running && service.reachable, true, restarted.stdout);
+  assert.notEqual(service.pid, initial.pid);
+  await waitFor(
+    () => log().slice(logOffset).includes("[update] 自动更新已关闭，跳过检查"),
+    () => `重启后没有走到关闭分支：\n${log().slice(logOffset)}\n请求：${JSON.stringify(requests)}`,
+  );
+  assert.deepEqual(requests, ["/api/commits/main", comparePath], "只有关闭前的检查可以访问 GitHub");
   assert.equal(appVersion(h), "0.1.0");
-  assert.equal(await status(h.port), 200);
+  assert.equal(await status(service.port), 200);
 });
