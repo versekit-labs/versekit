@@ -44,11 +44,14 @@ esac
 }
 
 function run(dir, extra = {}) {
+  // 假 agentctl：永远不碰真实 GitHub；调用记录写进 agentctl-calls，供断言
+  const fake = join(dir, 'fake-agentctl.mjs');
+  writeFileSync(fake, `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(join(dir, 'agentctl-calls'))}, process.argv.slice(2).join(' ') + '\\n');\n`);
   return spawnSync('bash', [join(ROOT, 'bin/coordinator-loop.sh')], {
     cwd: ROOT, encoding: 'utf8', timeout: 60000,
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RUN_FILE: join(dir, 'run-id'),
       CYCLE_BIN: join(dir, 'cycle.sh'), CYCLE_LOG: join(dir, 'cycle.log'),
-      COORD_STATE_DIR: join(dir, 'state'), STATE_DIR: join(dir, 'vstate'), COORD_WAIT_MS: '100', ...extra },
+      COORD_STATE_DIR: join(dir, 'state'), STATE_DIR: join(dir, 'vstate'), COORD_WAIT_MS: '100', AGENTCTL_BIN: fake, ...extra },
   });
 }
 
@@ -73,7 +76,7 @@ test('worker-read 末尾含 exceeded quota → 退出码 11，日志含 issue / 
 // ACC-harness-codex-07
 test('只有 Codex 自带的 /usage 提示行 → 不报额度用尽、不写冷却', () => {
   const dir = setup('tip');
-  dispatchRecord(dir, { issue: 284, role: 'engineer', channel: 'codex' });
+  dispatchRecord(dir, { issue: 999284, role: 'engineer', channel: 'codex' });
   const r = run(dir);
   assert.notEqual(r.status, 11, r.stdout + r.stderr);
   assert.doesNotMatch(r.stdout, /额度用尽|额度用完/);
@@ -82,10 +85,11 @@ test('只有 Codex 自带的 /usage 提示行 → 不报额度用尽、不写冷
 
 test('Codex 真用量上限 → 仍判额度用完并写冷却，issue 取自派工记录而非目录名', () => {
   const dir = setup('codexquota');
-  dispatchRecord(dir, { issue: 284, role: 'engineer', channel: 'codex' });
+  dispatchRecord(dir, { issue: 999284, role: 'engineer', channel: 'codex' });
   const r = run(dir);
-  assert.match(r.stdout, /Codex 额度用完（#284/, r.stdout + r.stderr);
+  assert.match(r.stdout, /Codex 额度用完（#999284/, r.stdout + r.stderr);
   assert.ok(existsSync(join(dir, 'vstate', 'codex-exhausted')));
+  assert.match(readFileSync(join(dir, 'agentctl-calls'), 'utf8'), /set --issue 999284 --to ready --force/); // 走的是假脚本
 });
 
 test('没有派工记录 → 报「issue 未知」，不从 worktree 目录名猜', () => {
