@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>模拟：抖音创作者中心 · 发布</title>
+<style>
+  body { font: 14px sans-serif; margin: 24px; }
+  .row { margin: 12px 0; }
+  .zone-container { border: 1px solid #999; min-height: 80px; padding: 6px; }
+  .cover-sim { position: relative; display: inline-block; width: 160px; height: 90px; background: #eee; }
+  .cover-sim img { width: 100%; height: 100%; object-fit: cover; }
+  .dy-creator-content-modal { position: fixed; inset: 10% 20%; background: #fff; border: 2px solid #333; padding: 16px; z-index: 10; }
+  .semi-button { padding: 6px 14px; }
+  .semi-button-disabled { opacity: .4; }
+  [hidden] { display: none !important; }
+</style></head>
+<body>
+<h1>发布视频</h1>
+<div class="row"><label>作品标题</label><br><input id="title" style="width:420px" placeholder="填写作品标题，会展示在作品的上方"></div>
+<div class="row"><label>作品简介</label><div id="desc" class="zone-container" contenteditable="true"></div></div>
+<div class="row"><div class="cover-sim" id="coverArea"><img id="coverImg" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span id="coverEdit">编辑封面</span></div></div>
+<div class="row" id="recommend" hidden><div class="recommendCover-1" id="rec1">推荐封面 1</div></div>
+<div class="row"><div class="long-card-sim"><div id="status">上传中 12%</div></div></div>
+<div class="row" id="coverTip" hidden>请设置封面后再发布</div>
+<div class="row" id="riskTip" hidden>请完成滑块验证</div>
+<div class="row"><button id="publishBtn">发布</button> <button id="draftBtn">暂存离开</button></div>
+
+<div class="dy-creator-content-modal" id="modal" hidden>
+  <div>
+    <button type="button" id="tabPortrait">设置竖封面</button>
+    <button type="button" id="tabLandscape">设置横封面</button>
+  </div>
+  <!-- 左边是「AI 参考图」上传，右边才是封面上传：SAU 踩过的坑，两个控件都在，选错了「完成」会一直灰着 -->
+  <div class="semi-upload"><div class="semi-upload-drag-area-custom">+</div><input type="file" accept="image/*" class="semi-upload-hidden-input" id="aiRef"></div>
+  <div class="semi-upload"><div class="semi-upload-drag-area-main-text">点击上传文件或拖拽文件到此处</div><input type="file" accept="image/*" class="semi-upload-hidden-input" id="coverFile"></div>
+  <button type="button" class="semi-button semi-button-disabled" id="coverDone">完成</button>
+</div>
+
+<script type="module">
+const q = (s) => document.querySelector(s);
+const cfg = await (await fetch("/__config")).json().catch(() => ({ mode: "ok" }));
+const mode = cfg.mode;
+if (mode === "risk") q("#riskTip").hidden = false;
+if (mode === "login") location.href = "/login";
+
+// 表单要等视频开始上传才渲染（真实页面实测约 40 秒，这里缩成几百毫秒）；上传进度走完才出现「重新上传」
+setTimeout(() => { q("#status").textContent = "上传中 80%"; }, 400);
+setTimeout(() => { q("#status").textContent = "重新上传"; }, cfg.uploadMs ?? 900);
+
+// 真实的富文本编辑器自己处理回车；普通 contenteditable 收不到合成的 Enter 键，这里模拟编辑器的行为
+q("#desc").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); document.execCommand("insertLineBreak"); } });
+q("#coverEdit").addEventListener("click", () => { q("#modal").hidden = false; });
+q("#coverFile").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { q("#modal").dataset.cover = r.result; setTimeout(() => q("#coverDone").classList.remove("semi-button-disabled"), 300); };
+  r.readAsDataURL(f);
+});
+q("#coverDone").addEventListener("click", () => {
+  if (q("#coverDone").classList.contains("semi-button-disabled")) return;
+  q("#coverImg").setAttribute("src", q("#modal").dataset.cover);
+  q("#modal").remove();
+  localStorage.setItem("sim.cover", "1");
+});
+q("#rec1").addEventListener("click", () => { q("#coverImg").setAttribute("src", "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="); localStorage.setItem("sim.cover", "1"); q("#coverTip").hidden = true; });
+
+q("#draftBtn").addEventListener("click", () => {
+  if (mode === "cover-required" && !localStorage.getItem("sim.cover")) { q("#coverTip").hidden = false; q("#recommend").hidden = false; return; }
+  if (mode === "risk-on-save") { q("#riskTip").hidden = false; return; }
+  const drafts = JSON.parse(localStorage.getItem("sim.drafts") || "[]");
+  if (mode !== "draft-lost") drafts.push({ title: q("#title").value, body: q("#desc").innerText, at: Date.now() });
+  localStorage.setItem("sim.drafts", JSON.stringify(drafts));
+  location.href = "/creator-micro/content/manage";
+});
+q("#publishBtn").addEventListener("click", () => { document.title = "SHOULD-NOT-PUBLISH"; localStorage.setItem("sim.published", "1"); });
+</script>
+</body></html>

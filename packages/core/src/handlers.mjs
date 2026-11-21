@@ -22,6 +22,7 @@ import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
 import { checkAccount } from "./adapters.mjs";
 import * as updates from "./update.mjs";
+import { LOGIN_TRACKED, loginCheckTime, normaliseClock, queueLoginChecks, rearmLoginChecker, DEFAULT_LOGIN_CHECK_TIME } from "./scheduler.mjs";
 
 /** 设备名：config.json 的 device.name；没起名叫「发布机」。主机名（xxx.local）不是给人看的。 */
 const deviceName = () => {
@@ -52,7 +53,7 @@ const HEARTBEAT_STALE_MS = 90e3;
 const RETRYABLE_STATES = new Set(["failed", "blocked", "expired", "notify_pending", "draft_pending"]);
 
 const platformLabel = (platform) =>
-  overview.MATRIX_COLUMNS.find((column) => column.platform === platform || column.aliases.includes(platform))?.label ?? platform;
+  overview.MATRIX_COLUMNS.find((column) => column.platform === platform || column.aliases.includes(platform))?.label ?? overview.loginPlatformLabel(platform);
 
 /**
  * 素材类型 × 平台能力的创建前校验（ACC-publish-04、ACC-publish-06）。
@@ -139,11 +140,17 @@ export function loginHint(platform, accountId) {
   if (platform === "xiaohongshu") {
     return `下一步：vk account login ${accountId} --qr（手机小红书扫码，不弹窗口；遇到风控改用 --phone <手机号> 短信登录或 --open 打开登录窗口）`;
   }
+  if (platform === "shipinhao") {
+    return `下一步：vk account login ${accountId} --qr（用开通视频号的微信扫码，不弹窗口；也可以在系统页账号那一行扫）`;
+  }
   if (platform === "tiktok-api") {
     return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用 TikTok 登录并同意）`;
   }
   if (platform === "youtube") {
     return `下一步：vk account connect ${accountId}（在电脑前点开授权链接，用你的 Google 账号登录并同意）`;
+  }
+  if (platform === "douyin") {
+    return `下一步：到系统页点「在发布机上打开登录窗口」，在窗口里登录抖音一次（需要验证码、滑块时在窗口里手动过；命令行：vk account reauth ${accountId}）`;
   }
   return `下一步：vk account reauth ${accountId}（在电脑前完成扫码）`;
 }
@@ -194,6 +201,43 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       open().prepare("UPDATE run SET run_after = NULL WHERE id = ? AND state = 'queued'").run(item.runId);
     }
     return result;
+  }
+
+  /**
+   * 确认之前把适配器能判的事先判了（视频号：短标题超 16 字、有不允许的标点、描述超 950 字）：
+   * 在人点确认的这一刻拦下并说清楚，不等到发布那天失败。适配器没有 preflight 就什么都不做。
+   */
+  function preflightDrafts({ cutId, publishId }) {
+    const rows = publishId
+      ? open().prepare("SELECT p.id, a.platform, a.handle FROM publish p JOIN account a ON a.id = p.account_id WHERE p.id = ?").all(publishId)
+      : open()
+          .prepare("SELECT p.id, a.platform, a.handle FROM publish p JOIN account a ON a.id = p.account_id WHERE p.cut_id = ? AND p.state IN ('pending_confirm', 'skipped')")
+          .all(cutId);
+    const problems = [];
+    for (const r of rows) {
+      const adapter = byPlatform.get(r.platform)?.adapter;
+      if (typeof adapter?.preflight !== "function") continue;
+      try {
+        adapter.preflight({ publishId: r.id });
+      } catch (err) {
+        problems.push(`${platformLabel(r.platform)}：${String(err.message).split("\n")[0]}`);
+      }
+    }
+    if (problems.length) fail(`还不能确认：${problems.join("；")}。改好之后再确认，这次没有确认任何一条`);
+  }
+
+  /** 人确认了视频号平台稿：这一刻查一次登录（过期了马上提醒，不等发布那天）；并让时钟重新对准「发布前 2 小时」。 */
+  function checkLoginOnConfirm(result) {
+    const ids = (result?.approved ?? []).map((a) => a?.publishId).filter(Boolean);
+    if (!ids.length) return;
+    const accounts = open()
+      .prepare(`SELECT DISTINCT p.account_id AS id FROM publish p JOIN account a ON a.id = p.account_id WHERE p.id IN (${ids.map(() => "?").join(",")}) AND a.platform IN (${[...LOGIN_TRACKED].map(() => "?").join(",")})`)
+      .all(...ids, ...LOGIN_TRACKED)
+      .map((r) => r.id);
+    if (accounts.length) {
+      queueLoginChecks({ trigger: "confirm", accountIds: accounts });
+      rearmLoginChecker();
+    }
   }
 
   /** 进行中的授权会话（TikTok 官方接口、YouTube），按账号。 */
@@ -572,7 +616,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const stamp = (list) =>
         list.map((a) => {
           const conflict = store.getIdentityConflict(a.id);
-          const view = { ...withCheckStatus(a), quota: quotaToday(a), ...(conflict ? { identityConflict: conflict.message } : {}) };
+          const clock = overview.loginClockOf(a);
+          const view = { ...withCheckStatus(a), quota: quotaToday(a), ...(clock ? { loginClock: clock } : {}), ...(conflict ? { identityConflict: conflict.message } : {}) };
           const profile = store.accountProfile(a);
           return profile ? { ...view, avatar_url: profile.avatarUrl } : view;
         });
@@ -584,6 +629,25 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         accounts.map((a) => [a.platform, { accountId: a.id, handle: a.handle, name: a.display_name ?? a.handle }]),
       );
       return { group: { id: g.id, name: g.name }, accounts, occupants };
+    },
+
+    /** 一个账号的详情；视频号带登录时长（这次登录已多久、最近几次平均撑多久），数字和系统页同一份。 */
+    "account.show": ({ accountId }) => {
+      const account = store.getAccount(accountId);
+      if (!account) fail(`没有这个账号：${accountId}`, "vk account list");
+      const view = { ...withCheckStatus(account), ...(overview.loginClockOf(account) ? { loginClock: overview.loginClockOf(account) } : {}) };
+      return { account: view, ...(view.loginClock ? { loginClock: view.loginClock } : {}) };
+    },
+
+    /** 视频号每天检查登录的钟点（系统页设置）。 */
+    "login.checktime.show": () => ({ time: loginCheckTime(), default: DEFAULT_LOGIN_CHECK_TIME, platforms: [...LOGIN_TRACKED] }),
+
+    "login.checktime.set": ({ time }) => {
+      const clock = normaliseClock(time);
+      if (!clock) fail(`检查时间要写成 时:分，比如 08:00（收到：${time}）`);
+      updateConfig({ login_check: { time: clock } });
+      rearmLoginChecker(); // 新的钟点马上生效，不等下一次醒来
+      return { time: clock, note: `视频号每天 ${clock} 查一次登录` };
     },
 
     "work.add": ({ asset, title, source, cuts }) => {
@@ -790,7 +854,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (account.platform === "bilibili") {
         return { accountId, started: false, next: `在电脑上运行：biliup -u ${account.credential_ref ?? "<cookies.json>"} login，选「浏览器登录」` };
       }
-      if (account.platform === "xiaohongshu") {
+      if (account.platform === "xiaohongshu" || account.platform === "shipinhao") {
         return { accountId, started: false, next: loginHint(account.platform, accountId) };
       }
       if (account.platform === "tiktok-api" || account.platform === "youtube") {
@@ -1034,12 +1098,22 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     // 发布前人确认（#146）：写库都在 store.mjs，这里只是把命令接上。
-    "publish.approve": ({ cutId = null, publishId = null, when = "scheduled" }) => releaseNativeSchedule(store.approvePublishes({ cutId, publishId, when })),
+    "publish.approve": ({ cutId = null, publishId = null, when = "scheduled" }) => {
+      preflightDrafts({ cutId, publishId });
+      const result = releaseNativeSchedule(store.approvePublishes({ cutId, publishId, when }));
+      checkLoginOnConfirm(result);
+      return result;
+    },
 
     // 改内容（ACC-v3-edit-*）：通用文案、各平台单独写的字段、按时间发的时间，一次提交、带 rev。
     "cut.edit": ({ cutId, rev, language = null, generic = null, platforms = null }) => store.editCut({ cutId, rev, language, generic, platforms }),
 
-    "publish.now": ({ publishId }) => store.publishNow({ publishId }),
+    "publish.now": ({ publishId }) => {
+      preflightDrafts({ publishId });
+      const result = store.publishNow({ publishId });
+      checkLoginOnConfirm({ approved: [result] });
+      return result;
+    },
 
     "publish.manual": ({ publishId }) => store.publishManual({ publishId }),
 

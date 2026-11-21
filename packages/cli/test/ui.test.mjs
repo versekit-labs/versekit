@@ -41,7 +41,7 @@ test("控制台在新设计下能打开：四个页面都在、没有横向溢�
   const base = `http://127.0.0.1:${daemon.port}`;
   let tab = null;
   try {
-    tab = await driver.openAccount({ accountId: "ui-check", url: `${base}/today`, headless: process.env.CI === "true" });
+    tab = await driver.openAccount({ accountId: `ui-check-${process.pid}`, url: `${base}/today`, headless: process.env.CI === "true" });
     await tab.waitFor(`document.querySelector("main .hd h1")?.innerText`, [], { timeout: 25e3, what: "今天页" });
 
     // v2 外壳：#148 之后只有四个页面（今天是首页），导航也只有这一份来源。
@@ -74,7 +74,7 @@ test("控制台在新设计下能打开：四个页面都在、没有横向溢�
     assert.equal(await tab.eval(`location.hash`), "", "导航不能退回 #setup 旧路由");
   } finally {
     if (tab) await tab.close().catch(() => {});
-    await driver.closeAccount("ui-check").catch(() => {});
+    await driver.closeAccount(`ui-check-${process.pid}`).catch(() => {});
     await daemon.close();
   }
 });

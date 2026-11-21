@@ -10,17 +10,17 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
+process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
 const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
 const { setInputValue, fillAndSendCode, clickLoginButton } = await import("../src/login-xhs.mjs");
 
-// 真浏览器验收只在开发机跑：CI 的 Chrome 实例开关有竞态，skip 免得 job 随机红。
-const skipNoChrome = browserReady() ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态）" : false);
+const skipNoChrome = browserReady() ?? false;
 
 const PAGE = `<!doctype html><meta charset="utf-8"><body>
 <div id="app">
@@ -78,32 +78,25 @@ const server = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(PAGE);
 });
+// 每份测试有独立 profile。只启动一次浏览器，每条用例仍然从新的登录页开始。
+const ACCOUNT = `xhs-fixture-${process.pid}`;
 let base;
 before(async () => {
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  await once(server.listen(0, "127.0.0.1"), "listening");
   base = `http://127.0.0.1:${server.address().port}/`;
 });
-after(() => server.close());
-
-// 账号 id 决定 Chrome 的调试端口（SHA-256 摘要）。固定 id 会让同时跑这条测试的多个进程
-// （多个 worktree 各自 npm run ci、或并行的 node --test）算出同一个端口：后起的 Chrome 绑不上
-// 端口，却因端口那头有人应答被当成「就绪」，于是 tab 开在别人的 Chrome 里，对方一
-// closeAccount 我们就报「tab 已关闭 / 连接已断开」（#136）。按 pid 分开，每个进程独占端口与 profile。
-const ACCOUNT = `xhs-fixture-${process.pid}`;
+after(async () => {
+  try {
+    await closeAccount(ACCOUNT);
+  } finally {
+    await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+});
 
 async function open() {
   const tab = await openAccount({ accountId: ACCOUNT, url: base, headless: true });
   await tab.waitFor(`!!document.querySelector('.phone')`, [], { timeout: 15e3, what: "假登录页" });
   return tab;
-}
-
-async function shut(tab) {
-  // tab.close() 抛错也必须关浏览器，否则这个无头 Chrome 会泄漏到测试结束之后。
-  try {
-    await tab.close();
-  } finally {
-    await closeAccount(ACCOUNT);
-  }
 }
 
 test("setInputValue：受控输入框要收到 input 事件，页面状态才认", { skip: skipNoChrome }, async () => {
@@ -116,7 +109,7 @@ test("setInputValue：受控输入框要收到 input 事件，页面状态才认
     await tab.eval(`(() => { const e = document.querySelector('.phone'); e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`).catch(() => {});
     assert.equal(await tab.eval(`window.__blocked === undefined`), true);
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 
@@ -129,7 +122,7 @@ test("fillAndSendCode：勾协议 + 嵌套按钮也能发出，并回读到倒�
     // 倒计时是「发出了」的证据
     assert.match(await tab.eval(`document.querySelector('#send').innerText`), /s$|重新发送/);
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 
@@ -139,7 +132,7 @@ test("fillAndSendCode：号码不合法时不报成功（回读失败要抛错�
     await assert.rejects(() => fillAndSendCode(tab, "123"), /没有发出|倒计时/);
     assert.equal(await tab.eval(`window.__blocked`), true, "页面应该把这次点击判为无效");
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 
@@ -149,11 +142,11 @@ test("clickLoginButton：文案带空格也能点中；验证码对就跳转成�
     await fillAndSendCode(tab, "17712665728");
     await setInputValue(tab, "验证码", "123456");
     await clickLoginButton(tab);
-    await new Promise((r) => setTimeout(r, 300));
+    await tab.waitFor(`window.__loggedIn === true && !!document.querySelector('input.upload')`, [], { what: "假登录成功页" });
     assert.equal(await tab.eval(`window.__loggedIn`), true);
     assert.equal(await tab.eval(`!!document.querySelector('input.upload')`), true);
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 
@@ -163,11 +156,11 @@ test("clickLoginButton：验证码错误时不跳转", { skip: skipNoChrome }, a
     await fillAndSendCode(tab, "17712665728");
     await setInputValue(tab, "验证码", "000000");
     await clickLoginButton(tab);
-    await new Promise((r) => setTimeout(r, 300));
+    await tab.waitFor(`window.__loginError === true`, [], { what: "假登录错误提示" });
     assert.equal(await tab.eval(`window.__loginError`), true);
     assert.equal(await tab.eval(`!!document.querySelector('input.upload')`), false);
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 
@@ -180,12 +173,12 @@ test("pageLoggedIn：控制台页面算登录成功，登录页不算", { skip: 
     await fillAndSendCode(tab, "17712665728");
     await setInputValue(tab, "验证码", "123456");
     await clickLoginButton(tab);
-    await new Promise((r) => setTimeout(r, 300));
+    await tab.waitFor(`window.__loggedIn === true && !!document.querySelector('input.upload')`, [], { what: "假登录成功页" });
     // 假页面 URL 仍是本地地址，所以这里只验证「不是无条件 false」之外的分支：
     // 域名不匹配 → 依然 false（这正是我们想要的安全行为）
     assert.equal(await pageLoggedIn(tab), false);
   } finally {
-    await shut(tab);
+    await tab.close();
   }
 });
 

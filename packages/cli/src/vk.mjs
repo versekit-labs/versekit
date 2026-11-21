@@ -474,6 +474,9 @@ function daemonHandlers(adapters, log) {
     "account.login.qr": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+      // 适配器自己会取二维码就交给它（视频号）：会话、轮询状态都在适配器里，这里只转发。
+      const delegate = adapterOf(account.platform);
+      if (typeof delegate?.loginQr === "function") return delegate.loginQr({ accountId });
       if (account.platform !== "xiaohongshu") {
         throw new Error(`${account.platform} 不走这条扫码登录：在账号卡上点「重新登录」`);
       }
@@ -1046,6 +1049,24 @@ async function cmdAccount() {
     } else out(data);
     return data;
   }
+  if (sub === "show") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account show <accountId>");
+    const data = await send("account.show", { accountId }, { log });
+    if (human) {
+      const a = data.account;
+      console.log(`${a.id}  ${platformLabelOf(a.platform)}  ${a.handle}  ${a.displayState ?? a.state}`);
+      if (data.loginClock) console.log(`登录时长：${data.loginClock.label}`);
+    } else out(data);
+    return data;
+  }
+  if (sub === "checktime") {
+    const time = pos[2];
+    const data = time ? await send("login.checktime.set", { time }, { log }) : await send("login.checktime.show", {}, { log });
+    if (human) console.log(time ? data.note : `视频号每天 ${data.time} 查一次登录`);
+    else out(data);
+    return data;
+  }
   if (sub === "add") {
     const platform = pos[2];
     if (!platform) throw new Error("用法：vk account add <platform> --group <组> --name <名字>");
@@ -1181,7 +1202,7 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
-  throw new Error("用法：vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
+  throw new Error("用法：vk account list [--group <组>] | show <accountId> | checktime [时:分] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
 }
 
 async function cmdBootstrap() {

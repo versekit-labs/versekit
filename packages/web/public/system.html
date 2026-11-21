@@ -76,14 +76,19 @@
   const toast = (m) => window.VKShell?.toast(m);
 
   // 平台在「接入账号」里的叫法：tiktok-api 是官方接口，和网页登录的 tiktok 分开说。
-  const LABEL = { xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
+  const LABEL = { xiaohongshu: "小红书", shipinhao: "视频号", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
   const labelOf = (p) => LABEL[p] ?? p;
   // 走官方接口的账号：先填应用凭证，再在新标签页授权；不靠发布机的浏览器资料（TikTok 官方接口、YouTube）。
   const OFFICIAL = { "tiktok-api": { name: "TikTok", idName: "client key", where: "TikTok 开发者后台里这个应用的凭证" }, youtube: { name: "YouTube", idName: "client id", where: "你自己在 Google Cloud 控制台里建的 OAuth 客户端的凭证" } };
   const WEB_LOGIN = (p) => p !== "bilibili" && !OFFICIAL[p]; // 靠自己的浏览器资料保持登录的平台
   // 发布机能在后台替你取二维码、发短信验证码的平台；其余平台只有「在发布机上打开登录窗口」。
-  const HEADLESS = new Set(["xiaohongshu"]);
+  const HEADLESS = new Set(["xiaohongshu"]);   // 能取二维码也能发短信
+  const QR_ONLY = new Set(["shipinhao"]);      // 只能取二维码（视频号：用开通视频号的微信扫）
+  const QR_OK = (p) => HEADLESS.has(p) || QR_ONLY.has(p);
+  // 登录要撑多久要记下来、不挂保活的平台：状态行说「要重新扫码」，登录时长接在「检查过」后面。
+  const TRACKED = new Set(["shipinhao"]);
   const QR_HINT = "扫码登录的是手机 App 当前的号；要接另一个号，先在 App 里切换账号，或者改用短信验证码。";
+  const qrHint = (p) => (QR_ONLY.has(p) ? "用开通视频号的微信扫，并在手机上点确认；扫码登录的是微信当前的号。" : QR_HINT);
   const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口", youtube: "走官方接口" };
   const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
   const TABS = [["accounts", "账号"], ["plan", "发布方案"], ["devices", "设备"]];
@@ -104,6 +109,7 @@
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
+    checktime: null,      // { time, value, busy, note }：视频号每天检查登录的钟点
     plan: null, machine: null, update: null, relay: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
     notesOpen: false, upd: null, updNote: "", updBusy: false,
     relayForm: null,      // { url, token, busy, note }：接入中转
@@ -151,15 +157,17 @@
   /** 发布方案、发布机、更新、中转、最近出的问题：都来自 /api。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
-    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; return; }
+    if (!group) { ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; ui.checktime = null; return; }
     const q = `group=${encodeURIComponent(group.id)}`;
-    const [plan, machine, runs, update, relay] = await Promise.all([
+    const [plan, machine, runs, update, relay, ct] = await Promise.all([
       VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
       VK.request(`/api/machine?${q}`).catch(() => null),
       VK.request(`/api/runs?state=failed&limit=100&${q}`).catch(() => null),
       VK.request("/api/update").catch(() => null),
       VK.request("/api/relay").catch(() => null),
+      VK.request("/api/login-check/time").catch(() => null),
     ]);
+    if (ct) ui.checktime = { ...(ui.checktime ?? {}), time: ct.time, value: ui.checktime?.dirty ? ui.checktime.value : ct.time, busy: false, note: ui.checktime?.note ?? "" };
     ui.plan = plan;
     ui.machine = machine;
     ui.update = update;
@@ -199,7 +207,9 @@
       return `<span class="st ${w[0]}">${w[1]}</span>`;
     }
     if (a.identityConflict) return '<span class="st bad">登录到了别的号</span>';
-    return `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}</span>`;
+    if (TRACKED.has(a.platform) && st.key === "relogin") return `<span class="st bad">${esc(labelOf(a.platform))}要重新扫码</span> <span class="sub">${stamp(a.lastCheckedAt)}${a.loginClock ? ` · ${esc(a.loginClock.label)}` : ""}</span>`;
+    // 登录时长接在「检查过」后面：这次登录已多久、最近几次平均撑多久；记录不够时写「还在记录」。
+    return `<span class="st ${st.cls}">${st.label}</span> <span class="sub">${stamp(a.lastCheckedAt)}${a.loginClock ? ` · ${esc(a.loginClock.label)}` : ""}</span>`;
   }
 
   function accountActions(a, st, lg) {
@@ -221,15 +231,14 @@
   function loginSub(a, lg) {
     const id = esc(a.id), pf = labelOf(a.platform), m = esc(machineName());
     const cancel = B(`data-cancel="${id}"`, "取消", "link");
-    const headless = HEADLESS.has(a.platform);
-    const sms = headless ? B(`data-loginmode="sms" data-id="${id}"`, "改用短信验证码", "link") : "";
-    const qr = headless ? B(`data-loginmode="qr" data-id="${id}"`, "改用扫码", "link") : "";
+    const sms = HEADLESS.has(a.platform) ? B(`data-loginmode="sms" data-id="${id}"`, "改用短信验证码", "link") : "";
+    const qr = QR_OK(a.platform) ? B(`data-loginmode="qr" data-id="${id}"`, "改用扫码", "link") : "";
     const win = B(`data-loginmode="win" data-id="${id}"`, "在发布机上打开登录窗口", "link");
     const alt = (...xs) => `<span class="alt">${xs.filter(Boolean).join("")}${cancel}</span>`;
     const box = (inner, cls = "") => `<div class="qr${cls ? ` ${cls}` : ""}">${inner}</div>`;
     switch (lg.step) {
       case "qr":
-        return subRow(6, `${box(lg.qr ? `<img src="${esc(lg.qr)}" alt="登录二维码">` : esc(lg.text || "正在取二维码…"))}<div class="how"><b>用${esc(pf)} App 扫这个码</b><span class="sub">二维码是发布机「${m}」取回来的，几分钟内有效。登录数据只存在那台电脑上，这个服务拿不到。${esc(QR_HINT)}${lg.note ? ` ${esc(lg.note)}` : ""}</span>${alt(sms, win)}</div>`);
+        return subRow(6, `${box(lg.qr ? `<img src="${esc(lg.qr)}" alt="登录二维码">` : esc(lg.text || "正在取二维码…"))}<div class="how"><b>用${esc(pf)} App 扫这个码</b><span class="sub">二维码是发布机「${m}」取回来的，几分钟内有效。登录数据只存在那台电脑上，这个服务拿不到。${esc(qrHint(a.platform))}${lg.note ? ` ${esc(lg.note)}` : ""}</span>${alt(sms, win)}</div>`);
       case "scanned":
         return subRow(6, `${box("已扫码")}<div class="how"><b>在手机上点「确认登录」</b><span class="sub">点完这里会自己变成正常，不用回来按什么。</span>${alt()}</div>`);
       case "qrold":
@@ -336,6 +345,16 @@
     return `<div class="note bad" role="status" id="platforms-err">读不到平台信息：${why}。这几行的登录操作先不显示；刷新页面再试。</div>`;
   }
 
+  /** 视频号每天检查登录的钟点：现有的设置行样式（sysrow）。只有接了视频号账号才出现。 */
+  function checktimeRow() {
+    const ct = ui.checktime;
+    if (!ct || !ui.accounts.some((a) => TRACKED.has(a.platform))) return "";
+    return `<div class="sysrow"><label>视频号每天 <input type="time" id="ct-time" value="${esc(ct.value ?? ct.time)}" aria-label="视频号每天检查登录的时间"> 查一次登录</label>` +
+      `<button class="btn" data-ctsave${ct.busy || (ct.value ?? ct.time) === ct.time ? " disabled" : ""}>保存</button>` +
+      `<span class="say${ct.bad ? " bad" : ""}" role="status">${esc(ct.note)}</span></div>` +
+      `<div class="cmd">视频号的登录撑不了多久，所以只在发布机启动时、每天这个钟点、你确认视频号平台稿时、计划发布前 2 小时查一次；不会定时打开页面「续命」。登录已经过期时不再反复查，等你重新扫码。</div>`;
+  }
+
   function tabAccounts(group, pending) {
     const groupsTable = `<div class="tblwrap"><table><thead><tr><th>账号组</th><th>账号</th><th>等你处理</th><th class="n"></th></tr></thead><tbody>${groupRows(pending)}${newGroupRow()}</tbody></table></div>`;
     if (!group) {
@@ -344,7 +363,7 @@
     const where = publisherOffline() ? `<span class="st bad" style="margin-left:10px">${OFFLINE_SAY}</span>` : `在发布机「${esc(machineName())}」上登录和发布`;
     const accountsTable = `<div class="tblwrap"><table><thead><tr><th>平台</th><th>账号</th><th>登录</th><th>今天还能发</th><th>说明</th><th class="n"></th></tr></thead><tbody>${ui.accounts.map(accountRow).join("")}${addRow(group)}</tbody></table></div>`;
     return `<h2 class="sec">账号组 · 一个组是一套平台账号，有自己的作品、待办、数据和发布方案</h2>${groupsTable}` +
-      `<h2 class="sec" id="accounts">账号 · ${esc(group.name)} · ${where}</h2>${platformsNote()}${accountsTable}` +
+      `<h2 class="sec" id="accounts">账号 · ${esc(group.name)} · ${where}</h2>${platformsNote()}${accountsTable}${checktimeRow()}` +
       `<div class="cmd">平台的登录数据只存在你自己的发布机上，这个服务拿不到。手机上的通知和确认都在飞书里。</div>`;
   }
 
@@ -602,7 +621,7 @@
         confirming.add(id);
         try {
           // 拿到 cookie 不等于能用：B站再过一遍检查，通过才显示正常。
-          if (acc(id)?.platform === "bilibili") await confirm(id); else await succeed(id);
+          if (acc(id)?.platform === "bilibili" || TRACKED.has(acc(id)?.platform)) await confirm(id); else await succeed(id);
         } finally { confirming.delete(id); }
         return;
       }
@@ -714,7 +733,7 @@
     if (credsUnknown(a)) return toast("读不到平台信息，刷新页面再试");
     if (OFFICIAL[a.platform]) return connectOfficial(id);
     if (!platformInfo(a.platform)) return fail(id, `${machineName()}上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
-    const how = method ?? (HEADLESS.has(a.platform) ? "qr" : "win");
+    const how = method ?? (QR_OK(a.platform) ? "qr" : "win");
     if (how === "qr") return startQr(id);
     if (how === "sms") { stopPoll(id); ui.login[id] = { step: "sms1" }; draw(); document.getElementById("sms-phone")?.focus(); return; }
     return startWindow(id);
@@ -849,6 +868,7 @@
     else if (t.id === "relay-url" && ui.relayForm) ui.relayForm.url = t.value;
     else if (t.id === "relay-token" && ui.relayForm) ui.relayForm.token = t.value;
     else if (t.id === "pe-days" && ui.planEdit) ui.planEdit.delayDays = t.value;
+    else if (t.id === "ct-time" && ui.checktime) { ui.checktime.value = t.value; ui.checktime.dirty = true; ui.checktime.note = ""; const save = main.querySelector("[data-ctsave]"); if (save) save.disabled = !t.value || t.value === ui.checktime.time; }
   });
   main.addEventListener("change", (e) => {
     const t = e.target;
@@ -872,7 +892,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -892,6 +912,12 @@
       try { await post(accPath(id, "logout"), { accountId: id }); toast("已退出登录，现在可以重新登录另一个号"); }
       catch (err) { toast(`没退出成功：${err.message}`); }
       await refresh();
+    } else if ("ctsave" in d) {
+      const ct = ui.checktime;
+      ct.busy = true; ct.note = ""; ct.bad = false; draw();
+      try { const r = await post("/api/login-check/time", { time: ct.value }); ui.checktime = { time: r.time, value: r.time, busy: false, note: r.note, bad: false }; toast(r.note); }
+      catch (err) { ct.busy = false; ct.bad = true; ct.note = err.message; }
+      draw();
     } else if (d.login) startLogin(d.login);
     else if (d.loginmode) startLogin(d.id, d.loginmode);
     else if (d.smssend) smsSend(d.smssend);

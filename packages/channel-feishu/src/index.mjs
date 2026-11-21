@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 const exec = promisify(execFile);
 const bin = () => process.env.VK_LARK_BIN ?? "lark-cli";
+const LARK_TIMEOUT = 25e3;
 // 只用 versekit 自己的 profile：用户在自己的应用上配的，不碰机器上别的应用。
 const profile = () => process.env.VK_FEISHU_PROFILE ?? "versekit";
 
@@ -27,13 +28,29 @@ function runWithInput(args, input) {
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (err += c));
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(String(err || out).trim().slice(0, 500)))));
+    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(String(err || out).trim().slice(0, 500)))));
     child.stdin.end(input);
   });
 }
 
+function probeLark(args) {
+  return spawnSync(bin(), args, { encoding: "utf8", timeout: LARK_TIMEOUT });
+}
+
+function probeFailure(result, what) {
+  if (result.error?.code === "ETIMEDOUT") return `飞书暂时不可用：lark-cli ${what}超时，请稍后重试`;
+  if (result.error) return `飞书暂时不可用：lark-cli ${what}失败（${result.error.message}）`;
+  if (result.status !== 0) {
+    const detail = String(result.stderr ?? "").trim().slice(0, 120) || result.signal || result.status;
+    return `飞书暂时不可用：lark-cli ${what}失败（${detail}）`;
+  }
+  return null;
+}
+
 function profileInfo() {
-  const list = spawnSync(bin(), ["profile", "list"], { encoding: "utf8", timeout: 5000 });
+  const list = probeLark(["profile", "list"]);
+  const error = probeFailure(list, "读取应用配置");
+  if (error) return { exists: false, appId: null, error };
   try {
     const profiles = JSON.parse(list.stdout ?? "[]");
     const found = Array.isArray(profiles) ? profiles.find((p) => p.name === profile()) : null;
@@ -57,9 +74,7 @@ export function normalizeFormValue(value) {
   return typeof value === "object" ? value : undefined;
 }
 
-const profileExists = () => profileInfo().exists;
-
-async function lark(args, { timeout = 25e3 } = {}) {
+async function lark(args, { timeout = LARK_TIMEOUT } = {}) {
   args = [...args, "--profile", profile()];
   let stdout;
   try {
@@ -90,15 +105,20 @@ export default {
 
   /** null = 可用；否则一句人能照做的话。这条会被账号墙与 doctor 直接显示。 */
   ready() {
-    const probe = spawnSync(bin(), ["--version"], { encoding: "utf8", timeout: 5000 });
-    if (probe.error) return "飞书未配置：没有找到 lark-cli（装好后到「接入」页填写你的应用）";
-    if (probe.status !== 0) return `飞书未配置：lark-cli 不可用（${String(probe.stderr ?? "").trim().slice(0, 120)}）`;
+    const probe = probeLark(["--version"]);
+    if (probe.error?.code === "ENOENT") return "飞书未配置：没有找到 lark-cli（装好后到「接入」页填写你的应用）";
+    const versionError = probeFailure(probe, "版本探测");
+    if (versionError) return versionError;
 
-    if (!profileExists()) {
+    const info = profileInfo();
+    if (info.error) return info.error;
+    if (!info.exists) {
       return "飞书应用未配置：在「接入」页扫码创建，或填写你自己的 app_id 与 app_secret";
     }
 
-    const status = spawnSync(bin(), ["auth", "status", "--profile", profile()], { encoding: "utf8", timeout: 8000 });
+    const status = probeLark(["auth", "status", "--profile", profile()]);
+    const statusError = probeFailure(status, "读取授权状态");
+    if (statusError) return statusError;
     let st = null;
     try {
       st = JSON.parse(status.stdout ?? "null");
@@ -160,7 +180,7 @@ export default {
         clearTimeout(timer);
         reject(err);
       });
-      child.on("exit", (code) => {
+      child.on("close", (code) => {
         if (!createState.url) {
           clearTimeout(timer);
           reject(new Error(`创建应用进程退出了（code ${code}）：${buffer.slice(-200)}`));
@@ -333,7 +353,7 @@ export default {
         clearTimeout(timer);
         resolve({ ok: false, detail: e.message, url: null });
       });
-      child.on("exit", () => {
+      child.on("close", () => {
         clearTimeout(timer);
         const text = `${out}\n${err}`;
         const url = text.match(/https:\/\/open\.feishu\.cn\/page\/launcher[^"\s]+/)?.[0] ?? null;
@@ -359,6 +379,7 @@ export default {
     let stopped = false;
     let backoff = 1000;
     let buffer = "";
+    let reconnect;
 
     const connect = () => {
       if (stopped) return;
@@ -423,10 +444,10 @@ export default {
       });
 
       child.on("error", (err) => log(`[feishu] 拉不起 lark-cli：${err.message}`));
-      child.on("exit", (code) => {
+      child.on("close", (code) => {
         if (stopped) return;
         log(`[feishu] 事件订阅断开（code ${code}），${Math.round(backoff / 1000)}s 后重连`);
-        setTimeout(connect, backoff);
+        reconnect = setTimeout(connect, backoff);
         backoff = Math.min(backoff * 2, 60e3);
       });
     };
@@ -434,6 +455,7 @@ export default {
     connect();
     return () => {
       stopped = true;
+      clearTimeout(reconnect);
       try {
         child?.kill("SIGTERM");
       } catch {
