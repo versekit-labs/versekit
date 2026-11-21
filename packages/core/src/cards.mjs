@@ -129,7 +129,8 @@ export const cardButtonCount = (card) =>
 //
 // 仍然只是纯函数：行数据由 notify.mjs 在投递/点击那一刻按当前状态查出来再传进来。
 // 按钮的 value 沿用 { cmd, args, exp, key }：`publish.*` 是真命令，走 executeAction 的四道闸；
-// `card.*` 只是翻页（开始确认 / 改 / 取消 / 保存），由 notify.mjs 的 handleCardEvent 处理。
+// `card.*` 只是翻页（开始确认 / 改 / 取消），在 commands.mjs 的 CARD_VIEWS 里声明；
+// 表单「改好了」提交的就是 publish.edit 命令本身（带 cutId，由 notify.mjs 拆成逐条 publish.edit）。
 // ---------------------------------------------------------------------------------------------
 
 export const PLATFORM_LABEL = {
@@ -386,7 +387,7 @@ export function buildEditCard({ cut, rows, groupName = null, now = Date.now(), c
             name: "save",
             text: { tag: "plain_text", content: "改好了" },
             form_action_type: "submit",
-            behaviors: callback("card.save_edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:card.save_edit`, now }),
+            behaviors: callback("publish.edit", { cutId: cut.id, ...(immediate ? { when: "now" } : {}) }, { key: `${cardKey}:publish.edit`, now }),
           },
         ],
       },
@@ -447,4 +448,44 @@ export function callbackValues(card) {
   };
   walk(card?.body ?? card);
   return out;
+}
+
+/** 一张卡片上所有按钮的 { cmd, ... }：v1（actions[].value）与 v2（behaviors）都收。 */
+export function cardActions(card) {
+  const out = [...callbackValues(card)];
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== "object") return;
+    if (node.tag === "button" && node.value) out.push(node.value);
+    Object.values(node).forEach(walk);
+  };
+  walk(card);
+  return out;
+}
+
+/**
+ * 每种卡片各造一张样例（纯函数、不碰库）：`check:parity` 与 card-parity 测试用它枚举「卡片上所有按钮」。
+ * 新增一种卡片 builder 时必须加到这里，否则它的按钮逃过三端一致检查。
+ */
+export function sampleCards(now = 1_800_000_000_000) {
+  const cut = { id: "cut_sample", title: "样例成片" };
+  const rows = [
+    { publishId: "pub_a", platform: "douyin", title: "抖音标题", at: now + 3600e3 },
+    { publishId: "pub_b", platform: "bilibili", title: "B站标题", at: now + 7200e3 },
+  ];
+  const ev = (type, payload = {}) => ({ id: `evt_${type}`, type, severity: "warn", payload });
+  const publish = { id: "pub_a", platform: "douyin", handle: "sample", title: "样例" };
+  const eventCard = (type, payload) => buildEventCard(ev(type, payload), { publish, now, approvalUrl: "https://example.invalid/a" });
+  return {
+    "event:publish.failed": eventCard("publish.failed"),
+    "event:publish.needs_human": eventCard("publish.needs_human"),
+    "event:account.expired": eventCard("account.expired", { platform: "douyin", handle: "sample", accountId: "acc_a" }),
+    "event:collect.degraded": eventCard("collect.degraded"),
+    "new-work": buildNewWorkCard({ workId: "work_sample", workTitle: "样例作品", cutCount: 1, publishCount: 2, eventId: "evt_new", now }),
+    "confirm:scheduled": buildConfirmCard({ cut, index: 1, total: 1, workTitle: "样例作品", rows, now }),
+    "confirm:now": buildConfirmCard({ cut, index: 1, total: 1, workTitle: "样例作品", rows, now, when: "now" }),
+    "edit:scheduled": buildEditCard({ cut, rows, now }),
+    "edit:now": buildEditCard({ cut, rows, now, when: "now" }),
+    xhs: buildXhsCard({ publishId: "pub_x", workTitle: "样例作品", cutTitle: "样例成片", title: "标题", at: now + 3600e3, now }),
+  };
 }

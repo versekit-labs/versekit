@@ -10,6 +10,8 @@
 //   2. buildRoutes() 无重复，且每条路由都能被 matchRoute 匹配回自己（含 :param 与查询串）。
 //   3. cardButtons() 的每个按钮都能在命令表里找到，且那条命令 remote === true。
 //      按钮能远程触发 = 它能写东西，所以必须有 remote / 幂等 / 审计三件套。
+//   3b. 每种卡片（cards.mjs 的 sampleCards）上所有按钮的 cmd，都必须是 remote 命令，或在 CARD_VIEWS 里
+//      声明过的翻页。绕开命令表自己发明 callback（如旧的 card.save_edit）会在这里失败。
 //   4. 真正 spawn `node packages/cli/src/vk.mjs commands`，解析 JSON，与注册表投影逐字段比对：
 //      命令集合、http「方法 路径」、卡片 label（外加 remote，防止按钮语义漂移）。
 //      这是三端一致的执行版：不是读同一份源码，而是读产品真实吐出来的东西。
@@ -184,6 +186,34 @@ if (!routesApi || !findCommand) {
       ok("parity.cards.orphan", `${buttons.length} 个按钮全部有归属：${byLabel}`);
     }
   }
+}
+
+// ---------------------------------------------------------------- 3b. 卡片上的每个动作都在命令表里
+
+try {
+  const { cardActionProblems } = await import("../../packages/core/src/commands.mjs");
+  const { cardActions, sampleCards } = await import("../../packages/core/src/cards.mjs");
+  const samples = sampleCards();
+  const problems = [];
+  let total = 0;
+  for (const [name, card] of Object.entries(samples)) {
+    const actions = cardActions(card);
+    // 测试钩子：模拟有人在卡片上加了命令表里没有的动作，验证这道门禁真的会失败。
+    if (process.env.VK_PARITY_ROGUE_CARD_ACTION && name === "edit:scheduled") actions.push({ cmd: process.env.VK_PARITY_ROGUE_CARD_ACTION });
+    total += actions.length;
+    for (const p of cardActionProblems(actions)) problems.push(`${name} 卡片：${p}`);
+  }
+  if (problems.length) {
+    bad(
+      "parity.cards.actions-in-table",
+      problems.join("；"),
+      "卡片按钮只能是 remote 命令；纯翻页要在 commands.mjs 的 CARD_VIEWS 里声明；新的卡片 builder 记得加进 cards.mjs 的 sampleCards()",
+    );
+  } else {
+    ok("parity.cards.actions-in-table", `${Object.keys(samples).length} 种卡片、${total} 个按钮的动作都在命令表里（命令或已声明的翻页）`);
+  }
+} catch (err) {
+  bad("parity.cards.actions-in-table", `枚举卡片按钮失败：${err.message}`, "cards.mjs 必须能独立 import，sampleCards() 要能造出每种卡片");
 }
 
 // ---------------------------------------------------------------- 4. CLI 投影（真 spawn）
