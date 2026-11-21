@@ -135,9 +135,9 @@
         `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(w.workId)}">去确认</a></div></div>`;
     }).join("");
     const badOnes = problems.map((p) => `<div class="oth bad"><span class="st bad"></span>${cover(state.covers.get(p.workId), 52, 39)}` +
-      `<div class="bd"><div class="t">${esc(p.workTitle)}</div><div class="sub why">${esc(pfName(p.platform))}：${esc(p.error?.message ?? "没有发出去，原因还没记下来")}</div></div>` +
+      `<div class="bd"><div class="t">${esc(p.workTitle)}</div><div class="sub why">${esc(pfName(p.platform))}：${esc(p.state === "published_limited" ? "已发出，但" : "")}${esc(p.error?.message ?? "没有发出去，原因还没记下来")}</div></div>` +
       `<div class="a"><a class="btn" href="/work?id=${encodeURIComponent(p.workId)}${p.cutId ? "&cut=" + encodeURIComponent(p.cutId) : ""}">看经过</a>` +
-      `<button class="btn" type="button" data-retry="${esc(p.publishId)}">再试一次</button></div></div>`).join("");
+      `${p.state === "published_limited" ? "" : `<button class="btn" type="button" data-retry="${esc(p.publishId)}">再试一次</button>`}</div></div>`).join("");
     const groupRows = (data.others ?? []).map((o) => `<div class="oth" style="margin-top:14px"><span class="st wait"></span>` +
       `<div class="bd"><div class="t">账号组「${esc(o.group.name)}」里还有 ${o.total} 件事等你</div>` +
       `<div class="sub">这一页只显示当前账号组${current ? "「" + esc(current.name) + "」" : ""}的内容</div></div>` +

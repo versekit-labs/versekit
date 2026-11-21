@@ -668,7 +668,11 @@ export const PUBLISH_STATE_GROUP = {
   draft_running: "scheduled",
   published: "done",
   published_limited: "done",
+  // 不是真实状态：statusState() 把「已发出但被平台锁成私享」映射到这里，作品不能算「都发完了」。
+  forced_private: "problem",
 };
+/** 算作品状态时用的「有效状态」：published_limited + visibility_forced_private 算出了问题（视频在，但可见性不是人要的）。 */
+export const statusState = (p) => (p.state === "published_limited" && (p.error?.code ?? p.error_code) === "visibility_forced_private" ? "forced_private" : p.state);
 export const WORK_STATUS_ORDER = ["problem", "awaiting_confirm", "scheduled", "skipped", "done"];
 export const WORK_STATUS_LABEL = {
   problem: "出了问题",
@@ -877,10 +881,10 @@ function workView(work) {
       if (limit && limit.verified !== false) copyLimit[p.platform] = { ...limit, tags: limit.tags ? { ...limit.tags } : undefined };
     }
     for (const v of versions) v.copyLimit = copyLimit;
-    return { id: c.id, title: c.title, rev: c.rev ?? 0, status: deriveStatus(publishes.map((p) => p.state)), versions, publishes };
+    return { id: c.id, title: c.title, rev: c.rev ?? 0, status: deriveStatus(publishes.map(statusState)), versions, publishes };
   });
   attachBaselines(cuts);
-  const allStates = cuts.flatMap((c) => c.publishes.map((p) => p.state));
+  const allStates = cuts.flatMap((c) => c.publishes.map(statusState));
   return {
     id: work.id,
     title: work.title,

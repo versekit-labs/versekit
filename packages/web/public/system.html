@@ -78,11 +78,13 @@
   // 平台在「接入账号」里的叫法：tiktok-api 是官方接口，和网页登录的 tiktok 分开说。
   const LABEL = { xiaohongshu: "小红书", douyin: "抖音", bilibili: "B站", youtube: "YouTube", tiktok: "TikTok（网页登录）", "tiktok-api": "TikTok（官方接口）" };
   const labelOf = (p) => LABEL[p] ?? p;
-  const WEB_LOGIN = (p) => p !== "bilibili" && p !== "tiktok-api"; // 靠自己的浏览器资料保持登录的平台
+  // 走官方接口的账号：先填应用凭证，再在新标签页授权；不靠发布机的浏览器资料（TikTok 官方接口、YouTube）。
+  const OFFICIAL = { "tiktok-api": { name: "TikTok", idName: "client key", where: "TikTok 开发者后台里这个应用的凭证" }, youtube: { name: "YouTube", idName: "client id", where: "你自己在 Google Cloud 控制台里建的 OAuth 客户端的凭证" } };
+  const WEB_LOGIN = (p) => p !== "bilibili" && !OFFICIAL[p]; // 靠自己的浏览器资料保持登录的平台
   // 发布机能在后台替你取二维码、发短信验证码的平台；其余平台只有「在发布机上打开登录窗口」。
   const HEADLESS = new Set(["xiaohongshu"]);
   const QR_HINT = "扫码登录的是手机 App 当前的号；要接另一个号，先在 App 里切换账号，或者改用短信验证码。";
-  const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口" };
+  const NOTE = { xiaohongshu: "逐条单独确认", "tiktok-api": "走官方接口", youtube: "走官方接口" };
   const TIKTOK_FAMILY = ["tiktok", "tiktok-api"];
   const TABS = [["accounts", "账号"], ["plan", "发布方案"], ["devices", "设备"]];
   const OFFLINE_SAY = "发布机不在线，登录要它在线";
@@ -117,7 +119,7 @@
   };
 
   const platformInfo = (p) => ui.platforms.find((x) => x.platform === p) ?? null;
-  const credsMissing = (a) => a.platform === "tiktok-api" && platformInfo("tiktok-api")?.credentials?.configured === false;
+  const credsMissing = (a) => Boolean(OFFICIAL[a.platform]) && platformInfo(a.platform)?.credentials?.configured === false;
   const connected = (a) => Boolean(a.credential_ref && a.state === "ok");
   const machineName = () => ui.machine?.name || "发布机";
   const publisherOffline = () => Boolean(ui.machine) && !ui.machine.online;
@@ -197,7 +199,7 @@
     const dis = off ? ` disabled title="${OFFLINE_SAY}"` : "";
     let html;
     if (credsMissing(a)) return B(`data-credopen="${esc(a.id)}"`, "填应用凭证");
-    if (a.platform === "tiktok-api") html = B(`data-login="${esc(a.id)}"`, connected(a) ? "重新授权" : "Connect TikTok", connected(a) ? "link" : "btn", dis);
+    if (OFFICIAL[a.platform]) html = B(`data-login="${esc(a.id)}"`, connected(a) ? "重新授权" : `Connect ${OFFICIAL[a.platform].name}`, connected(a) ? "link" : "btn", dis);
     else if (st.key === "ok") html = (WEB_LOGIN(a.platform) ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, "重新登录", "link", dis);
     else html = (WEB_LOGIN(a.platform) && st.key !== "down" ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, st.key === "down" ? "登录" : "重新登录", "btn", dis);
     return `<span class="acts">${html}</span>${off ? `<div class="sub">${OFFLINE_SAY}</div>` : ""}`;
@@ -252,8 +254,9 @@
     } else if (lg) sub = loginSub(a, lg);
     else if (credsMissing(a) && ui.credOpen === a.id) {
       const c = ui.cred;
-      sub = subRow(6, `<p>填 TikTok 开发者后台里这个应用的凭证。它保存在发布机上，不会回显，也不进日志。</p>` +
-        `<input type="text" id="cred-key" placeholder="client key" aria-label="client key" autocomplete="off" value="${esc(c.key)}">` +
+      const of = OFFICIAL[a.platform];
+      sub = subRow(6, `<p>填${esc(of.where)}。它保存在发布机上，不会回显，也不进日志。</p>` +
+        `<input type="text" id="cred-key" placeholder="${of.idName}" aria-label="${of.idName}" autocomplete="off" value="${esc(c.key)}">` +
         `<input type="password" id="cred-secret" placeholder="client secret" aria-label="client secret" autocomplete="new-password" value="${esc(c.secret)}">` +
         `<span class="acts">${B("data-credcancel", "取消", "link")}${B("data-credsave", "保存", "btn pri", c.busy ? " disabled" : "")}</span>` +
         (c.note ? `<span class="${c.bad ? "say bad" : "sub"}" role="status" style="flex:1 1 100%">${esc(c.note)}</span>` : ""), "wait");
@@ -604,7 +607,7 @@
     }, POLL_MS));
   }
 
-  async function connectTikTok(id) {
+  async function connectOfficial(id) {
     ui.login[id] = { step: "auth", url: null };
     draw();
     try {
@@ -661,7 +664,7 @@
     const a = acc(id);
     if (!a) return;
     if (publisherOffline()) return toast(OFFLINE_SAY);
-    if (a.platform === "tiktok-api") return connectTikTok(id);
+    if (OFFICIAL[a.platform]) return connectOfficial(id);
     if (!platformInfo(a.platform)) return fail(id, `${machineName()}上没有装 ${labelOf(a.platform)} 的组件，账号已登记但没法登录。`);
     const how = method ?? (HEADLESS.has(a.platform) ? "qr" : "win");
     if (how === "qr") return startQr(id);
@@ -715,8 +718,8 @@
     if (ui.accounts.some((a) => String(a.handle ?? a.display_name ?? "").replace(/^@/, "").toLocaleLowerCase() === name.replace(/^@/, "").toLocaleLowerCase())) return say(`这个组里已经有叫「${name}」的账号，两个平台同名会分不清，换一个名字。`);
     ui.addBusy = true; ui.addNote = ""; draw();
     try {
-      const isTk = ui.addPlatform === "tiktok-api";
-      const body = { platform: ui.addPlatform, name: isTk ? name.replace(/^@/, "") : name, group: group.id, ...(isTk ? { handle: name.startsWith("@") ? name : `@${name}` } : {}) };
+      const isOfficial = Boolean(OFFICIAL[ui.addPlatform]);
+      const body = { platform: ui.addPlatform, name: isOfficial ? name.replace(/^@/, "") : name, group: group.id, ...(isOfficial ? { handle: name.startsWith("@") ? name : `@${name}` } : {}) };
       const r = await post("/api/accounts", body);
       ui.addName = ""; ui.addBusy = false; ui.addNote = ""; ui.addBad = false;
       await refresh();
@@ -744,10 +747,12 @@
   async function saveCreds() {
     const c = ui.cred;
     c.bad = false; c.note = "";
-    if (!c.key.trim() || !c.secret.trim()) { c.bad = true; c.note = "client key 和 client secret 都要填"; return draw(); }
+    if (!c.key.trim() || !c.secret.trim()) { c.bad = true; c.note = `${OFFICIAL[acc(ui.credOpen)?.platform]?.idName ?? "client key"} 和 client secret 都要填`; return draw(); }
     c.busy = true; draw();
     try {
-      await post("/api/platforms/tiktok-api/credentials", { platform: "tiktok-api", clientKey: c.key.trim(), clientSecret: c.secret.trim() });
+      const platform = acc(ui.credOpen)?.platform ?? "tiktok-api";
+      const path = { "tiktok-api": "/api/platforms/tiktok-api/credentials", youtube: "/api/platforms/youtube/credentials" }[platform];
+      await post(path, { platform, clientKey: c.key.trim(), clientSecret: c.secret.trim() });
       c.key = ""; c.secret = ""; c.busy = false; c.note = ""; ui.credOpen = null;
       toast("应用凭证已保存，可以 Connect 了");
       await refresh();
