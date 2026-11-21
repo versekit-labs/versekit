@@ -271,6 +271,18 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v2-web-05] 账号组切换在侧栏顶部，只有一个组时也显示；别的组有待办时带数字；每页副标题带当前组名；切换后页面只显示那个组的内容。
 - [ACC-v2-web-06] `npm run design:check -- --url <服务地址>` 通过；颜色、字号、圆角只用 `DESIGN.md` 里有的。
 
+### YouTube 官方接口（`packages/adapter-youtube`，2026-11-21）
+
+所有者 2026-11-21 定：先把自动发布跑通，YouTube 是海外第一个平台。移植自 `trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`（`docs/adr-0001-reuse.md` §4.1）。agent 只对 mock 服务端验证，真机由所有者在同网电脑上做（第一节真机红线照旧）。
+
+- [ACC-youtube-01] 结构与移植：`packages/adapter-youtube` 按 `docs/adapter-contract.md` 导出 `{ platform, capabilities, ready, publish, collect }`，`npm run check:contract` 通过；文件头写 `// ported from trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`；不引入运行时依赖。工厂里的硬编码全部剥离，仓库里 grep 不到：播放列表名 `Overseas Compliance Explained`、`categoryId: '28'` 写死、`defaultLanguage: 'en'` 写死、过滤 `learnontiktok|techtok`、`filesOf()` / `episode` 目录约定、`~/.config/assurelane/youtube-*.json`。`vk publish --platform youtube --dry-run` 能单独跑、无副作用、产出将要提交的元数据。
+- [ACC-youtube-02] 授权在网页上完成：系统页账号那一行「接入 YouTube」→ 填用户自己的 Google OAuth client（client id / secret）→ 打开 Google 授权页 → 只在 `127.0.0.1` 临时端口收回调（带 `state` 和 PKCE S256），拿到 code 立即关端口。token 经 core 接口存本地凭证目录，账号表只存 `credential_ref`；client secret 和 token 不进库、不进日志、不进审计参数，仓库里 grep 不到。token 过期前用 refresh 续期；续期失败或被撤销时账号变「需要重新登录」并发事件。界面上不出现命令行。对 mock 授权服务器有测试。
+- [ACC-youtube-03] 发布：对 mock 服务端跑通 `videos.insert` 可续传上传，**分块读文件**，不整段读进内存（测试断言单次读取不超过分块大小）；中途断开从服务端报告的偏移续传。标题、描述、标签来自平台稿；语言来自成片的语言版本；类目、「含 AI 合成内容」声明、播放列表都是平台稿参数，默认不加播放列表。竖版且时长在 YouTube Shorts 上限内的成片按 Shorts 处理（按成片比例与时长判断，不靠写死话题）。「预约发」用私享上传加 `publishAt`，到点由 YouTube 公开；「现在发」按平台稿的可见性直接发。平台稿经 `transitionPublish()` 到已发布，并用 `videos.list` 回读核实 id、链接和状态，不信任上传返回。
+- [ACC-youtube-04] 不静默的私享：回读的 `privacyStatus` 和请求的不一致时（API 项目未过 Google 审核会被强制锁成私享），平台稿记 `visibility_forced_private`，发事件，人话写「YouTube 把这条锁成了私享：接入用的 Google 项目还没过审，需要在 YouTube Studio 里手动改成公开」，今天页和成片面板看得到，不算悄悄成功。视频上传成功后，缩略图、字幕、播放列表这些步骤失败只写进 notes、尽力而为，不重传视频。有测试。
+- [ACC-youtube-05] 错误与配额：429 和 5xx 指数退避重试；`quotaExceeded` 立即停下、不重试，该账号暂停到太平洋时间次日零点（配额重置）并发事件；`uploadLimitExceeded`、token 失效（转「需要重新登录」）、视频被拒等，每种都有 `error_code` + 人话 + 事件，测试逐个钉住。PR 里写明按官方文档（附链接和查阅日期）一次发布消耗多少配额单位、默认每日配额多少；发布前预估当天剩余配额不够就不开始，并说明原因。
+- [ACC-youtube-06] 采集：`collect()` 用 `videos.list`（statistics）回填播放、点赞、评论；授权里有 Analytics 权限时再取观看时长，没有时不报错。数据页能看到 YouTube 的行，倍数口径和别的平台一致。有测试。
+- [ACC-youtube-07] 待人工（所有者在同网电脑上做，agent 不做）：用所有者的 Google 账号真机授权一次、发一条私享视频，核对回读、强制私享提示和数据回填。写进 PR 的「待人工」，不计 pass/fail。
+
 ### 飞书卡片
 
 - [ACC-v2-card-01] 新作品入库后 1 分钟内发"新作品，等你确认"卡片。点"开始确认"后按成片一支一支发确认卡片：上一支处理完（确认或先不发）才发下一支。
