@@ -49,6 +49,8 @@
 #   - 实现 / 返工 worker 默认 claude 通道（Sonnet）；Opus 只认 issue 的显式 model:opus label；
 #   - issue 带 model:deepseek label：实现与返工 round 1 走 DeepSeek（不探测、不调用 claude），
 #     返工 round >= 2 升 Sonnet；DeepSeek 不可用时本轮不派，不改用 claude；
+#   - issue 带 model:codex label：实现与返工 round 1 走 Codex（--agent codex --model $CODEX_MODEL），
+#     round >= 2 升 Sonnet；Codex 未安装/未登录/额度冷却中则本单改派 Sonnet；全程不探测 claude 之外的花钱请求；
 #   - 验收 worker 始终走 DeepSeek（bin/dsh-model.sh：volc 优先、qwen 兜底），绝不选 claude；
 #   - claude 不可用时实现 worker 自动降级 DeepSeek，日志写明原因。
 # 选路逻辑集中在 bin/worker-channel.sh；每次派工日志写「角色 → 通道 → 模型」。
@@ -86,6 +88,7 @@ WORKER_RETRIES="${CYCLE_WORKER_RETRIES:-2}"
 # 原生启动（默认开）：worker 由 Orca 自己启动（worker-start --agent），终端归 Dispatch 所有，
 # 交活后用 worker-release 回收——这是 Orca 官方的首选路径。
 #   claude 通道 → --agent claude --model sonnet|opus
+#   codex 通道（issue 带 model:codex，ACC-harness-codex-01）→ --agent codex --model $CODEX_MODEL（默认 gpt-6.2-sol）
 #   DeepSeek 通道（volc/qwen）→ --agent opencode（模型取 ~/.config/opencode/opencode.json 的 model，
 #   由 bin/opencode-model.sh 在派工前按探测结果写好；Orca 目前不能给 opencode 传 --model）
 # 设 CYCLE_NATIVE_AGENTS=0 回到旧路径（自建 dsh/claude 终端 + worker-start --terminal）。
@@ -374,7 +377,7 @@ choose_worker_channel() {
   out=$(bin/worker-channel.sh "${args[@]}") || return 1
   IFS='|' read -r CHOSEN_CHANNEL CHOSEN_MODEL CHOSEN_REASON <<< "$out"
   case "${CHOSEN_CHANNEL}:${CHOSEN_MODEL}" in
-    claude:sonnet|claude:opus|volc:deepseek-v4.1-flash|qwen:deepseek-v4.1-flash-1017) return 0 ;;
+    claude:sonnet|claude:opus|codex:?*|volc:deepseek-v4.1-flash|qwen:deepseek-v4.1-flash-1017) return 0 ;;
   esac
   CHOSEN_CHANNEL=""
   CHOSEN_MODEL=""
@@ -457,6 +460,9 @@ ensure_terminal() {
     local agent="" nmodel=""
     case "$channel" in
       claude) agent="claude"; nmodel="$model" ;;
+      # Codex：Orca 原生启动，模型走 --model（默认 gpt-6.2-sol，见 bin/worker-channel.sh）。
+      # 不碰 ~/.codex/config.toml；信任目录/权限确认若真机出现，在这里的启动参数或任务书里解决。
+      codex) agent="codex"; nmodel="$model" ;;
       volc|qwen)
         agent="opencode"
         if ! bin/opencode-model.sh "$channel" "$model" >/dev/null; then
@@ -505,6 +511,10 @@ ensure_terminal() {
   # 已完成未关的终端回收之后仍超上限：不再开新终端（ACC-harness-leak-03）。
   terminal_budget_exceeded || return 1
   local new
+  if [ "$channel" = "codex" ]; then
+    logerr "    ✗ ${role_zh} Codex 通道只支持原生启动（CYCLE_NATIVE_AGENTS=1），本轮不派"
+    return 1
+  fi
   if [ -n "$WORKER_AGENT" ]; then
     made=$(orca terminal create --worktree "$wt" --command "$WORKER_AGENT" --title "$title" --json 2>/dev/null || true)
     new=$(printf '%s' "$made" | jfind handle)
@@ -699,16 +709,16 @@ reclaim_settled_worker_terminals() {
 # 派工：一次建 Task + Dispatch，再把 dispatch 与 issue 的对应写下来。
 # 没有这份对应，收到 escalation 时协调器只知道"某个 dispatch 卡住了"，不知道是哪个工单。
 record_dispatch() {
-  local dispatch="$1" issue="$2" role="$3" pull="${4:-}" files="${5:-}"
+  local dispatch="$1" issue="$2" role="$3" pull="${4:-}" files="${5:-}" channel="${6:-}"
   [ -n "$dispatch" ] || return 0
   python3 -c '
 import json,sys
-dispatch, issue, role, pull, files = sys.argv[1:6]
+dispatch, issue, role, pull, files, channel = sys.argv[1:7]
 json.dump(
-    {"issue": int(issue), "role": role, "pull": pull, "files": [f for f in files.split(",") if f]},
-    open(sys.argv[6], "w"),
+    {"issue": int(issue), "role": role, "pull": pull, "files": [f for f in files.split(",") if f], "channel": channel},
+    open(sys.argv[7], "w"),
 )
-' "$dispatch" "$issue" "$role" "$pull" "$files" "$STATE_DIR/dispatch-$dispatch.json" 2>/dev/null \
+' "$dispatch" "$issue" "$role" "$pull" "$files" "$channel" "$STATE_DIR/dispatch-$dispatch.json" 2>/dev/null \
     || printf '{"issue":%s,"role":"%s","pull":"%s"}\n' "$issue" "$role" "$pull" > "$STATE_DIR/dispatch-$dispatch.json"
 }
 
@@ -1090,7 +1100,7 @@ for s in d.get("skipped") or []:
 engineer_spec() {
   local num="$1" title="$2" wt="$3" lane="$4" branch="$5" body="$6" channel="$7"
   local extra=""
-  if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  if [ "$channel" = "claude" ] || [ "$channel" = "codex" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
   printf '目标：#%s %s\n\n改动：按下面工单的「口径」逐条实现。\n\n约束：\n%s- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：你在 %s 这个独立 worktree（lane %s，分支 %s）里工作，只动本分支；不要碰其他 lane 的 worktree。\n\n可观察验收：\n- 开 PR，body 含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$extra" "$wt" "$lane" "${branch:-（Orca 新建）}" "$num" "$body"
 }
@@ -1098,7 +1108,7 @@ engineer_spec() {
 rework_spec() {
   local num="$1" title="$2" pull="$3" branch="$4" round="$5" comment_url="$6" comment_body="$7" rwt="$8" body="$9" channel="${10}"
   local extra=""
-  if [ "$channel" = "claude" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
+  if [ "$channel" = "claude" ] || [ "$channel" = "codex" ]; then extra=$(claude_task_constraints); extra="${extra}"$'\n'; fi
   printf '目标：返工 issue #%s %s（PR #%s，原分支 %s，第 %s 轮）。\n\n改动：按最近验收意见在原分支继续修改；不新建分支、不新建 issue、不改写历史。\n\n最近验收评论：%s\n\n验收意见（节选）：\n%s\n\n约束：\n%s- 在分支 %s 上继续，PR #%s 保持同一个；改完 push 到同一分支\n- 只改工单「涉及」列出的文件/模块；不改 api 形状、数据库 schema、commands.mjs 的命令定义\n- 不改 issue 的 s:* label（状态由协调器迁移）\n- 不合并 PR、不给自己发通行证\n- 完成后必须能通过 npm run ci\n- 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）\n\n归属：worktree=%s（目标分支 %s）；若当前不在该分支，先 git switch %s。\n\n可观察验收：\n- 更新 PR #%s 的 body，含 Closes #%s 与证据包 YAML（head_sha、acceptance 逐条 status: pass）\n- 用 worker_done 结束，带 taskId 与 dispatchId 和 --outcome\n\n工单原文：\n%s' \
     "$num" "$title" "$pull" "$branch" "$round" "$comment_url" "$comment_body" "$extra" \
     "$branch" "$pull" "$rwt" "$branch" "$branch" "$pull" "$num" "$body"
@@ -1236,7 +1246,7 @@ dispatch_engineer_lane() {
     set_issue_state "$num" ready || true
     return 1
   fi
-  record_dispatch "$START_DISPATCH" "$num" engineer "" "$files"
+  record_dispatch "$START_DISPATCH" "$num" engineer "" "$files" "$ch"
   lane_write "$lane" issue "$num"
   lane_write "$lane" dispatch "$START_DISPATCH"
   lane_write "$lane" since "$(date +%s)"
@@ -1465,7 +1475,7 @@ print(",".join(d.get("files") or []))
     set_issue_state "$num" changes force || true
     return 1
   fi
-  record_dispatch "$START_DISPATCH" "$num" "rework" "$pull" "$files"
+  record_dispatch "$START_DISPATCH" "$num" "rework" "$pull" "$files" "$ch"
   log "    ✓ 已派返工 task=$taskid dispatch=${START_DISPATCH}（原分支 ${branch}）"
   return 0
 }

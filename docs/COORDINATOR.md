@@ -145,17 +145,25 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 | 档 | label | 通道 | 适合 | 例子 |
 |---|---|---|---|---|
 | 简单活 | `model:deepseek` | opencode + DeepSeek（火山优先，千问兜底） | 口径写得很死、改动小、模式固定、有现成测试可对照 | 改文档与验收口径；补测试；改脚本里的一个分支；按已有模式加一条命令或字段；改文案 |
+| Codex | `model:codex` | Codex（Orca 原生 `--agent codex --model gpt-6.2-sol`） | 口径写得死、不靠看图判断的后端 / 脚本 / 测试单：核心逻辑、CLI、适配器内部、不稳定测试排查 | 修不稳定测试；CLI 命令内部逻辑；适配器的解析与重试 |
 | 默认 | （无） | Claude Sonnet | 要读懂跨模块逻辑、改适配器或页面、新功能 | 手机交接页；新适配器能力；账号登录流程 |
 | 难单 | `model:opus` | Claude Opus | **须人点头**；只在 Sonnet 反复做不过且原因是推理难度时用 | 状态机重构；并发与时序类缺陷 |
 
 规则：
 - 验收 worker 始终是 DeepSeek，与实现分开。
+- `model:codex`（2026-11-21 所有者买了 Codex 20 美元档，额度有限，目的是省 Claude 额度）：
+  - **不适合**：界面还原、要看设计稿的单、对外文案、须人拍板的单；这些别打。
+  - 协调器打这个 label 要在 issue「涉及」下一行写理由（为什么口径够死、不靠看图）；同一时间最多 1 个 Codex worker。
+  - 返工 round 1 仍走 Codex，round ≥ 2 自动升 Sonnet；同时带 `model:opus` 时 Opus 优先。
+  - Codex 没装、`codex login status` 显示未登录、或冷却期内（额度用完）→ 该单自动改派 Sonnet，日志写原因。探测只看 `command -v codex` 与 `codex login status`，**不跑 `codex exec`**（一次最小请求约 1.2 万 token）。
+  - 额度用完：`bin/coordinator-loop.sh` 从 Codex worker 屏幕识别用量上限（`You've hit your usage limit … try again at <时间>`），记 `$STATE_DIR/codex-exhausted`（解析不出时间按 5 小时）、worker-stop、issue 退回 `s:ready`；冷却期内所有 `model:codex` 的单子改派 Sonnet，到点自动恢复。
+  - 模型用 `CODEX_MODEL`（默认 `gpt-6.2-sol`）；本机 Codex 默认是最费额度的 gpt-6.2-astra，别用默认。不要改 `~/.codex/config.toml`（用户全局配置）；若真机发现停在信任目录或权限确认，要改配置前先问所有者。
 - `model:deepseek` 的返工第 2 轮起自动升到 Sonnet；Opus 只靠显式 label，返工轮次不再自动升。
 - 不要为了省事把"改页面""动适配器"这类放 DeepSeek；DeepSeek 做砸的成本（返工、真机重试）比省下的额度高。
 
 ## 6. 模型与通道（供你解释给人听）
 
-- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认 Claude Sonnet，带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude。
+- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认 Claude Sonnet，带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道，带 `model:codex` 的走 Codex 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude；Codex 不可用时该单改派 Sonnet。
 - 你自己（协调器）用 Claude。验收是否也换 Claude 由人决定，目前未换。
 
 ## 7. 汇报格式

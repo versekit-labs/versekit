@@ -9,6 +9,12 @@
 #     返工 round >= 2 仍未过 → 单升 Sonnet（claude 通道）；仍不自动升 Opus。
 #     DeepSeek 两个通道都不可用时退出码 1、本轮不派，**绝不自动改用 claude**。
 #   - 同时带 model:opus 与 model:deepseek 时，显式 Opus 优先。
+#   - issue 带 model:codex label（2026-11-21 所有者加了 Codex 账号，ACC-harness-codex-01/03/04）：
+#     实现与返工 round 1 走 codex 通道（Orca 原生 --agent codex --model $CODEX_MODEL，默认 gpt-6.2-sol）；
+#     返工 round >= 2 升 Sonnet；同时带 model:opus 时 Opus 优先；优先于 model:deepseek。
+#     Codex 不可用（没有 codex 命令 / codex login status 显示未登录 / 冷却期内额度用完）→ 本单改派 Sonnet。
+#     探测只看 `command -v codex` 与 `codex login status`，**不跑 codex exec**（一次最小请求就约 1.2 万 token）。
+#     额度用完由 bin/coordinator-loop.sh 从 worker 屏幕识别，写 $STATE_DIR/codex-exhausted。
 #   - 验收 worker **始终**走 DeepSeek 通道（bin/dsh-model.sh：volc 优先、qwen 兜底），
 #     绝不选 claude。实现与验收用不同模型，彼此独立，验收不看实现方的思考过程。
 #   - claude 不可用（命令不存在 / 额度用尽 / 限流 / 网络不通）时，实现 worker 自动降级到
@@ -16,8 +22,8 @@
 #   - IMPL_CHANNEL / IMPL_MODEL 显式覆盖照旧生效（优先于 label），便于演练与紧急回退。
 #
 # 输出（stdout，单行）：<通道>|<模型>|<原因>
-#   通道：claude / volc / qwen
-#   模型：sonnet / opus / deepseek-v4.1-flash / deepseek-v4.1-flash-1017
+#   通道：claude / volc / qwen / codex
+#   模型：sonnet / opus / deepseek-v4.1-flash / deepseek-v4.1-flash-1017 / gpt-6.2-sol（CODEX_MODEL）
 #   原因：给日志用的人话，不含 `|`
 # 退出码：0 选中；1 没有任何可用通道（stderr 说清原因）。
 #
@@ -29,6 +35,8 @@
 #   IMPL_CHANNEL=claude|dsh   强制实现 worker 的通道（显式 claude 时跳过探测）
 #   IMPL_MODEL=sonnet|opus    强制实现 worker 的模型
 #   CLAUDE_BIN                默认 claude
+#   CODEX_BIN                 默认 codex
+#   CODEX_MODEL               Codex 通道的模型（默认 gpt-6.2-sol；不要用本机默认的 gpt-6.2-astra，最费额度）
 #   CLAUDE_PROBE=0            跳过 claude 探测（假定可用；仅演练/离线用）
 #   CLAUDE_PROBE_TTL_S        探测结果缓存秒数（默认 300）
 #   CLAUDE_PROBE_TIMEOUT_S    探测超时秒数（默认 45）
@@ -80,6 +88,46 @@ labels_has_deepseek() {
     *",model:deepseek,"*) return 0 ;;
   esac
   return 1
+}
+
+labels_has_codex() {
+  case ",${LABELS}," in
+    *",model:codex,"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Codex 探测：0 = 可用；1 = 不可用（原因在 CODEX_REASON）。不花 token：不跑 codex exec。
+CODEX_BIN="${CODEX_BIN:-codex}"
+CODEX_MODEL="${CODEX_MODEL:-gpt-6.2-sol}"
+CODEX_REASON=""
+probe_codex() {
+  CODEX_REASON=""
+  local ex="$STATE_DIR/codex-exhausted" until_ts until_text now out rc
+  now=$(date +%s)
+  if [ -s "$ex" ]; then
+    IFS=$'\t' read -r until_ts until_text < "$ex" || true
+    case "$until_ts" in
+      ''|*[!0-9]*) ;;
+      *)
+        if [ "$until_ts" -gt "$now" ]; then
+          CODEX_REASON="Codex 额度用完，到 ${until_text:-?} 为止"
+          return 1
+        fi
+        ;;
+    esac
+  fi
+  if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
+    CODEX_REASON="找不到 ${CODEX_BIN} 命令"
+    return 1
+  fi
+  rc=0
+  out=$("$CODEX_BIN" login status 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ] || printf '%s' "$out" | grep -qiE 'not logged in|logged out|no (credentials|auth)'; then
+    CODEX_REASON="Codex 未登录"
+    return 1
+  fi
+  return 0
 }
 
 # 用现有 DeepSeek 选路：volc 优先，qwen 兜底。结果写 DSH_CHANNEL / DSH_MODEL。
@@ -271,6 +319,7 @@ esac
 MODEL="sonnet"
 MODEL_REASON="默认 Sonnet"
 DEEPSEEK_LABEL=0   # 1 = 按 model:deepseek label 走 DeepSeek 通道（不碰 claude）
+CODEX_LABEL=0      # 1 = 按 model:codex label 先试 Codex 通道（不可用则改派 Sonnet）
 local_round=0
 case "$ROUND" in
   ''|*[!0-9]*) ;;
@@ -285,6 +334,13 @@ else
   if labels_has_opus; then
     MODEL="opus"
     MODEL_REASON="issue 带 model:opus label"
+  elif labels_has_codex; then
+    if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
+      MODEL="sonnet"
+      MODEL_REASON="Codex 第 ${local_round} 轮仍未过 → 升 Sonnet"
+    else
+      CODEX_LABEL=1
+    fi
   elif labels_has_deepseek; then
     if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
       MODEL="sonnet"
@@ -305,6 +361,14 @@ if [ -n "${IMPL_CHANNEL:-}" ]; then
     dsh|deepseek) CHANNEL="dsh"; CHANNEL_FORCED=1; FORCE_REASON="IMPL_CHANNEL=${IMPL_CHANNEL} 强制" ;;
     *) printf 'worker-channel: IMPL_CHANNEL 只支持 claude|dsh\n' >&2; exit 1 ;;
   esac
+elif [ "$CODEX_LABEL" = "1" ]; then
+  if probe_codex; then
+    printf 'codex|%s|%s\n' "$CODEX_MODEL" "issue 带 model:codex label → Codex"
+    exit 0
+  fi
+  # Codex 不可用：本单改派 Sonnet，走下面 claude 通道的常规探测与降级。
+  MODEL="sonnet"
+  MODEL_REASON="Codex 不可用（${CODEX_REASON}）→ 改派 Sonnet"
 elif [ "$DEEPSEEK_LABEL" = "1" ]; then
   # 简单活直走 DeepSeek：不进入 claude 分支，所以不会探测、不会调用 claude。
   CHANNEL="dsh"
