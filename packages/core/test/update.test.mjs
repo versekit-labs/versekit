@@ -51,7 +51,6 @@ after(() => {
 });
 
 const cur = (commit) => ({ version: "0.1.0", commit, short: updates.shortCommit(commit) });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const setState = (id, state) => core.open().prepare("UPDATE publish SET state=? WHERE id=?").run(state, id);
 function pub(state, scheduledAt = null) {
   const g = store.addGroup({ name: `组 ${Math.random()}` });
@@ -183,10 +182,28 @@ test("ACC-update-03 定时检查：不空闲就推迟不打断；空闲才更新
   clearPublishes();
   const logs = [];
   const applied = [];
-  const run = async ({ busy = () => 0, wait = 120 } = {}) => {
-    const stop = updates.startAutoUpdate({ log: (l) => logs.push(l), apply: async (a) => applied.push(a), busy, startDelayMs: 5 });
-    await sleep(wait);
-    stop();
+  const run = async ({ busy, waitForApply = false } = {}) => {
+    // tick 要等本机 HTTP 和写库。等这一轮的日志或 apply 回调，再停止调度器。
+    const { promise, resolve, reject } = Promise.withResolvers();
+    const deadline = setTimeout(() => reject(new Error("等待自动更新检查结果超时")), 20_000);
+    const stop = updates.startAutoUpdate({
+      busy,
+      startDelayMs: 5,
+      log: (message) => {
+        logs.push(message);
+        if (!waitForApply) resolve();
+      },
+      apply: async (args) => {
+        applied.push(args);
+        resolve();
+      },
+    });
+    try {
+      await promise;
+    } finally {
+      clearTimeout(deadline);
+      stop();
+    }
   };
   latest = B; down = false;
   core.open().prepare("DELETE FROM meta WHERE key='update.state'").run();
@@ -199,7 +216,7 @@ test("ACC-update-03 定时检查：不空闲就推迟不打断；空闲才更新
   assert.ok(updates.readState().last_check_at, "照样记下检查时间");
 
   // 2) 空闲：更新，目标是最新提交
-  await run();
+  await run({ waitForApply: true });
   assert.deepEqual(applied, [{ latest: B }]);
 
   // 3) 网络失败：只记日志，不更新、不抛
