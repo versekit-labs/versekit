@@ -412,7 +412,7 @@ export function statsWithBaseline(rows) {
 // ------------------------------------------------------------------ vk today（ACC-v2-today-01）
 
 export const TODAY_DEFINITIONS = {
-  awaiting: "等确认的作品：有平台稿停在待确认的作品，按成片分；「这支先不发」的不催",
+  awaiting: "等确认的作品：有平台稿停在待确认的作品，按成片分；已送到草稿箱的（draft_pending）也在这里，提醒去手机上发；「这支先不发」的不催",
   problems: "出了问题的平台稿：failed / blocked / expired；以及已发出但被 YouTube 锁成私享的（published_limited + visibility_forced_private）",
   scheduled: "已确认等时间的队列：按计划时间从早到晚，没有时间的排最后",
   results: "最近发布满 24 小时的结果：发布已满 24 小时，最近的在前；倍数见 baseline",
