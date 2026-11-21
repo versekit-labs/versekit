@@ -13,6 +13,7 @@ import { open } from "./index.mjs";
 import { currentGroup, listAccounts, listGroups, deriveStatus, statusState, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
 import { withBaselines } from "./baseline.mjs";
 import { LOGIN_TRACKED } from "./scheduler.mjs";
+import { pausedAccountIds, view as egressView } from "./egress.mjs";
 
 /** 1 小时内采集算「新鲜」；超过 24 小时仍未采集算「坏掉」。与总览页的 5/8 口径一致。 */
 export const FRESH_AFTER_MS = 3600e3;
@@ -514,12 +515,13 @@ function todayRows(conn, groupId) {
     .all(groupId, groupId);
 }
 
-const item = (r) => ({
+const baseItem = (r) => ({
   publishId: r.id,
   workId: r.workId,
   workTitle: r.workTitle,
   cutId: r.cutId,
   cutTitle: r.cutTitle,
+  accountId: r.accountId,
   platform: r.platform,
   handle: r.handle,
   language: r.language ?? null,
@@ -535,6 +537,9 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
   const conn = open();
   const scope = groupId ? listGroups().find((g) => g.id === groupId) : null;
   const rows = todayRows(conn, groupId);
+  // 出口位置变了的账号（#310）：它们的平台稿照常保留，只是不会被领取；页面据 paused 写「暂停中」。
+  const pausedSet = new Set(pausedAccountIds());
+  const item = (r) => ({ ...baseItem(r), paused: pausedSet.has(r.accountId) });
 
   // 等确认：作品 → 成片 → 平台稿。小红书标 perItem：按成片确认不会带上它。
   const works = new Map();
@@ -594,11 +599,19 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
       text: `${loginPlatformLabel(a.platform)}要重新扫码`,
     }));
 
+  const where = egressView({ groupId });
   return {
     group: scope ? { id: scope.id, name: scope.name } : null,
     awaiting,
     problems,
     relogin,
+    // 出口位置变了：「今天」最上面（确认面板之上）的待办。paused = 暂停发布的账号；没变时 paused 为空。
+    egress: {
+      paused: where.paused,
+      pausedCount: where.pausedCount,
+      waitingCount: where.waitingCount,
+      place: where.lines.find((l) => !l.error)?.place ?? null,
+    },
     scheduled,
     results,
     others,

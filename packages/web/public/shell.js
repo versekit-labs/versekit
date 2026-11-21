@@ -107,6 +107,18 @@
   }
 
   /**
+   * 出口位置（ACC-v3-egress-02）：灰字 + 墨色地名 + IP；和账号平时的国家不一样时黄点「出口位置变了」。
+   * 两条线路出口不一样时侧栏只写第一条，两条都写在系统页。
+   */
+  function egressLines(machine) {
+    const e = machine?.egress;
+    if (!e) return [];
+    if (e.pausedCount) return [`<div class="nw"><span class="dot" style="background:var(--mark)"></span>出口位置变了</div>`, ...(e.place ? [`<div class="nw ind">${esc(e.place)}${e.ip ? ` · ${esc(e.ip)}` : ""}</div>`] : [])];
+    if (e.place) return [`<div class="nw ind"><b style="color:var(--ink);font-weight:500">${esc(e.place)}</b>${e.ip ? ` <span style="color:var(--ink2)">${esc(e.ip)}</span>` : ""}</div>`];
+    return [`<div class="nw ind" title="${esc(e.note ?? "")}">出口位置：查不到</div>`];
+  }
+
+  /**
    * 侧栏底部摘要：几个账号登录正常、发布机在线、今天还能发几条。
    * 读 account.list 的同一份结果（与系统页账号表同源），所以两处不会各说各话。
    */
@@ -141,12 +153,16 @@
       ? [`<div><span class="dot bad"></span>读不到账号状态</div>`]
       : [
           // 有问题只写「N 个账号要处理」，全正常写「N 个账号登录正常」：一行放得下，不折行。
+          ...(machine?.egress?.pausedCount
+            ? [`<div class="nw"><span class="dot" style="background:var(--mark)"></span>${machine.egress.pausedCount} 个账号暂停发布</div>`]
+            : []),
           `<div class="nw"><span class="dot${bad ? " bad" : ""}"></span>${
             accounts.length ? (bad ? `${bad} 个账号要处理` : `${ok} 个账号登录正常`) : "还没有接入账号"
           }</div>`,
           machine?.online
             ? `<div class="nw"><span class="dot"></span>发布机在线</div>`
             : `<div class="nw"><span class="dot bad"></span>${machine ? "发布机不在线" : "读不到发布机状态"}</div>`,
+          ...egressLines(machine),
           ...quotaLines,
         ];
     nav.querySelector(".health")?.remove();

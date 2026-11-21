@@ -20,8 +20,9 @@ import { setupStatus } from "./setup.mjs";
 import { readConfig, updateConfig } from "./config.mjs";
 import { listSchedule, moveSchedule, cancelSchedule } from "./schedule.mjs";
 import * as overview from "./overview.mjs";
-import { checkAccount } from "./adapters.mjs";
+import { checkAccount, notifyLogin } from "./adapters.mjs";
 import * as updates from "./update.mjs";
+import * as egress from "./egress.mjs";
 import { LOGIN_TRACKED, loginCheckTime, normaliseClock, queueLoginChecks, rearmLoginChecker, DEFAULT_LOGIN_CHECK_TIME } from "./scheduler.mjs";
 
 /** 设备名：config.json 的 device.name；没起名叫「发布机」。主机名（xxx.local）不是给人看的。 */
@@ -45,6 +46,23 @@ const platformList = (to) => {
   const clean = [...new Set(list.map((p) => String(p).trim()).filter(Boolean))];
   if (!clean.length) fail("至少要选一个要发到的平台，如 tiktok、bilibili", "--to tiktok,bilibili");
   return clean;
+};
+
+/** 侧栏要的出口位置一行：位置用哪条线路写哪条（两条一样只写一条），暂停几个账号。 */
+const egressSummary = (groupId) => {
+  const v = egress.view({ groupId });
+  const shown = v.lines.filter((l) => !l.error);
+  const first = shown[0] ?? null;
+  return {
+    probedAt: v.probedAt,
+    place: first ? first.place : null,
+    ip: first?.ip ?? null,
+    lines: v.lines.map((l) => ({ key: l.key, label: l.label, place: l.place, ip: l.ip, datacenter: l.datacenter ?? null, error: l.error ?? null })),
+    split: v.split,
+    pausedCount: v.pausedCount,
+    waitingCount: v.waitingCount,
+    note: v.notes[0] ?? null,
+  };
 };
 
 /** 守护进程每 30 秒写一次心跳；超过这个时间没动静就当发布机不在线。 */
@@ -820,6 +838,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         connectSessions.delete(accountId);
         const r = session.result;
         store.applyAccountConnection({ accountId, credentialRef: r.credentialRef, displayName: r.displayName, expiresAt: r.expiresAt });
+        await notifyLogin(accountId);
         log(`[connect] ${account.platform} ${accountId} 授权完成`);
         return { accountId, state: "connected", displayName: r.displayName, avatarUrl: r.avatarUrl };
       }
@@ -1047,7 +1066,35 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         queued: { count: queued.length, nextAt: queued.find((r) => r.scheduledAt != null)?.scheduledAt ?? null },
         running: { count: running.length },
         awaiting: { count: today.awaiting.reduce((n, w) => n + w.cuts.reduce((m, c) => m + c.publishes.length, 0), 0) },
+        // 出口位置（侧栏底部一行读它）：国家城市 + IP；暂停的账号数。
+        egress: egressSummary(g?.id ?? null),
       };
+    },
+
+    /** 出口位置：线路、IP 库状态、每个账号的判断（系统页「设备」和 vk egress 读同一份）。 */
+    "egress.status": ({ group = null } = {}) => egress.view({ groupId: (group ? requireGroup(group) : store.currentGroup())?.id ?? null }),
+
+    "egress.recheck": async ({ group = null } = {}) => {
+      try {
+        await egress.probeNow();
+      } catch (err) {
+        emit({ type: "egress.probe_failed", severity: "warn", payload: { code: "egress_probe_failed", message: err.message }, dedupeKey: `egress.probe_failed:manual:${Date.now()}` });
+        fail(`没能探测出口位置：${err.message}`);
+      }
+      return egress.view({ groupId: (group ? requireGroup(group) : store.currentGroup())?.id ?? null });
+    },
+
+    "egress.accept": ({ group = null, accountId = null, confirm = false } = {}) => {
+      const g = group ? requireGroup(group) : store.currentGroup();
+      if (confirm !== true) fail("继续用新位置要再确认一次：如果这台电脑其实开着代理，平台会看到这些账号突然换了国家，有被处罚的风险", "加 --yes");
+      const done = egress.acceptNewPlace({ groupId: g?.id ?? null, accountId });
+      return { ...done, ...egress.view({ groupId: g?.id ?? null }) };
+    },
+
+    "egress.wait": ({ group = null, accountId = null } = {}) => {
+      const g = group ? requireGroup(group) : store.currentGroup();
+      const done = egress.waitForRecheck({ groupId: g?.id ?? null, accountId });
+      return { ...done, ...egress.view({ groupId: g?.id ?? null }) };
     },
 
     "approval.link": ({ publishId }) => {

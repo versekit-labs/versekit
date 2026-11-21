@@ -212,6 +212,18 @@ window.VKPanel = function createPanel(state) {
   const isEditable = (p) => p.platform !== "tiktok-api" && (p.state === "pending_confirm" || (p.state === "queued" && p.scheduledAt != null && p.scheduledAt > Date.now()));
   const editableOf = (cut) => (cut?.publishes ?? []).filter(isEditable);
   let ctx = null;
+  // 出口位置变了、暂停发布的平台（ACC-v3-egress-05）：来自 /api/egress，读不到就当没有暂停（页面上系统页会说明）。
+  let pausedPf = new Set();
+  const pausedOf = (list) => list.filter((p) => pausedPf.has(p.platform));
+  function loadPaused() {
+    const g = VK.current?.();
+    VK.request(`/api/egress${g ? `?group=${encodeURIComponent(g.id)}` : ""}`)
+      .then((d) => {
+        const next = new Set((d.paused ?? []).map((a) => a.platform));
+        if ([...next].sort().join() !== [...pausedPf].sort().join()) { pausedPf = next; ctx?.render(); }
+      })
+      .catch(() => {});
+  }
 
   /** 一份文案放进某平台超限吗：规则同后端 copyViolations，数字只来自 work.show 给的 copyLimit。 */
   function violationsOf(limit, c) {
@@ -531,7 +543,10 @@ window.VKPanel = function createPanel(state) {
       ctx.act(async () => {
         const res = await VK.approveCut(cur.cut.id, mode);
         const held = res.held ?? [];
+        // 暂停期间确认：不说「现在开始发」，说其中几条等位置处理完再发（ACC-v3-egress-05）。
+        const waitN = pausedOf(batchOf(cur.cut)).length;
         if (held.length) window.VKShell?.toast(held.map((h) => `${pfName(h.platform)} 现在发不了：${h.reason}`).join("；"));
+        else if (waitN) window.VKShell?.toast(`已确认，其中 ${waitN} 条等位置处理完再发`);
         else if (mode === "now") window.VKShell?.toast("已确认，现在开始发");
         else window.VKShell?.toast("已确认，会按时间发");
       }, null, { advance: true });
@@ -635,7 +650,8 @@ window.VKPanel = function createPanel(state) {
       const late = p.shifted && p.state === "pending_confirm" ? `<span class="sub"> · 原定${esc(when(p.originalAt).text)}，已顺延</span>` : "";
       // 底栏选了「现在发」：还没确认的整批时间列都写「现在发」，切回「预约发」恢复时间（ACC-v3-fid-11）。
       const nowCol = sendingNow(p) || (mode === "now" && batch.includes(p));
-      const tm = nowCol ? "现在发" : w.text;
+      const stopped = pausedPf.has(p.platform) && ["pending_confirm", "queued"].includes(p.state);
+      const tm = stopped ? "暂停中" : nowCol ? "现在发" : w.text;
       return `<div class="prow ${p.state === "skipped" ? "off" : ""} ${bad ? "bad" : ""}">${pfBadge(p.platform, bad ? "err" : ["published", "published_limited"].includes(p.state) ? "" : "off")}` +
         `<span class="nm">${esc(name)}</span>` +
         `<button class="ti tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}" title="${esc(p.title)}">${esc(p.title)}${late}</button>` +
@@ -645,23 +661,28 @@ window.VKPanel = function createPanel(state) {
     const soloBlocks = solo.map((p) => {
       if (p.platform === "tiktok-api") return tkHtml(p, work.id);
       const w = when(p.scheduledAt);
+      // 小红书也是出口位置暂停的对象：块里写「暂停中」，确认后写「等位置处理完再发」，不说「正在发」（ACC-v3-egress-05）。
+      const held = pausedPf.has(p.platform) && ["pending_confirm", "queued"].includes(p.state);
       const acts = p.state === "pending_confirm"
-        ? `<div class="acts"><button class="btn" type="button" data-solo="approve" data-pub="${esc(p.id)}">${p.scheduledAt == null ? "按建议时间发" : esc(w.text) + " 发"}</button>` +
-          `<button class="btn" type="button" data-solo="now" data-pub="${esc(p.id)}">现在发</button>` +
-          `<button class="btn" type="button" data-solo="manual" data-pub="${esc(p.id)}">我自己发</button></div>`
+        ? `<div class="acts"><button class="btn" type="button" data-solo="approve" data-pub="${esc(p.id)}" data-pf="${esc(p.platform)}">${p.scheduledAt == null ? "按建议时间发" : esc(w.text) + " 发"}</button>` +
+          `<button class="btn" type="button" data-solo="now" data-pub="${esc(p.id)}" data-pf="${esc(p.platform)}">现在发</button>` +
+          `<button class="btn" type="button" data-solo="manual" data-pub="${esc(p.id)}" data-pf="${esc(p.platform)}">我自己发</button></div>`
         : `<div class="acts"><span class="st ${p.state === "skipped" ? "" : "done"}">${
-            { queued: sendingNow(p) ? "已确认，正在发" : `已确认，${w.text} 发`, notify_pending: "你自己发，发完告诉我", skipped: "先不发" }[p.state] ?? "已处理"
+            { queued: held ? "已确认，等位置处理完再发" : sendingNow(p) ? "已确认，正在发" : `已确认，${w.text} 发`, notify_pending: "你自己发，发完告诉我", skipped: "先不发" }[p.state] ?? "已处理"
           }</span></div>`;
       const editBtn = isEditable(p)
         ? `<button class="link" type="button" style="margin-left:auto" data-ed="start" data-arg="${esc(p.id)}" aria-label="改小红书的内容或时间">改</button>` : "";
       const late = p.shifted && p.state === "pending_confirm" ? ` · 原定${esc(when(p.originalAt).text)}，已顺延` : "";
-      const head = `<div class="ti">${esc(p.title)}</div><div class="sub${p.scheduledAt == null ? " unset" : ""}">${p.scheduledAt == null ? "还没定时间" : esc(w.text) + " 发"}${late}</div>` +
+      const head = `<div class="ti">${esc(p.title)}</div><div class="sub${p.scheduledAt == null && !held ? " unset" : ""}">${held ? "暂停中 · 出口位置变了，等位置处理完再发" : p.scheduledAt == null ? "还没定时间" : esc(w.text) + " 发"}${late}</div>` +
         `<button class="tog" type="button" data-more="${esc(p.id)}" aria-expanded="${isOpen(p.id)}">${isOpen(p.id) ? "收起正文和话题" : "看正文和话题"}</button>${isOpen(p.id) ? detHtml(p) : ""}`;
       return `<div class="solo"><div class="sh">${pfBadge("xiaohongshu")}小红书 · 每条都要你单独确认${editBtn}</div>${head}${acts}</div>`;
     }).join("");
 
+    // 小红书不在批量里（每条单独确认），但同样暂停：底栏要把它一起写上。
+    const stoppedBatch = pausedOf([...batch, ...solo.filter((p) => p.state === "pending_confirm")]);
+    const stopNote = stoppedBatch.length ? `${[...new Set(stoppedBatch.map((p) => pfName(p.platform)))].join("、")}的出口位置变了，先暂停发布：确认后会等位置处理完再发。` : "";
     const foot = batch.length
-      ? `<div class="cfoot"><span class="hint">${mode === "now" ? "确认后马上开始发。" : "确认之后才会排进发布；没确认的到时间也不会发。"}</span>` +
+      ? `<div class="cfoot"><span class="hint">${stopNote ? esc(stopNote) : mode === "now" ? "确认后马上开始发。" : "确认之后才会排进发布；没确认的到时间也不会发。"}</span>` +
         `<button class="link" type="button" data-skip="${esc(cut.id)}">${one ? "先不发" : "这支先不发"}</button>` +
         `<span class="seg" role="group" aria-label="什么时候发"><button type="button" data-ed="mode" data-arg="at" aria-pressed="${mode === "at"}">预约发</button>` +
         `<button type="button" data-ed="mode" data-arg="now" aria-pressed="${mode === "now"}">现在发</button></span>` +
@@ -669,7 +690,7 @@ window.VKPanel = function createPanel(state) {
       : allSkipped
         ? `<div class="cfoot"><div class="done-note">这支先不发。以后可以在作品里再确认。</div></div>`
         : confirmed
-          ? `<div class="cfoot"><div class="done-note">${one ? "" : esc(cut.title) + "的 "}${confirmed} 条已确认，${confirmedAt ? "会按时间发" : "正在发"}。</div></div>`
+          ? `<div class="cfoot"><div class="done-note">${one ? "" : esc(cut.title) + "的 "}${confirmed} 条已确认，${pausedOf(cut.publishes.filter((p) => p.state === "queued")).length ? `其中 ${pausedOf(cut.publishes.filter((p) => p.state === "queued")).length} 条等位置处理完再发` : confirmedAt ? "会按时间发" : "正在发"}。</div></div>`
           : "";
 
     return `<section class="cp" aria-label="${esc(cut.title)}">` +
@@ -907,7 +928,7 @@ window.VKPanel = function createPanel(state) {
   }
 
   return {
-    bind: (c) => { ctx = c; }, guard, startEdit,
+    bind: (c) => { ctx = c; loadPaused(); }, refreshPaused: loadPaused, isPaused: (platform) => pausedPf.has(platform), guard, startEdit,
     esc, BLANK, cover, pfOf, ORDER, pfBadge, pfName, when, fmt, ratioText, ratioCls, WD,
     pending, batchOf, soloOf, cutHasPending, draftsOf, progressText, fallback, confirmPanel, cutSteps,
   };

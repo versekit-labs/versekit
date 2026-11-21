@@ -217,3 +217,17 @@ test("qrStatus 显式接收 log，且调用处把 daemon 的 log 传进去", asy
   assert.match(src, /async function qrStatus\(accountId, account, session, log\b/);
   assert.match(src, /qrStatus\(accountId, account, qrSession, log\)/);
 });
+
+// #310 ACC-v3-egress-03：出口基线取自「登录成功那一刻」。小红书的登录成功只有这三处（扫码 / 窗口 / 短信验证码），
+// 每一处写 ok 之后都必须调 notifyLogin，否则基线退回第一次探测，代理开着时 JP 会被当成平时的位置。
+test("小红书扫码 / 窗口 / 短信三条登录成功路径都调 notifyLogin（出口基线取自登录那一刻）", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/vk.mjs", import.meta.url), "utf8");
+  assert.match(src, /import \{[^}]*\bnotifyLogin\b[^}]*\} from "..\/..\/core\/src\/adapters\.mjs"/);
+  const sets = [...src.matchAll(/setAccountState\(accountId, "ok"\);/g)];
+  assert.equal(sets.length, 3, "小红书登录成功写 ok 的地方正好三处（多了要同步改这条测试和 notifyLogin）");
+  for (const m of sets) {
+    const after = src.slice(m.index, m.index + 160);
+    assert.match(after, /await notifyLogin\(accountId\)/, "写 ok 之后紧跟 notifyLogin");
+  }
+});

@@ -1226,6 +1226,21 @@ export async function openAccount(options = {}) {
   return tab;
 }
 
+/**
+ * 用浏览器（不是 Node 的 fetch）打开一个页面，读出正文文字。出口位置探测靠它：
+ * 用户的代理一般是系统代理，Chrome 走、Node 不走，只有浏览器看到的才是平台看到的出口（#310）。
+ * 用专用的 accountId 起 Chrome 实例，不碰任何真实账号的登录资料；请求里不带账号信息。
+ */
+export async function fetchPageText(url, { accountId = "egress-probe", timeout = 20e3 } = {}) {
+  const tab = await openAccount({ accountId, url, headless: true });
+  try {
+    await tab.waitFor("document.readyState !== 'loading' && document.body && document.body.innerText.trim().length > 0", [], { timeout, what: "回显页内容" });
+    return String(await tab.eval("document.body.innerText"));
+  } finally {
+    await tab.close().catch(() => {});
+  }
+}
+
 /** 兼容壳：旧代码没有账号概念，统一落到 default 账号。 */
 export async function openTab(url) {
   return openAccount({ accountId: DEFAULT_ACCOUNT, url });

@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
-import { loadAdapters, buildHandlers, checkAccount } from "../../core/src/adapters.mjs";
+import { loadAdapters, buildHandlers, checkAccount, notifyLogin } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
 import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
@@ -316,6 +316,8 @@ async function qrStatus(accountId, account, session, log = () => {}) {
         return { mode: "qr", state: "failed", reason: "identity_conflict", note: identity.message, conflict: true };
       }
       if (account.state !== "ok") setAccountState(accountId, "ok");
+      // 登录成功的这一刻记出口国家作为这个账号平时的位置（#310，ACC-v3-egress-03）。
+      await notifyLogin(accountId);
       await endQrSession(accountId, session);
       log(`[login.qr] ${accountId} 扫码登录成功，登录态已保存`);
       return { mode: "qr", state: "ok", persisted: true, next: "登录成功，登录态已保存到这个账号的浏览器资料里" };
@@ -564,6 +566,7 @@ function daemonHandlers(adapters, log) {
         const identity = await bindXhsIdentity(accountId, await openAccount({ accountId, headless: true, reuse: "creator.xiaohongshu.com" }), log).catch(() => ({ ok: true }));
         if (!identity.ok) return { state: "failed", mode: "manual", reason: "identity_conflict", note: identity.message, conflict: true };
         if (account.state !== "ok") setAccountState(accountId, "ok");
+        await notifyLogin(accountId);
         closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => {});
         return { state: "ok", mode: "manual" };
       }
@@ -588,6 +591,8 @@ function daemonHandlers(adapters, log) {
           loginSessions.delete(accountId);
           const identity = await bindXhsIdentity(accountId, tab, log);
           if (!identity.ok) throw new Error(identity.message);
+          if (getAccount(accountId)?.state !== "ok") setAccountState(accountId, "ok");
+          await notifyLogin(accountId);
           // 会话 cookie 已持久化才收登录窗口；小红书若只有内存态会话，closeLoginWindow 会保留窗口。
           const closing = await closeLoginWindow(accountId, { cookieUrl: "https://creator.xiaohongshu.com" }).catch(() => false);
           return { ok: true, state: "ok", next: closing ? "登录成功（登录窗口几秒后自动关闭，登录态已保存）" : "登录成功（浏览器保持登录态，不用再点验证）" };
@@ -1804,6 +1809,27 @@ async function cmdMachine() {
   return data;
 }
 
+/** 发布机出口位置（#310）：vk egress [recheck|accept --yes|wait]。 */
+async function cmdEgress() {
+  const sub = pos[1] ?? "status";
+  const group = val("--group") ? { group: val("--group") } : {};
+  const account = val("--account") ? { accountId: val("--account") } : {};
+  const data =
+    sub === "recheck" ? await send("egress.recheck", group)
+    : sub === "accept" ? await send("egress.accept", { ...group, ...account, confirm: has("--yes") })
+    : sub === "wait" ? await send("egress.wait", { ...group, ...account })
+    : sub === "status" ? await send("egress.status", group)
+    : (() => { throw new Error(`没有 vk egress ${sub}：可用 status、recheck、accept --yes、wait`); })();
+  if (human) {
+    for (const l of data.lines) console.log(`${l.label}：${l.error ? l.error : `${l.place}  ${l.ip}${l.datacenter ? "  机房线路，可能是代理" : ""}`}`);
+    if (!data.lines.length) console.log("还没有探测过出口位置");
+    for (const a of data.paused) console.log(`暂停发布：${a.platform} ${a.handle}（平时 ${a.baseline?.countryName}，现在 ${a.now?.countryName}）${a.waiting ? "，等发布机复查" : ""}`);
+    for (const n of data.notes) console.log(n);
+    console.log(data.source);
+  } else out(data);
+  return data;
+}
+
 async function cmdEvents() {
   const data = await send("event.list", {
     ...(val("--since") ? { since: Number(val("--since")) } : {}),
@@ -2040,6 +2066,7 @@ function usage() {
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
       "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
       "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
+      "  vk egress [recheck | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、继续用新位置、等我关掉代理",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
@@ -2095,6 +2122,7 @@ try {
   else if (cmd === "setup") await cmdSetup();
   else if (cmd === "runs") await cmdRuns();
   else if (cmd === "machine") await cmdMachine();
+  else if (cmd === "egress") await cmdEgress();
   else if (cmd === "events") await cmdEvents();
   else if (cmd === "channel") await cmdChannel();
   else if (cmd === "approval") await cmdApproval();
