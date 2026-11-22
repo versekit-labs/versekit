@@ -660,7 +660,7 @@
     const head = `<h2 class="sec">飞书 · 要你确认的发到手机上，在卡片上就能确认</h2>`;
     const f = ui.fs;
     if (!f) return head + `<div class="panel empty">${ui.fsErr ? `读不到飞书的状态：${esc(ui.fsErr)}。后台服务可能没在运行。` : "先建一个账号组。"}</div>`;
-    // 在授权那一步点了「取消」：页面先回到「还没接」，不再自己往下走，直到再点「接飞书」。
+    // 在扫码那一步点了「取消」：页面先回到「还没接」，不再自己往下走，直到再点「接飞书」。
     const s = ui.fsPaused && f.state === "qr" && !f.create?.running ? "none" : f.state;
     const link = `<div class="cmd"><a class="link" href="feishu.html">看飞书卡片长什么样</a></div>`;
     const busy = ui.fsBusy ? " disabled" : "";
@@ -673,22 +673,21 @@
         `<td class="n"><span class="acts">${B('data-fs="off"', "不用飞书", "link")}${B("disabled", "接飞书", "btn pri", ' title="这台发布机上没有飞书组件，接不了"')}</span></td></tr></tbody></table></div>` + link;
     }
     if (s === "none" || s === "off") {
-      return head + note + `<div class="tblwrap"><table><tbody><tr><td><span class="st ${s === "off" ? "" : "wait"}">${s === "off" ? "不用飞书" : "还没接"}</span>` +
-        `<div class="sub">${s === "off" ? "要你确认的只出现在网页的「今天」里。没有人确认，一条都不会发。" : "接上以后，有要你确认的、出了问题的，会发到你的飞书里。不接也可以，那就只在网页上确认。"}</div></td>` +
-        `<td class="n"><span class="acts">${s === "off" ? "" : B('data-fs="off"', "不用飞书", "link", busy)}${B('data-fs="connect"', "接飞书", s === "off" ? "btn" : "btn pri", busy)}</span></td></tr></tbody></table></div>` + link;
+      // 机器人早先建好了、但还没认出你是谁（老版本要扫两次码，第二次授权不了）：重新扫一次就好，不用先删旧的。
+      const half = s === "none" && f.configured && !f.bound;
+      const text = s === "off" ? "要你确认的只出现在网页的「今天」里。没有人确认，一条都不会发。"
+        : half ? "飞书里的机器人已经建好，但还不知道卡片该发给谁。点「重新接」扫一次码就接好了，不用先删旧的机器人。"
+        : "接上以后，有要你确认的、出了问题的，会发到你的飞书里。不接也可以，那就只在网页上确认。";
+      return head + note + `<div class="tblwrap"><table><tbody><tr><td><span class="st ${s === "off" ? "" : "wait"}">${s === "off" ? "不用飞书" : half ? "差一次扫码" : "还没接"}</span>` +
+        `<div class="sub">${text}</div></td>` +
+        `<td class="n"><span class="acts">${s === "off" ? "" : B('data-fs="off"', "不用飞书", "link", busy)}${B('data-fs="connect"', half ? "重新接" : "接飞书", s === "off" ? "btn" : "btn pri", busy)}</span></td></tr></tbody></table></div>` + link;
     }
     if (s === "qr") {
-      const app = f.create?.running;
-      const img = app ? f.create.qr : f.auth?.qr;
-      const url = app ? f.create.url : f.auth?.url;
-      const err = f.create?.error || f.auth?.error;
-      const title = app ? "用飞书 App 扫这个码" : "再用飞书 App 扫一次";
-      const why = app
-        ? "会在你的飞书里建一个只属于你的机器人「versekit」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。"
-        : "机器人建好了。这一次是让它知道卡片发给你本人。扫完这里会自己往下走。";
+      // 只有一个二维码：扫完就建好机器人并认出你，后面自己往下走。
+      const err = f.create?.error;
       return head + note + (err ? `<div class="subin bad" style="margin-bottom:12px"><p><span class="st bad">没接成</span>　${esc(String(err).replace(/[。.]+$/, ""))}。</p><span class="acts">${B('data-fs="connect"', "重新来", "btn")}</span></div>` : "") +
-        (err ? "" : `<div class="subin">${fsQr(img, app ? "正在取二维码…" : "正在取二维码…")}<div class="how"><b>${title}</b><span class="sub">${why}</span>` +
-        `<span class="alt">${url ? `<a class="link" href="${esc(url)}" target="_blank" rel="noopener">扫不了？点这里打开</a>` : ""}${B('data-fs="cancel"', "取消", "link")}</span></div></div>`) + link;
+        (err ? "" : `<div class="subin">${fsQr(f.create?.qr, "正在取二维码…")}<div class="how"><b>用飞书 App 扫这个码</b><span class="sub">会在你的飞书里建一个只属于你的机器人「versekit」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。</span>` +
+        `<span class="alt">${f.create?.url ? `<a class="link" href="${esc(f.create.url)}" target="_blank" rel="noopener">扫不了？点这里打开</a>` : ""}${B('data-fs="cancel"', "取消", "link")}</span></div></div>`) + link;
     }
     if (s === "sub") {
       const u = f.subscription?.url;
@@ -716,35 +715,24 @@
     return post(`/api/channels/feishu/${path}`, body);
   }
 
-  /** 「接飞书」：只点一下，后面的步骤（建应用 → 授权 → 配对 → 探订阅 → 测试卡片）自己往下走。 */
+  /** 「接飞书」：只点一下、只扫一次码，后面的步骤（建应用 → 配对 → 探订阅 → 测试卡片）自己往下走。 */
   async function fsConnect() {
     ui.fsBusy = true; ui.fsNote = ""; ui.fsTried = false; ui.fsPaused = false; draw();
     try {
       if (ui.fs?.skipped) await fsCall("unskip");
-      const st = await VK.request("/api/channels/feishu/status");
-      if (!st.configured) await fsCall("app/create");
-      else if (!st.authorized) { await fsCall("login/start"); ui.fsTried = true; }
-      else if (!st.bound) await fsCall("bind", {});
-      else await fsCall("app/create"); // 卡片发不出去后「重新接」：重建应用
+      await fsCall("app/create"); // 只扫一次码；已建应用未配对、卡片发不出去后的「重新接」也是它，不要求先删旧应用
     } catch (err) { ui.fsNote = `没接成：${err.message}`; }
     ui.fsBusy = false;
     await loadFeishu(); draw();
   }
 
-  /** 轮询：扫码和授权、开通按钮都在飞书那边完成，这里每 2 秒读一次状态，到了就自己往下走，没有「我弄好了」。 */
+  /** 轮询：扫码、开通按钮都在飞书那边完成，这里每 2 秒读一次状态，到了就自己往下走，没有「我弄好了」。 */
   let fsTimer = null;
   async function fsTick() {
     const before = ui.fs?.state;
     const prev = JSON.stringify(ui.fs);
     await loadFeishu();
     const f = ui.fs;
-    if (f?.state === "qr" && !ui.fsBusy && !ui.fsPaused) {
-      // 应用建好了、还没授权：自己发起授权（出第二个码）；授权好了还没配对：自己配对。
-      try {
-        if (!f.create?.running && f.configured && !f.authorized && !f.auth?.running && !f.auth?.error && !ui.fsTried) { ui.fsTried = true; await fsCall("login/start"); await loadFeishu(); }
-        else if (f.authorized && !f.bound && !f.auth?.running) { await fsCall("bind", {}); await loadFeishu(); }
-      } catch (err) { ui.fsNote = `没接成：${err.message}`; }
-    }
     if (before && before !== "ok" && ui.fs?.state === "ok") toast("飞书接好了，测试卡片已经发出，去飞书里看一眼");
     if (JSON.stringify(ui.fs) !== prev || ui.fsNote) draw();
   }

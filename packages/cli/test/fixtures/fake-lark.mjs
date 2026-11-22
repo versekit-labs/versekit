@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 假的 lark-cli：用一个状态目录（FAKE_LARK_DIR）里的文件模拟飞书那一侧，测试往里放文件就是「用户在飞书里做了这一步」。
-//   create.go    扫码建应用完成        → 写 profile
-//   login.go     扫码授权完成          → 写 authed
+//   profile      应用已建好（profile add 会写它；secret 只从 stdin 读，长度记在 secret.len，内容不落盘）
+//   authed       lark-cli 里有用户身份（只给 `vk channel bind` 不带 open_id 的老路径用；接飞书本身不再需要）
 //   subscribed   开发者后台开通了按钮订阅
 //   sendfail     里面写一句话：发卡片就失败并带这句话
 import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync } from "node:fs";
@@ -11,34 +11,26 @@ const dir = process.env.FAKE_LARK_DIR;
 const f = (n) => join(dir, n);
 const has = (n) => existsSync(f(n));
 const args = process.argv.slice(2);
-const wait = async (name) => { while (!has(name)) await new Promise((r) => setTimeout(r, 30)); };
 appendFileSync(f("calls.log"), JSON.stringify(args.filter((a) => !/secret/i.test(a))) + "\n");
 
 if (args[0] === "--version") { console.log("1.0.97"); process.exit(0); }
-if (args[0] === "profile") {
-  console.log(JSON.stringify(has("profile") ? [{ name: "versekit", appId: "cli_fake" }] : []));
+if (args[0] === "profile" && args[1] === "add") {
+  const d = await new Promise((resolve) => { let t = ""; process.stdin.on("data", (c) => (t += c)); process.stdin.on("end", () => resolve(t)); });
+  writeFileSync(f("secret.len"), String(d.trim().length));
+  writeFileSync(f("profile"), args[args.indexOf("--app-id") + 1]);
+  console.log(JSON.stringify({ ok: true }));
   process.exit(0);
-}
-if (args[0] === "config") {
-  console.log("请在浏览器打开 https://fake.feishu.test/create?code=abc 完成创建");
-  await wait("create.go");
-  writeFileSync(f("profile"), "1");
+} else if (args[0] === "profile") {
+  console.log(JSON.stringify(has("profile") ? [{ name: "versekit", appId: readFileSync(f("profile"), "utf8") === "1" ? "cli_fake" : readFileSync(f("profile"), "utf8") }] : []));
   process.exit(0);
 }
 if (args[0] === "auth" && args[1] === "status") {
-  console.log(JSON.stringify(has("authed") ? { appId: "cli_fake", identities: { user: { openId: "ou_owner", userName: "所有者" }, bot: { status: "ready" } } } : { identities: {} }));
+  console.log(JSON.stringify({ appId: "cli_fake", identities: { ...(has("authed") ? { user: { openId: "ou_owner", userName: "所有者" } } : {}), bot: { status: "ready" } } }));
   process.exit(0);
 }
 if (args[0] === "auth" && args[1] === "qrcode") {
   const out = args[args.indexOf("-o") + 1];
   writeFileSync(out, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64"));
-  process.exit(0);
-}
-if (args[0] === "auth" && args[1] === "login") {
-  if (args.includes("--no-wait")) { console.log(JSON.stringify({ ok: true, data: { verification_url: "https://fake.feishu.test/auth?c=1", device_code: "dev_1", expires_in: 600 } })); process.exit(0); }
-  await wait("login.go");
-  writeFileSync(f("authed"), "1");
-  console.log(JSON.stringify({ ok: true }));
   process.exit(0);
 }
 if (args[0] === "event") {
