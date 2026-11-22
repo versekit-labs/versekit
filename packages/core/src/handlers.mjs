@@ -1107,6 +1107,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       return egress.view({ groupId: (group ? requireGroup(group) : store.currentGroup())?.id ?? null });
     },
 
+    "egress.geodb": ({ group = null } = {}) => {
+      const started = egress.startGeoDbDownload({ log: (m) => console.error(m) });
+      return { started, alreadyRunning: !started, ...egress.view({ groupId: (group ? requireGroup(group) : store.currentGroup())?.id ?? null }) };
+    },
+
     "egress.accept": ({ group = null, accountId = null, confirm = false } = {}) => {
       const g = group ? requireGroup(group) : store.currentGroup();
       if (confirm !== true) fail("继续用新位置要再确认一次：如果这台电脑其实开着代理，平台会看到这些账号突然换了国家，有被处罚的风险", "加 --yes");

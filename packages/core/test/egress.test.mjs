@@ -2,7 +2,7 @@
 // 全部用自造的小 mmdb 和假回显：不下载真实 IP 库，不访问真实回显地址，不碰真实账号。
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -387,7 +387,7 @@ test("ACC-v3-egress-01 没有 IP 库：不暂停，位置写查不到，并说�
     assert.deepEqual(moved.paused, [], "没库不暂停发布");
     const v = egress.view({ groupId: "g1" });
     assert.ok(v.lines.every((l) => l.place === "查不到"));
-    assert.ok(v.notes.some((n) => /没有 IP 库/.test(n) && /不会因为位置暂停发布/.test(n)), "说明原因");
+    assert.ok(v.notes.some((n) => /位置库还没下载/.test(n) && /不会因为位置暂停发布/.test(n)), "说明原因");
     assert.equal(v.pausedCount, 0);
     queuePublishRun("p1", "xhs");
     const attempted = [];
@@ -493,4 +493,232 @@ test("ACC-v3-egress 回显页解析：JSON 和纯文本都认；IPv6 也认；�
   assert.equal(egress.ipFromEcho("your ip is 2001:db8::1"), "2001:db8::1");
   assert.equal(egress.ipFromEcho("<html>blocked</html>"), null);
   assert.equal(existsSync(HOME), true);
+});
+
+// ---------------------------------------------------------------- #333 IP 库在慢网络上也能下载（ACC-v3-egress-09）
+// 假下载源：按块、按间隔吐数据；可中途停住、可不认 Range。全程不访问真实网络。
+
+const SRC = [{ kind: "city", name: "DB-IP City Lite", url: "https://example.invalid/city.mmdb.gz", gz: true }];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** @param {Buffer} buf  @param {{chunk?:number, delay?:number, stallAfter?:number, noRange?:boolean, headers?:object[]}} o */
+const fakeSource = (buf, { chunk = 16, delay = 0, stallAfter = Infinity, noRange = false } = {}) => {
+  const requests = [];
+  const fetchImpl = async (url, { signal, headers = {} } = {}) => {
+    requests.push(headers);
+    const m = /bytes=(\d+)-/.exec(headers.Range ?? "");
+    const start = m && !noRange ? Number(m[1]) : 0;
+    let sent = 0;
+    const body = new ReadableStream({
+      async pull(ctrl) {
+        if (signal?.aborted) return ctrl.error(signal.reason);
+        const pos = start + sent;
+        if (pos >= buf.length) return ctrl.close();
+        if (sent >= stallAfter) {
+          // 卡住：不再有数据，直到调用方放弃（超时）。
+          await new Promise((_, rej) => signal?.addEventListener("abort", () => rej(signal.reason)));
+        }
+        if (delay) await sleep(delay);
+        const n = Math.min(chunk, buf.length - pos, stallAfter - sent);
+        ctrl.enqueue(buf.subarray(pos, pos + n));
+        sent += n;
+      },
+    });
+    const partial = m && !noRange;
+    return new Response(body, {
+      status: partial ? 206 : 200,
+      headers: partial ? { "content-range": `bytes ${start}-${buf.length - 1}/${buf.length}`, "content-length": String(buf.length - start) } : { "content-length": String(buf.length) },
+    });
+  };
+  return { fetchImpl, requests };
+};
+
+const freshDir = () => mkdtempSync(join(tmpdir(), "vk-geo9-"));
+const resetGeoMeta = () => store.setEgressGeoDb({});
+const gzCity = () => gzipSync(cityDb());
+
+test("ACC-v3-egress-09 慢但一直有数据的下载能成功：超时按「连续没数据」算，不按总时长", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  const gz = gzCity();
+  const idleMs = 120;
+  const chunk = 8, delay = 20; // 每块都在 idle 之内，总时长远超 idle
+  assert.ok((gz.length / chunk) * delay > idleMs * 2, "夹具要够慢，才能证明不是按总时长");
+  const src = fakeSource(gz, { chunk, delay });
+  const t0 = Date.now();
+  const r = await egress.refreshGeoDb({ dir, now: Date.UTC(2026, 10, 22), sources: SRC, fetchImpl: src.fetchImpl, idleMs });
+  assert.ok(Date.now() - t0 > idleMs, "总时长超过了 idle 超时");
+  assert.deepEqual(r.updated, ["DB-IP City Lite"]);
+  assert.equal(r.error, null);
+  assert.equal(egress.openMmdb(readFileSync(join(dir, egress.GEO_FILES.city))).lookup(TYO).country.iso_code, "JP");
+  assert.deepEqual(readdirSync(dir).filter((n) => /\.(part|tmp)$/.test(n)), [], "成功后没有临时文件残留");
+  assert.equal(store.getEgressGeoDb().attempts, 0);
+  assert.equal(store.getEgressGeoDb().nextAt, null);
+});
+
+test("ACC-v3-egress-09 中途断开：留下已收到的部分，下次用 Range 续传成功", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  const gz = gzCity();
+  const now = Date.UTC(2026, 10, 22);
+  const stalled = fakeSource(gz, { chunk: 8, stallAfter: 40 });
+  const first = await egress.refreshGeoDb({ dir, now, sources: SRC, fetchImpl: stalled.fetchImpl, idleMs: 80 });
+  assert.match(first.error, /连续 \d+ 秒没有收到数据|连续 0 秒没有收到数据/);
+  assert.match(first.error, /已收到/);
+  assert.equal(existsSync(join(dir, egress.GEO_FILES.city)), false, "没下完不出库");
+  const parts = readdirSync(dir).filter((n) => n.endsWith(".part"));
+  assert.equal(parts.length, 1, "已收到的部分留着续传");
+  assert.equal(statSync(join(dir, parts[0])).size, 40);
+
+  const ok = fakeSource(gz, { chunk: 16 });
+  const second = await egress.refreshGeoDb({ dir, now: now + 1000, sources: SRC, fetchImpl: ok.fetchImpl, idleMs: 80 });
+  assert.equal(second.error, null);
+  assert.equal(ok.requests[0].Range, "bytes=40-", "从断点接着要");
+  assert.equal(egress.openMmdb(readFileSync(join(dir, egress.GEO_FILES.city))).lookup(LA).city.names.en, "Los Angeles");
+  assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith(".part")), []);
+});
+
+test("ACC-v3-egress-09 服务器不支持断点：从头下载并说明，下完照样换库", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  const gz = gzCity();
+  const logs = [];
+  await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(gz, { chunk: 8, stallAfter: 24 }).fetchImpl, idleMs: 60, log: (m) => logs.push(m) });
+  const noRange = fakeSource(gz, { noRange: true });
+  const r = await egress.refreshGeoDb({ dir, now: 2, sources: SRC, fetchImpl: noRange.fetchImpl, idleMs: 60, log: (m) => logs.push(m) });
+  assert.equal(r.error, null);
+  assert.equal(noRange.requests[0].Range, "bytes=24-", "先尝试续传");
+  assert.ok(logs.some((m) => /不支持断点续传，从头下载/.test(m)));
+  assert.equal(existsSync(join(dir, egress.GEO_FILES.city)), true);
+});
+
+test("ACC-v3-egress-09 解压或校验不过的下载不换旧库，也不留着坏的续传文件", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, egress.GEO_FILES.city), cityDb());
+  const before = readFileSync(join(dir, egress.GEO_FILES.city));
+  const r = await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(Buffer.from("this is not gzip at all")).fetchImpl, idleMs: 60 });
+  assert.ok(r.error);
+  assert.deepEqual(readFileSync(join(dir, egress.GEO_FILES.city)), before);
+  assert.deepEqual(readdirSync(dir).filter((n) => /\.(part|tmp)$/.test(n)), []);
+});
+
+test("ACC-v3-egress-09 连续失败：重试间隔 10 分钟、1 小时、6 小时，之后每 6 小时；退避期内不下载；成功后回到每月一次", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  const t0 = Date.UTC(2026, 10, 22, 8);
+  const down = async () => new Response("x", { status: 503 });
+  const deltas = [];
+  for (let i = 0; i < 5; i++) {
+    const now = t0 + i * 7 * 3600e3;
+    await egress.refreshGeoDb({ dir, now, sources: SRC, fetchImpl: down });
+    const m = store.getEgressGeoDb();
+    assert.equal(m.attempts, i + 1);
+    deltas.push(m.nextAt - now);
+  }
+  assert.deepEqual(deltas, [600e3, 3600e3, 6 * 3600e3, 6 * 3600e3, 6 * 3600e3]);
+
+  const failedAt = t0 + 4 * 7 * 3600e3;
+  const nextAt = store.getEgressGeoDb().nextAt;
+  assert.equal(egress.geoDbDue({ now: failedAt + 3600e3, dir }), false, "6 小时的退避期内，每 10 分钟的探测不会再下一整份");
+  assert.equal(egress.geoDbDue({ now: nextAt - 1, dir }), false);
+  assert.equal(egress.geoDbDue({ now: nextAt, dir }), true, "到点才再试");
+
+  const ok = await egress.refreshGeoDb({ dir, now: nextAt, sources: SRC, fetchImpl: fakeSource(gzCity()).fetchImpl });
+  assert.equal(ok.error, null);
+  const m = store.getEgressGeoDb();
+  assert.equal(m.attempts, 0);
+  assert.equal(m.nextAt, null);
+  assert.equal(egress.geoDbDue({ now: nextAt + 864e5, dir }), false, "成功后回到每月一次");
+  assert.equal(egress.geoDbDue({ now: Date.now() + 40 * 864e5, dir }), true);
+});
+
+test("ACC-v3-egress-09 系统页两种说法：从来没成功过 / 有旧库才写「继续用」", async () => {
+  resetGeoMeta();
+  const empty = freshDir();
+  const t = Date.UTC(2026, 10, 22, 8);
+  const timeout = async (_url, { signal }) => { await new Promise((_, rej) => signal.addEventListener("abort", () => rej(signal.reason))); };
+  await egress.refreshGeoDb({ dir: empty, now: t, sources: SRC, fetchImpl: timeout, idleMs: 30 });
+  await egress.refreshGeoDb({ dir: empty, now: t + 700e3, sources: SRC, fetchImpl: timeout, idleMs: 30 });
+  const never = egress.geoDbNote(egress.geoDbStatus(empty));
+  assert.match(never, /^位置库还没下载下来：连续 \d+ 秒没有收到数据/);
+  assert.match(never, /已试 2 次，下次 /);
+  assert.ok(never.includes(`下次 ${egress.fmtAt(store.getEgressGeoDb().nextAt)}`), "写了下次时间");
+  assert.doesNotMatch(never, /继续用/);
+  assert.doesNotMatch(never, /aborted due to timeout/, "不再把英文原话甩给用户");
+
+  const old = freshDir();
+  writeFileSync(join(old, egress.GEO_FILES.city), cityDb());
+  resetGeoMeta();
+  await egress.refreshGeoDb({ dir: old, now: t, sources: SRC, fetchImpl: async () => new Response("x", { status: 503 }) });
+  const withOld = egress.geoDbNote(egress.geoDbStatus(old));
+  assert.match(withOld, /这次更新位置库没成功：HTTP 503，已试 1 次，下次 /);
+  assert.match(withOld, /继续用 \S+ 的库/);
+  assert.doesNotMatch(withOld, /还没下载下来/);
+
+  resetGeoMeta();
+  await egress.refreshGeoDb({ dir: old, now: t, sources: SRC, fetchImpl: fakeSource(gzCity()).fetchImpl });
+  assert.equal(egress.geoDbNote(egress.geoDbStatus(old)), null, "没失败就没有提示");
+});
+
+test("ACC-v3-egress-09 「现在重新下载」是一条命令（egress.geodb）：开始下载、显示进度、已在下载不重复开始", async () => {
+  resetGeoMeta();
+  const cmd = (await import("../src/commands.mjs")).COMMANDS.find((c) => c.name === "egress.geodb");
+  assert.ok(cmd, "命令在 commands.mjs 里定义，CLI / HTTP 由它派生");
+  assert.equal(cmd.http.path, "/api/egress/geodb");
+  assert.match(cmd.cli.usage, /vk egress geodb/);
+
+  const gz = gzCity();
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const inner = fakeSource(gz, { chunk: 8 });
+  let fetches = 0;
+  egress.setGeoFetch(async (url, opts) => {
+    fetches++;
+    await gate;
+    return inner.fetchImpl(url, opts);
+  });
+  try {
+    const h = createCoreHandlers({ adapters: [], log: () => {} });
+    const first = await h["egress.geodb"]({ group: "g1" });
+    assert.equal(first.started, true);
+    assert.ok(first.geoDb.downloading, "下载中带进度");
+    assert.match(first.notes.join("\n"), /正在下载位置库/);
+
+    const second = await h["egress.geodb"]({ group: "g1" });
+    assert.equal(second.started, false, "已经在下载，不重复开始");
+    assert.equal(second.alreadyRunning, true);
+    assert.equal(fetches, 1);
+
+    release();
+    while (egress.geoDbDownloading()) await sleep(10);
+    const done = h["egress.status"]({ group: "g1" });
+    assert.equal(done.geoDb.downloading, null);
+    assert.equal(done.geoDb.error, null);
+    assert.equal(egress.geoDbDue({ now: Date.now() }), false);
+  } finally {
+    egress.setGeoFetch(null);
+    release();
+  }
+});
+
+test("ACC-v3-egress-09 下载进度：按收到的字节写进度（含总大小）", async () => {
+  resetGeoMeta();
+  const dir = freshDir();
+  const gz = gzCity();
+  const seen = [];
+  const inner = fakeSource(gz, { chunk: 8, delay: 5 });
+  let watch;
+  const p = egress.refreshGeoDb({
+    dir, now: 1, sources: SRC, idleMs: 200, progressMs: 0,
+    fetchImpl: async (url, opts) => {
+      watch = setInterval(() => { const d = store.getEgressGeoDb()?.downloading; if (d) seen.push(d); }, 10);
+      return inner.fetchImpl(url, opts);
+    },
+  });
+  await p;
+  clearInterval(watch);
+  assert.ok(seen.some((d) => d.total === gz.length && d.received > 0 && d.received < gz.length), "中途读到过 已收到/总大小");
+  assert.equal(store.getEgressGeoDb().downloading, null);
 });

@@ -12,9 +12,11 @@
 //
 // 状态放 meta 表（不改表结构）：egress.state / egress.baselines / egress.waits / egress.geodb。
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import { emit, open, paths } from "./index.mjs";
 import * as store from "./store.mjs";
 import { readConfig } from "./config.mjs";
@@ -319,8 +321,31 @@ export const geoDbStatus = (dir = geoDir()) => {
     asnDate: existsSync(asnFile) ? Math.round(statSync(asnFile).mtimeMs) : null,
     checkedAt: meta.checkedAt ?? null,
     error: meta.error ?? null,
+    reason: meta.reason ?? null,
+    attempts: meta.attempts ?? 0,
+    nextAt: meta.nextAt ?? null,
+    // 进度每秒写一次；超过 1 分钟没更新说明下载的进程没了，不再显示「下载中」。
+    downloading: meta.downloading && Date.now() - meta.downloading.at < 60e3 ? meta.downloading : null,
   };
 };
+
+export const fmtAt = (t) => new Date(t).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+export const fmtMB = (n) => (n / 1048576).toFixed(1);
+
+/** 系统页「出口位置」一格里写的 IP 库说法。两种不能混：从来没成功过 / 有旧库。 */
+export function geoDbNote(geo) {
+  if (geo.downloading) {
+    const d = geo.downloading;
+    return `正在下载位置库（${d.name}）：${fmtMB(d.received)}${d.total ? ` / ${fmtMB(d.total)}` : ""} MB${d.total ? `（${Math.floor((d.received / d.total) * 100)}%）` : ""}`;
+  }
+  const next = geo.nextAt ? `，下次 ${fmtAt(geo.nextAt)}` : "";
+  if (!geo.hasCity) {
+    if (!geo.error) return "位置库还没下载下来，发布机联网后会自动下载。出口位置先写「查不到」，不会因为位置暂停发布。";
+    return `位置库还没下载下来：${geo.reason ?? geo.error}，已试 ${geo.attempts} 次${next}。出口位置先写「查不到」，不会因为位置暂停发布。`;
+  }
+  if (geo.error) return `这次更新位置库没成功：${geo.reason ?? geo.error}，已试 ${geo.attempts} 次${next}；继续用 ${fmtAt(geo.cityDate).split(" ")[0]} 的库。`;
+  return null;
+}
 
 const activeAccounts = (groupId = null) => store.listAccounts({ groupId }).filter((a) => !a.removed_at);
 
@@ -489,8 +514,8 @@ export function view({ groupId = null } = {}) {
   const paused = accounts.filter((a) => a.paused);
   const lines = (state?.lines ?? []).map((l) => ({ ...l, place: placeText(l) }));
   const notes = [];
-  if (!geo.hasCity) notes.push("没有 IP 库（国家城市），出口位置写「查不到」，不会因为位置暂停发布。发布机联网后会自动下载。");
-  if (geo.error) notes.push(`IP 库上次没下载成功，继续用旧库：${geo.error}`);
+  const geoNote = geoDbNote(geo);
+  if (geoNote) notes.push(geoNote);
   for (const l of lines) if (l.error) notes.push(`${l.label}：${l.error}`);
   const approx = accounts.filter((a) => a.baselineSource === "first_probe").length;
   if (approx) notes.push(`${approx} 个账号平时的位置是按第一次探测定的（没有登录时的记录）；重新登录一次会改成登录时的位置。`);
@@ -558,39 +583,156 @@ export function geoSources({ now = Date.now(), config = readConfig() } = {}) {
   ];
 }
 
-/** 库该不该下载了：没有库，或最近一次成功下载超过 30 天。 */
+/** 失败后的重试间隔：第 1 次失败等 10 分钟，第 2 次 1 小时，第 3 次起每 6 小时。 */
+export const GEO_RETRY_MS = [10 * 60e3, 3600e3, 6 * 3600e3];
+export const geoRetryDelay = (attempts) => GEO_RETRY_MS[Math.min(Math.max(attempts, 1), GEO_RETRY_MS.length) - 1];
+/** 连续这么久一个字节都没收到才算超时（不按总时长，慢网络也能下完）。 */
+export const GEO_IDLE_TIMEOUT_MS = 30e3;
+
+/** 库该不该下载了：还在退避等待中就不下；没有库，或最近一次成功下载超过 30 天才下。 */
 export function geoDbDue({ now = Date.now(), dir = geoDir() } = {}) {
   const s = geoDbStatus(dir);
+  if (s.nextAt && now < s.nextAt) return false;
   if (!s.hasCity) return true;
   return now - s.cityDate >= GEO_DB_MAX_AGE_MS;
 }
 
+const patchGeoMeta = (fields) => store.setEgressGeoDb({ ...(store.getEgressGeoDb() ?? {}), ...fields });
+
+const humanError = (err) => {
+  const cause = err?.cause?.code ?? err?.cause?.message;
+  return err?.message === "fetch failed" && cause ? `网络不通（${cause}）` : err.message;
+};
+
 /**
- * 下载新库。成功才替换（先写临时文件、校验能打开、再改名）；失败沿用旧库，把原因记下来，页面写明库的日期。
+ * 边收边写临时文件（.part），不整份读进内存。已有 .part 就用 Range 接着下；服务器不认 Range（回 200）就从头下并说明。
+ * 超时是「连续 idleMs 没收到数据」。返回 .part 路径；不完整就抛错，.part 留着下次续传。
  */
-export async function refreshGeoDb({ now = Date.now(), dir = geoDir(), fetchImpl = fetch, sources = geoSources({ now }), log = () => {} } = {}) {
+async function downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh = true }) {
+  const part = `${dest}.${createHash("sha1").update(src.url).digest("hex").slice(0, 8)}.part`;
+  const have = existsSync(part) ? statSync(part).size : 0;
+  const ctrl = new AbortController();
+  let idle = null;
+  const arm = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => ctrl.abort(new Error(`连续 ${Math.round(idleMs / 1000)} 秒没有收到数据`)), idleMs);
+  };
+  let fd = null;
+  let got = have;
+  try {
+    arm();
+    const res = await fetchImpl(src.url, { signal: ctrl.signal, headers: have ? { Range: `bytes=${have}-` } : {} });
+    if (res.status === 416 && have && retryFresh) {
+      rmSync(part, { force: true });
+      return await downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh: false });
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let resumed = res.status === 206 && have > 0;
+    if (have && !resumed) log(`[egress] ${src.name} 的服务器不支持断点续传，从头下载`);
+    const range = /\/(\d+)\s*$/.exec(res.headers.get("content-range") ?? "");
+    const len = Number(res.headers.get("content-length")) || 0;
+    const total = resumed ? (range ? Number(range[1]) : len ? have + len : 0) : len;
+    fd = openSync(part, resumed ? "a" : "w");
+    got = resumed ? have : 0;
+    onProgress(got, total);
+    for await (const chunk of res.body) {
+      arm();
+      writeSync(fd, chunk);
+      got += chunk.length;
+      onProgress(got, total);
+    }
+    if (total && got !== total) throw new Error(`只收到 ${fmtMB(got)} / ${fmtMB(total)} MB`);
+    return part;
+  } catch (err) {
+    if (ctrl.signal.aborted) {
+      throw new Error(`${ctrl.signal.reason?.message ?? "超时"}（已收到 ${fmtMB(got)} MB，下次接着下）`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(idle);
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+let inflight = null;
+let geoFetch = null;
+/** 测试用：把下载换成本地假下载源（不访问真实网络）。传 null 还原。 */
+export const setGeoFetch = (fn) => { geoFetch = fn; };
+
+/**
+ * 下载新库。成功才替换（.part 收完 → 解压到临时文件 → 校验能打开 → 改名）；失败沿用旧库、.part 留着续传，
+ * 把原因、次数、下次时间记下来。同一时刻只下载一次：已经在下载就返回正在进行的那一次。
+ */
+export function refreshGeoDb(opts = {}) {
+  if (inflight) return inflight;
+  inflight = doRefreshGeoDb(opts).finally(() => { inflight = null; });
+  return inflight;
+}
+
+/** 「现在重新下载」：后台开始下载并立刻返回；已经在下载就不重复开始。 */
+export function startGeoDbDownload(opts = {}) {
+  const started = !inflight;
+  refreshGeoDb(opts).catch((err) => (opts.log ?? (() => {}))(`[egress] IP 库更新出错：${err.message}`));
+  return started;
+}
+
+export const geoDbDownloading = () => inflight !== null;
+
+async function doRefreshGeoDb({ now = Date.now(), dir = geoDir(), fetchImpl = (...a) => (geoFetch ?? fetch)(...a), sources = geoSources({ now }), log = () => {}, idleMs = GEO_IDLE_TIMEOUT_MS, progressMs = 1000 } = {}) {
   mkdirSync(dir, { recursive: true });
   const errors = [];
+  const reasons = [];
   const got = [];
   for (const src of sources) {
+    let lastWrite = 0;
+    const onProgress = (received, total) => {
+      const t = Date.now();
+      if (t - lastWrite < progressMs && !(total && received === total)) return;
+      lastWrite = t;
+      patchGeoMeta({ downloading: { name: src.name, received, total, at: t } });
+    };
+    const target = join(dir, GEO_FILES[src.kind]);
+    let part = null;
     try {
-      const res = await fetchImpl(src.url, { signal: AbortSignal.timeout(120e3) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      let bytes = Buffer.from(await res.arrayBuffer());
-      if (src.gz) bytes = gunzipSync(bytes);
-      openMmdb(bytes); // 打不开的库不替换旧库
-      const target = join(dir, GEO_FILES[src.kind]);
-      writeFileSync(`${target}.tmp`, bytes);
-      renameSync(`${target}.tmp`, target);
+      patchGeoMeta({ downloading: { name: src.name, received: 0, total: 0, at: Date.now() } });
+      part = await downloadPart(src, target, { fetchImpl, idleMs, onProgress, log });
+      const tmp = `${target}.tmp`;
+      if (src.gz) {
+        await pipeline(createReadStream(part), createGunzip(), createWriteStream(tmp));
+      } else {
+        renameSync(part, tmp);
+      }
+      try {
+        openMmdb(readFileSync(tmp)); // 打不开的库不替换旧库
+      } catch (err) {
+        rmSync(tmp, { force: true });
+        throw err;
+      }
+      renameSync(tmp, target);
+      rmSync(part, { force: true });
       got.push(src.name);
     } catch (err) {
-      errors.push(`${src.name} 没下载成功：${err.message}`);
+      // 解压或校验失败说明 .part 本身是坏的，续传没用，删掉；其余（断网、超时）留着续传。
+      if (part && (err.code === "Z_DATA_ERROR" || err.code === "Z_BUF_ERROR" || /MMDB/.test(err.message) || /incorrect header|unexpected end/.test(err.message))) rmSync(part, { force: true });
+      rmSync(`${target}.tmp`, { force: true });
+      const reason = humanError(err);
+      reasons.push(reason);
+      errors.push(`${src.name} 没下载成功：${reason}`);
     }
   }
   const error = errors.length ? errors.join("；") : null;
-  store.setEgressGeoDb({ checkedAt: now, error });
+  const prev = store.getEgressGeoDb() ?? {};
+  const attempts = error ? (prev.attempts ?? 0) + 1 : 0;
+  store.setEgressGeoDb({
+    checkedAt: now,
+    error,
+    reason: reasons.length ? reasons.join("；") : null,
+    attempts,
+    nextAt: error ? now + geoRetryDelay(attempts) : null,
+    downloading: null,
+  });
   if (error) {
-    emit({ type: "egress.geodb_failed", severity: "warn", payload: { code: "egress_geodb_download", message: error }, dedupeKey: `egress.geodb_failed:${monthStamp(now)}:${error.length}` });
+    emit({ type: "egress.geodb_failed", severity: "warn", payload: { code: "egress_geodb_download", message: error, attempts, nextAt: now + geoRetryDelay(attempts) }, dedupeKey: `egress.geodb_failed:${now}:${attempts}`});
     log(`[egress] ${error}`);
   }
   return { updated: got, error };

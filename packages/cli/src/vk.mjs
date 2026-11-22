@@ -1854,10 +1854,11 @@ async function cmdEgress() {
   const account = val("--account") ? { accountId: val("--account") } : {};
   const data =
     sub === "recheck" ? await send("egress.recheck", group)
+    : sub === "geodb" ? await send("egress.geodb", group)
     : sub === "accept" ? await send("egress.accept", { ...group, ...account, confirm: has("--yes") })
     : sub === "wait" ? await send("egress.wait", { ...group, ...account })
     : sub === "status" ? await send("egress.status", group)
-    : (() => { throw new Error(`没有 vk egress ${sub}：可用 status、recheck、accept --yes、wait`); })();
+    : (() => { throw new Error(`没有 vk egress ${sub}：可用 status、recheck、geodb、accept --yes、wait`); })();
   if (human) {
     for (const l of data.lines) console.log(`${l.label}：${l.error ? l.error : `${l.place}  ${l.ip}${l.datacenter ? "  机房线路，可能是代理" : ""}`}`);
     if (!data.lines.length) console.log("还没有探测过出口位置");
@@ -2125,7 +2126,7 @@ function usage() {
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
       "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
       "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
-      "  vk egress [recheck | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、继续用新位置、等我关掉代理",
+      "  vk egress [recheck | geodb | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、重新下载位置库、继续用新位置、等我关掉代理",
       "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
       "  vk publish retry|release|confirm <publishId>",
       "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
