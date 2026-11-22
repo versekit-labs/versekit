@@ -122,7 +122,7 @@
    * 侧栏底部摘要：几个账号登录正常、发布机在线、今天还能发几条。
    * 读 account.list 的同一份结果（与系统页账号表同源），所以两处不会各说各话。
    */
-  async function renderHealth(nav, current) {
+  async function renderHealth(nav, current, notify = null) {
     let accounts = [];
     let failed = null;
     let machine = null; // 与系统页「发布机」同源：GET /api/machine（machine.status）
@@ -163,6 +163,8 @@
             ? `<div class="nw"><span class="dot"></span>发布机在线</div>`
             : `<div class="nw"><span class="dot bad"></span>${machine ? "发布机不在线" : "读不到发布机状态"}</div>`,
           ...egressLines(machine),
+          // 飞书卡片发不出去：和系统页「通知」分段同源（today.notify），点进去看原因、重新接。
+          ...(notify?.why === "failed" ? [`<div class="nw"><span class="dot bad"></span><a href="/system#tab=notify" style="color:inherit;text-decoration:none">飞书卡片发不出去</a></div>`] : []),
           ...quotaLines,
         ];
     nav.querySelector(".health")?.remove();
@@ -221,7 +223,7 @@
 
     renderGroupSwitch(nav, groups, current, pending);
     fillTodo(nav, mine);
-    await renderHealth(nav, current);
+    await renderHealth(nav, current, today?.notify ?? null);
   }
 
   /** 页面改了账号（登录成功、接入、重新登录）后调用：侧栏摘要重新读一遍。 */
@@ -229,7 +231,8 @@
     const nav = document.querySelector("nav.nav");
     if (!nav || !window.VK) return;
     await window.VK.bootstrap({ force: true }).catch(() => {});
-    await renderHealth(nav, window.VK.current());
+    const today = await window.VK.today().catch(() => null);
+    await renderHealth(nav, window.VK.current(), today?.notify ?? null);
   }
 
   window.VKShell = { render, NAV, toast, pageKey, refreshHealth };

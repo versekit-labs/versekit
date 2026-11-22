@@ -10,12 +10,13 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { paths, migrate, open, getMeta, isInitialised } from "../../core/src/index.mjs";
+import { paths, migrate, open, getMeta, isInitialised, emit } from "../../core/src/index.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount, notifyLogin } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding, bindChannel, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel, getFeishuSettings, patchFeishuSettings, getFeishuDelivery, patchFeishuDelivery, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
+import { feishuState, reportCardFailed, reportCardSent } from "../../core/src/notify.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf, readCreatorId, QR_ACCOUNT_HINT } from "./login-xhs.mjs";
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
@@ -162,6 +163,64 @@ const LOGIN_URL = {
 };
 
 let subscriptionCache = null;
+let probing = false;
+
+/** 后台探一次事件订阅；探到「已订阅」且还没发过测试卡片，就自动发一张（接好后自己往下走）。 */
+function refreshSubscription({ maxAge = 120e3 } = {}) {
+  if (probing) return;
+  if (subscriptionCache && Date.now() - subscriptionCache.at < maxAge) return;
+  probing = true;
+  channelFeishu
+    .probeEvents()
+    .then(async (probe) => {
+      const now = Date.now();
+      subscriptionCache = { at: now, value: { subscribed: Boolean(probe.ok), detail: probe.detail ?? null, url: probe.url ?? null, checkedAt: now } };
+      const binding = getBinding("feishu");
+      if (probe.ok && binding && !getFeishuSettings().testSentAt) await sendTestCard(binding).catch(() => {});
+    })
+    .catch(() => {})
+    .finally(() => { probing = false; });
+}
+
+/** 授权完成后：配对授权的那个人、记下接上了、探订阅。 */
+async function connectAfterAuth() {
+  const who = await channelFeishu.whoami();
+  bindChannel("feishu", who.openId);
+  updateConfig({ channel: { feishu: { authorized_at: Date.now(), skipped: false } } });
+  // 重新接上：旧的「发不出去」作废，接好后重新发一张测试卡片。
+  patchFeishuSettings({ off: false, testSentAt: null });
+  patchFeishuDelivery({ failure: null });
+  emit({ type: "channel.connected", payload: { channel: "feishu" }, dedupeKey: `channel.connected:${Date.now()}` });
+  refreshSubscription({ maxAge: 0 });
+}
+
+/** 发一张测试卡片；送不到就记下原因（系统页「通知」变红），不静默。 */
+async function sendTestCard(binding) {
+  const now = Date.now();
+  const card = {
+    config: { wide_screen_mode: true },
+    header: { template: "blue", title: { tag: "plain_text", content: "versekit · 通道已连通" } },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点下面的按钮，验证「手机点一下、电脑执行」这条闭环。" } },
+      {
+        tag: "action",
+        actions: [
+          { tag: "button", text: { tag: "plain_text", content: "点我验证闭环" }, type: "primary", value: { cmd: "stats.works", args: {}, exp: now + 24 * 3600e3, key: `test:${now}` } },
+        ],
+      },
+      { tag: "note", elements: [{ tag: "plain_text", content: "按钮 24 小时内有效 · 重复点击只会执行一次" }] },
+    ],
+  };
+  try {
+    const { messageId } = await channelFeishu.send({ openId: binding.external_user_id, card });
+    reportCardSent(now);
+    patchFeishuSettings({ testSentAt: now });
+    return { messageId, openId: binding.external_user_id };
+  } catch (err) {
+    const reason = reportCardFailed(err, { eventType: "test", now });
+    throw new Error(reason);
+  }
+}
 
 // 网页登录会话：验证码要跨两次请求，标签页得留在内存里。
 // 只放进程内存，不落库；daemon 重启就失效，这是有意的（验证码是一次性的）。
@@ -651,29 +710,53 @@ function daemonHandlers(adapters, log) {
     "channel.status": () => {
       const ready = channelFeishu.ready();
       const cfg = readConfig().channel?.feishu ?? {};
+      const settings = getFeishuSettings();
+      const delivery = getFeishuDelivery();
       const create = channelFeishu.createAppStatus();
+      const auth = channelFeishu.authStatus();
       const binding = getBinding("feishu");
+      const installed = channelFeishu.installed();
+      const configured = Boolean(cfg.app_id) || create.configured;
+      const bound = Boolean(binding);
+      // 绑定后订阅状态不明或过期：后台悄悄探一次（要等约 10 秒），页面轮询时自然看到结果。
+      if (bound && installed && !settings.off) refreshSubscription({ maxAge: subscriptionCache?.value?.subscribed ? 120e3 : 10e3 });
+      const subscription = subscriptionCache?.value ?? null;
+      const skipped = Boolean(cfg.skipped) || settings.off;
+      const state = feishuState({
+        installed, skipped, creating: create.running, authorizing: Boolean(auth.running), configured, authorized: ready === null, bound,
+        subscribed: subscription ? Boolean(subscription.subscribed) : null, failure: delivery.failure,
+      });
       return {
+        // state：none 没接 / qr 等你扫码 / sub 差一步 / ok 接好了 / bad 卡片发不出去 / off 不用飞书 / missing 发布机上没有飞书组件
+        state,
+        installed,
         create,
-        auth: channelFeishu.authStatus(),
-        subscription: subscriptionCache?.value ?? null,
+        auth,
+        subscription,
         ready,
-        skipped: Boolean(cfg.skipped),
-        configured: Boolean(cfg.app_id) || create.configured,
+        skipped,
+        configured,
         authorized: ready === null,
-        bound: Boolean(binding),
+        bound,
         profile: cfg.profile ?? feishuProfileName(),
         appId: cfg.app_id ?? create.appId ?? null,
         externalUserId: binding?.external_user_id ?? null,
+        kinds: settings.kinds,
+        lastOkAt: delivery.lastOkAt,
+        failure: delivery.failure,
+        testSentAt: settings.testSentAt,
       };
     },
 
     "channel.skip": () => {
       updateConfig({ channel: { feishu: { skipped: true } } });
-      return { skipped: true, next: "已跳过；需要手机拍板时再回来开启" };
+      patchFeishuSettings({ off: true });
+      channelFeishu.createAppCancel();
+      return { skipped: true, next: "已选不用飞书；要你确认的只出现在网页的「今天」里" };
     },
     "channel.unskip": () => {
       updateConfig({ channel: { feishu: { skipped: false } } });
+      patchFeishuSettings({ off: false });
       return { skipped: false };
     },
 
@@ -684,29 +767,22 @@ function daemonHandlers(adapters, log) {
     "channel.app.set": async ({ appId, appSecret }) => {
       const r = await channelFeishu.configure({ appId, appSecret });
       updateConfig({ channel: { feishu: { profile: r.profile, app_id: r.appId, configured_at: Date.now() } } });
-      return { ...r, next: "点「开始授权」，在浏览器里完成飞书授权" };
+      return { ...r, next: "接着在飞书里确认授权" };
     },
 
     "channel.login.start": async () => {
       if (channelFeishu.ready() && !/还没有授权/.test(channelFeishu.ready() ?? "")) throw new Error(channelFeishu.ready());
-      const started = await channelFeishu.authStart();
-      if (!started.verificationUrl) throw new Error("lark-cli 没有返回验证链接");
+      // 授权一完成就自己配对、探订阅、发测试卡片：页面不需要「我弄好了」。
+      const started = await channelFeishu.authStart({ onDone: connectAfterAuth });
+      if (!started.verificationUrl && !started.already) throw new Error("飞书没有返回授权链接");
       return started;
     },
 
     "channel.login.wait": async ({ deviceCode }) => {
       await channelFeishu.authFinish(deviceCode);
-      const who = await channelFeishu.whoami();
-      const bound = bindChannel("feishu", who.openId);
-      updateConfig({ channel: { feishu: { authorized_at: Date.now() } } });
-      // 顺手探一次订阅：没订阅时按钮收不到点击，界面要能立刻说出来。
-      channelFeishu
-        .probeEvents()
-        .then((probe) => {
-          subscriptionCache = { at: Date.now(), value: { subscribed: Boolean(probe.ok), detail: probe.detail ?? null, url: probe.url ?? null, checkedAt: Date.now() } };
-        })
-        .catch(() => {});
-      return { ...bound, who: who.name ?? null };
+      await connectAfterAuth();
+      const binding = getBinding("feishu");
+      return { channel: "feishu", externalUserId: binding?.external_user_id ?? null };
     },
 
     "channel.diagnose": async () => {
@@ -742,36 +818,14 @@ function daemonHandlers(adapters, log) {
     "channel.bind": async ({ openId }) => {
       const who = openId ? { openId, name: null } : await channelFeishu.whoami();
       const bound = bindChannel("feishu", who.openId);
+      patchFeishuSettings({ off: false });
+      refreshSubscription({ maxAge: 0 });
       return { ...bound, who: who.name ?? null };
     },
     "channel.test": async () => {
       const binding = getBinding("feishu");
-      if (!binding) throw new Error("还没有配对：先运行 vk channel bind feishu");
-      const now = Date.now();
-      const card = {
-        config: { wide_screen_mode: true },
-        header: { template: "blue", title: { tag: "plain_text", content: "versekit · 通道已连通" } },
-        elements: [
-          {
-            tag: "div",
-            text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点下面的按钮，验证「手机点一下、电脑执行」这条闭环。" },
-          },
-          {
-            tag: "action",
-            actions: [
-              {
-                tag: "button",
-                text: { tag: "plain_text", content: "点我验证闭环" },
-                type: "primary",
-                value: { cmd: "stats.works", args: {}, exp: now + 24 * 3600e3, key: `test:${now}` },
-              },
-            ],
-          },
-          { tag: "note", elements: [{ tag: "plain_text", content: "按钮 24 小时内有效 · 重复点击只会执行一次" }] },
-        ],
-      };
-      const { messageId } = await channelFeishu.send({ openId: binding.external_user_id, card });
-      return { messageId, openId: binding.external_user_id };
+      if (!binding) throw new Error("还没有接飞书：先在系统页「通知」里接上");
+      return sendTestCard(binding);
     },
     // 控制台的「自检」页与 CLI 用的是同一份检查，避免「网页说没问题、命令行说有问题」。
     doctor: () => doctorReport(),
@@ -1896,6 +1950,27 @@ async function cmdChannel() {
     return data;
   }
 
+  if (sub === "settings") {
+    // vk channel settings feishu [confirm|issue|daily on|off]：不带就是只看。
+    const kind = pos[3];
+    if (kind && !["confirm", "issue", "daily"].includes(kind)) throw new Error("用法：vk channel settings feishu [confirm|issue|daily on|off]");
+    if (kind && !["on", "off"].includes(pos[4])) throw new Error("后面要写 on 或 off");
+    const data = await send("channel.settings", kind ? { [kind]: pos[4] === "on" } : {});
+    if (human) {
+      const k = data.kinds;
+      console.log(`要你确认的 ${k.confirm ? "发" : "不发"} · 出了问题的 ${k.issue ? "发" : "不发"} · 每天的结果 ${k.daily ? "发" : "不发"}`);
+      if (data.next) console.log(data.next);
+    } else out(data);
+    return data;
+  }
+
+  if (sub === "unbind" || sub === "skip" || sub === "unskip") {
+    const data = await send(sub === "unbind" ? "channel.unbind" : `channel.${sub}`, {});
+    if (human) console.log(data.next ?? (sub === "unskip" ? "已重新开启飞书" : "已完成"));
+    else out(data);
+    return data;
+  }
+
   const missing = sub === "diagnose" ? null : channelFeishu.ready();
   if (missing) throw new Error(missing);
 
@@ -1938,7 +2013,7 @@ async function cmdChannel() {
     return test;
   }
 
-  throw new Error("用法：vk channel bind | test | status | diagnose | subscription feishu");
+  throw new Error("用法：vk channel bind | test | status | diagnose | subscription | settings | unbind | skip | unskip feishu");
 }
 
 async function cmdStats() {

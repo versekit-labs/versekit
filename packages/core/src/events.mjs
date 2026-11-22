@@ -64,6 +64,12 @@ export const EVENTS = {
   "egress.probe_failed": { severity: "warn", required: false, internal: true },
   "egress.geodb_failed": { severity: "warn", required: false, internal: true },
 
+  // 飞书通知（#311）：卡片发不出去、接上、断开、改了发哪几类。内部留痕：系统页「通知」读它们，不再为它们发一张卡片。
+  "channel.card_failed": { severity: "warn", required: false, internal: true },
+  "channel.connected": { severity: "info", required: false, internal: true },
+  "channel.disconnected": { severity: "info", required: false, internal: true },
+  "channel.settings_changed": { severity: "info", required: false, internal: true },
+
   "system.alive": { severity: "info", required: false, internal: true },
   "system.dead": { severity: "critical", required: true, card: "system" },
 

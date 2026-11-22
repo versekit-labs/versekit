@@ -1304,6 +1304,39 @@ export function getBinding(channel) {
   return open().prepare("SELECT * FROM channel_binding WHERE channel=? ORDER BY paired_at DESC LIMIT 1").get(channel) ?? null;
 }
 
+/** 断开通道：只删配对（卡片不再发给这个人）；飞书里的机器人不动。 */
+export function unbindChannel(channel) {
+  const res = open().prepare("DELETE FROM channel_binding WHERE channel=?").run(channel);
+  return { channel, removed: Number(res.changes) };
+}
+
+// ------------------------------------------------------------------ 飞书通知设置与发送状态（#311）
+//
+// 放 meta 表（不改 schema）。settings：往飞书发哪几类、是不是「不用飞书」；delivery：最近一张卡片送没送到。
+// 凭证不在这里：app secret 只在 lark-cli 的钥匙串里，这里只有布尔和时间。
+
+export const FEISHU_KINDS = ["confirm", "issue", "daily"];
+const FEISHU_DEFAULTS = { kinds: { confirm: true, issue: true, daily: true }, off: false, testSentAt: null };
+
+export function getFeishuSettings() {
+  const saved = readMeta("feishu.settings") ?? {};
+  return { ...FEISHU_DEFAULTS, ...saved, kinds: { ...FEISHU_DEFAULTS.kinds, ...(saved.kinds ?? {}) } };
+}
+export function patchFeishuSettings(patch = {}) {
+  const cur = getFeishuSettings();
+  const next = { ...cur, ...patch, kinds: { ...cur.kinds, ...(patch.kinds ?? {}) } };
+  putMeta("feishu.settings", next);
+  return next;
+}
+
+/** { lastOkAt, failure: { at, reason, eventType } | null }：failure 只在「最近一张没送到」时存在，送到一张就清掉。 */
+export const getFeishuDelivery = () => ({ lastOkAt: null, failure: null, ...(readMeta("feishu.delivery") ?? {}) });
+export const patchFeishuDelivery = (patch) => {
+  const next = { ...getFeishuDelivery(), ...patch };
+  putMeta("feishu.delivery", next);
+  return next;
+};
+
 // ------------------------------------------------------------------ 发布前人确认（#146）
 //
 // 平台稿生成后停在 pending_confirm。下面这几个函数是**唯一**能把它推进队列的地方，而且都只由

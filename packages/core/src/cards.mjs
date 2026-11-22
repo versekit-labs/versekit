@@ -112,6 +112,16 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
   };
 }
 
+/**
+ * 一类事件算「发哪几类」里的哪一类（系统页「通知」的三个开关）：
+ * confirm 要你确认的 / daily 每天的结果 / issue 其余（出了问题的）。
+ */
+export function cardKindOf(eventType) {
+  if (eventType === "work.awaiting_confirm") return "confirm";
+  if (eventType === "digest.daily") return "daily";
+  return "issue";
+}
+
 /** 点完按钮后原地更新的卡片：结论一句，按钮收起来。 */
 export function resultCard(title, message, { ok = true } = {}) {
   return {
