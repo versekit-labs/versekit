@@ -16,7 +16,7 @@
  * 退出码：0 通过；1 有阻塞项。
  */
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 
@@ -177,7 +177,12 @@ async function withChrome(fn) {
     await fn(send, consoleErrors);
     ws.close();
   } finally {
+    // 关浏览器、等它退出、删临时 profile（#339：之前每跑一次留一个 vk-gate-* 目录）。
+    const exited = new Promise(r => chrome.once('exit', r));
     chrome.kill();
+    await Promise.race([exited, sleep(5000)]);
+    if (chrome.exitCode === null) chrome.kill('SIGKILL');
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 

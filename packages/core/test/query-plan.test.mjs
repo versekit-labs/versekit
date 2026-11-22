@@ -19,7 +19,7 @@ function openTestDb(t, ddl = null) {
     close();
     if (previousHome === undefined) delete process.env.VK_HOME;
     else process.env.VK_HOME = previousHome;
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   if (ddl) open().exec(ddl);
   else migrate();

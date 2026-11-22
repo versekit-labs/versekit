@@ -26,7 +26,7 @@ before(async () => {
 });
 after(async () => {
   await daemon.close();
-  rmSync(HOME, { recursive: true, force: true });
+  rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function vk(args) {

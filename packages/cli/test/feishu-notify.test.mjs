@@ -57,7 +57,7 @@ async function boot({ larkBin = FAKE, registration = null } = {}) {
   const init = spawn(process.execPath, [VK, "init"], { env });
   await new Promise((r) => init.on("close", r));
   const child = spawn(process.execPath, [VK, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });
-  cleanups.push(() => { child.kill("SIGTERM"); rmSync(home, { recursive: true, force: true }); rmSync(lark, { recursive: true, force: true }); });
+  cleanups.push(() => { child.kill("SIGTERM"); rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); rmSync(lark, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(`${base}/api/channels/feishu/status`)).ok) break; } catch { /* 还没起来 */ }

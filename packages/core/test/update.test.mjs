@@ -47,7 +47,7 @@ before(async () => {
 after(() => {
   server?.close();
   server?.closeAllConnections?.();
-  rmSync(HOME, { recursive: true, force: true });
+  rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const cur = (commit) => ({ version: "0.1.0", commit, short: updates.shortCommit(commit) });

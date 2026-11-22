@@ -42,7 +42,7 @@ before(async () => {
 after(async () => {
   await daemon.close();
   await mock.close();
-  rmSync(HOME, { recursive: true, force: true });
+  rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 /** 跑一条 vk 命令；onStderr 能在命令还在等的时候拿到输出（比如授权链接）。 */

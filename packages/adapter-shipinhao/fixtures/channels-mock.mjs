@@ -298,11 +298,17 @@ export function fakeTab(page, { hooks = {} } = {}) {
     async waitFor(fn, args = [], options = {}) {
       if (!Array.isArray(args)) { options = args ?? {}; args = []; }
       const { timeout = 30e3, what = "页面元素" } = options;
-      const end = Date.now() + Math.min(timeout, hooks.maxWait ?? 400);
+      // 上限按「轮询次数」算而不是墙钟：机器忙（多份全量测试并发）时每轮变慢，墙钟上限会把「还在处理」误判成超时。
+      // 调用方明确给了更短的 timeout（要测超时路径）时才按墙钟。
+      const cap = hooks.maxWait ?? 400;
+      const end = Date.now() + timeout;
+      const maxRounds = Math.ceil(cap / 2);
+      let rounds = 0;
       for (;;) {
         const v = await tab.eval(fn, ...args).catch(() => null);
         if (v) return v;
-        if (Date.now() > end) throw new Error(`等不到${what}`);
+        rounds++;
+        if (timeout < cap ? Date.now() > end : rounds > maxRounds) throw new Error(`等不到${what}`);
         await new Promise((r) => setTimeout(r, 2));
       }
     },
