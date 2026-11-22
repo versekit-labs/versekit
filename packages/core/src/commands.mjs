@@ -533,6 +533,18 @@ export const COMMANDS = [
     audit: "always",
   },
   {
+    // 位置库（DB-IP / IPinfo）现在重新下载（#333）：后台下载，立刻返回；已经在下载就不重复开始。进度在 egress.status 的 geoDb.downloading。
+    name: "egress.geodb",
+    summary: "现在重新下载位置库（DB-IP City Lite、IPinfo Lite）：后台下载，已经在下载就不重复开始；进度和失败原因在出口位置里",
+    remote: false,
+    localOnly: true,
+    args: { group: "string?" },
+    http: { method: "POST", path: "/api/egress/geodb" },
+    cli: { usage: "vk egress geodb [--group <组>]" },
+    card: null,
+    audit: "always",
+  },
+  {
     name: "egress.accept",
     summary: "继续用新位置：把现在的国家定为这些账号平时的位置并恢复发布。要 confirm，因为代理没关时平台会看到账号突然换了国家",
     remote: false,

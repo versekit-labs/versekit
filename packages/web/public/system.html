@@ -486,7 +486,19 @@
       return `<div>${e.split ? `<span class="sub">${esc(l.label)}：</span>` : ""}${esc(l.place)} ${l.ip ? `<span class="mono">${esc(l.ip)}</span>` : ""} ${net}</div>`;
     }).join("");
     const stale = e.probedAt && !online ? `<div class="sub">发布机不在线，这是 ${esc(ago(Date.now() - e.probedAt))}查到的</div>` : "";
-    return `${moved ? '<span class="st wait">出口位置变了</span>' : ""}${rows || '<span class="sub">还没探测过</span>'}${stale}${e.notes.map((n) => `<div class="sub">${esc(n)}</div>`).join("")}`;
+    return `${moved ? '<span class="st wait">出口位置变了</span>' : ""}${rows || '<span class="sub">还没探测过</span>'}${stale}${e.notes.map((n) => `<div class="sub">${esc(n)}</div>`).join("")}${geoButton(e)}`;
+  }
+
+  /** 位置库「现在重新下载」：下载中不显示按钮（进度写在上面的说明里），页面每 2 秒刷新一次直到下完。 */
+  function geoButton(e) {
+    if (e.geoDb?.downloading) return "";
+    return `<div>${B('data-ipx="geodb"', "现在重新下载位置库", "link", ui.ipBusy ? " disabled" : "")}</div>`;
+  }
+  let geoTimer = null;
+  function syncGeoPoll() {
+    const want = !!ui.egress?.geoDb?.downloading;
+    if (want && !geoTimer) geoTimer = setInterval(async () => { try { await load(); draw(); } catch {} }, Math.max(500, POLL_MS));
+    if (!want && geoTimer) { clearInterval(geoTimer); geoTimer = null; }
   }
 
   /** 位置变了：写清平时在哪、现在在哪、哪几个平台先暂停；两条路——继续用新位置（行内再确认）/ 我去关掉代理。 */
@@ -517,6 +529,9 @@
       } else if (x === "fix") {
         await post("/api/egress/wait", { group: VK.current()?.id });
         toast("好，关掉代理后发布机会自己复查");
+      } else if (x === "geodb") {
+        const r = await post("/api/egress/geodb", { group: VK.current()?.id });
+        toast(r.started ? "开始下载位置库了，进度在「出口位置」里" : "位置库已经在下载了，不用重复点");
       } else if (x === "recheck") {
         await post("/api/egress/recheck", { group: VK.current()?.id });
         toast(ui.egress?.pausedCount ? "还没回到平时的位置，继续暂停" : "位置回到平时的国家了，已恢复发布");
@@ -620,6 +635,7 @@
   }
 
   function draw() {
+    syncGeoPoll();
     const group = VK.current();
     const pending = {};
     for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
