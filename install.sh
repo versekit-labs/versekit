@@ -198,25 +198,31 @@ main() {
 
   # ------------------------------------------------------------ 3b. 飞书组件 lark-cli
   # 装在 $PREFIX/bin（不碰系统里已有的 lark-cli）。已经是这个版本就跳过；先下载校验、暂存，换程序时才落盘。
-  STEP="下载飞书组件"
-  local LARK_FILE="lark-cli-$LARK_VERSION-$LARK_PLAT.tar.gz" LARK_STAGED="" HAVE_LARK=""
+  # 飞书组件是可选件：下载/校验/解压任何一步失败都只记下原因、跳过它，不拖垮 versekit 本体的安装；
+  # 装完会在末尾说清原因和怎么补装（重新运行这一行安装命令即可），系统页「通知」也会提示。
+  local LARK_FILE="lark-cli-$LARK_VERSION-$LARK_PLAT.tar.gz" LARK_STAGED="" HAVE_LARK="" LARK_FAIL="" LARK_WANT LARK_GOT
   if [ -x "$PREFIX/bin/lark-cli" ]; then HAVE_LARK="$("$PREFIX/bin/lark-cli" --version 2>/dev/null || true)"; fi
+  lark_stage() { # 成功返回 0 并设 LARK_STAGED；失败返回 1 并设 LARK_FAIL
+    curl -fsSL --retry 2 --connect-timeout 15 -o "$TMP/lark-checksums.txt" "$LARK_URL/checksums.txt" </dev/null ||
+      { LARK_FAIL="下载失败：$LARK_URL/checksums.txt"; return 1; }
+    grep -q "  $LARK_FILE\$" "$TMP/lark-checksums.txt" ||
+      { LARK_FAIL="${LARK_URL}/checksums.txt 里没有 ${LARK_FILE}"; return 1; }
+    curl -fsSL --retry 2 --connect-timeout 15 -o "$TMP/$LARK_FILE" "$LARK_URL/$LARK_FILE" </dev/null ||
+      { LARK_FAIL="下载失败：$LARK_URL/$LARK_FILE"; return 1; }
+    LARK_WANT="$(awk -v f="$LARK_FILE" '$2==f {print $1; exit}' "$TMP/lark-checksums.txt")"
+    LARK_GOT="$(sha_of "$TMP/$LARK_FILE")"
+    [ "$LARK_WANT" = "$LARK_GOT" ] ||
+      { LARK_FAIL="校验不通过（官方 ${LARK_WANT}，实际 ${LARK_GOT}），多半是下载被截断或被劫持"; return 1; }
+    mkdir -p "$TMP/lark-x"
+    tar -xzf "$TMP/$LARK_FILE" -C "$TMP/lark-x" || { LARK_FAIL="压缩包解压失败"; return 1; }
+    LARK_STAGED="$(find "$TMP/lark-x" -type f -name lark-cli | head -1)"
+    [ -n "$LARK_STAGED" ] || { LARK_FAIL="压缩包里没有 lark-cli 可执行文件"; return 1; }
+  }
   case "$HAVE_LARK" in
     *"version $LARK_VERSION"|*" $LARK_VERSION") say "飞书组件 lark-cli ${LARK_VERSION} 已经在了，跳过下载" ;;
     *)
       say "下载飞书组件 lark-cli ${LARK_VERSION}（约 10MB，装在 ${PREFIX}/bin，接飞书要用）"
-      fetch "$LARK_URL/checksums.txt" "$TMP/lark-checksums.txt"
-      grep -q "  $LARK_FILE\$" "$TMP/lark-checksums.txt" || die "${LARK_URL}/checksums.txt 里没有 ${LARK_FILE}" "确认 VERSEKIT_LARK_VERSION（${LARK_VERSION}）和 VERSEKIT_LARK_URL 指向同一个官方发布"
-      fetch "$LARK_URL/$LARK_FILE" "$TMP/$LARK_FILE"
-      STEP="校验飞书组件"
-      local LARK_WANT LARK_GOT
-      LARK_WANT="$(awk -v f="$LARK_FILE" '$2==f {print $1; exit}' "$TMP/lark-checksums.txt")"
-      LARK_GOT="$(sha_of "$TMP/$LARK_FILE")"
-      [ "$LARK_WANT" = "$LARK_GOT" ] || die "lark-cli 压缩包校验不通过（官方 ${LARK_WANT}，实际 ${LARK_GOT}）" "多半是下载被截断或被劫持，重新运行；反复出现就换一个网络"
-      mkdir -p "$TMP/lark-x"
-      tar -xzf "$TMP/$LARK_FILE" -C "$TMP/lark-x" || die "lark-cli 解压失败" "重新运行；磁盘空间不足也会这样"
-      LARK_STAGED="$(find "$TMP/lark-x" -type f -name lark-cli | head -1)"
-      [ -n "$LARK_STAGED" ] || die "lark-cli 压缩包里没有 lark-cli 可执行文件" "确认 VERSEKIT_LARK_URL 指向 larksuite/cli 的官方发布"
+      lark_stage || { LARK_STAGED=""; say "飞书组件没装上（${LARK_FAIL}），先跳过，不影响 versekit 其余部分"; }
       ;;
   esac
 
@@ -328,6 +334,9 @@ EOF
   elif [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_LABEL} → ${NEW_LABEL}（数据、账号、登录都保留）"
   else say "已安装 ${NEW_LABEL}"; fi
   say "新开的终端里可以直接用 vk；日常管理：vk service status | restart | stop | uninstall"
+  if [ -n "$LARK_FAIL" ]; then
+    printf '⚠ 飞书组件没装上：%s\n  versekit 其余部分已装好；要接飞书，网络通了以后重新运行这一行安装命令即可（可以反复运行，数据、账号、登录都保留）。\n' "$LARK_FAIL" >&2
+  fi
   printf '装好了，控制台地址 %s，终端可以关了\n' "$URL"
 }
 

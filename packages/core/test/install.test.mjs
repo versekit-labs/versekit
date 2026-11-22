@@ -314,18 +314,25 @@ test("ACC-v3-feishu-08：首次安装装上飞书组件 lark-cli（校验过、�
   await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
 });
 
-test("ACC-v3-feishu-08：lark-cli 校验不过——非 0 退出、说清是校验飞书组件、不留服务、不留半个安装", { timeout: 60000 }, async () => {
+test("ACC-v3-feishu-08：lark-cli 校验不过——不拖垮安装：versekit 照常装好，说清原因和补装办法，不留飞书组件", { timeout: 120000 }, async () => {
   const h = await newHome();
   breakLarkSum = true;
   const r = await install(h);
   breakLarkSum = false;
-  assert.notEqual(r.code, 0);
-  assert.match(r.stderr, /校验飞书组件/);
-  assert.match(r.stderr, /怎么办/);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout + r.stderr, /飞书组件没装上/);
+  assert.match(r.stderr, /校验不通过/);
+  assert.match(r.stderr, /重新运行这一行安装命令/);
   assert.ok(!existsSync(join(h.home, ".versekit/bin/lark-cli")), "校验不过不能装上");
-  assert.ok(!existsSync(join(h.home, ".versekit/app")));
-  assert.ok(!existsSync(join(h.home, ".local/state/versekit/service.json")));
-  assert.equal(await status(h.port), null);
+  assert.ok(existsSync(join(h.home, ".versekit/app")), "versekit 本体照常装上");
+  assert.ok(existsSync(join(h.home, ".versekit/bin/vk")));
+  assert.notEqual(await status(h.port), null, "后台服务在跑");
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+  // 网络恢复后重新运行：补装上
+  const again = await install(h);
+  assert.equal(again.code, 0, again.stderr);
+  assert.ok(existsSync(join(h.home, ".versekit/bin/lark-cli")), "重新运行后补装");
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
 });
 
 test("ACC-install-03：下载失败——退出码非 0 并指出是哪一步", { timeout: 60000 }, async () => {
