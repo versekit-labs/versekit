@@ -211,7 +211,7 @@ export default {
     // 用系统自带的 script 分配一个 pty，再照常解析输出。
     const child =
       process.platform === "linux"
-        ? spawn("script", ["-q", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
+        ? spawn("script", ["-q", "-e", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
         : spawn("script", ["-q", "/dev/null", bin(), "config", "init", "--new", "--name", profile()], { stdio: ["ignore", "pipe", "pipe"] });
     createState = { running: true, url: null, qr: null, qrError: null, error: null, startedAt: Date.now(), child };
     let buffer = "";
