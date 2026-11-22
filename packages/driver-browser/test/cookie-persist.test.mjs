@@ -65,6 +65,6 @@ test("ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies
     assert.equal(found.expires, cookie.expires);
   } finally {
     await closeAccount(id).catch(() => {});
-    rmSync(HOME, { recursive: true, force: true });
+    rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

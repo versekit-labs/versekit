@@ -77,7 +77,7 @@ async function scenario(signal) {
     await until(() => !alive(chromePid), `账号 Chrome(${chromePid}) 随守护进程关掉`, 5000);
   } finally {
     serve.kill("SIGKILL");
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
