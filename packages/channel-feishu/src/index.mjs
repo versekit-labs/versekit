@@ -225,6 +225,7 @@ export default {
         if (!hit) return;
         clearTimeout(timer);
         child.stdout.off("data", onData);
+        createState.url = hit; // 同步记下，close 处理器才分得清「拿到链接后才失败」
         resolve(hit);
       };
       child.stdout.on("data", onData);
@@ -251,7 +252,6 @@ export default {
     });
 
     // 二维码只是锦上添花：生成失败也要把链接给出去，否则用户彻底没法继续。
-    createState.url = url;
     let qr = null;
     let qrError = null;
     try {
@@ -261,7 +261,13 @@ export default {
     }
     // 生成二维码期间子进程可能已经退出：close 处理器已清空 qr/url 并写了 error，
     // 这时不能把作废的二维码写回去。
-    if (createState.error || createState.url !== url) {
+    if (createState.exitCode !== undefined && createState.exitCode !== 0) {
+      if (!createState.error) {
+        logRaw("config init", tail || buffer);
+        createState.error = explainLarkFailure(tail || buffer);
+      }
+      createState.qr = null;
+      createState.url = null;
       return { url: null, qr: null, qrError: null, running: false, error: createState.error };
     }
     createState.qr = qr;
