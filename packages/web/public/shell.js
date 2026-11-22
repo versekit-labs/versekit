@@ -235,7 +235,72 @@
     await renderHealth(nav, window.VK.current(), today?.notify ?? null);
   }
 
-  window.VKShell = { render, NAV, toast, pageKey, refreshHealth };
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render);
-  else render();
+  /* 发布机换了版本后，已打开的页面跟着换新（ACC-update-07）。
+   * 每个页面记下载入时 /api/stream 推来的提交号；变了就：没有编辑中的内容 → 刷新一次；
+   * 有未保存的输入 → 只在顶部提示，不动输入。提交号来自服务端 buildInfo()，这里不另造。 */
+  function hasUnsavedInput() {
+    for (const f of document.querySelectorAll("input, textarea, select, [contenteditable='true']")) {
+      if (f.closest("[data-no-dirty]")) continue;
+      if (f.isContentEditable && f.tagName !== "INPUT" && f.tagName !== "TEXTAREA") {
+        if (f.textContent.trim()) return true;
+        continue;
+      }
+      const type = (f.type || "").toLowerCase();
+      if (["hidden", "button", "submit", "reset"].includes(type)) continue;
+      if (type === "checkbox" || type === "radio") {
+        if (f.checked !== f.defaultChecked) return true;
+      } else if (f.tagName === "SELECT") {
+        if ([...f.options].some((o) => o.selected !== o.defaultSelected)) return true;
+      } else if (f.value !== f.defaultValue) return true;
+    }
+    return false;
+  }
+
+  function showUpdateBanner(version) {
+    if (document.querySelector("[data-update-banner]")) return;
+    const bar = el(
+      `<div data-update-banner role="status" style="position:sticky;top:0;z-index:50;display:flex;gap:12px;align-items:center;justify-content:center;padding:8px 16px;background:#fff6dd;color:#4a3b00;border-bottom:1px solid #e6cf85;font-size:14px">` +
+        `<span>发布机已更新到 ${esc(version)}，刷新后能用上新功能</span><button type="button" data-update-reload style="min-height:32px;padding:0 12px">刷新</button></div>`,
+    );
+    bar.querySelector("[data-update-reload]").addEventListener("click", () => location.reload());
+    document.body.prepend(bar);
+  }
+
+  /** 收到一帧推送：第一帧记基线，之后提交号变了才动作。导出给测试用。 */
+  function makeBuildWatcher({ reload = () => location.reload(), banner = showUpdateBanner, dirty = hasUnsavedInput } = {}) {
+    let baseline = null;
+    let done = false;
+    return (build) => {
+      const commit = build?.commit;
+      if (!commit || done) return;
+      if (baseline === null) {
+        baseline = commit;
+        return;
+      }
+      if (commit === baseline) return;
+      if (dirty()) {
+        banner(build.version ?? commit.slice(0, 7));
+        return; // 有输入时每帧都可能再来，banner 自己去重；用户处理完输入后仍可点「刷新」
+      }
+      done = true;
+      reload();
+    };
+  }
+
+  function watchBuild() {
+    if (typeof EventSource === "undefined") return;
+    const onBuild = makeBuildWatcher();
+    const es = new EventSource("/api/stream");
+    es.onmessage = (e) => {
+      try {
+        onBuild(JSON.parse(e.data).build);
+      } catch {
+        /* 坏帧忽略 */
+      }
+    };
+  }
+
+  window.VKShell = { render, NAV, toast, pageKey, refreshHealth, makeBuildWatcher, hasUnsavedInput };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => (render(), watchBuild()));
+  else (render(), watchBuild());
 })();
