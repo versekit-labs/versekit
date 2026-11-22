@@ -462,6 +462,14 @@ export async function recordLogin(accountId, { at = Date.now(), ...options } = {
       payload: { accountId, platform: account.platform, country: baseline.country, message: `登录成功：以 ${baseline.countryName} 作为这个账号平时的位置` },
       dedupeKey: `egress.login_baseline:${accountId}:${at}`,
     });
+  } else {
+    // 查不到国家（没有 IP 库 / 探测失败）：原基线保留，但要留现场，不静默（#325）。
+    emit({
+      type: "egress.probe_failed",
+      severity: "warn",
+      payload: { line: "login", accountId, platform: account.platform, code: line?.code ?? "egress_no_geo", message: line?.error ?? "登录成功但查不到出口国家（没有 IP 库），没有记录这个账号平时的位置，等下一次探测补上" },
+      dedupeKey: `egress.login_baseline_skipped:${accountId}:${at}`,
+    });
   }
   recordProbe(result);
   return { baseline };
