@@ -24,7 +24,7 @@ import { setLoginRecording } from "./adapters.mjs";
 import { deliverPending, handleCardEvent } from "./notify.mjs";
 import { getBinding, statusSnapshot, listPublishes, listRuns, listAccounts, countPublished, recordHeartbeat } from "./store.mjs";
 import { setupStatus } from "./setup.mjs";
-import { startAutoUpdate } from "./update.mjs";
+import { startAutoUpdate, buildInfo, displayVersion } from "./update.mjs";
 import { verifyApproval, applyApproval } from "./approval.mjs";
 
 const MAX_BODY = 1 << 20;
@@ -491,8 +491,11 @@ function streamState(req, res, { log, doctor = null }) {
       channel: { bound: Boolean(binding), who: binding?.external_user_id ?? null },
       publishedCount: countPublished(),
     });
+    // 每帧都重读 buildInfo()：发布机自动更新换了程序目录后，已打开的页面靠这个知道自己过期了（ACC-update-07）。
+    const build = buildInfo();
     return {
       at: Date.now(),
+      build: { commit: build.commit, version: displayVersion(build) },
       status: { ...status, accounts },
       setup: { nextStep: setup.nextStep, done: setup.done, total: setup.total, steps: setup.steps.map((s) => ({ id: s.id, status: s.status })) },
       publishes: listPublishes({ limit: 20 }).map((p) => ({ id: p.id, state: p.state, updated_at: p.updated_at, platform: p.platform })),
