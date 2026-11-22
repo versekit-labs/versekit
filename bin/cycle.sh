@@ -7,6 +7,7 @@
 #
 #   1. 机械迁移      agentctl tick --apply        （doing 有 PR → review）
 #   2. 合并          agentctl merge --pending      （脚本合并，双门禁）
+#   3a. 排队放行     agentctl release-queued       （s:ready 空且有空 lane 时，s:queued → s:ready，一次 1 张）
 #   3. 派工实现      claim → worker-start          （一次建 Task；首次失败用同一 task 退避重试）
 #      派工返工      s:changes → 原 PR 原分支      （引用最近验收 FAIL 评论，3 轮封顶转 blocked）
 #   4. 派工验收      queue + 锁 → worker-start
@@ -243,7 +244,7 @@ keep_lane_worktree_alerts() {
         wt="${line#\[lane-worktree\] }"
         st=""; [ -d "$wt" ] && st=$(lane_worktree_state "$wt" 2>/dev/null || true)
         case "$st" in tracked|unpushed) keep=1; kept=1 ;; *) keep=0 ;; esac ;;
-      "[终端回收]"*|"Run 所有权"*) keep=0 ;;
+      "[终端回收]"*|"Run 所有权"*|"[排队跳过]"*) keep=0 ;;
     esac
     [ "$keep" = 1 ] && printf '%s\n' "$line" >> "$tmp"
   done < "$f"
@@ -1282,6 +1283,73 @@ dispatch_engineer_lane() {
 }
 
 log "== 3/6 派工 =="
+# ---------------------------------------------------------------- 排队放行
+# s:queued = 口径已写好、排队等派。ready 空了、活着的实现/返工 worker 少于 CYCLE_LANES 时，
+# 脚本自己把排在最前、能派的一张转成 s:ready（agentctl release-queued；一次最多 1 张），
+# 紧接着下面的派工就会认领它。协调器不再手动转 s:ready（ACC-harness-queue-01）。
+# 依赖没完成 / 口径查不到 / 缺 ACC-arch-09 的跳过并写进 cycle-owner-alert.txt，不卡后面的。
+# s:triage 只表示「还没写口径」，这里不碰。
+count_free_lanes() {
+  local i n=0
+  for i in $(seq 1 "$CYCLE_LANES"); do
+    case " ${LANES_USED:-} " in *" $i "*) continue ;; esac
+    if lane_available "$i"; then n=$((n + 1)); fi
+  done
+  printf '%s\n' "$n"
+}
+
+# 取出 alert 文件里现有的 [排队跳过] 行：本轮没评估队列时原样保留，到消费段之后再写回。
+QUEUE_SKIP_ALERTS=""
+queue_skip_alerts_load() {
+  QUEUE_SKIP_ALERTS=$(grep '^\[排队跳过\] ' "$STATE_DIR/cycle-owner-alert.txt" 2>/dev/null || true)
+}
+
+release_from_queue() {
+  local free out rc=0 skipped
+  free=$(count_free_lanes)
+  local args=(release-queued --free-lanes "$free" --json)
+  [ "$DRY" = "1" ] && args+=(--dry-run)
+  out=$(node bin/agentctl.mjs "${args[@]}" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "  ✗ 排队放行失败：$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+    return 1
+  fi
+  printf '%s' "$out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("LOG  ✗ 排队放行：agentctl 输出不是 JSON"); raise SystemExit(0)
+print("LOG  · " + d.get("message", ""))
+if d.get("reason") in ("released", "none-viable"):
+    print("EVAL")
+    for s in d.get("skipped") or []:
+        print("SKIP[排队跳过] #%s：%s" % (s.get("number"), s.get("why")))
+        print("LOG    ✗ 跳过 #%s：%s" % (s.get("number"), s.get("why")))
+' > "$STATE_DIR/queue-release.out" 2>/dev/null || true
+  local line evaluated=0 now
+  now=$(date -u +%FT%TZ)
+  skipped=""
+  while IFS= read -r line; do
+    case "$line" in
+      LOG*) log "${line#LOG}" ;;
+      EVAL) evaluated=1 ;;
+      SKIP*) skipped="${skipped}${skipped:+$'\n'}${line#SKIP} （${now}）" ;;
+    esac
+  done < "$STATE_DIR/queue-release.out"
+  rm -f "$STATE_DIR/queue-release.out"
+  [ "$evaluated" = 1 ] && QUEUE_SKIP_ALERTS="$skipped"
+  return 0
+}
+
+log "== 3a 排队放行 =="
+queue_skip_alerts_load
+if [ "$MAX" -gt 0 ]; then
+  release_from_queue || FAILED=1
+else
+  log "  · --max 0，不放行"
+fi
+
 # 派工前先回收：已完成 worker 的终端没人关，dsh 会一直占内存（ACC-harness-leak-01/03）。
 # 放在 claim 之前：清理失败也不影响 claim/合并，且超限时 ensure_terminal 会拒绝开新终端。
 release_reclaimable_workers
@@ -1787,6 +1855,28 @@ write_acceptance_verdict_alerts() {
   fi
   if [ -s "$tmp" ]; then mv -f "$tmp" "$file"; else rm -f "$tmp" "$file"; fi
 }
+
+# [排队跳过]：每轮以最新评估为准；本轮没评估队列时保留上一轮的（见 release_from_queue）。
+write_queue_skip_alerts() {
+  local file="$STATE_DIR/cycle-owner-alert.txt" tmp
+  if [ -z "$QUEUE_SKIP_ALERTS" ] && ! grep -q '^\[排队跳过\] ' "$file" 2>/dev/null; then
+    return 0
+  fi
+  tmp=$(mktemp "$STATE_DIR/cycle-owner-alert.XXXXXX") || return 1
+  if ! {
+    if [ -f "$file" ]; then sed '/^\[排队跳过\] /d' "$file"; fi &&
+    if [ -n "$QUEUE_SKIP_ALERTS" ]; then printf '%s\n' "$QUEUE_SKIP_ALERTS"; fi
+  } > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ -s "$tmp" ]; then mv -f "$tmp" "$file"; else rm -f "$tmp" "$file"; fi
+}
+
+if [ "$DRY" != "1" ] && ! write_queue_skip_alerts; then
+  log "  ✗ 无法更新 $STATE_DIR/cycle-owner-alert.txt 中的排队跳过告警"
+  FAILED=1
+fi
 
 if [ "$ACCEPTANCE_QUEUE_READ" = 1 ] && ! write_acceptance_verdict_alerts; then
   log "  ✗ 无法更新 $STATE_DIR/cycle-owner-alert.txt 中的验收判定告警"

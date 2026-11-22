@@ -42,11 +42,12 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 多一个状态或改一个名字，label 就会漂；漂了以后脚本只会"认不出来"，不会报错，
 // 所以这里显式列全，未知状态一律当成异常暴露出来。
 
-const STATES = ["triage", "ready", "doing", "review", "changes", "accept", "blocked", "done"];
+const STATES = ["triage", "queued", "ready", "doing", "review", "changes", "accept", "blocked", "done"];
 
 /** 每个状态对应"下一步该谁动"。角色不是模型名，是职责——换模型不影响判断。 */
 const NEXT = {
   triage: { actor: "human", action: "补口径", why: "验收条目还没写清楚" },
+  queued: { actor: "cycle", action: "排队等放行", why: "口径已写好；ready 空了、lane 有空时由循环转 s:ready" },
   ready: { actor: "engineer", action: "派工实现", why: "口径齐，且没有进行中的 PR" },
   doing: { actor: "engineer", action: "等待中", why: "已有 agent 在跑（运行态在 Orca，不在 label）" },
   review: { actor: "acceptance", action: "派工验收", why: "PR 已开，等逐条比对验收条目" },
@@ -69,13 +70,14 @@ const NEXT = {
  *   - done → changes：里程碑验收或事后复验打回，先 reopen 原 issue，同样不新建 issue
  */
 const TRANSITIONS = {
-  triage: ["ready", "blocked"],
-  ready: ["doing", "triage", "blocked"],
+  triage: ["queued", "ready", "blocked"],
+  queued: ["ready", "triage", "blocked"],
+  ready: ["doing", "triage", "queued", "blocked"],
   doing: ["review", "ready", "blocked"],
   review: ["changes", "accept", "blocked"],
   changes: ["doing", "blocked"],
   accept: ["done", "changes", "blocked"],
-  blocked: ["triage", "ready", "doing", "review", "changes", "accept"],
+  blocked: ["triage", "queued", "ready", "doing", "review", "changes", "accept"],
   done: ["changes"],
 };
 
@@ -345,6 +347,96 @@ function validateScope(issue) {
   return { ok: true, ids, why: `引用 ${ids.length} 条口径` };
 }
 
+// ---------------------------------------------------------------- 排队放行（s:queued → s:ready）
+//
+// 三态：s:triage 没口径（协调器写）→ s:queued 口径已写好、排队等派 → s:ready（循环放行，一次 1 张）。
+// 为什么交给脚本：口径写好的单子停在人手里等「转 ready」，协调器没及时放，lane 就白空着
+// （2026-11-22 #336/#333/#334）。靠流程保证，不靠协调器记住。
+
+/** 正文「**依赖**：#X、#Y」里列的 issue 号；没写或写「无」返回空。只认散文行，不认代码块与注释。 */
+function issueDependencies(body) {
+  const nums = [];
+  for (const line of markdownProseLines(body)) {
+    const m = /^\s*(?:[-*+]\s+)?\**依赖\**\s*[：:]\s*(.*)$/.exec(line);
+    if (!m) continue;
+    for (const n of m[1].match(/#(\d+)/g) ?? []) {
+      const num = Number(n.slice(1));
+      if (!nums.includes(num)) nums.push(num);
+    }
+  }
+  return nums;
+}
+
+/** 还没完成的 issue 号：open 且不是 s:done。不在 open 列表里的（已关闭）算完成。 */
+function unfinishedIssueNumbers(issues) {
+  return new Set((issues ?? []).filter((i) => readState(i).state !== "done").map((i) => i.number));
+}
+
+/** 这张排队单现在不能放行的原因；能放行返回 null。unfinished 为 null 时不查依赖。 */
+function queueSkipReason(issue, unfinished) {
+  const waiting = unfinished ? issueDependencies(issue.body).filter((n) => unfinished.has(n) && n !== issue.number) : [];
+  if (waiting.length) return `依赖 ${waiting.map((n) => `#${n}`).join("、")} 未完成`;
+  // 与 ACC-harness-arch-01 同一套检查，不另写一份。
+  const scope = validateScope(issue);
+  if (!scope.ok) return scope.why;
+  return null;
+}
+
+/** 排队顺序：prio:high 在前，其余按 issue 号从小到大。 */
+function queueOrder(issues) {
+  const high = (i) => readState(i).names.includes("prio:high");
+  return (issues ?? [])
+    .filter((i) => {
+      const st = readState(i);
+      return st.state === "queued" && !st.hold && !st.problem;
+    })
+    .sort((a, b) => Number(high(b)) - Number(high(a)) || a.number - b.number);
+}
+
+/**
+ * 纯函数：从 s:queued 里挑第一张能放行的。
+ * 返回 { released, skipped: [{number, why, before}] }；before = 排在被放行那张前面。
+ * 被放行那张后面的不稳定，也评估并列出（给协调器的告警用），但不影响放行结果。
+ */
+function planQueueRelease(issues) {
+  const unfinished = unfinishedIssueNumbers(issues);
+  const skipped = [];
+  let released = null;
+  for (const issue of queueOrder(issues)) {
+    const why = queueSkipReason(issue, unfinished);
+    if (why) skipped.push({ number: issue.number, title: issue.title, why, before: released === null });
+    else if (released === null) released = issue;
+  }
+  return { released, skipped };
+}
+
+async function cmdReleaseQueued(repo, { freeLanes, dryRun, json }) {
+  const board = await loadBoard(repo);
+  const out = (payload) => {
+    process.stdout.write(json ? JSON.stringify(payload) + "\n" : `${payload.message}\n`);
+    return 0;
+  };
+  const queued = queueOrder(board.issues);
+  if (queued.length === 0) return out({ released: null, reason: "no-queued", skipped: [], message: "没有 s:queued 的单" });
+  if (board.issues.some((i) => readState(i).state === "ready")) {
+    return out({ released: null, reason: "ready-exists", skipped: [], message: "已有 s:ready，不放行排队单" });
+  }
+  if (!(freeLanes > 0)) {
+    return out({ released: null, reason: "lanes-full", skipped: [], message: "lane 已占满，不放行排队单" });
+  }
+  const { released, skipped } = planQueueRelease(board.issues);
+  const before = skipped.filter((s) => s.before);
+  if (!released) {
+    return out({ released: null, reason: "none-viable", skipped, message: `s:queued 里没有能放行的：${skipped.map((s) => `#${s.number}（${s.why}）`).join("；")}` });
+  }
+  const message = `从排队里放行 #${released.number}（排第 1${before.map((s) => `，前面跳过 #${s.number}：${s.why}`).join("")}）`;
+  if (!dryRun) {
+    const ok = await replaceState(repo, released.number, "ready", { from: "queued" });
+    if (!ok) return out({ released: null, reason: "raced", skipped, message: `#${released.number} 已不在 s:queued（被人改过），本轮不放行` });
+  }
+  return out({ released: { number: released.number, title: released.title }, dryRun, reason: "released", skipped, message: dryRun ? `[dry-run] 会${message}` : message });
+}
+
 // ---------------------------------------------------------------- 认证
 
 /** 从 .pi/gh-account 取账号名，交给 gh 换 token；不自己解析 hosts.yml。 */
@@ -457,7 +549,7 @@ function findPull(pulls, issue) {
  * 决策表。**这是整个脚本唯一的判断逻辑**，改规则只改这里。
  * 返回的 action 是"该谁动"，不是"已经动了"——本脚本不产生副作用。
  */
-function decide(issue, pulls, { now = Date.now() } = {}) {
+function decide(issue, pulls, { now = Date.now(), unfinished = null } = {}) {
   const { state, hold, problem } = readState(issue);
 
   if (hold) {
@@ -478,6 +570,14 @@ function decide(issue, pulls, { now = Date.now() } = {}) {
   if (state === "ready" || (state === "changes" && requiresArchitectureChecklist(issue.body))) {
     const scope = validateScope(issue);
     if (!scope.ok) return { actor: "human", action: "补口径", why: scope.why, blocked: true };
+  }
+
+  // s:queued 是「口径已写好、排队等循环放行」。放行前的检查与派工同一套（validateScope），
+  // 另加依赖；不合格的在 tick 里标出来，循环放行时会跳过它、不卡后面的。
+  if (state === "queued") {
+    const why = queueSkipReason(issue, unfinished);
+    if (why) return { actor: "human", action: "补口径", why, blocked: true };
+    return { ...base };
   }
 
   // 状态与现场不一致时，先纠正认知，再谈派工。这几种情况都是"label 说一套、实际是另一套"，
@@ -1919,6 +2019,12 @@ async function main(argv) {
             --round-limit 3              超过轮次强制 s:blocked + hold:human
             --dry-run
 
+  release-queued  把排队的 s:queued 放行成 s:ready（循环每轮派工前调用；协调器不手动转 s:ready）。
+            --free-lanes <n>             必填：空闲 lane 数（活着的实现/返工 worker 少于上限才 >0）
+            已有 s:ready 或 lane 占满时不放行；一次最多放 1 张；
+            顺序：prio:high 在前，其余按 issue 号；依赖未完成/口径查不到/缺 ACC-arch-09 的跳过并列出原因。
+            --dry-run                    只说会放行谁，不改 label
+
   void      作废最新一条验收 FAIL（环境/账号/外部原因，与代码无关）：不计轮次、不打回，
             issue 回 s:review 并清掉验收锁，下一轮重新验收。
             --issue <n>
@@ -1967,6 +2073,17 @@ async function main(argv) {
     return cmdSet(repo, { issue, to, json, force });
   }
 
+  if (cmd === "release-queued") {
+    const free = arg("--free-lanes");
+    if (free == null || !/^\d+$/.test(free)) {
+      process.stderr.write("release-queued 需要 --free-lanes <n>（空闲 lane 数，由 cycle.sh 数出来）\n");
+      return 1;
+    }
+    const repo = resolveRepo();
+    TOKEN = resolveToken();
+    return cmdReleaseQueued(repo, { freeLanes: Number(free), dryRun, json });
+  }
+
   if (cmd === "reject") {
     const issue = arg("--issue");
     if (!issue) {
@@ -2012,7 +2129,7 @@ async function main(argv) {
   }
 
   if (cmd !== "tick") {
-    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set / reject / void / merge）\n`);
+    process.stderr.write(`未知命令：${cmd}（支持 tick / claim / set / release-queued / reject / void / merge）\n`);
     return 1;
   }
 
@@ -2021,9 +2138,10 @@ async function main(argv) {
   const board = await loadBoard(repo);
 
   const pulls = board.pulls;
+  const unfinished = unfinishedIssueNumbers(board.issues);
   const rows = board.issues
     .map((issue) => {
-      const d = decide(issue, pulls);
+      const d = decide(issue, pulls, { unfinished });
       return {
         number: issue.number,
         title: issue.title,
@@ -2088,6 +2206,10 @@ export {
   filesOverlap,
   parseVerdict,
   validateScope,
+  issueDependencies,
+  planQueueRelease,
+  queueOrder,
+  decide,
   voidedCommentIds,
   effectiveVerdictComments,
   effectiveFailCount,

@@ -68,7 +68,7 @@ bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它
 | **跑在火山通道上的验收 worker** 终端末尾出现额度用尽（如 `You have exceeded the 5-hour usage quota. It will reset at …`） | 这是正证据，循环**自己处理、不退出**：① 解析报错里的重置时间（解析不出按 5 小时）写进 `$STATE_DIR/volc-exhausted`；② 对该 worker `worker-stop`；③ 清掉它的验收锁（`accept-<issue>-*.lock`）与验收终端记录，本轮 `cycle.sh` 用千问重派。三步都写日志。此后 `bin/dsh-model.sh` 到期前不探测火山、直接选千问并在 stderr 写原因，到期自动恢复火山（1 token 探测在额度用尽时仍返回 200，所以不能靠探测）。千问通道的额度错误仍按上一行以 11 停下 | — |
 | 等待被取消或 `check` 报错 | 说明原因 | 12 |
 | 同一项目已有循环在跑（锁里的 pid 还活着，且进程名是本项目的循环） | stderr 写「已有循环在跑：pid=N」，不调 `orca` / `cycle.sh`，直接退出 | 14 |
-| 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:ready`，再重新启动 | 13 |
+| 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:queued`（循环会自动放行成 `s:ready`），再重新启动。`s:queued` 里有能放行的单时**不退出 13**，多等几轮（`COORD_QUEUE_WAITS`，默认 5）让循环放行 | 13 |
 | 没有在跑的 worker，也没有新单可派 | 结束 | 0 |
 
 退出码 14 的锁在 `$COORD_STATE_DIR/coordinator-loop.lock`（内容是 pid，默认目录 `~/.orca/<项目名>-state/`）。锁里的 pid 已不存在、或那个进程不是本项目的循环时算陈旧锁，新循环接管并在日志写一行；任何方式退出都只删自己的锁。重复起循环会让两个循环共用同一个 Run、把同一单派两次，所以这里宁可拒绝。
@@ -139,8 +139,22 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 
 实现者在 PR 正文用 `##` 或 `###` 写一个含「六问」的标题，例如 `## ADR-0005 §13 六问`，在该节用 `1.` 到 `6.` 各写一条非空答案。不适用的题也要写明原因。`agentctl merge --pending` 缺任一答案会拒绝合并，只检查这个小节里的编号。问题见 [ADR-0005 §13](adr-0005-saas-architecture.md#13-架构验收进-ci也进每个实现单的口径)。
 
-写完**先给人确认**，人说可以再打 `s:ready`。`s:ready` 一打，下一轮 `cycle.sh` 就会派工。
-一次只放 1 个 issue 进 `s:ready`——这套流程还在练熟阶段，别急着并行。
+### 三态：`s:triage` → `s:queued` → `s:ready`
+
+| 状态 | 意思 | 谁动它 |
+|---|---|---|
+| `s:triage` | 还没写口径 | 协调器写好口径；循环**不碰** |
+| `s:queued` | 口径已写好，排队等派 | 协调器写好**先给人确认**，人说可以就转 `s:queued`（`agentctl set --issue N --to queued`） |
+| `s:ready` | 可派工 | **循环自动放行**，协调器不再手动转 `s:ready` |
+
+每轮 `cycle.sh` 派工前（`== 3a 排队放行 ==`）：`s:ready` 为空、活着的实现/返工 worker 少于 `CYCLE_LANES` 时，
+按顺序（`prio:high` 优先，其余按 issue 号从小到大）把第一张能派的 `s:queued` 转成 `s:ready`，日志写
+「从排队里放行 #N（排第 1，前面跳过 #M：…）」，紧接着同一轮就派工。「一次只放 1 张 `s:ready`」由脚本保证。
+
+跳过的不卡后面的，并写进 `~/.orca/versekit-state/cycle-owner-alert.txt`（`[排队跳过] #N：原因`），开场要读：
+依赖没完成（正文写 `**依赖**：#X`，#X 还没 `s:done`/关闭）、口径里有 ACCEPTANCE.md 查不到的 id、
+涉及核心文件却缺 ACC-arch-09（与 `agentctl tick` 的「补口径」同一套检查）。
+`prio:high` label 只影响排队顺序。想让某张单先做，打 `prio:high`，不要手动转 `s:ready` 插队。
 
 ## 5.1 选哪个模型（省 Claude 额度）
 

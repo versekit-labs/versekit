@@ -330,7 +330,7 @@ test('ACC-harness-model-05：cycle.sh --dry-run --no-consume 不改 issue 状态
   const result = fx.run({ dry: true });
   assert.ok(result.stdout.includes(`[dry-run] 会派返工 #${ISSUE}`));
   assert.deepEqual(result.events.filter((event) => event.startsWith('agentctl ')), [
-    'agentctl tick', 'agentctl merge --pending --dry-run', 'agentctl claim --role engineer --dry-run --json',
+    'agentctl tick', 'agentctl merge --pending --dry-run', 'agentctl release-queued --free-lanes 3 --json --dry-run', 'agentctl claim --role engineer --dry-run --json',
     'agentctl claim --role rework --dry-run --json', 'agentctl claim --role acceptance --json',
   ]);
   assert.deepEqual(dispatchEvents(result.events), []);
