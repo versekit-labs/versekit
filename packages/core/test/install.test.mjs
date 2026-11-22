@@ -26,6 +26,13 @@ const PINNED = /VERSEKIT_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INS
 const NODE_VER = PINNED?.[1] ?? "0.0.0";
 const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
 
+// 假 lark-cli：版本号取自 install.sh 里写死的默认值，--version 输出和真的一样的格式。
+const LARK_PIN = /VERSEKIT_LARK_VERSION:-(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
+const LARK_VER = LARK_PIN?.[1] ?? "0.0.0";
+const LARK_FILE = `lark-cli-${LARK_VER}-${OS}-${CPU === "arm64" ? "arm64" : "amd64"}.tar.gz`;
+let breakLarkSum = false;
+let larkArchiveHits = 0;
+
 const homes = [];
 let server;
 let base;
@@ -67,6 +74,14 @@ function buildApp(name, version) {
   tar(["-czf", join(WORK, `${name}.tar.gz`), "-C", join(WORK, `${name}-src`), "versekit-main"]);
 }
 
+function buildLark() {
+  const dir = join(WORK, "lark-pkg");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "lark-cli"), `#!/bin/sh\n[ "$1" = "--version" ] && { echo "lark-cli version ${LARK_VER}"; exit 0; }\necho lark-fake\n`);
+  chmodSync(join(dir, "lark-cli"), 0o755);
+  tar(["-czf", join(WORK, LARK_FILE), "-C", dir, "lark-cli"]);
+}
+
 function buildBiliup() {
   const dir = join(WORK, "biliup-pkg", `biliupR-v0.0.0-${BILIUP_PLAT}`);
   mkdirSync(dir, { recursive: true });
@@ -80,6 +95,7 @@ before(async () => {
   buildApp("app-1", "0.1.0");
   buildApp("app-2", "9.9.9");
   buildBiliup();
+  buildLark();
   server = createServer((req, res) => {
     const url = req.url ?? "";
     if (url === "/node/SHASUMS256.txt") {
@@ -87,7 +103,13 @@ before(async () => {
       res.end(`${sum}  ${NODE_FILE}\n${"1".repeat(64)}  node-v${NODE_VER}-win-x64.zip\n`);
     } else if (url === `/node/${NODE_FILE}`) res.end(readFileSync(join(WORK, NODE_FILE)));
     else if (url === "/app.tar.gz") res.end(readFileSync(join(WORK, `${appTarball}.tar.gz`)));
-    else if (url === "/biliup.tar.gz") res.end(readFileSync(join(WORK, "biliup.tar.gz")));
+    else if (url === "/lark/checksums.txt") {
+      const sum = breakLarkSum ? "0".repeat(64) : sha(join(WORK, LARK_FILE));
+      res.end(`${sum}  ${LARK_FILE}\n${"2".repeat(64)}  lark-cli-${LARK_VER}-windows-amd64.zip\n`);
+    } else if (url === `/lark/${LARK_FILE}`) {
+      larkArchiveHits += 1;
+      res.end(readFileSync(join(WORK, LARK_FILE)));
+    } else if (url === "/biliup.tar.gz") res.end(readFileSync(join(WORK, "biliup.tar.gz")));
     else {
       res.statusCode = 404;
       res.end("no");
@@ -122,6 +144,7 @@ async function newHome(extra = {}) {
     VERSEKIT_NODE_URL: `${base}/node`,
     VERSEKIT_APP_URL: `${base}/app.tar.gz`,
     VERSEKIT_BILIUP_URL: `${base}/biliup.tar.gz`,
+    VERSEKIT_LARK_URL: `${base}/lark`,
     ...extra,
   };
   delete env.VK_HOME;
@@ -168,7 +191,7 @@ test("ACC-install-01/02/05：一条命令装好——私有 Node、程序、bili
   assert.equal(lines.at(-1), `装好了，控制台地址 http://127.0.0.1:${main.port}，终端可以关了`, r.stderr);
 
   const prefix = join(main.home, ".versekit");
-  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "bin/biliup", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
+  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "bin/biliup", "bin/lark-cli", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
   assert.ok(existsSync(join(main.home, ".local/state/versekit/vk.db")), "vk init 应该建库");
   assert.equal(await status(main.port), 200);
 
@@ -263,6 +286,53 @@ test("ACC-install-03/05：校验不过——非 0 退出、说清哪一步、不
   assert.ok(!existsSync(join(h.home, ".local/state/versekit/service.json")));
   assert.equal(await status(h.port), null);
   assert.ok(!existsSync(join(h.home, ".zshrc")), "失败了就不该改 shell 配置");
+});
+
+test("ACC-v3-feishu-08：首次安装装上飞书组件 lark-cli（校验过、可执行、版本对）；重复运行跳过下载；系统里的 lark-cli 不动", { timeout: 180000 }, async () => {
+  assert.ok(LARK_PIN, "install.sh 里要有写死的 VERSEKIT_LARK_VERSION 默认值");
+  // 系统 PATH 里放一个「已有的」lark-cli，装完它必须原样还在。
+  const sysBin = join(WORK, "sysbin");
+  mkdirSync(sysBin, { recursive: true });
+  writeFileSync(join(sysBin, "lark-cli"), "#!/bin/sh\necho system-lark\n");
+  chmodSync(join(sysBin, "lark-cli"), 0o755);
+  const h = await newHome({ PATH: `${sysBin}:${process.env.PATH}` });
+  const own = join(h.home, ".versekit", "bin", "lark-cli");
+  const before = larkArchiveHits;
+  const first = await install(h);
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.equal(larkArchiveHits, before + 1, "首次应下载一次");
+  assert.ok(existsSync(own), "lark-cli 装在 versekit 目录下");
+  const v = spawnSync(own, ["--version"], { encoding: "utf8" });
+  assert.equal(v.stdout.trim(), `lark-cli version ${LARK_VER}`);
+  assert.equal(readFileSync(join(sysBin, "lark-cli"), "utf8"), "#!/bin/sh\necho system-lark\n", "系统里已有的 lark-cli 不动");
+
+  const again = await install(h);
+  assert.equal(again.code, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /飞书组件 lark-cli \S+ 已经在了，跳过下载/);
+  assert.equal(larkArchiveHits, before + 1, "重复运行不该再下载");
+  assert.ok(existsSync(own));
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+});
+
+test("ACC-v3-feishu-08：lark-cli 校验不过——不拖垮安装：versekit 照常装好，说清原因和补装办法，不留飞书组件", { timeout: 120000 }, async () => {
+  const h = await newHome();
+  breakLarkSum = true;
+  const r = await install(h);
+  breakLarkSum = false;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout + r.stderr, /飞书组件没装上/);
+  assert.match(r.stderr, /校验不通过/);
+  assert.match(r.stderr, /重新运行这一行安装命令/);
+  assert.ok(!existsSync(join(h.home, ".versekit/bin/lark-cli")), "校验不过不能装上");
+  assert.ok(existsSync(join(h.home, ".versekit/app")), "versekit 本体照常装上");
+  assert.ok(existsSync(join(h.home, ".versekit/bin/vk")));
+  assert.notEqual(await status(h.port), null, "后台服务在跑");
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+  // 网络恢复后重新运行：补装上
+  const again = await install(h);
+  assert.equal(again.code, 0, again.stderr);
+  assert.ok(existsSync(join(h.home, ".versekit/bin/lark-cli")), "重新运行后补装");
+  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
 });
 
 test("ACC-install-03：下载失败——退出码非 0 并指出是哪一步", { timeout: 60000 }, async () => {

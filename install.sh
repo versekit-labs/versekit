@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash
 #
-# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → vk init → 后台服务 → 打开控制台。
+# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → 飞书组件 lark-cli → vk init → 后台服务 → 打开控制台。
 # 全程不用 sudo、不问问题。再运行一次就是升级：数据库、配置、凭证、账号、浏览器登录都保留。
 #
 # 可用环境变量覆盖（开发机上验证用）：
@@ -15,6 +15,8 @@
 #   VERSEKIT_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
 #   VERSEKIT_APP_URL         versekit tarball 地址   VERSEKIT_APP_SHA256 可选校验
 #   VERSEKIT_BILIUP_URL      biliup-rs 压缩包地址    VERSEKIT_BILIUP_VERSION 默认 v0.2.4
+#   VERSEKIT_LARK_VERSION    飞书组件 lark-cli 版本（写死）   默认 1.0.97
+#   VERSEKIT_LARK_URL        lark-cli 下载目录（含 checksums.txt）  默认 https://github.com/larksuite/cli/releases/download/v<版本>
 #   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
 #   VERSEKIT_NO_OPEN=1       不自动打开浏览器
 #   VERSEKIT_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
@@ -40,6 +42,10 @@ main() {
   local NODE_URL="${VERSEKIT_NODE_URL:-https://nodejs.org/dist/$NODE_VERSION}"
   local APP_URL="${VERSEKIT_APP_URL:-https://codeload.github.com/versekit-labs/versekit/tar.gz/refs/heads/main}"
   local BILIUP_VERSION="${VERSEKIT_BILIUP_VERSION:-v0.2.4}"
+  # lark-cli：飞书官方命令行（larksuite/cli）。官方发布渠道是 GitHub Releases，每个版本附 checksums.txt
+  # （与 npm 包 @larksuite/cli 里自带的那份逐字相同），按它校验。版本写死，升级时改这一行并过测试。
+  local LARK_VERSION="${VERSEKIT_LARK_VERSION:-1.0.97}"
+  local LARK_URL="${VERSEKIT_LARK_URL:-https://github.com/larksuite/cli/releases/download/v$LARK_VERSION}"
   local STEP="准备"
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/versekit-install.XXXXXX")"
   SWAPPED=0 HAD_APP=0 SERVICE_TOUCHED=0 DONE=0 OLD_PORT=""
@@ -91,6 +97,7 @@ main() {
     *) die "不支持这个 CPU：$(uname -m)" "目前只支持 arm64 与 x86_64" ;;
   esac
   NODE_PLAT="$OS-$ARCH"
+  local LARK_PLAT="$OS-amd64"; [ "$ARCH" = arm64 ] && LARK_PLAT="$OS-arm64"
   if [ "$OS" = darwin ]; then
     [ "$ARCH" = arm64 ] && BILIUP_PLAT="aarch64-macos" || BILIUP_PLAT="x86_64-macos"
   else
@@ -189,6 +196,36 @@ main() {
   BILIUP_BIN="$(find "$TMP/biliup-x" -type f -name biliup | head -1)"
   [ -n "$BILIUP_BIN" ] || die "biliup 压缩包里没有 biliup 可执行文件" "确认 VERSEKIT_BILIUP_URL 指向 biliup-rs 的发布包"
 
+  # ------------------------------------------------------------ 3b. 飞书组件 lark-cli
+  # 装在 $PREFIX/bin（不碰系统里已有的 lark-cli）。已经是这个版本就跳过；先下载校验、暂存，换程序时才落盘。
+  # 飞书组件是可选件：下载/校验/解压任何一步失败都只记下原因、跳过它，不拖垮 versekit 本体的安装；
+  # 装完会在末尾说清原因和怎么补装（重新运行这一行安装命令即可），系统页「通知」也会提示。
+  local LARK_FILE="lark-cli-$LARK_VERSION-$LARK_PLAT.tar.gz" LARK_STAGED="" HAVE_LARK="" LARK_FAIL="" LARK_WANT LARK_GOT
+  if [ -x "$PREFIX/bin/lark-cli" ]; then HAVE_LARK="$("$PREFIX/bin/lark-cli" --version 2>/dev/null || true)"; fi
+  lark_stage() { # 成功返回 0 并设 LARK_STAGED；失败返回 1 并设 LARK_FAIL
+    curl -fsSL --retry 2 --connect-timeout 15 -o "$TMP/lark-checksums.txt" "$LARK_URL/checksums.txt" </dev/null ||
+      { LARK_FAIL="下载失败：$LARK_URL/checksums.txt"; return 1; }
+    grep -q "  $LARK_FILE\$" "$TMP/lark-checksums.txt" ||
+      { LARK_FAIL="${LARK_URL}/checksums.txt 里没有 ${LARK_FILE}"; return 1; }
+    curl -fsSL --retry 2 --connect-timeout 15 -o "$TMP/$LARK_FILE" "$LARK_URL/$LARK_FILE" </dev/null ||
+      { LARK_FAIL="下载失败：$LARK_URL/$LARK_FILE"; return 1; }
+    LARK_WANT="$(awk -v f="$LARK_FILE" '$2==f {print $1; exit}' "$TMP/lark-checksums.txt")"
+    LARK_GOT="$(sha_of "$TMP/$LARK_FILE")"
+    [ "$LARK_WANT" = "$LARK_GOT" ] ||
+      { LARK_FAIL="校验不通过（官方 ${LARK_WANT}，实际 ${LARK_GOT}），多半是下载被截断或被劫持"; return 1; }
+    mkdir -p "$TMP/lark-x"
+    tar -xzf "$TMP/$LARK_FILE" -C "$TMP/lark-x" || { LARK_FAIL="压缩包解压失败"; return 1; }
+    LARK_STAGED="$(find "$TMP/lark-x" -type f -name lark-cli | head -1)"
+    [ -n "$LARK_STAGED" ] || { LARK_FAIL="压缩包里没有 lark-cli 可执行文件"; return 1; }
+  }
+  case "$HAVE_LARK" in
+    *"version $LARK_VERSION"|*" $LARK_VERSION") say "飞书组件 lark-cli ${LARK_VERSION} 已经在了，跳过下载" ;;
+    *)
+      say "下载飞书组件 lark-cli ${LARK_VERSION}（约 10MB，装在 ${PREFIX}/bin，接飞书要用）"
+      lark_stage || { LARK_STAGED=""; say "飞书组件没装上（${LARK_FAIL}），先跳过，不影响 versekit 其余部分"; }
+      ;;
+  esac
+
   # ------------------------------------------------------------ 换上新程序
   STEP="安装程序文件"
   # 下载和校验都过了才动已安装的东西：任何一步失败都不会破坏现有版本。
@@ -196,6 +233,7 @@ main() {
   if [ "$NODE_STAGED" = 1 ]; then rm -rf "$PREFIX/node"; mv "$TMP/node-x" "$PREFIX/node"; fi
   local NODE="$PREFIX/node/bin/node"
   cp "$BILIUP_BIN" "$PREFIX/bin/biliup.new" && chmod +x "$PREFIX/bin/biliup.new" && mv "$PREFIX/bin/biliup.new" "$PREFIX/bin/biliup"
+  if [ -n "$LARK_STAGED" ]; then cp "$LARK_STAGED" "$PREFIX/bin/lark-cli.new" && chmod +x "$PREFIX/bin/lark-cli.new" && mv "$PREFIX/bin/lark-cli.new" "$PREFIX/bin/lark-cli"; fi
   rm -rf "$PREFIX/app.prev"
   if [ "$HAD_APP" = 1 ]; then mv "$PREFIX/app" "$PREFIX/app.prev"; elif [ -d "$PREFIX/app" ]; then rm -rf "$PREFIX/app"; fi
   mv "$TMP/app-x" "$PREFIX/app"
@@ -296,6 +334,9 @@ EOF
   elif [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_LABEL} → ${NEW_LABEL}（数据、账号、登录都保留）"
   else say "已安装 ${NEW_LABEL}"; fi
   say "新开的终端里可以直接用 vk；日常管理：vk service status | restart | stop | uninstall"
+  if [ -n "$LARK_FAIL" ]; then
+    printf '⚠ 飞书组件没装上：%s\n  versekit 其余部分已装好；要接飞书，网络通了以后重新运行这一行安装命令即可（可以反复运行，数据、账号、登录都保留）。\n' "$LARK_FAIL" >&2
+  fi
   printf '装好了，控制台地址 %s，终端可以关了\n' "$URL"
 }
 

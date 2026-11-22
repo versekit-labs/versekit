@@ -667,7 +667,7 @@
     const note = ui.fsNote ? `<div class="note bad" role="alert" style="margin-bottom:12px">${esc(ui.fsNote)}</div>` : "";
     if (s === "missing") {
       return head + note + `<div class="tblwrap"><table><tbody><tr><td><span class="st bad">发布机上还没有飞书组件</span>` +
-        `<div class="sub">接飞书要靠发布机上的飞书组件，它是装发布机时一起装的；这台发布机上没找到，所以现在接不了。要你确认的先在网页的「今天」里做，不会漏。</div></td>` +
+        `<div class="sub">接飞书要靠发布机上的飞书组件，它是装发布机时一起装的；这台发布机上没找到，所以现在接不了。补装办法：在发布机上重新运行安装页上的那一行安装命令（可以反复运行，数据、账号、登录都保留），装好后回到这里刷新。要你确认的先在网页的「今天」里做，不会漏。</div></td>` +
         `<td class="n"><span class="acts">${B('data-fs="off"', "不用飞书", "link")}${B("disabled", "接飞书", "btn pri", ' title="这台发布机上没有飞书组件，接不了"')}</span></td></tr></tbody></table></div>` + link;
     }
     if (s === "none" || s === "off") {
