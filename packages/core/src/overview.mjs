@@ -10,7 +10,7 @@
 // 一个作品发三端 = 1 个作品 + 3 条平台发布，这两个数不能互相替代。
 
 import { open } from "./index.mjs";
-import { currentGroup, listAccounts, listGroups, deriveStatus, statusState, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
+import { getBinding, getFeishuSettings, getFeishuDelivery, currentGroup, listAccounts, listGroups, deriveStatus, statusState, showWork, PER_ITEM_PLATFORMS } from "./store.mjs";
 import { withBaselines } from "./baseline.mjs";
 import { LOGIN_TRACKED } from "./scheduler.mjs";
 import { pausedAccountIds, view as egressView } from "./egress.mjs";
@@ -533,6 +533,22 @@ const baseItem = (r) => ({
  * 「现在要我做什么」：四块 + 其他组的待办数。只读，不改任何状态；数字在这里算好，Web 和卡片只渲染。
  * 平台数字不跨平台相加：results 每行是一条平台稿自己的 24 小时播放，倍数只和同一账号比。
  */
+/**
+ * 要你确认的现在能不能到飞书（#311）：到不了时「今天」照常列出，只是在上面写一句为什么只在网页上。
+ * via=feishu 才会发卡片；why：off 不用飞书 / failed 卡片发不出去 / confirm_off 关了「要你确认的」。
+ * 没接过飞书（none）不写：那本来就是网页上做。
+ */
+export function notifyRoute() {
+  const settings = getFeishuSettings();
+  const delivery = getFeishuDelivery();
+  const bound = Boolean(getBinding("feishu"));
+  if (settings.off) return { via: "web", why: "off", reason: null };
+  if (!bound) return { via: "web", why: "none", reason: null };
+  if (delivery.failure) return { via: "web", why: "failed", reason: delivery.failure.reason };
+  if (!settings.kinds.confirm) return { via: "web", why: "confirm_off", reason: null };
+  return { via: "feishu", why: null, reason: null };
+}
+
 export function buildToday({ groupId = null, now = Date.now() } = {}) {
   const conn = open();
   const scope = groupId ? listGroups().find((g) => g.id === groupId) : null;
@@ -605,6 +621,7 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
     awaiting,
     problems,
     relogin,
+    notify: notifyRoute(),
     // 出口位置变了：「今天」最上面（确认面板之上）的待办。paused = 暂停发布的账号；没变时 paused 为空。
     egress: {
       paused: where.paused,

@@ -179,10 +179,18 @@
         `<div class="a"><a class="btn" href="system.html#tab=devices">去处理</a></div></div></div>`
       : "";
 
+    // 飞书关了、没送到、或关了「要你确认的」：确认只能在网页上做。写一句，别让人干等手机上的卡片。
+    const nt = data.notify;
+    const notifyWhy = { off: "你选了不用飞书", failed: `飞书卡片发不出去（${nt?.reason ?? "原因见系统页"}）`, confirm_off: "「要你确认的」没有发往飞书" }[nt?.why];
+    const notifyNote = notifyWhy && awaiting.length
+      ? `<div class="sub" data-notify-note style="padding:0 0 10px">${esc(notifyWhy)}，要你确认的只在这里。<a class="link" href="system.html#tab=notify">去看通知</a></div>`
+      : "";
+
     main.innerHTML =
       `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
       (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/system#groups">先建一个账号组 →</a></div>`) +
       egressTodo +
+      notifyNote +
       focus +
       `<div class="others" ${more || badOnes || relogin ? "" : "hidden"}>${relogin}${more}${badOnes}</div>` +
       groupRows +

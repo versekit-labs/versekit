@@ -194,7 +194,8 @@ test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布
   // 系统页：墨色只出现在「这一步要你做的事」上（短信的发验证码和登录、窗口登录的我登录好了、填凭证、接中转），
   // 而且这些都在各自的行内展开里，同一行同时只有一步；Connect TikTok、再试一次、现在更新都是描边
   const sysInk = [...system.matchAll(/"([^"]{1,12})", "btn pri"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(sysInk, ["保存", "发验证码", "我登录好了", "登录", "接入"].sort());
+  // 通知分段（#311）：「接飞书」「去飞书里开通」也是各自那一步唯一要你做的事。
+  assert.deepEqual(sysInk, ["保存", "发验证码", "我登录好了", "登录", "接入", "接飞书", "去飞书里开通"].sort());
   assert.match(system, /connected\(a\) \? "link" : "btn"/);
   assert.match(system, /<button class="btn" data-retry=/);
   // 已发布的行，时间列是发布时间；竖版成片视频框 360px

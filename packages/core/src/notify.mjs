@@ -5,7 +5,7 @@
 //   · 投递幂等：同一个事件不会发两次卡片（delivery 行 + event_id 唯一）
 //   · 动作幂等：同一张卡点两次只会执行一次（command_audit.idempotency_key 唯一）
 
-import { open, newId } from "./index.mjs";
+import { open, newId, emit } from "./index.mjs";
 import { findCommand, findCardView, parseArgs } from "./commands.mjs";
 import {
   buildEventCard,
@@ -21,9 +21,11 @@ import {
   platformLabel,
   resultCard,
   CARD_TTL_MS,
+  cardKindOf,
 } from "./cards.mjs";
 import { getPublishRow } from "./publish-flow.mjs";
 import { approvalLink } from "./approval.mjs";
+import { getFeishuSettings, getFeishuDelivery, patchFeishuDelivery } from "./store.mjs";
 import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups, effectiveCopy, effectiveTitle } from "./store.mjs";
 import { planRules, takenTimes } from "./plan-rules.mjs";
 import { basename } from "node:path";
@@ -47,6 +49,9 @@ function parsePayload(row) {
  */
 export async function deliverPending({ channel, binding, log = () => {}, now = Date.now(), limit = 20 } = {}) {
   if (!binding?.external_user_id) return { sent: 0, skipped: "unbound" };
+  // 「不用飞书」：一张都不发。要你确认的只在网页的「今天」里，没有人确认，一条都不会发（ACC-v3-feishu-04）。
+  const settings = getFeishuSettings();
+  if (settings.off) return { sent: 0, skipped: "off" };
   const conn = open();
   const rows = conn
     .prepare(
@@ -79,6 +84,11 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
       card = buildEventCard(event, { publish, now, approvalUrl });
     }
     if (!card) continue; // 内部 trace，不该打扰人
+    // 这一类在系统页「通知」里关了：记成已跳过（重新打开后不会把旧的一股脑补发），不发卡片。
+    if (!settings.kinds[cardKindOf(event.type)]) {
+      markDelivery(conn, event.id, channel.channel, "skipped", null, now);
+      continue;
+    }
 
     try {
       const { messageId } = await channel.send({
@@ -87,6 +97,7 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
         idempotencyKey: `event:${event.id}`.slice(0, 50),
       });
       markDelivery(conn, event.id, channel.channel, "sent", messageId ?? null, now);
+      reportCardSent(now);
       sent += 1;
     } catch (err) {
       const existing = conn.prepare("SELECT id, attempted FROM delivery WHERE event_id=? AND channel=?").get(event.id, channel.channel);
@@ -97,10 +108,62 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
           .prepare("INSERT INTO delivery (id, event_id, channel, state, attempted, sent_at) VALUES (?,?,?,'failed',1,?)")
           .run(newId("del"), event.id, channel.channel, now);
       }
+      reportCardFailed(err, { eventType: event.type, now });
       log(`[notify] 投递失败 ${event.type}: ${err.message}`);
     }
   }
   return { sent, considered: rows.length };
+}
+
+/** 发送失败的原因翻成人话；原文可能带长串标识，截短并去掉像密钥的长串。 */
+export function humanizeCardError(message = "") {
+  const text = String(message);
+  if (/ENOENT|没有找到 lark-cli|spawn .*lark/i.test(text)) return "发布机上的飞书组件找不到了";
+  if (/timeout|超时|ETIMEDOUT|ECONN|ENOTFOUND|network|fetch failed|网络/i.test(text)) return "发布机连不上飞书，可能是网络断了";
+  if (/disabled|deactivat|inactive|removed|not (?:exist|found)|已停用|被停用|已删除|99991400|230001|230002/i.test(text)) return "飞书里的机器人被停用或删除了";
+  if (/token|unauthori[sz]ed|授权|expired|99991663|99991668|99991661/i.test(text)) return "飞书授权失效了";
+  if (/permission|scope|权限|99991672|99991679/i.test(text)) return "飞书没有给机器人发消息的权限";
+  const brief = text.replace(/[A-Za-z0-9_-]{32,}/g, "…").replace(/\s+/g, " ").trim().slice(0, 80);
+  return brief ? `飞书拒收了这张卡片：${brief}` : "飞书没有收下这张卡片";
+}
+
+/**
+ * 卡片没送到：记下原因，系统页「通知」据此变红、分段计数加一；留一条事件，不静默（ACC-v3-feishu-05）。
+ * 事件只在「刚开始失败」那一下发一次，连着失败不刷屏。
+ */
+export function reportCardFailed(err, { eventType = null, now = Date.now() } = {}) {
+  const prev = getFeishuDelivery();
+  const reason = humanizeCardError(err?.message ?? err);
+  patchFeishuDelivery({ failure: { at: now, reason, eventType } });
+  if (!prev.failure) {
+    emit({ type: "channel.card_failed", severity: "warn", payload: { code: "card_send_failed", message: reason, eventType }, dedupeKey: `channel.card_failed:${now}` });
+  }
+  return reason;
+}
+
+/** 送到一张就算好了：清掉「发不出去」。 */
+export function reportCardSent(now = Date.now()) {
+  const prev = getFeishuDelivery();
+  patchFeishuDelivery({ lastOkAt: now, failure: null });
+  return Boolean(prev.failure);
+}
+
+/**
+ * 「通知」分段现在是哪个状态（和设计稿 fs= 对齐，外加 missing）：
+ *   missing 发布机上没有飞书组件 / off 不用飞书 / none 没接 / qr 等你扫码（建应用或授权）/
+ *   sub 差一步：让卡片上的按钮能点 / ok 接好了 / bad 卡片发不出去
+ * 纯函数：输入全是事实，页面、命令行、测试读同一份结论。
+ */
+export function feishuState({ installed = true, skipped = false, creating = false, authorizing = false, configured = false, authorized = false, bound = false, subscribed = null, failure = null } = {}) {
+  if (skipped && !bound) return "off";
+  if (!installed) return "missing";
+  // 重新接的时候（卡片发不出去后点「重新接」）：正在扫码就是扫码，不能还停在红色上。
+  if (creating || authorizing) return "qr";
+  if (bound && failure) return "bad";
+  // 应用建好了、还没配对：授权这一步接着走（页面自己发起），所以仍算「等你扫码」。
+  if (!bound) return configured ? "qr" : "none";
+  if (subscribed === true) return "ok";
+  return "sub";
 }
 
 function markDelivery(conn, eventId, channelName, state, messageId, now) {

@@ -733,6 +733,29 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "channel.bind": ({ openId }) => store.bindChannel("feishu", openId),
 
+    // 往飞书发哪几类。不带参数只返回现在的设置；关掉一类后那一类不再发卡片，确认只能在网页上做。
+    "channel.settings": ({ confirm, issue, daily } = {}) => {
+      const patch = {};
+      for (const [k, v] of Object.entries({ confirm, issue, daily })) if (v !== undefined && v !== null) patch[k] = Boolean(v);
+      if (!Object.keys(patch).length) return { kinds: store.getFeishuSettings().kinds };
+      const before = store.getFeishuSettings().kinds;
+      const next = store.patchFeishuSettings({ kinds: patch });
+      emit({ type: "channel.settings_changed", payload: { channel: "feishu", from: before, to: next.kinds }, dedupeKey: `channel.settings_changed:${Date.now()}` });
+      return {
+        kinds: next.kinds,
+        next: next.kinds.confirm ? null : "「要你确认的」不再发飞书：确认只能在网页的「今天」里做，没有人确认，一条都不会发",
+      };
+    },
+
+    // 断开：删配对，并记成「不用飞书」。飞书里的机器人不动，用户自己决定删不删。
+    "channel.unbind": () => {
+      const removed = store.unbindChannel("feishu");
+      store.patchFeishuSettings({ off: true, testSentAt: null });
+      store.patchFeishuDelivery({ failure: null });
+      emit({ type: "channel.disconnected", payload: { channel: "feishu", removed: removed.removed }, dedupeKey: `channel.disconnected:${Date.now()}` });
+      return { ...removed, next: "已断开；要你确认的只出现在网页的「今天」里" };
+    },
+
     "setup.status": async () => {
       const binding = store.getBinding("feishu");
       // 接入进度是「当前账号组」的进度：账号步骤只数本组账号，否则空组会借用别组的账号显示完成。

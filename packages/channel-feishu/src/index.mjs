@@ -103,6 +103,12 @@ let createState = { running: false, url: null, qr: null, startedAt: 0, child: nu
 export default {
   channel: "feishu",
 
+  /** 发布机上有没有飞书组件（lark-cli）。没有就一步都走不通，页面据此写明原因，不让人去敲命令。 */
+  installed() {
+    const probe = probeLark(["--version"]);
+    return !(probe.error?.code === "ENOENT");
+  },
+
   /** null = 可用；否则一句人能照做的话。这条会被账号墙与 doctor 直接显示。 */
   ready() {
     const probe = probeLark(["--version"]);
@@ -186,6 +192,7 @@ export default {
           reject(new Error(`创建应用进程退出了（code ${code}）：${buffer.slice(-200)}`));
         }
         createState.running = false;
+        createState.exitCode = code;
       });
     });
 
@@ -223,6 +230,8 @@ export default {
       qrError: createState.qrError,
       configured: info.exists,
       appId: info.appId,
+      // 扫码这一步没走完就退出了（二维码过期、在飞书里取消）：页面据此说「没建成」，不是悄悄回到「还没接」。
+      error: !createState.running && createState.url && !info.exists && createState.exitCode !== undefined ? "二维码过期了，或者在飞书里取消了，没有建成" : null,
     };
   },
 
@@ -240,7 +249,7 @@ export default {
   },
 
   /** 设备码授权第一步：拿验证地址，交给用户去浏览器确认。 */
-  async authStart() {
+  async authStart({ onDone = null } = {}) {
     if (authState.running) return { ...authState, already: true };
     const json = await lark(["auth", "login", "--no-wait", "--json"]);
     const data = json.data ?? json;
@@ -254,9 +263,15 @@ export default {
     // 页面只负责轮询状态，不再需要「我已完成授权」按钮。
     if (deviceCode) {
       this.authFinish(deviceCode)
-        .then(() => {
+        .then(async () => {
           authState.running = false;
           authState.completed = true;
+          // 授权一完成就由调用方接着配对、探订阅、发测试卡片：页面不需要「我弄好了」。
+          try {
+            await onDone?.();
+          } catch (err) {
+            authState.error = err.message;
+          }
         })
         .catch((err) => {
           authState.running = false;
