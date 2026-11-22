@@ -33,9 +33,45 @@ function runWithInput(args, input) {
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (err += c));
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(String(err || out).trim().slice(0, 500)))));
+    child.on("close", (code) => (code === 0 ? resolve(out) : (logRaw("profile add", err || out), reject(new Error(explainLarkFailure(err || out))))));
     child.stdin.end(input);
   });
+}
+
+/**
+ * 把 lark-cli 的原始输出变成一句人话。
+ * 不在终端里跑时它先往 stderr 打一大段 `[AI agent] ...` 说明和「等待用户授权...」，
+ * 真正的错误 JSON 跟在后面；这里只取 `{"ok":false,"error":{"message":...}}` 的 message。
+ * 授权码作废/过期、拒绝翻成人话，其余照原文，最多两行。完整原文只写日志，不进页面。
+ */
+export function explainLarkFailure(raw) {
+  const text = String(raw ?? "");
+  let message = null;
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    try {
+      const j = JSON.parse(t);
+      if (j && j.ok === false) message = j.error?.message ?? (typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? j));
+    } catch {
+      /* 不是 JSON 行 */
+    }
+  }
+  if (message == null) {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const waitAt = lines.findLastIndex((l) => /等待用户授权/.test(l));
+    const rest = (waitAt >= 0 ? lines.slice(waitAt + 1) : lines).filter((l) => !/^\[AI agent\]/.test(l));
+    message = rest.slice(-2).join(" ");
+  }
+  const m = String(message || "").trim();
+  if (/device_code.*(invalid|expired)|(invalid|expired).*device_code|expired_token|\bexpired\b/i.test(m)) return "二维码过期了，点「重新来」。";
+  if (/access_denied|denied|拒绝/i.test(m)) return "你在飞书里点了拒绝。点「重新来」可以再扫一次。";
+  const clipped = m.split(/\r?\n/).slice(0, 2).join(" ").slice(0, 160);
+  return clipped || "飞书那边没有给出原因。点「重新来」再试一次。";
+}
+
+function logRaw(what, raw) {
+  console.error(`[feishu] ${what} 原始输出：${String(raw ?? "").trim()}`);
 }
 
 function probeLark(args) {
@@ -85,17 +121,22 @@ async function lark(args, { timeout = LARK_TIMEOUT } = {}) {
   try {
     ({ stdout } = await exec(bin(), args, { timeout, maxBuffer: 16 << 20, encoding: "utf8" }));
   } catch (err) {
-    // execFile 的 rejection 只有一句 "Command failed"；真正的原因在 stderr 里。
-    const detail = String(err.stderr ?? err.message ?? "").trim().slice(0, 500);
-    throw new Error(`lark-cli ${args.slice(0, 2).join(" ")} 失败：${detail}`);
+    // execFile 的 rejection 只有一句 "Command failed"；真正的原因在 stderr（有时在 stdout）里。
+    const raw = `${err.stderr ?? ""}\n${err.stdout ?? ""}`.trim() || String(err.message ?? "");
+    logRaw(`lark-cli ${args.slice(0, 2).join(" ")}`, raw);
+    throw new Error(explainLarkFailure(raw));
   }
   let json;
   try {
     json = JSON.parse(stdout);
   } catch {
-    throw new Error(`lark-cli ${args.slice(0, 2).join(" ")} 返回了非 JSON：${stdout.slice(0, 200)}`);
+    logRaw(`lark-cli ${args.slice(0, 2).join(" ")}`, stdout);
+    throw new Error(`lark-cli ${args.slice(0, 2).join(" ")} 返回了非 JSON`);
   }
-  if (json.ok === false) throw new Error(json.error?.message ?? JSON.stringify(json.error ?? json).slice(0, 300));
+  if (json.ok === false) {
+    logRaw(`lark-cli ${args.slice(0, 2).join(" ")}`, stdout);
+    throw new Error(explainLarkFailure(stdout));
+  }
   return json;
 }
 
@@ -170,10 +211,11 @@ export default {
     // 用系统自带的 script 分配一个 pty，再照常解析输出。
     const child =
       process.platform === "linux"
-        ? spawn("script", ["-q", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
+        ? spawn("script", ["-q", "-e", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
         : spawn("script", ["-q", "/dev/null", bin(), "config", "init", "--new", "--name", profile()], { stdio: ["ignore", "pipe", "pipe"] });
-    createState = { running: true, url: null, qr: null, qrError: null, startedAt: Date.now(), child };
+    createState = { running: true, url: null, qr: null, qrError: null, error: null, startedAt: Date.now(), child };
     let buffer = "";
+    let tail = "";
 
     const url = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("30 秒内没有拿到创建应用的链接")), 30e3);
@@ -183,6 +225,7 @@ export default {
         if (!hit) return;
         clearTimeout(timer);
         child.stdout.off("data", onData);
+        createState.url = hit; // 同步记下，close 处理器才分得清「拿到链接后才失败」
         resolve(hit);
       };
       child.stdout.on("data", onData);
@@ -194,15 +237,21 @@ export default {
       child.on("close", (code) => {
         if (!createState.url) {
           clearTimeout(timer);
-          reject(new Error(`创建应用进程退出了（code ${code}）：${buffer.slice(-200)}`));
+          logRaw("config init", buffer);
+          reject(new Error(`创建应用没有成功：${explainLarkFailure(buffer)}`));
         }
         createState.running = false;
         createState.exitCode = code;
+        if (code !== 0 && createState.url) {
+          logRaw("config init", tail || buffer);
+          createState.error = explainLarkFailure(tail || buffer);
+          createState.qr = null;
+          createState.url = null;
+        }
       });
     });
 
     // 二维码只是锦上添花：生成失败也要把链接给出去，否则用户彻底没法继续。
-    createState.url = url;
     let qr = null;
     let qrError = null;
     try {
@@ -210,9 +259,23 @@ export default {
     } catch (err) {
       qrError = err.message;
     }
+    // 生成二维码期间子进程可能已经退出：close 处理器已清空 qr/url 并写了 error，
+    // 这时不能把作废的二维码写回去。
+    if (createState.exitCode !== undefined && createState.exitCode !== 0) {
+      if (!createState.error) {
+        logRaw("config init", tail || buffer);
+        createState.error = explainLarkFailure(tail || buffer);
+      }
+      createState.qr = null;
+      createState.url = null;
+      return { url: null, qr: null, qrError: null, running: false, error: createState.error };
+    }
     createState.qr = qr;
     createState.qrError = qrError;
-    child.stdout.resume();
+    if (createState.running) {
+      child.stdout.on("data", (c) => (tail = (tail + c).slice(-8000)));
+      child.stderr.on("data", (c) => (tail = (tail + c).slice(-8000)));
+    }
     return { url, qr, qrError, running: true };
   },
 
@@ -222,7 +285,7 @@ export default {
     } catch {
       /* 已经退了 */
     }
-    createState = { running: false, url: null, qr: null, qrError: null, startedAt: 0, child: null };
+    createState = { running: false, url: null, qr: null, qrError: null, error: null, startedAt: 0, child: null };
     return { running: false };
   },
 
@@ -236,7 +299,9 @@ export default {
       configured: info.exists,
       appId: info.appId,
       // 扫码这一步没走完就退出了（二维码过期、在飞书里取消）：页面据此说「没建成」，不是悄悄回到「还没接」。
-      error: !createState.running && createState.url && !info.exists && createState.exitCode !== undefined ? "二维码过期了，或者在飞书里取消了，没有建成" : null,
+      error:
+        createState.error ??
+        (!createState.running && createState.url && !info.exists && createState.exitCode !== undefined ? "二维码过期了，或者在飞书里取消了，没有建成" : null),
     };
   },
 
@@ -279,8 +344,8 @@ export default {
           }
         })
         .catch((err) => {
-          authState.running = false;
-          authState.error = err.message;
+          // 授权失败：作废的二维码立刻收起，页面只留错误和「重新来」。
+          authState = { running: false, url: null, qr: null, error: err.message, completed: false };
         });
     }
 
