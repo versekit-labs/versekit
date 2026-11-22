@@ -14,6 +14,7 @@ import { recordSnapshot, applyPublishResult, applyPublishError, getPublishRow, p
 import { nextCollectAt } from "./collect-plan.mjs";
 import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
 import { LOGIN_TRACKED, takeCheckTrigger } from "./scheduler.mjs";
+import { recordLogin } from "./egress.mjs";
 import { computeLoginClock, loginRecords } from "./overview.mjs";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -73,17 +74,23 @@ export function recordLoginCheck(account, result, { at = Date.now(), trigger = "
 }
 
 /**
- * 「账号登录成功」的钩子（出口位置要在这一刻记基线，#310）。守护进程启动时注册；没注册（测试、离线）就什么都不做。
- * 钩子出错只记事件，不让登录/检查失败。
+ * 「账号登录成功」：出口位置要在这一刻记基线（#310、#325）。直接调 egress.recordLogin，不依赖 `vk serve`
+ * 有没有在跑——命令行单独登录、网页登录、体检恢复为正常，三条路径走的都是这一处。
+ * 探测失败 / 没有 IP 库时 recordLogin 不记基线（原基线保留）并留 egress.probe_failed 事件；出错也不让登录/检查失败。
+ * 离线服务（vk serve --offline）不访问任何外部，调 setLoginRecording(false) 关掉；测试可用 setLoginHook 换实现。
  */
 let loginHook = null;
+let loginRecording = true;
 export const setLoginHook = (fn) => {
   loginHook = fn ?? null;
 };
+export const setLoginRecording = (on) => {
+  loginRecording = on !== false;
+};
 export async function notifyLogin(accountId, at = Date.now()) {
-  if (!loginHook) return;
+  if (!loginHook && !loginRecording) return;
   try {
-    await loginHook(accountId, { at });
+    await (loginHook ?? recordLogin)(accountId, { at });
   } catch (err) {
     emit({ type: "egress.probe_failed", severity: "warn", payload: { code: "egress_login_probe_failed", message: `登录时记录出口位置失败：${err.message}` }, dedupeKey: `egress.login_hook:${accountId}:${Math.floor(at / 36e5)}` });
   }

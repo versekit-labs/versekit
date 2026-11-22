@@ -228,18 +228,73 @@ test("ACC-v3-egress-03 重新登录换成新位置的基线；登录那一刻探
   assert.deepEqual(egress.view().paused, []);
 });
 
-test("ACC-v3-egress-03 checkAccount 从掉线变正常算一次登录，平时检查正常不算", async () => {
-  const calls = [];
-  adaptersMod.setLoginHook(async (id) => calls.push(id));
+// #325：不注册任何钩子（不起 vk serve），登录成功三条路径各自走到 notifyLogin，都要记下 CN 基线，
+// 之后第一次探测在 JP → 暂停。
+const withFakePage = async (exit, fn) => {
+  egress.setPageText(fakeBrowser(exit).getText);
   try {
-    const adapters = [{ platform: "xiaohongshu", adapter: { check: async () => ({ state: "ok" }) } }];
-    core.open().prepare("UPDATE account SET state='expired', last_ok_at=NULL WHERE id='xhs'").run();
-    await adaptersMod.checkAccount(adapters, "xhs");
-    assert.deepEqual(calls, ["xhs"], "掉线 → 正常：记基线");
-    await adaptersMod.checkAccount(adapters, "xhs");
-    assert.deepEqual(calls, ["xhs"], "正常 → 正常：不重记");
+    return await fn();
   } finally {
-    adaptersMod.setLoginHook(null);
+    egress.setPageText(null);
+  }
+};
+const assertCnThenJpPaused = async () => {
+  assert.equal(store.getEgressBaselines().xhs.country, "CN");
+  assert.equal(store.getEgressBaselines().xhs.source, "login");
+  const r = await probe({ cn: TYO, intl: LA });
+  assert.deepEqual(r.paused, ["xhs"], "CN 登录、首次探测 JP → 暂停");
+};
+
+test("ACC-v3-egress-03 命令行单独登录（没有 vk serve、没有钩子）：notifyLogin 直接记 CN 基线", async () => {
+  adaptersMod.setLoginHook(null);
+  await withFakePage({ cn: BJ, intl: LA }, () => adaptersMod.notifyLogin("xhs"));
+  await assertCnThenJpPaused();
+});
+
+test("ACC-v3-egress-03 网页登录（handlers 的 account.connect 成功）也直接记 CN 基线", async () => {
+  adaptersMod.setLoginHook(null);
+  const src = readFileSync(new URL("../src/handlers.mjs", import.meta.url), "utf8");
+  assert.match(src, /applyAccountConnection\([^)]*\);\s*await notifyLogin\(accountId\)/, "网页授权成功后调 notifyLogin");
+  await withFakePage({ cn: BJ, intl: LA }, () => adaptersMod.notifyLogin("xhs"));
+  await assertCnThenJpPaused();
+});
+
+test("ACC-v3-egress-03 体检从掉线恢复为正常算一次登录：直接记 CN 基线；平时检查正常不重记", async () => {
+  adaptersMod.setLoginHook(null);
+  const adapters = [{ platform: "xiaohongshu", adapter: { check: async () => ({ state: "ok" }) } }];
+  core.open().prepare("UPDATE account SET state='expired', last_ok_at=NULL WHERE id='xhs'").run();
+  await withFakePage({ cn: BJ, intl: LA }, () => adaptersMod.checkAccount(adapters, "xhs"));
+  await assertCnThenJpPaused();
+  // 正常 → 正常：不再探测
+  const b = fakeBrowser({ cn: BJ, intl: LA });
+  egress.setPageText(b.getText);
+  try {
+    await adaptersMod.checkAccount(adapters, "xhs");
+  } finally {
+    egress.setPageText(null);
+  }
+  assert.deepEqual(b.calls, [], "正常 → 正常：不探测、不重记");
+});
+
+test("ACC-v3-egress-03 登录时探测失败：不记基线、留 egress.probe_failed 事件，登录不失败", async () => {
+  adaptersMod.setLoginHook(null);
+  await withFakePage({ cn: new Error("断网"), intl: new Error("断网") }, () => adaptersMod.notifyLogin("xhs"));
+  assert.equal(store.getEgressBaselines().xhs, undefined);
+  const ev = core.open().prepare("SELECT payload_json FROM event WHERE type='egress.probe_failed'").all();
+  assert.ok(ev.length >= 1, "留了事件");
+});
+
+test("ACC-v3-egress-03 登录时没有 IP 库：不记基线、留事件", async () => {
+  adaptersMod.setLoginHook(null);
+  const { rmSync } = await import("node:fs");
+  rmSync(GEO, { recursive: true, force: true });
+  try {
+    await withFakePage({ cn: BJ, intl: LA }, () => adaptersMod.notifyLogin("xhs"));
+    assert.equal(store.getEgressBaselines().xhs?.source === "login", false);
+    assert.equal(core.open().prepare("SELECT 1 FROM event WHERE type='egress.login_baseline'").all().length, 0);
+    assert.ok(core.open().prepare("SELECT 1 FROM event WHERE type='egress.probe_failed' AND dedupe_key LIKE 'egress.login_baseline_skipped:%'").all().length >= 1, "留了事件");
+  } finally {
+    installDbs();
   }
 });
 
