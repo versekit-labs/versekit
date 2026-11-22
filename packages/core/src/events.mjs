@@ -56,6 +56,14 @@ export const EVENTS = {
   // 后台自动更新没成功、已经退回旧版本（#217）：留在系统页「最近出的问题」，不发手机通知（更新是后台的事）。
   "update.failed": { severity: "warn", required: false, internal: true },
 
+  // 发布机出口位置（#310）：探测、位置变了暂停、恢复、接受新位置、IP 库下载失败。都是内部留痕，页面和 `vk egress` 读它们。
+  "egress.moved": { severity: "warn", required: false, internal: true },
+  "egress.restored": { severity: "info", required: false, internal: true },
+  "egress.accepted": { severity: "info", required: false, internal: true },
+  "egress.login_baseline": { severity: "info", required: false, internal: true },
+  "egress.probe_failed": { severity: "warn", required: false, internal: true },
+  "egress.geodb_failed": { severity: "warn", required: false, internal: true },
+
   "system.alive": { severity: "info", required: false, internal: true },
   "system.dead": { severity: "critical", required: true, card: "system" },
 

@@ -1925,3 +1925,17 @@ export const patchRelayState = (patch) => {
   putMeta(RELAY_STATE_KEY, next);
   return next;
 };
+
+// ------------------------------------------------------------------ 发布机出口位置（#310）
+//
+// 全放 meta 表（不改 schema）：最近一次探测、每个账号「平时的国家」、「等发布机复查」的账号、IP 库的下载记录。
+// 判断逻辑在 egress.mjs；这里只管读写。
+
+export const getEgress = () => readMeta("egress.state");
+export const setEgress = (state) => putMeta("egress.state", state);
+export const getEgressBaselines = () => readMeta("egress.baselines") ?? {};
+export const setEgressBaselines = (map) => putMeta("egress.baselines", map);
+export const getEgressWaits = () => readMeta("egress.waits") ?? {};
+export const setEgressWaits = (map) => putMeta("egress.waits", map);
+export const getEgressGeoDb = () => readMeta("egress.geodb");
+export const setEgressGeoDb = (record) => putMeta("egress.geodb", record);
