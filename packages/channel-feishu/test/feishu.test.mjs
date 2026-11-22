@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -65,6 +65,31 @@ test("ready(): 有 lark-cli 返回 null，没有就给出人能照做的原因",
   process.env.VK_LARK_BIN = join(DIR, "missing-cli");
   assert.match(channel.ready(), /没有找到 lark-cli/);
   process.env.VK_LARK_BIN = BIN;
+});
+
+test("默认用 versekit 目录下的 lark-cli；VK_LARK_BIN 仍可覆盖；没装就退回 PATH", () => {
+  const prefix = mkdtempSync(join(tmpdir(), "vk-feishu-prefix-"));
+  const own = join(prefix, "bin", "lark-cli");
+  mkdirSync(join(prefix, "bin"), { recursive: true });
+  writeFileSync(own, '#!/bin/sh\n[ "$1" = "--version" ] && { echo "lark-cli version own"; exit 0; }\nexit 2\n');
+  chmodSync(own, 0o755);
+  const saved = { bin: process.env.VK_LARK_BIN, prefix: process.env.VERSEKIT_PREFIX, path: process.env.PATH };
+  try {
+    delete process.env.VK_LARK_BIN;
+    process.env.VERSEKIT_PREFIX = prefix;
+    process.env.PATH = "/nonexistent-vk-test";
+    assert.equal(channel.installed(), true, "PATH 里没有 lark-cli，也该找到 versekit 目录下的");
+    process.env.VK_LARK_BIN = join(prefix, "missing");
+    assert.equal(channel.installed(), false, "VK_LARK_BIN 优先于默认位置");
+    delete process.env.VK_LARK_BIN;
+    process.env.VERSEKIT_PREFIX = join(prefix, "empty");
+    assert.equal(channel.installed(), false, "两处都没有就是没装");
+  } finally {
+    for (const [k, v] of [["VK_LARK_BIN", saved.bin], ["VERSEKIT_PREFIX", saved.prefix], ["PATH", saved.path]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 });
 
 test("whoami() 从 auth status 里取当前登录的人", async () => {

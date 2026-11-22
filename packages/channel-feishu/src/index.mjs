@@ -9,12 +9,17 @@
 
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const exec = promisify(execFile);
-const bin = () => process.env.VK_LARK_BIN ?? "lark-cli";
+// 优先级：VK_LARK_BIN（显式覆盖）→ install.sh 装在 versekit 目录下的 lark-cli → PATH 里的 lark-cli。
+const bin = () => {
+  if (process.env.VK_LARK_BIN) return process.env.VK_LARK_BIN;
+  const own = join(process.env.VERSEKIT_PREFIX || join(homedir(), ".versekit"), "bin", "lark-cli");
+  return existsSync(own) ? own : "lark-cli";
+};
 const LARK_TIMEOUT = 25e3;
 // 只用 versekit 自己的 profile：用户在自己的应用上配的，不碰机器上别的应用。
 const profile = () => process.env.VK_FEISHU_PROFILE ?? "versekit";

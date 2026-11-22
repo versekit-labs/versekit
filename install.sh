@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash
 #
-# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → vk init → 后台服务 → 打开控制台。
+# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → 飞书组件 lark-cli → vk init → 后台服务 → 打开控制台。
 # 全程不用 sudo、不问问题。再运行一次就是升级：数据库、配置、凭证、账号、浏览器登录都保留。
 #
 # 可用环境变量覆盖（开发机上验证用）：
@@ -15,6 +15,8 @@
 #   VERSEKIT_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
 #   VERSEKIT_APP_URL         versekit tarball 地址   VERSEKIT_APP_SHA256 可选校验
 #   VERSEKIT_BILIUP_URL      biliup-rs 压缩包地址    VERSEKIT_BILIUP_VERSION 默认 v0.2.4
+#   VERSEKIT_LARK_VERSION    飞书组件 lark-cli 版本（写死）   默认 1.0.97
+#   VERSEKIT_LARK_URL        lark-cli 下载目录（含 checksums.txt）  默认 https://github.com/larksuite/cli/releases/download/v<版本>
 #   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
 #   VERSEKIT_NO_OPEN=1       不自动打开浏览器
 #   VERSEKIT_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
@@ -40,6 +42,10 @@ main() {
   local NODE_URL="${VERSEKIT_NODE_URL:-https://nodejs.org/dist/$NODE_VERSION}"
   local APP_URL="${VERSEKIT_APP_URL:-https://codeload.github.com/versekit-labs/versekit/tar.gz/refs/heads/main}"
   local BILIUP_VERSION="${VERSEKIT_BILIUP_VERSION:-v0.2.4}"
+  # lark-cli：飞书官方命令行（larksuite/cli）。官方发布渠道是 GitHub Releases，每个版本附 checksums.txt
+  # （与 npm 包 @larksuite/cli 里自带的那份逐字相同），按它校验。版本写死，升级时改这一行并过测试。
+  local LARK_VERSION="${VERSEKIT_LARK_VERSION:-1.0.97}"
+  local LARK_URL="${VERSEKIT_LARK_URL:-https://github.com/larksuite/cli/releases/download/v$LARK_VERSION}"
   local STEP="准备"
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/versekit-install.XXXXXX")"
   SWAPPED=0 HAD_APP=0 SERVICE_TOUCHED=0 DONE=0 OLD_PORT=""
@@ -91,6 +97,7 @@ main() {
     *) die "不支持这个 CPU：$(uname -m)" "目前只支持 arm64 与 x86_64" ;;
   esac
   NODE_PLAT="$OS-$ARCH"
+  local LARK_PLAT="$OS-amd64"; [ "$ARCH" = arm64 ] && LARK_PLAT="$OS-arm64"
   if [ "$OS" = darwin ]; then
     [ "$ARCH" = arm64 ] && BILIUP_PLAT="aarch64-macos" || BILIUP_PLAT="x86_64-macos"
   else
@@ -189,6 +196,30 @@ main() {
   BILIUP_BIN="$(find "$TMP/biliup-x" -type f -name biliup | head -1)"
   [ -n "$BILIUP_BIN" ] || die "biliup 压缩包里没有 biliup 可执行文件" "确认 VERSEKIT_BILIUP_URL 指向 biliup-rs 的发布包"
 
+  # ------------------------------------------------------------ 3b. 飞书组件 lark-cli
+  # 装在 $PREFIX/bin（不碰系统里已有的 lark-cli）。已经是这个版本就跳过；先下载校验、暂存，换程序时才落盘。
+  STEP="下载飞书组件"
+  local LARK_FILE="lark-cli-$LARK_VERSION-$LARK_PLAT.tar.gz" LARK_STAGED="" HAVE_LARK=""
+  if [ -x "$PREFIX/bin/lark-cli" ]; then HAVE_LARK="$("$PREFIX/bin/lark-cli" --version 2>/dev/null || true)"; fi
+  case "$HAVE_LARK" in
+    *"version $LARK_VERSION"|*" $LARK_VERSION") say "飞书组件 lark-cli ${LARK_VERSION} 已经在了，跳过下载" ;;
+    *)
+      say "下载飞书组件 lark-cli ${LARK_VERSION}（约 10MB，装在 ${PREFIX}/bin，接飞书要用）"
+      fetch "$LARK_URL/checksums.txt" "$TMP/lark-checksums.txt"
+      grep -q "  $LARK_FILE\$" "$TMP/lark-checksums.txt" || die "${LARK_URL}/checksums.txt 里没有 ${LARK_FILE}" "确认 VERSEKIT_LARK_VERSION（${LARK_VERSION}）和 VERSEKIT_LARK_URL 指向同一个官方发布"
+      fetch "$LARK_URL/$LARK_FILE" "$TMP/$LARK_FILE"
+      STEP="校验飞书组件"
+      local LARK_WANT LARK_GOT
+      LARK_WANT="$(awk -v f="$LARK_FILE" '$2==f {print $1; exit}' "$TMP/lark-checksums.txt")"
+      LARK_GOT="$(sha_of "$TMP/$LARK_FILE")"
+      [ "$LARK_WANT" = "$LARK_GOT" ] || die "lark-cli 压缩包校验不通过（官方 ${LARK_WANT}，实际 ${LARK_GOT}）" "多半是下载被截断或被劫持，重新运行；反复出现就换一个网络"
+      mkdir -p "$TMP/lark-x"
+      tar -xzf "$TMP/$LARK_FILE" -C "$TMP/lark-x" || die "lark-cli 解压失败" "重新运行；磁盘空间不足也会这样"
+      LARK_STAGED="$(find "$TMP/lark-x" -type f -name lark-cli | head -1)"
+      [ -n "$LARK_STAGED" ] || die "lark-cli 压缩包里没有 lark-cli 可执行文件" "确认 VERSEKIT_LARK_URL 指向 larksuite/cli 的官方发布"
+      ;;
+  esac
+
   # ------------------------------------------------------------ 换上新程序
   STEP="安装程序文件"
   # 下载和校验都过了才动已安装的东西：任何一步失败都不会破坏现有版本。
@@ -196,6 +227,7 @@ main() {
   if [ "$NODE_STAGED" = 1 ]; then rm -rf "$PREFIX/node"; mv "$TMP/node-x" "$PREFIX/node"; fi
   local NODE="$PREFIX/node/bin/node"
   cp "$BILIUP_BIN" "$PREFIX/bin/biliup.new" && chmod +x "$PREFIX/bin/biliup.new" && mv "$PREFIX/bin/biliup.new" "$PREFIX/bin/biliup"
+  if [ -n "$LARK_STAGED" ]; then cp "$LARK_STAGED" "$PREFIX/bin/lark-cli.new" && chmod +x "$PREFIX/bin/lark-cli.new" && mv "$PREFIX/bin/lark-cli.new" "$PREFIX/bin/lark-cli"; fi
   rm -rf "$PREFIX/app.prev"
   if [ "$HAD_APP" = 1 ]; then mv "$PREFIX/app" "$PREFIX/app.prev"; elif [ -d "$PREFIX/app" ]; then rm -rf "$PREFIX/app"; fi
   mv "$TMP/app-x" "$PREFIX/app"
