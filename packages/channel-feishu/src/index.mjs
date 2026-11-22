@@ -259,6 +259,11 @@ export default {
     } catch (err) {
       qrError = err.message;
     }
+    // 生成二维码期间子进程可能已经退出：close 处理器已清空 qr/url 并写了 error，
+    // 这时不能把作废的二维码写回去。
+    if (createState.error || createState.url !== url) {
+      return { url: null, qr: null, qrError: null, running: false, error: createState.error };
+    }
     createState.qr = qr;
     createState.qrError = qrError;
     if (createState.running) {
