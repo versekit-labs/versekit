@@ -182,15 +182,15 @@ function refreshSubscription({ maxAge = 120e3 } = {}) {
     .finally(() => { probing = false; });
 }
 
-/** 授权完成后：配对授权的那个人、记下接上了、探订阅。 */
-async function connectAfterAuth() {
-  const who = await channelFeishu.whoami();
-  bindChannel("feishu", who.openId);
-  updateConfig({ channel: { feishu: { authorized_at: Date.now(), skipped: false } } });
+/** 扫码建好应用后：用注册结果里的 open_id 直接配对、记下接上了、探订阅。不再有第二次扫码。 */
+async function connectAfterRegistration({ appId, openId }) {
+  bindChannel("feishu", openId);
+  updateConfig({ channel: { feishu: { profile: feishuProfileName(), app_id: appId, configured_at: Date.now(), authorized_at: Date.now(), skipped: false } } });
   // 重新接上：旧的「发不出去」作废，接好后重新发一张测试卡片。
   patchFeishuSettings({ off: false, testSentAt: null });
   patchFeishuDelivery({ failure: null });
   emit({ type: "channel.connected", payload: { channel: "feishu" }, dedupeKey: `channel.connected:${Date.now()}` });
+  subscriptionCache = null;
   refreshSubscription({ maxAge: 0 });
 }
 
@@ -713,7 +713,6 @@ function daemonHandlers(adapters, log) {
       const settings = getFeishuSettings();
       const delivery = getFeishuDelivery();
       const create = channelFeishu.createAppStatus();
-      const auth = channelFeishu.authStatus();
       const binding = getBinding("feishu");
       const installed = channelFeishu.installed();
       const configured = Boolean(cfg.app_id) || create.configured;
@@ -722,8 +721,9 @@ function daemonHandlers(adapters, log) {
       if (bound && installed && !settings.off) refreshSubscription({ maxAge: subscriptionCache?.value?.subscribed ? 120e3 : 10e3 });
       const subscription = subscriptionCache?.value ?? null;
       const skipped = Boolean(cfg.skipped) || settings.off;
+      // 应用建好了但还没配对（老版本留下的状态）：不算「等你扫码」，回到「还没接」，页面给「重新接」。
       const state = feishuState({
-        installed, skipped, creating: create.running, authorizing: Boolean(auth.running), configured, authorized: ready === null, bound,
+        installed, skipped, creating: create.running, configured: false, authorized: ready === null, bound,
         subscribed: subscription ? Boolean(subscription.subscribed) : null, failure: delivery.failure,
       });
       return {
@@ -731,7 +731,6 @@ function daemonHandlers(adapters, log) {
         state,
         installed,
         create,
-        auth,
         subscription,
         ready,
         skipped,
@@ -760,29 +759,14 @@ function daemonHandlers(adapters, log) {
       return { skipped: false };
     },
 
-    "channel.app.create.start": () => channelFeishu.createAppStart(),
+    "channel.app.create.start": () => channelFeishu.createAppStart({ onDone: connectAfterRegistration }),
     "channel.app.create.status": () => channelFeishu.createAppStatus(),
     "channel.app.create.cancel": () => channelFeishu.createAppCancel(),
 
     "channel.app.set": async ({ appId, appSecret }) => {
       const r = await channelFeishu.configure({ appId, appSecret });
       updateConfig({ channel: { feishu: { profile: r.profile, app_id: r.appId, configured_at: Date.now() } } });
-      return { ...r, next: "接着在飞书里确认授权" };
-    },
-
-    "channel.login.start": async () => {
-      if (channelFeishu.ready() && !/还没有授权/.test(channelFeishu.ready() ?? "")) throw new Error(channelFeishu.ready());
-      // 授权一完成就自己配对、探订阅、发测试卡片：页面不需要「我弄好了」。
-      const started = await channelFeishu.authStart({ onDone: connectAfterAuth });
-      if (!started.verificationUrl && !started.already) throw new Error("飞书没有返回授权链接");
-      return started;
-    },
-
-    "channel.login.wait": async ({ deviceCode }) => {
-      await channelFeishu.authFinish(deviceCode);
-      await connectAfterAuth();
-      const binding = getBinding("feishu");
-      return { channel: "feishu", externalUserId: binding?.external_user_id ?? null };
+      return { ...r, next: "应用已保存。要让卡片发给你，请在「通知」里点「接飞书」扫码，或 vk channel bind feishu --open-id <你的 open_id>" };
     },
 
     "channel.diagnose": async () => {
@@ -1943,7 +1927,7 @@ async function cmdChannel() {
     const data = await send("channel.status", {});
     if (human) {
       console.log(`应用    ${data.configured ? data.appId ?? "已配置" : "未配置"}`);
-      console.log(`授权    ${data.authorized ? "已完成" : "未完成"}`);
+      console.log(`机器人  ${data.authorized ? "可用" : "未就绪"}`);
       console.log(`配对    ${data.bound ? `已配对（${data.externalUserId}）` : "未配对"}`);
       if (data.ready) console.log(`提示    ${data.ready}`);
     } else out(data);

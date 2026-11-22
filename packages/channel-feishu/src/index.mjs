@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { beginRegistration, pollRegistration, RegistrationError } from "./registration.mjs";
 
 const exec = promisify(execFile);
 // 优先级：VK_LARK_BIN（显式覆盖）→ install.sh 装在 versekit 目录下的 lark-cli → PATH 里的 lark-cli。
@@ -140,11 +141,8 @@ async function lark(args, { timeout = LARK_TIMEOUT } = {}) {
   return json;
 }
 
-// 授权状态：后台轮询进行中 / 已完成 / 失败。
-let authState = { running: false, url: null, qr: null, error: null, completed: false };
-
-// 扫码创建应用：config init --new 会阻塞到浏览器里完成；URL 先给用户扫。
-let createState = { running: false, url: null, qr: null, startedAt: 0, child: null };
+// 扫码建机器人：走飞书应用注册（registration.mjs），一次扫码同时拿到应用凭证与所有者的 open_id。
+let createState = { running: false, url: null, qr: null, qrError: null, error: null, startedAt: 0, abort: null };
 
 export default {
   channel: "feishu",
@@ -158,18 +156,19 @@ export default {
   /** null = 可用；否则一句人能照做的话。这条会被账号墙与 doctor 直接显示。 */
   ready() {
     const probe = probeLark(["--version"]);
-    if (probe.error?.code === "ENOENT") return "飞书未配置：没有找到 lark-cli（装好后到「接入」页填写你的应用）";
+    if (probe.error?.code === "ENOENT") return "飞书未配置：没有找到 lark-cli（装好后到系统页「通知」里点「接飞书」）";
     const versionError = probeFailure(probe, "版本探测");
     if (versionError) return versionError;
 
     const info = profileInfo();
     if (info.error) return info.error;
     if (!info.exists) {
-      return "飞书应用未配置：在「接入」页扫码创建，或填写你自己的 app_id 与 app_secret";
+      return "飞书应用未配置：在系统页「通知」里点「接飞书」扫码创建";
     }
 
+    // 只看应用配置和机器人（bot）身份：卡片以机器人的身份发，不需要用户身份令牌。
     const status = probeLark(["auth", "status", "--profile", profile()]);
-    const statusError = probeFailure(status, "读取授权状态");
+    const statusError = probeFailure(status, "读取应用状态");
     if (statusError) return statusError;
     let st = null;
     try {
@@ -177,7 +176,8 @@ export default {
     } catch {
       st = null;
     }
-    if (!st?.identities?.user?.openId) return "飞书应用已配置，但还没有授权：在「接入」页点「开始授权」";
+    const bot = st?.identities?.bot;
+    if (bot?.status && bot.status !== "ready") return `飞书机器人不可用：${bot.message ?? bot.status}。在「通知」里点「重新接」。`;
     return null;
   },
 
@@ -201,91 +201,71 @@ export default {
   },
 
   /**
-   * 扫码创建应用：官方流程会在浏览器里建一个应用，并把 app_id/secret 直接写进
-   * 当前 profile（钥匙串）。我们只把 URL 截出来给用户扫，不接触 secret。
+   * 扫码创建应用（也是「重新接」）：自己走飞书应用注册 begin / poll，只扫这一次码。
+   * 拿到 client_id / client_secret / open_id 后：secret 只经 stdin 交给 `lark-cli profile add`，
+   * open_id 交给 onDone({ appId, openId, brand }) 去配对。已有同名应用会被直接覆盖，不要求先删。
    */
-  async createAppStart() {
-    if (createState.running) return { url: createState.url, qr: createState.qr, running: true };
+  async createAppStart({ onDone = null } = {}) {
+    if (createState.running) return { url: createState.url, qr: createState.qr, qrError: createState.qrError, running: true };
 
-    // 这条命令只有在 TTY 里才会输出二维码和链接；管道下它会直接退出。
-    // 用系统自带的 script 分配一个 pty，再照常解析输出。
-    const child =
-      process.platform === "linux"
-        ? spawn("script", ["-q", "-e", "-c", `${bin()} config init --new --name ${profile()}`, "/dev/null"], { stdio: ["ignore", "pipe", "pipe"] })
-        : spawn("script", ["-q", "/dev/null", bin(), "config", "init", "--new", "--name", profile()], { stdio: ["ignore", "pipe", "pipe"] });
-    createState = { running: true, url: null, qr: null, qrError: null, error: null, startedAt: Date.now(), child };
-    let buffer = "";
-    let tail = "";
+    const abort = new AbortController();
+    const mine = { running: true, url: null, qr: null, qrError: null, error: null, startedAt: Date.now(), abort };
+    createState = mine;
+    const fail = (err) => {
+      if (createState !== mine) return;
+      mine.running = false;
+      mine.url = null;
+      mine.qr = null;
+      mine.error = err instanceof RegistrationError && err.code === "cancelled" ? null : err.message;
+    };
 
-    const url = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("30 秒内没有拿到创建应用的链接")), 30e3);
-      const onData = (chunk) => {
-        buffer += chunk;
-        const hit = buffer.match(/https:\/\/[^"'\s]+/)?.[0];
-        if (!hit) return;
-        clearTimeout(timer);
-        child.stdout.off("data", onData);
-        createState.url = hit; // 同步记下，close 处理器才分得清「拿到链接后才失败」
-        resolve(hit);
-      };
-      child.stdout.on("data", onData);
-      child.stderr.on("data", (c) => (buffer += c));
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-      child.on("close", (code) => {
-        if (!createState.url) {
-          clearTimeout(timer);
-          logRaw("config init", buffer);
-          reject(new Error(`创建应用没有成功：${explainLarkFailure(buffer)}`));
-        }
-        createState.running = false;
-        createState.exitCode = code;
-        if (code !== 0 && createState.url) {
-          logRaw("config init", tail || buffer);
-          createState.error = explainLarkFailure(tail || buffer);
-          createState.qr = null;
-          createState.url = null;
-        }
-      });
-    });
+    let begin;
+    try {
+      begin = await beginRegistration({ signal: abort.signal });
+    } catch (err) {
+      console.error(`[feishu] 应用注册 begin 失败：${err.message}`);
+      fail(err);
+      throw new Error(`创建应用没有成功：${err.message}`);
+    }
+    mine.url = begin.verificationUrl;
 
     // 二维码只是锦上添花：生成失败也要把链接给出去，否则用户彻底没法继续。
-    let qr = null;
-    let qrError = null;
     try {
-      qr = await this.qr(url);
+      mine.qr = await this.qr(begin.verificationUrl);
     } catch (err) {
-      qrError = err.message;
+      mine.qrError = err.message;
     }
-    // 生成二维码期间子进程可能已经退出：close 处理器已清空 qr/url 并写了 error，
-    // 这时不能把作废的二维码写回去。
-    if (createState.exitCode !== undefined && createState.exitCode !== 0) {
-      if (!createState.error) {
-        logRaw("config init", tail || buffer);
-        createState.error = explainLarkFailure(tail || buffer);
+
+    // 后台等用户在飞书里扫完确认；页面只轮询状态。
+    (async () => {
+      try {
+        const r = await pollRegistration(begin, { signal: abort.signal, intervalScale: Number(process.env.VK_FEISHU_POLL_SCALE) || 1 });
+        if (!r.openId) throw new Error("飞书没有告诉我们你是谁（没有返回 open_id），卡片没法发给你。点「重新来」再扫一次。");
+        const brand = r.tenantBrand === "lark" ? "lark" : "feishu";
+        await this.configure({ appId: r.clientId, appSecret: r.clientSecret, brand });
+        if (createState !== mine) return; // 中途取消了
+        await onDone?.({ appId: r.clientId, openId: r.openId, brand });
+        if (createState !== mine) return;
+        mine.running = false;
+        mine.url = null;
+        mine.qr = null;
+      } catch (err) {
+        // 完整原因只写日志（里面没有凭证）；页面只留一句人话和「重新来」，作废的二维码立刻收起。
+        if (!(err instanceof RegistrationError && err.code === "cancelled")) console.error(`[feishu] 扫码建应用失败：${err.message}`);
+        fail(err);
       }
-      createState.qr = null;
-      createState.url = null;
-      return { url: null, qr: null, qrError: null, running: false, error: createState.error };
-    }
-    createState.qr = qr;
-    createState.qrError = qrError;
-    if (createState.running) {
-      child.stdout.on("data", (c) => (tail = (tail + c).slice(-8000)));
-      child.stderr.on("data", (c) => (tail = (tail + c).slice(-8000)));
-    }
-    return { url, qr, qrError, running: true };
+    })();
+
+    return { url: mine.url, qr: mine.qr, qrError: mine.qrError, running: true };
   },
 
   createAppCancel() {
     try {
-      createState.child?.kill("SIGTERM");
+      createState.abort?.abort();
     } catch {
-      /* 已经退了 */
+      /* 已经结束 */
     }
-    createState = { running: false, url: null, qr: null, qrError: null, error: null, startedAt: 0, child: null };
+    createState = { running: false, url: null, qr: null, qrError: null, error: null, startedAt: 0, abort: null };
     return { running: false };
   },
 
@@ -298,15 +278,13 @@ export default {
       qrError: createState.qrError,
       configured: info.exists,
       appId: info.appId,
-      // 扫码这一步没走完就退出了（二维码过期、在飞书里取消）：页面据此说「没建成」，不是悄悄回到「还没接」。
-      error:
-        createState.error ??
-        (!createState.running && createState.url && !info.exists && createState.exitCode !== undefined ? "二维码过期了，或者在飞书里取消了，没有建成" : null),
+      // 扫码这一步没走完（二维码过期、在飞书里点了拒绝、品牌矛盾…）：页面据此写明原因，不是悄悄回到「还没接」。
+      error: createState.error,
     };
   },
 
   /** 保存用户自己的应用（secret 走 stdin，不写文件、不进 argv/日志）。 */
-  async configure({ appId, appSecret }) {
+  async configure({ appId, appSecret, brand = "feishu" }) {
     if (typeof appId !== "string" || !/^cli_[0-9a-z]+$/i.test(appId.trim())) throw new Error("app_id 格式不对：应以 cli_ 开头");
     if (typeof appSecret !== "string" || appSecret.trim().length < 8) throw new Error("app_secret 看起来不合法");
     try {
@@ -314,61 +292,15 @@ export default {
     } catch {
       /* 第一次配置时本来就不存在 */
     }
-    await runWithInput(["profile", "add", "--name", profile(), "--app-id", appId.trim(), "--app-secret-stdin"], appSecret.trim() + "\n");
+    await runWithInput(["profile", "add", "--name", profile(), "--app-id", appId.trim(), "--app-secret-stdin", ...(brand === "lark" ? ["--brand", "lark"] : [])], appSecret.trim() + "\n");
     return { profile: profile(), appId: appId.trim() };
-  },
-
-  /** 设备码授权第一步：拿验证地址，交给用户去浏览器确认。 */
-  async authStart({ onDone = null } = {}) {
-    if (authState.running) return { ...authState, already: true };
-    const json = await lark(["auth", "login", "--no-wait", "--json"]);
-    const data = json.data ?? json;
-    const verificationUrl = data.verification_url ?? data.verificationUrl ?? null;
-    const deviceCode = data.device_code ?? data.deviceCode ?? null;
-    const qr = verificationUrl ? await this.qr(verificationUrl) : null;
-
-    authState = { running: Boolean(deviceCode), url: verificationUrl, qr, error: null, completed: false };
-
-    // 设备码在后台自己轮询：用户扫完码、在飞书点确认后，这里会自动完成，
-    // 页面只负责轮询状态，不再需要「我已完成授权」按钮。
-    if (deviceCode) {
-      this.authFinish(deviceCode)
-        .then(async () => {
-          authState.running = false;
-          authState.completed = true;
-          // 授权一完成就由调用方接着配对、探订阅、发测试卡片：页面不需要「我弄好了」。
-          try {
-            await onDone?.();
-          } catch (err) {
-            authState.error = err.message;
-          }
-        })
-        .catch((err) => {
-          // 授权失败：作废的二维码立刻收起，页面只留错误和「重新来」。
-          authState = { running: false, url: null, qr: null, error: err.message, completed: false };
-        });
-    }
-
-    return { verificationUrl, qr, deviceCode, expiresIn: data.expires_in ?? data.expiresIn ?? null };
-  },
-
-  authStatus() {
-    return { ...authState };
-  },
-
-  /** 设备码授权第二步：用户确认后完成轮询。 */
-  async authFinish(deviceCode) {
-    if (!deviceCode) throw new Error("缺少 device_code");
-    // 设备码轮询最长约 10 分钟；默认 25s 超时会把进程杀掉，用户授权后也收不到结果。
-    await lark(["auth", "login", "--device-code", deviceCode], { timeout: 620e3 });
-    return { ok: true };
   },
 
   /** 当前登录的人（open_id）。配对时用它，不需要用户手抄一串 ou_。 */
   async whoami() {
     const json = await lark(["auth", "status"]);
     const openId = json.identities?.user?.openId ?? json.identity?.user?.openId ?? null;
-    if (!openId) throw new Error("lark-cli 没有登录用户身份：先运行 lark-cli auth login");
+    if (!openId) throw new Error("没有拿到你的 open_id：在系统页「通知」里点「重新接」重新扫一次码");
     return { openId, name: json.identities?.user?.userName ?? null };
   },
 
