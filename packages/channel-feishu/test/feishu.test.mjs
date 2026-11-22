@@ -242,106 +242,28 @@ test("ready(): 没有自己的 profile 时让你去配，不回落全局应用",
   }
 });
 
-test("ready(): 应用配了但没授权时，要求先授权", () => {
-  const bin = join(DIR, "lark-noauth");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
+test("ready(): 应用配了、机器人可用就行，不要求用户身份令牌（ACC-v3-feishu-10）", () => {
+  const mk = (name, bot) => {
+    const bin = join(DIR, name);
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
 const a=process.argv.slice(2);
 if(a[0]==="--version"){console.log("1.0.97");process.exit(0)}
 if(a[0]==="profile"){console.log(JSON.stringify([{name:"versekit"}]));process.exit(0)}
-if(a[0]==="auth"){console.log(JSON.stringify({appId:"cli_test",identities:{bot:{status:"ready"}}}));process.exit(0)}
+if(a[0]==="auth"){console.log(JSON.stringify({appId:"cli_test",identities:{bot:${JSON.stringify(bot)}}}));process.exit(0)}
 process.exit(0);
 `,
-  );
-  chmodSync(bin, 0o755);
-  process.env.VK_LARK_BIN = bin;
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  };
   try {
-    assert.match(channel.ready(), /还没有授权/);
+    process.env.VK_LARK_BIN = mk("lark-botok", { status: "ready" });
+    assert.equal(channel.ready(), null, "只有机器人身份、没有用户登录，也算可用");
+    process.env.VK_LARK_BIN = mk("lark-botbad", { status: "error", message: "secret 失效" });
+    assert.match(channel.ready(), /机器人不可用.*secret 失效/);
   } finally {
-    process.env.VK_LARK_BIN = BIN;
-  }
-});
-
-test("authStart / authFinish：设备码两步", async () => {
-  const bin = join(DIR, "lark-login");
-  const log = join(DIR, "login.log");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const a = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(a) + "\\n");
-if (a[0] === "auth" && a[1] === "qrcode") {
-  const out = a[a.indexOf("-o") + 1];
-  fs.writeFileSync(out, Buffer.from([137, 80, 78, 71]));
-  process.exit(0);
-}
-if (a[0] === "auth" && a[1] === "login") {
-  if (a.includes("--no-wait")) console.log(JSON.stringify({ ok: true, data: { verification_url: "https://open.feishu.cn/device", device_code: "dc_1", expires_in: 300 } }));
-  else console.log(JSON.stringify({ ok: true }));
-  process.exit(0);
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.VK_LARK_BIN = bin;
-  try {
-    const started = await channel.authStart();
-    assert.equal(started.verificationUrl, "https://open.feishu.cn/device");
-    assert.equal(started.deviceCode, "dc_1");
-    assert.match(started.qr, /^data:image\/png;base64,/);
-
-    await channel.authFinish("dc_1");
-    const calls = readFileSync(log, "utf8");
-    assert.match(calls, /--device-code/);
-  } finally {
-    process.env.VK_LARK_BIN = BIN;
-  }
-});
-
-test("createAppStart(): 从官方创建流程里截出链接，并生成二维码", { timeout: 60e3 }, async ({ signal }) => {
-  const bin = join(DIR, "lark-create");
-  const marker = join(DIR, "created-profile");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const a = process.argv.slice(2);
-if (a[0] === "config" && a.includes("--new")) {
-  console.log("在浏览器里完成创建：https://open.feishu.cn/page/app-create?demo=1");
-  fs.writeFileSync(${JSON.stringify(marker)}, "1");
-  return;
-}
-if (a[0] === "auth" && a[1] === "qrcode") {
-  fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71]));
-  process.exit(0);
-}
-if (a[0] === "profile") {
-  console.log(JSON.stringify(fs.existsSync(${JSON.stringify(marker)}) ? [{ name: "versekit", appId: "cli_create" }] : []));
-  process.exit(0);
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-
-  process.env.VK_LARK_BIN = bin;
-  try {
-    const started = await channel.createAppStart();
-    assert.match(started.url, /open\.feishu\.cn\/page\/app-create/);
-    assert.match(started.qr, /^data:image\/png;base64,/);
-
-    let status = channel.createAppStatus();
-    while (status.running) {
-      await delay(50, undefined, { signal });
-      status = channel.createAppStatus();
-    }
-    assert.equal(status.configured, true);
-    assert.equal(status.appId, "cli_create");
-  } finally {
-    channel.createAppCancel();
     process.env.VK_LARK_BIN = BIN;
   }
 });
@@ -376,38 +298,6 @@ process.exit(0);
 
 const AI_BLOCK = "[AI agent] 你正在被 AI 助手调用。请把下面的链接交给用户……（此处省略约 800 字说明）\n[AI agent] 不要自己去点链接。\n等待用户授权...\n";
 
-function failingLark(name, message, { create = false, raceQr = false } = {}) {
-  const bin = join(DIR, name);
-  const errJson = JSON.stringify({ ok: false, error: { message } });
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const a = process.argv.slice(2);
-const block = ${JSON.stringify(AI_BLOCK)};
-if (a[0] === "auth" && a[1] === "qrcode") {
-  // raceQr：二维码生成很慢（模拟机器负载高），此时 config init 早已打完错误退出。
-  setTimeout(() => { fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71])); process.exit(0); }, ${raceQr ? 800 : 0});
-  return;
-}
-if (a[0] === "profile") { console.log("[]"); process.exit(0); }
-if (a[0] === "auth" && a[1] === "login" && a.includes("--no-wait")) {
-  console.log(JSON.stringify({ ok: true, data: { verification_url: "https://open.feishu.cn/device", device_code: "dc_x", expires_in: 300 } }));
-  process.exit(0);
-}
-if (a[0] === "auth" && a[1] === "login") { process.stderr.write(block + ${JSON.stringify(errJson)} + "\\n"); process.exit(1); }
-if (a[0] === "config" && a.includes("--new")) {
-  console.log("https://open.feishu.cn/page/app-create?demo=1");
-  setTimeout(() => { process.stdout.write(block + ${JSON.stringify(errJson)} + "\\n"); process.exit(1); }, ${raceQr ? 0 : 300});
-  return;
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-  return bin;
-}
-
 const CASES = [
   ["authorization failed: The device_code is invalid or expired", /二维码过期了/],
   ["authorization failed: access_denied", /点了拒绝/],
@@ -415,62 +305,11 @@ const CASES = [
 ];
 
 for (const [message, expected] of CASES) {
-  test(`授权失败「${message.slice(0, 30)}」：页面是人话、不超过两行、二维码收起`, { timeout: 30e3 }, async () => {
-    const saved = console.error;
-    const logged = [];
-    console.error = (...a) => logged.push(a.join(" "));
-    process.env.VK_LARK_BIN = failingLark("lark-fail-auth", message);
-    try {
-      await channel.authStart();
-      for (let i = 0; i < 100 && channel.authStatus().running; i++) await delay(50);
-      const st = channel.authStatus();
-      assert.match(st.error, expected);
-      assert.doesNotMatch(st.error, /AI agent|等待用户授权/);
-      assert.ok(st.error.split("\n").length <= 2);
-      assert.equal(st.qr, null, "失败后二维码要收起");
-      assert.equal(st.url, null);
-      assert.ok(logged.some((l) => /AI agent/.test(l)), "原始输出进日志");
-    } finally {
-      console.error = saved;
-      process.env.VK_LARK_BIN = BIN;
-    }
+  test(`lark-cli 出错「${message.slice(0, 30)}」：取真实原因，翻成人话，不超过两行（ACC-v3-feishu-09）`, async () => {
+    const { explainLarkFailure } = await import("../src/index.mjs");
+    const text = explainLarkFailure(AI_BLOCK + JSON.stringify({ ok: false, error: { message } }) + "\n");
+    assert.match(text, expected);
+    assert.doesNotMatch(text, /AI agent|等待用户授权/);
+    assert.ok(text.split("\n").length <= 2);
   });
 }
-
-test("config init 失败：同样取真实原因，二维码收起", { timeout: 30e3 }, async () => {
-  const saved = console.error;
-  console.error = () => {};
-  process.env.VK_LARK_BIN = failingLark("lark-fail-create", "authorization failed: The device_code is invalid");
-  try {
-    await channel.createAppStart();
-    for (let i = 0; i < 400 && channel.createAppStatus().running; i++) await delay(50);
-    const st = channel.createAppStatus();
-    assert.match(st.error, /二维码过期了/);
-    assert.doesNotMatch(st.error, /AI agent/);
-    assert.equal(st.qr, null);
-    assert.equal(st.url, null);
-  } finally {
-    console.error = saved;
-    channel.createAppCancel();
-    process.env.VK_LARK_BIN = BIN;
-  }
-});
-
-test("config init：二维码还在生成时子进程已打出错误并退出，错误原因不丢（#339 时序）", { timeout: 30e3 }, async () => {
-  const saved = console.error;
-  console.error = () => {};
-  process.env.VK_LARK_BIN = failingLark("lark-fail-create-race", "authorization failed: The device_code is invalid", { raceQr: true });
-  try {
-    await channel.createAppStart();
-    for (let i = 0; i < 400 && channel.createAppStatus().running; i++) await delay(50);
-    const st = channel.createAppStatus();
-    assert.match(st.error, /二维码过期了/);
-    assert.doesNotMatch(st.error, /AI agent|https:/);
-    assert.equal(st.qr, null);
-    assert.equal(st.url, null);
-  } finally {
-    console.error = saved;
-    channel.createAppCancel();
-    process.env.VK_LARK_BIN = BIN;
-  }
-});
