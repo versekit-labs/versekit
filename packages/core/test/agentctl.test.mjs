@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { TRANSITIONS, canTransition, issueAccIds, parseVerdict, validateScope } from "../../../bin/agentctl.mjs";
+import { TRANSITIONS, canTransition, issueAccIds, parseVerdict, planQueueRelease, validateScope } from "../../../bin/agentctl.mjs";
 
 test("迁移表：只放行定义过的边", () => {
   // 正常接力
@@ -684,4 +684,120 @@ test("作废的 FAIL：不再是最新判定，也不计返工轮次", async () 
 
   // 全部作废 = 没有判定（等重新验收），而不是回退到更早的结论之外的猜测。
   assert.equal(latestVerdict([voidOf(11, 10), fail(10, 1)]), null);
+});
+
+// ---------------------------------------------------------------- ACC-harness-queue-01：s:queued 排队放行
+//
+// 假 GitHub（本地 http mock），不碰真实 GitHub / orca（ACC-harness-codex-07）。
+
+const okBody = (extra = "") => `## 验收口径\n- [ACC-harness-queue-01]\n\n## 涉及与不可动\n- 改：\`bin/cycle.sh\`\n${extra}`;
+const queuedIssue = (number, { body = okBody(), labels = [] } = {}) => ({
+  number, title: `单 ${number}`, body, labels: ["s:queued", ...labels], updated_at: "2026-11-22T00:00:00Z",
+});
+
+test("迁移表：triage → queued → ready，ready 不能直接回到 queued 以外的乱边", () => {
+  assert.equal(canTransition("triage", "queued"), true);
+  assert.equal(canTransition("queued", "ready"), true);
+  assert.equal(canTransition("queued", "doing"), false);
+  assert.equal(canTransition("queued", "review"), false);
+});
+
+test("planQueueRelease：prio:high 在前，其余按 issue 号；依赖/口径/ARCH-09 缺失跳过且不卡后面", () => {
+  const issues = [
+    queuedIssue(300, { body: okBody("\n**依赖**：#299\n") }), // #299 还没 done
+    { number: 299, title: "依赖单", body: "x", labels: ["s:doing"] },
+    queuedIssue(301, { body: "## 验收口径\n- [ACC-nope-99]\n" }),
+    queuedIssue(302, { body: `## 验收口径\n- [ACC-harness-queue-01]\n\n## 涉及与不可动\n- 改：\`packages/core/src/store.mjs\`\n` }),
+    queuedIssue(310),
+    queuedIssue(305, { labels: ["prio:high"] }),
+    queuedIssue(304, { labels: ["hold:human"] }), // hold:human 不碰
+  ];
+  const { released, skipped } = planQueueRelease(issues);
+  assert.equal(released.number, 305); // prio:high 先于更小的 #310
+  assert.deepEqual(skipped.map((s) => s.number), [300, 301, 302]);
+  assert.match(skipped.find((s) => s.number === 300).why, /依赖 #299 未完成/);
+  assert.match(skipped.find((s) => s.number === 301).why, /ACC-nope-99/);
+  assert.match(skipped.find((s) => s.number === 302).why, /ACC-arch-09/);
+  // 前面跳过的标 before：它们排在被放行的 #305 之后（high 在前），所以都不是「前面」
+  assert.ok(skipped.every((s) => s.before === false));
+});
+
+test("planQueueRelease：依赖已完成（已关闭或 s:done）就能放；自己不算依赖", () => {
+  const body = okBody("\n**依赖**：#10、#11\n");
+  const issues = [queuedIssue(20, { body }), { number: 11, title: "d", body: "", labels: ["s:done"] }];
+  assert.equal(planQueueRelease(issues).released?.number, 20); // #10 不在 open 列表 = 已关闭
+});
+
+async function queueRun(t, issues, args, { env } = {}) {
+  const calls = [];
+  const routes = new Map([["issues", issues], ["pulls", []]]);
+  for (const i of issues) {
+    routes.set(`issues/${i.number}`, i);
+    routes.set(`PUT issues/${i.number}/labels`, (body) => { calls.push({ number: i.number, labels: body }); return body; });
+  }
+  const run = await mockAgentctl(t, routes, env);
+  return { result: await run("release-queued", ...args), calls };
+}
+
+test("release-queued：ready 空、lane 有空 → 放行排第一的，日志写前面跳过了谁", async (t) => {
+  const issues = [
+    { number: 1, title: "在做", body: "x", labels: ["s:doing"] },
+    queuedIssue(5, { body: okBody("\n**依赖**：#6\n") }),
+    { number: 6, title: "未完成依赖", body: "x", labels: ["s:triage"] },
+    queuedIssue(7),
+    queuedIssue(8),
+  ];
+  const { result, calls } = await queueRun(t, issues, ["--free-lanes", "1"]);
+  assert.equal(result.released.number, 7);
+  assert.equal(result.message, "从排队里放行 #7（排第 1，前面跳过 #5：依赖 #6 未完成）");
+  assert.deepEqual(result.skipped.map((s) => s.number), [5]);
+  assert.deepEqual(calls, [{ number: 7, labels: { labels: ["s:ready"] } }]); // 只放 1 张，且是 s:queued → s:ready
+});
+
+test("release-queued：lane 占满或已有 s:ready 时不放行，也不改任何 label", async (t) => {
+  const queued = [queuedIssue(7)];
+  const full = await queueRun(t, queued, ["--free-lanes", "0"]);
+  assert.equal(full.result.released, null);
+  assert.equal(full.result.reason, "lanes-full");
+  assert.deepEqual(full.calls, []);
+
+  const withReady = await queueRun(t, [...queued, { number: 9, title: "r", body: "x", labels: ["s:ready"] }], ["--free-lanes", "2"]);
+  assert.equal(withReady.result.reason, "ready-exists");
+  assert.deepEqual(withReady.calls, []);
+});
+
+test("release-queued：全部跳过 → 不放行，原因逐条列出；s:triage 不被碰", async (t) => {
+  const issues = [
+    queuedIssue(7, { body: "## 验收口径\n- [ACC-nope-99]\n" }),
+    { number: 8, title: "还没口径", body: okBody(), labels: ["s:triage"] },
+  ];
+  const { result, calls } = await queueRun(t, issues, ["--free-lanes", "2"]);
+  assert.equal(result.reason, "none-viable");
+  assert.equal(result.skipped.length, 1);
+  assert.deepEqual(calls, []); // #8 是 s:triage，虽然口径齐也不放行
+});
+
+test("release-queued --dry-run 不写 label；缺 --free-lanes 报错", async (t) => {
+  const { result, calls } = await queueRun(t, [queuedIssue(7)], ["--free-lanes", "1", "--dry-run"]);
+  assert.equal(result.released.number, 7);
+  assert.match(result.message, /^\[dry-run\] 会从排队里放行 #7/);
+  assert.deepEqual(calls, []);
+  const run = await mockAgentctl(t, new Map([["issues", []], ["pulls", []]]));
+  await assert.rejects(run("release-queued"), /free-lanes/);
+});
+
+test("tick：s:queued 口径/依赖不合格会标「补口径」，合格的等循环放行", async (t) => {
+  const issues = [
+    queuedIssue(7),
+    queuedIssue(8, { body: okBody("\n**依赖**：#7\n") }),
+    queuedIssue(9, { body: "没有口径" }),
+  ];
+  const run = await mockAgentctl(t, new Map([["issues", issues], ["pulls", []]]));
+  const { rows } = await run("tick");
+  const by = Object.fromEntries(rows.map((r) => [r.number, r]));
+  assert.equal(by[7].blocked, undefined);
+  assert.equal(by[7].action, "排队等放行");
+  assert.equal(by[8].blocked, true); // #7 还没完成
+  assert.match(by[8].why, /依赖 #7 未完成/);
+  assert.equal(by[9].blocked, true);
 });

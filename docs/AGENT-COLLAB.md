@@ -55,7 +55,8 @@
 
 | 状态 | 含义 | 进入条件（谁） | 离开动作 |
 |---|---|---|---|
-| `s:triage` | 想法，口径未定 | 人 / 产品随手记 | 口径齐 → `s:ready` |
+| `s:triage` | 想法，口径未定 | 人 / 产品随手记 | 口径齐 → `s:queued` |
+| `s:queued` | 口径已写好，排队等派 | 协调器写好口径、人确认 | 循环在 ready 空且有空 lane 时自动放行 → `s:ready` |
 | `s:ready` | 可派工 | 验收条目、涉及文件、不可动边界都写清（人） | 协调器派工 → `s:doing` |
 | `s:doing` | 有且仅有一个 agent 在跑 | 协调器（派工成功那一刻） | 开 PR → `s:review` |
 | `s:review` | 等验收 | 协调器（收到 `pull_request.opened`） | 见下 |
@@ -67,7 +68,7 @@
 **合法迁移表**（其余一律拒绝并留事件）：
 
 ```
-triage → ready
+triage → queued → ready
 ready → doing → review
 review → changes → doing        (循环，最多 3 轮)
 review → accept → done

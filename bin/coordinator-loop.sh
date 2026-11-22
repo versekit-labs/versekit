@@ -30,7 +30,8 @@
 #   CYCLE_BIN            cycle 脚本路径（默认 bin/cycle.sh；测试用）
 # 退出码：
 #   0   没活可等了（全部结算，没有新单可派，s:triage 里也没有待整理的 issue）
-#   13  没活可派，但 s:triage 里还有 issue：要协调器补验收口径、转 s:ready（流程「停住」最常见的原因）
+#   13  没活可派，但 s:triage 里还有 issue：要协调器补验收口径、转 s:queued（循环自动放行成 s:ready）。
+#       有 s:queued 可放行时不退出 13：等循环放行（最多 COORD_QUEUE_WAITS 轮，默认 5）
 #   10  有消息需要协调器判断（未 ack；delivery id 与消息内容已打印）
 #   11  有 worker 需要处理：worker-list 报 requiresAction/已退出；或 worker-read 末尾出现额度/限流错误；
 #       或终端输出超过 COORD_STALL_SECS 没变化（疑似卡住）。不自动 stop/kill，由协调器决定。
@@ -109,6 +110,9 @@ RUN_FILE="${RUN_FILE:-$HOME/.orca/${COORD_PROJECT}-run-id}"
 RUN_ID=$(cat "$RUN_FILE")
 WAIT_MS="${COORD_WAIT_MS:-300000}"
 IDLE_LIMIT="${COORD_IDLE_ROUNDS:-2}"
+# 有 s:queued 可放行时最多多等几轮（放行失败不能让循环空转到永远）。
+QUEUE_WAIT_LIMIT="${COORD_QUEUE_WAITS:-5}"
+queue_waits=0
 export CYCLE_LANES="${CYCLE_LANES:-2}"
 TYPES="worker_done,escalation,question,merge_ready"
 # 火山用尽记录与验收锁：与 bin/dsh-model.sh / bin/cycle.sh 用同一组默认路径。
@@ -359,22 +363,36 @@ while :; do
     if [ "$idle" -ge "$IDLE_LIMIT" ]; then
       # 退出前把手里的 delivery ack 掉，不留给下次重放。
       [ -n "$ack" ] && orca orchestration check --run "$RUN_ID" --ack "$ack" --json >/dev/null 2>&1
-      triage=$(node bin/agentctl.mjs tick --json 2>/dev/null | python3 -c '
+      tick_out=$(node "${AGENTCTL_BIN:-bin/agentctl.mjs}" tick --json 2>/dev/null | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
 rows=d.get("rows") or d.get("issues") or []
-print(" ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage" and "hold:human" not in (r.get("labels") or [])))
+held=lambda r: "hold:human" in (r.get("labels") or [])
+print("TRIAGE=" + " ".join("#%s" % r.get("number") for r in rows if r.get("state")=="triage" and not held(r)))
+# 排队单里有能放行的、且没有 s:ready：循环下一轮会自己放行，不能当成「没活」退出。
+ok=[r for r in rows if r.get("state")=="queued" and not r.get("blocked") and not held(r)]
+ready=[r for r in rows if r.get("state")=="ready"]
+print("QUEUED=%s" % (len(ok) if not ready else 0))
 ' 2>/dev/null || true)
+      triage=$(printf '%s\n' "$tick_out" | sed -n 's/^TRIAGE=//p')
+      queued_ok=$(printf '%s\n' "$tick_out" | sed -n 's/^QUEUED=//p')
+      if [ "${queued_ok:-0}" -gt 0 ] 2>/dev/null && [ "$queue_waits" -lt "$QUEUE_WAIT_LIMIT" ]; then
+        # s:triage 只表示还没写口径；有 s:queued 可放时不因它退出 13，等循环放行。
+        queue_waits=$((queue_waits + 1))
+        say "s:queued 里有 ${queued_ok} 张可放行，等循环放行（${queue_waits}/${QUEUE_WAIT_LIMIT}），暂不退出。"
+      else
       if [ -n "$triage" ]; then
-        say "没有可派的活，但 s:triage 里还有：${triage}。需要协调器补验收口径并转 s:ready，然后重新启动本脚本。"
+        say "没有可派的活，但 s:triage 里还有：${triage}。需要协调器补验收口径并转 s:queued（循环会自动放行成 s:ready），然后重新启动本脚本。"
         exit 13
       fi
       say "没有在跑的 worker，也没有新单可派：结束等待。"
       exit 0
+      fi
     fi
   else
     idle=0
+    queue_waits=0
   fi
 
   stalled=$(stall_rows)
