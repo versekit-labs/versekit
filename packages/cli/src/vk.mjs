@@ -929,10 +929,11 @@ async function cmdServe() {
       if (stopping) return;
       stopping = true;
       log(`\n收到 ${sig}，正在停止`);
-      await daemon.close().catch(() => {});
-      // Chrome 是 detached 起的，不在这里关就会变成孤儿（#91）。
+      // Chrome 是 detached 起的，不在这里关就会变成孤儿（#91）。先关浏览器：daemon.close() 可能被未断开的连接拖住，
+      // 拖住时进程被强杀，Chrome 就留下了（#339）。
       const closed = await closeAllAccounts().catch(() => 0);
       if (closed) log(`已关闭 ${closed} 个账号浏览器`);
+      await Promise.race([daemon.close().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
       process.exit(0);
     });
   }

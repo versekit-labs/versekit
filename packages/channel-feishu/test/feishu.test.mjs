@@ -376,7 +376,7 @@ process.exit(0);
 
 const AI_BLOCK = "[AI agent] 你正在被 AI 助手调用。请把下面的链接交给用户……（此处省略约 800 字说明）\n[AI agent] 不要自己去点链接。\n等待用户授权...\n";
 
-function failingLark(name, message, { create = false } = {}) {
+function failingLark(name, message, { create = false, raceQr = false } = {}) {
   const bin = join(DIR, name);
   const errJson = JSON.stringify({ ok: false, error: { message } });
   writeFileSync(
@@ -385,7 +385,11 @@ function failingLark(name, message, { create = false } = {}) {
 const fs = require("node:fs");
 const a = process.argv.slice(2);
 const block = ${JSON.stringify(AI_BLOCK)};
-if (a[0] === "auth" && a[1] === "qrcode") { fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71])); process.exit(0); }
+if (a[0] === "auth" && a[1] === "qrcode") {
+  // raceQr：二维码生成很慢（模拟机器负载高），此时 config init 早已打完错误退出。
+  setTimeout(() => { fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71])); process.exit(0); }, ${raceQr ? 800 : 0});
+  return;
+}
 if (a[0] === "profile") { console.log("[]"); process.exit(0); }
 if (a[0] === "auth" && a[1] === "login" && a.includes("--no-wait")) {
   console.log(JSON.stringify({ ok: true, data: { verification_url: "https://open.feishu.cn/device", device_code: "dc_x", expires_in: 300 } }));
@@ -394,7 +398,7 @@ if (a[0] === "auth" && a[1] === "login" && a.includes("--no-wait")) {
 if (a[0] === "auth" && a[1] === "login") { process.stderr.write(block + ${JSON.stringify(errJson)} + "\\n"); process.exit(1); }
 if (a[0] === "config" && a.includes("--new")) {
   console.log("https://open.feishu.cn/page/app-create?demo=1");
-  setTimeout(() => { process.stdout.write(block + ${JSON.stringify(errJson)} + "\\n"); process.exit(1); }, 300);
+  setTimeout(() => { process.stdout.write(block + ${JSON.stringify(errJson)} + "\\n"); process.exit(1); }, ${raceQr ? 0 : 300});
   return;
 }
 process.exit(0);
@@ -443,6 +447,25 @@ test("config init 失败：同样取真实原因，二维码收起", { timeout: 
     const st = channel.createAppStatus();
     assert.match(st.error, /二维码过期了/);
     assert.doesNotMatch(st.error, /AI agent/);
+    assert.equal(st.qr, null);
+    assert.equal(st.url, null);
+  } finally {
+    console.error = saved;
+    channel.createAppCancel();
+    process.env.VK_LARK_BIN = BIN;
+  }
+});
+
+test("config init：二维码还在生成时子进程已打出错误并退出，错误原因不丢（#339 时序）", { timeout: 30e3 }, async () => {
+  const saved = console.error;
+  console.error = () => {};
+  process.env.VK_LARK_BIN = failingLark("lark-fail-create-race", "authorization failed: The device_code is invalid", { raceQr: true });
+  try {
+    await channel.createAppStart();
+    for (let i = 0; i < 400 && channel.createAppStatus().running; i++) await delay(50);
+    const st = channel.createAppStatus();
+    assert.match(st.error, /二维码过期了/);
+    assert.doesNotMatch(st.error, /AI agent|https:/);
     assert.equal(st.qr, null);
     assert.equal(st.url, null);
   } finally {

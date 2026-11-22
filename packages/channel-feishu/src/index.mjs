@@ -226,6 +226,11 @@ export default {
         clearTimeout(timer);
         child.stdout.off("data", onData);
         createState.url = hit; // 同步记下，close 处理器才分得清「拿到链接后才失败」
+        // 拿到链接的同一刻就开始收后续输出：二维码生成期间子进程可能已经打出错误原文并退出，
+        // 等生成完才挂监听会把它丢掉（#339，机器负载高时必现）。
+        tail = buffer;
+        child.stdout.on("data", (c) => (tail = (tail + c).slice(-8000)));
+        child.stderr.on("data", (c) => (tail = (tail + c).slice(-8000)));
         resolve(hit);
       };
       child.stdout.on("data", onData);
@@ -272,10 +277,6 @@ export default {
     }
     createState.qr = qr;
     createState.qrError = qrError;
-    if (createState.running) {
-      child.stdout.on("data", (c) => (tail = (tail + c).slice(-8000)));
-      child.stderr.on("data", (c) => (tail = (tail + c).slice(-8000)));
-    }
     return { url, qr, qrError, running: true };
   },
 
