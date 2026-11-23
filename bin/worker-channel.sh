@@ -14,7 +14,7 @@
 #     返工 round >= 2 升 Sonnet；同时带 model:opus 时 Opus 优先；优先于 model:deepseek。
 #     Codex 不可用（没有 codex 命令 / codex login status 显示未登录 / 冷却期内额度用完）→ 本单改派 Sonnet。
 #     探测只看 `command -v codex` 与 `codex login status`，**不跑 codex exec**（一次最小请求就约 1.2 万 token）。
-#     额度用完由 bin/coordinator-loop.sh 从 worker 屏幕识别，写 $STATE_DIR/codex-exhausted。
+#     额度用完由协调器从 worker 屏幕确认后手动写 $STATE_DIR/codex-exhausted（docs/COORDINATOR.md §3）。
 #   - 验收 worker **始终**走 DeepSeek 通道（bin/dsh-model.sh：volc 优先、qwen 兜底），
 #     绝不选 claude。实现与验收用不同模型，彼此独立，验收不看实现方的思考过程。
 #   - claude 不可用（命令不存在 / 额度用尽 / 限流 / 网络不通）时，实现 worker 自动降级到

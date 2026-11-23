@@ -1734,7 +1734,7 @@ async function cmdVoid(repo, { issue: number, reason, unhold, dryRun, json }) {
   return 0;
 }
 
-/** cycle.sh 的验收锁：<LOCK_DIR>/accept-<issue>-<sha8>.lock（目录）。 */
+/** 旧 cycle.sh 的验收锁（cycle.sh 已删，void 仍清理残留）：<LOCK_DIR>/accept-<issue>-<sha8>.lock（目录）。 */
 function acceptanceLocks(number) {
   const dir = process.env.LOCK_DIR || join(homedir(), ".orca", "versekit-locks");
   if (!existsSync(dir)) return [];
@@ -2076,7 +2076,7 @@ async function main(argv) {
   if (cmd === "release-queued") {
     const free = arg("--free-lanes");
     if (free == null || !/^\d+$/.test(free)) {
-      process.stderr.write("release-queued 需要 --free-lanes <n>（空闲 lane 数，由 cycle.sh 数出来）\n");
+      process.stderr.write("release-queued 需要 --free-lanes <n>（空闲并行名额，由 bin/orca-flow.mjs 数出来）\n");
       return 1;
     }
     const repo = resolveRepo();
