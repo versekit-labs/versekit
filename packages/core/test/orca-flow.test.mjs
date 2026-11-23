@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  projectName, projectRules, hasLabel,
+  projectName, projectRules, hasLabel, flowConfig,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -138,4 +138,18 @@ test("by:coordinator 标记从看板的 labels 读", () => {
   const s = base({ board: { rows: [{ number: 8, labels: ["s:changes", "by:coordinator"] }, { number: 9, labels: ["s:changes"] }] } });
   assert.equal(hasLabel(s, 8, "by:coordinator"), true);
   assert.equal(hasLabel(s, 9, "by:coordinator"), false);
+});
+
+test("flow.json：没有就是默认；钩子只收非空字符串；release:false 与 inbox:external 生效；写坏回默认并报错", () => {
+  const d = flowConfig("{}");
+  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow" });
+  const c = flowConfig(JSON.stringify({ hooks: { beforeTick: ["a", "", 3, "b"], beforeMerge: ["node bin/local-ci.mjs --pending"] }, release: false, inbox: "external" }));
+  assert.deepEqual(c.hooks.beforeTick, ["a", "b"]);
+  assert.deepEqual(c.hooks.beforeMerge, ["node bin/local-ci.mjs --pending"]);
+  assert.equal(c.release, false);
+  assert.equal(c.inbox, "external");
+  assert.equal(flowConfig(JSON.stringify({ inbox: "whatever" })).inbox, "flow");
+  const bad = flowConfig("{ 不是 json");
+  assert.match(bad.error, /flow\.json 解析失败/);
+  assert.equal(bad.release, true);
 });

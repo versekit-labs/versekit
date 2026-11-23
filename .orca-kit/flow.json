@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "beforeTick": [
+      "[ -z \"$(git symbolic-ref -q HEAD)\" ] || { echo '协调器 worktree 在分支上，不自动跟 main'; exit 0; }; git fetch -q origin main && git merge-base --is-ancestor HEAD origin/main && git checkout -q --detach origin/main && git log --oneline -1"
+    ],
+    "beforeMerge": []
+  },
+  "release": true,
+  "inbox": "flow"
+}
