@@ -1093,7 +1093,7 @@ async function newTab(instance) {
     },
 
     /** 导航并等 load；返回时页面已经稳定，而不是「navigate 发出去就算完」。 */
-    async goto(url, { timeout = 30e3, waitUntil = "load" } = {}) {
+    async goto(url, { timeout = 30e3, waitUntil = "load", tolerateTimeout = false } = {}) {
       if (typeof url !== "string" || !url.trim()) throw new TypeError("goto 需要 URL 字符串");
 
       // 只改 hash 的「导航」不会触发 load，等 load 会白等到超时。SPA 里这是常态。
@@ -1117,7 +1117,12 @@ async function newTab(instance) {
       loaded.catch(() => {}); // 下面若因 errorText 提前抛出，别留下未处理的 rejection
       const res = await send("Page.navigate", { url });
       if (res?.errorText) throw new Error(`打不开 ${url}：${res.errorText}`);
-      await loaded;
+      try {
+        await loaded;
+      } catch (err) {
+        // 登录窗口：页面没触发事件不等于没打开，交给登录态轮询；导航失败（上面）仍然抛。
+        if (!tolerateTimeout) throw err;
+      }
     },
 
     /** 当前地址；适配器用它判断是否被踢到 /login。 */
@@ -1180,7 +1185,9 @@ async function newTab(instance) {
  */
 export async function openAccount(options = {}) {
   if (!options || typeof options !== "object") throw new TypeError("openAccount 需要 { accountId, url?, headless? }");
-  const { accountId, url, headless = false, reuse = false } = options;
+  const { accountId, url, headless = false, reuse = false, loginWindow = false, gotoTimeout } = options;
+  // 登录窗口给人用：只等 DOM 就绪，重页面一直不 load 也不算失败（#375）。其余场景仍等 load。
+  const gotoOpts = loginWindow ? { waitUntil: "domcontentloaded", tolerateTimeout: true, ...(gotoTimeout ? { timeout: gotoTimeout } : {}) } : {};
   const id = requireAccountId(accountId);
   if (url !== undefined && url !== null) {
     if (typeof url !== "string" || !url.trim()) throw new TypeError("url 必须是非空字符串（或省略）");
@@ -1210,7 +1217,7 @@ export async function openAccount(options = {}) {
   }
   if (existing) {
     try {
-      if (url) await existing.goto(url);
+      if (url) await existing.goto(url, gotoOpts);
       return existing;
     } catch {
       /* 旧的废了就开新的 */
@@ -1218,7 +1225,7 @@ export async function openAccount(options = {}) {
   }
   const tab = await newTab(instance);
   try {
-    if (url) await tab.goto(url);
+    if (url) await tab.goto(url, gotoOpts);
   } catch (err) {
     await tab.close().catch(() => {});
     throw err;
