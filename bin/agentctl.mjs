@@ -418,7 +418,8 @@ async function cmdReleaseQueued(repo, { freeLanes, dryRun, json }) {
   };
   const queued = queueOrder(board.issues);
   if (queued.length === 0) return out({ released: null, reason: "no-queued", skipped: [], message: "没有 s:queued 的单" });
-  if (board.issues.some((i) => readState(i).state === "ready")) {
+  // 挂 hold:human 的 ready 单不会被认领、不占派工，不能挡住排队（ACC-harness-orca-14；#35 曾因此堵住 #374/#375）。
+  if (board.issues.some((i) => readState(i).state === "ready" && !(i.labels ?? []).some((l) => (l.name ?? l) === "hold:human"))) {
     return out({ released: null, reason: "ready-exists", skipped: [], message: "已有 s:ready，不放行排队单" });
   }
   if (!(freeLanes > 0)) {
@@ -2022,7 +2023,7 @@ async function main(argv) {
 
   release-queued  把排队的 s:queued 放行成 s:ready（循环每轮派工前调用；协调器不手动转 s:ready）。
             --free-lanes <n>             必填：空闲 lane 数（活着的实现/返工 worker 少于上限才 >0）
-            已有 s:ready 或 lane 占满时不放行；一次最多放 1 张；
+            已有 s:ready（不算挂 hold:human 的）或 lane 占满时不放行；一次最多放 1 张；
             顺序：prio:high 在前，其余按 issue 号；依赖未完成/口径查不到/缺 ACC-arch-09 的跳过并列出原因。
             --dry-run                    只说会放行谁，不改 label
 

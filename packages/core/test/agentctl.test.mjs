@@ -696,6 +696,16 @@ test("release-queued：lane 占满或已有 s:ready 时不放行，也不改任�
   assert.deepEqual(withReady.calls, []);
 });
 
+test("release-queued：s:ready 挂着 hold:human（等人做的单）不挡放行（ACC-harness-orca-14）", async (t) => {
+  const queued = [queuedIssue(7)];
+  const held = await queueRun(t, [...queued, { number: 35, title: "真机", body: "x", labels: ["s:ready", "hold:human"] }], ["--free-lanes", "2"]);
+  assert.equal(held.result.released?.number, 7);
+  assert.deepEqual(held.calls, [{ number: 7, labels: { labels: ["s:ready"] } }]);
+  const mixed = await queueRun(t, [...queued, { number: 35, title: "真机", body: "x", labels: ["s:ready", "hold:human"] }, { number: 9, title: "r", body: "x", labels: ["s:ready"] }], ["--free-lanes", "2"]);
+  assert.equal(mixed.result.reason, "ready-exists", "还有不带 hold 的 ready 时照旧不放");
+  assert.deepEqual(mixed.calls, []);
+});
+
 test("release-queued：全部跳过 → 不放行，原因逐条列出；s:triage 不被碰", async (t) => {
   const issues = [
     queuedIssue(7, { body: "## 验收口径\n- [ACC-nope-99]\n" }),
