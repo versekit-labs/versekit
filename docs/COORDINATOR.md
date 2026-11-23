@@ -58,6 +58,8 @@ pgrep -fl 'orca-flow\[versekit\]'                   # 后台 watch 在不在
 | 6 实现 | `s:ready`：`agentctl claim --role engineer`，建 Task `vk#N 实现`，`worker-start --worktree new-top-level --name issue-N`，再 `worktree set --issue N` 把单子挂到 Orca 卡片上 |
 
 Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca 之间唯一的对应关系，不要手建同名 Task。
+任务书里 versekit 专属的约束（8788 端口、真机红线、登录窗口）在 `.orca-kit/flow-rules.md`，改约束改这个文件，不改脚本。
+**协调器自己实现的单**（所有者明确要你直接做的）开单时打 `by:coordinator`：验收打回后不派返工 agent，日志提醒你自己改；验收照常派独立 worker，合并照常走闸门。
 
 **谁来跑 tick**：
 - 你在的时候：`nohup node bin/orca-flow.mjs watch --every 180 >> ~/.orca/versekit-state/orca-flow.out 2>&1 &`（进程名 `orca-flow[versekit]`，同一项目只允许一个，重复起会退出码 14）。用 Monitor 盯 `orca-flow.log` 里的「⚠ 需要协调器」「✗」「✓ 合并」。

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
+  projectName, projectRules, hasLabel,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -109,4 +110,32 @@ test("验收任务书：在共用 worktree 里切到 PR head、验完恢复干�
   assert.match(s, /git status 为空/);
   assert.match(s, /round: 2/);
   assert.match(s, /不另发 escalation \/ merge_ready/);
+});
+
+test("项目名：FLOW_PROJECT 优先，否则取 origin 仓库名（https / ssh / 带不带 .git），都没有用目录名", () => {
+  assert.equal(projectName({ FLOW_PROJECT: "x" }, "https://github.com/a/b.git"), "x");
+  assert.equal(projectName({}, "https://github.com/versekit-labs/versekit.git"), "versekit");
+  assert.equal(projectName({}, "git@github.com:buxibuxi/trustbridge.git"), "trustbridge");
+  assert.equal(projectName({}, "https://github.com/a/market-research"), "market-research");
+  assert.equal(projectName({}, "", "/tmp/some/dir"), "dir");
+});
+
+test("Task 前缀可换：别的项目用自己的前缀，互不认", () => {
+  assert.equal(taskTitle("impl", 5, "", "trustbridge"), "trustbridge#5 实现");
+  assert.deepEqual(parseTaskTitle("trustbridge#5 验收 abc1234", "trustbridge"), { issue: 5, kind: "accept", extra: "abc1234" });
+  assert.equal(parseTaskTitle("trustbridge#5 实现", "vk"), null);
+  assert.equal(parseTaskTitle("vk#5 实现", "trustbridge"), null);
+});
+
+test("项目专属约束只从 .orca-kit/flow-rules.md 的对应小节取列表行；没有就是空", () => {
+  const md = "# 说明\n\n## 实现\n- 实现规则 A\n说明文字不进任务书\n\n## 验收\n- 验收规则 B\n- 验收规则 C\n";
+  assert.equal(projectRules("impl", md), "- 实现规则 A\n");
+  assert.equal(projectRules("accept", md), "- 验收规则 B\n- 验收规则 C\n");
+  assert.equal(projectRules("accept", "# 没有小节\n"), "");
+});
+
+test("by:coordinator 标记从看板的 labels 读", () => {
+  const s = base({ board: { rows: [{ number: 8, labels: ["s:changes", "by:coordinator"] }, { number: 9, labels: ["s:changes"] }] } });
+  assert.equal(hasLabel(s, 8, "by:coordinator"), true);
+  assert.equal(hasLabel(s, 9, "by:coordinator"), false);
 });
