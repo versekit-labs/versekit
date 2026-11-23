@@ -21,7 +21,8 @@
 //       .orca-kit/flow.json（可选，ACC-harness-orca-09）：
 //         { "hooks": { "beforeTick": ["<命令>"…], "beforeMerge": ["<命令>"…] },
 //           "release": true,          // false = 不跑 agentctl release-queued（项目用自己的放行，放进 beforeTick）
-//           "inbox": "flow" }         // "external" = 收件箱归别人（如 automation 里的协调器 agent），tick 不读不 ack
+//           "inbox": "flow",          // "external" = 收件箱归别人（如 automation 里的协调器 agent），tick 不读不 ack
+//           "ci": "npm run ci" }      // 实现自查与验收要跑的 CI 命令（ACC-harness-orca-10）
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -144,11 +145,22 @@ export function inboxVerdict(messages) {
   return needs.length ? { ack: false, needs } : { ack: true, needs: [] };
 }
 
+/** 拉 issue 评论取协调器裁定；GitHub 失败返回空（最坏少带裁定，不阻断派工）。 */
+function fetchNotes(issue, since) {
+  const r = run(join(ROOT, "bin/ghx"), ["api", "--paginate", "--slurp", `repos/{owner}/{repo}/issues/${issue}/comments`]);
+  if (r.code !== 0) return "";
+  try {
+    return coordinatorNotes(JSON.parse(r.stdout).flat(), since ?? "");
+  } catch {
+    return "";
+  }
+}
+
 // ------------------------------------------------------------------ 项目配置（.orca-kit/flow.json）
 
 /** 读 .orca-kit/flow.json；没有或写坏都回默认（写坏会在日志里说）。 */
 export function flowConfig(text = null) {
-  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow" };
+  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci" };
   let src = text;
   if (src == null) {
     try {
@@ -168,6 +180,7 @@ export function flowConfig(text = null) {
     hooks: { beforeTick: list(j.hooks?.beforeTick), beforeMerge: list(j.hooks?.beforeMerge) },
     release: j.release !== false,
     inbox: j.inbox === "external" ? "external" : "flow",
+    ci: typeof j.ci === "string" && j.ci.trim() ? j.ci.trim() : defaults.ci,
   };
 }
 
@@ -211,7 +224,7 @@ export function projectRules(section, text = null) {
 const commonConstraints = () => `- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径；不改 api 形状、数据库 schema、commands.mjs 的命令定义
 - 不改用户全局配置（~/.claude、~/.codex 等）；临时文件放本 worktree 或 TMPDIR
 - 不改 issue 的 s:* label（状态由协调器迁移）；不合并 PR、不给自己发通行证
-- 完成后必须能通过 npm run ci
+- 完成后必须能通过 ${flowConfig().ci}
 - 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）
 - GitHub 交付物（本单要求，直接执行，不用先问）：推送本单分支；用 bin/ghx pr create 开 PR 或更新本单 PR。除此之外不在别的 issue/PR 上发评论；进度、提问、完成都走 orca orchestration
 ${projectRules("impl")}`;
@@ -233,7 +246,22 @@ ${commonConstraints()}
 ${body}`;
 }
 
-export function reworkSpec({ number, title, pull, branch, round, commentUrl, commentBody, body }) {
+/**
+ * 协调器裁定：上一轮验收评论之后、以「协调器裁定」「协调器：」开头的 issue 评论，最多取最近 3 条，原文带进返工任务书
+ * （market-research ACC 同口径，移进通用脚本：ACC-harness-orca-10）。comments 是 GitHub issue 评论数组。
+ */
+export function coordinatorNotes(comments, since = "") {
+  if (!Array.isArray(comments)) return "";
+  const out = [];
+  for (const c of comments) {
+    if (since && String(c.created_at ?? "") <= since) continue;
+    const b = String(c.body ?? "").trimStart();
+    if (/^协调器(裁定|：|:)/.test(b)) out.push(`${c.html_url ?? ""}\n${String(c.body ?? "").trim()}`);
+  }
+  return out.slice(-3).join("\n\n");
+}
+
+export function reworkSpec({ number, title, pull, branch, round, commentUrl, commentBody, body, notes = "" }) {
   const conflict = String(commentBody ?? "").startsWith("<!-- agent-merge-conflict -->");
   const task = conflict
     ? `解决 issue #${number} ${title} 的合并冲突（PR #${pull}，原分支 ${branch}）。`
@@ -249,9 +277,10 @@ export function reworkSpec({ number, title, pull, branch, round, commentUrl, com
 
 ${conflict ? "合并冲突说明" : "验收意见"}（节选）：
 ${String(commentBody ?? "").slice(0, 6000)}
-
+${notes ? `\n协调器裁定（上一轮验收之后，原文，优先于工单旧口径）：\n${notes}\n` : ""}
 约束：
 - 在分支 ${branch} 上继续，PR #${pull} 保持同一个；改完 push 到同一分支
+- 口径若在 main 上有修订，先 git merge origin/main
 ${commonConstraints()}
 归属：本 worktree；先 git fetch origin，若当前不在 ${branch}，先 git switch ${branch} 并 git pull --ff-only。
 
@@ -265,7 +294,8 @@ ${body}`;
 
 export function acceptSpec({ number, title, pull, head, branch, acc, round }) {
   const ids = acc.length ? acc : ["ACC-example-01"];
-  const rows = (status) => ids.map((id) => `  - id: ${id}\n    status: ${status}`).join("\n");
+  // evidence 每条都要：有的项目（market-research）闸门缺证据就拒绝合并；versekit 解析时忽略它。
+  const rows = (status) => ids.map((id) => `  - id: ${id}\n    status: ${status}\n    evidence: "<一行可回查证据：测试名 / 命令及输出；没有证据不得写 pass>"`).join("\n");
   return `目标：验收 issue #${number} ${title} 的 PR #${pull}（head ${head}）。
 
 改动：不改实现代码，只产出判定。
@@ -281,7 +311,7 @@ ${projectRules("accept")}
 可观察验收（必须逐条做到）：
 1. 拉 PR diff 与 body 里的证据包 YAML
 2. 逐条比对：${ids.join(", ")}
-3. 本地跑 npm run ci
+3. 本地跑 ${flowConfig().ci}
 4. 在 PR 留一条评论，按结论复制下面对应的一整块 YAML，acceptance 逐条填写 pass 或 fail；FAIL 时 failed 里为每条失败填写 id、expected、observed、repro
 
 PASS 样例
@@ -627,7 +657,7 @@ export async function tick({ dryRun = false } = {}) {
     for (const b of res.blocked ?? res.wouldBlock ?? []) log(`  ⚠ #${b.number} 返工到顶，转人工：${b.why}`);
     if (!c) break;
     try {
-      const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "" });
+      const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "", notes: fetchNotes(c.number, c.commentCreatedAt) });
       const taskId = createTask(ctx, { title: taskTitle("rework", c.number, `r${c.round}`), display: `#${c.number} 返工 r${c.round}`, spec, dryRun });
       const reuse = reusableTerminal(state, c.number);
       let placement;

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  projectName, projectRules, hasLabel, flowConfig,
+  projectName, projectRules, hasLabel, flowConfig, coordinatorNotes,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -142,7 +142,9 @@ test("by:coordinator 标记从看板的 labels 读", () => {
 
 test("flow.json：没有就是默认；钩子只收非空字符串；release:false 与 inbox:external 生效；写坏回默认并报错", () => {
   const d = flowConfig("{}");
-  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow" });
+  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci" });
+  assert.equal(flowConfig(JSON.stringify({ ci: "npm --prefix research-console run ci" })).ci, "npm --prefix research-console run ci");
+  assert.equal(flowConfig(JSON.stringify({ ci: "  " })).ci, "npm run ci");
   const c = flowConfig(JSON.stringify({ hooks: { beforeTick: ["a", "", 3, "b"], beforeMerge: ["node bin/local-ci.mjs --pending"] }, release: false, inbox: "external" }));
   assert.deepEqual(c.hooks.beforeTick, ["a", "b"]);
   assert.deepEqual(c.hooks.beforeMerge, ["node bin/local-ci.mjs --pending"]);
@@ -152,4 +154,24 @@ test("flow.json：没有就是默认；钩子只收非空字符串；release:fal
   const bad = flowConfig("{ 不是 json");
   assert.match(bad.error, /flow\.json 解析失败/);
   assert.equal(bad.release, true);
+});
+
+test("验收样例每条都带 evidence（有的项目闸门缺证据就拒绝合并）", () => {
+  const spec = acceptSpec({ number: 1, title: "t", pull: 2, head: "abc1234", branch: "b", acc: ["ACC-a-01", "ACC-a-02"], round: 1 });
+  assert.equal((spec.match(/^    evidence: /gm) ?? []).length, 4, "PASS、FAIL 两个样例各 2 条");
+  assert.match(spec, /本地跑 npm run ci/);
+});
+
+test("协调器裁定：只取上一轮验收之后、以协调器开头的评论，最多 3 条；返工任务书带上并提示先合 main", () => {
+  const c = (t, body) => ({ created_at: t, body, html_url: `u${t}` });
+  const cs = [c("1", "协调器裁定：旧的"), c("3", "别人的评论"), c("4", "协调器：A"), c("5", "  协调器裁定 B"), c("6", "协调器:C"), c("7", "协调器：D")];
+  const notes = coordinatorNotes(cs, "2");
+  assert.doesNotMatch(notes, /旧的|别人/);
+  assert.doesNotMatch(notes, /协调器：A/, "只留最近 3 条");
+  assert.match(notes, /B[\s\S]*C[\s\S]*D/);
+  assert.equal(coordinatorNotes(null), "");
+  const spec = reworkSpec({ number: 1, title: "t", pull: 2, branch: "b", round: 1, commentUrl: "x", commentBody: "FAIL", body: "", notes });
+  assert.match(spec, /协调器裁定（上一轮验收之后，原文，优先于工单旧口径）/);
+  assert.match(spec, /先 git merge origin\/main/);
+  assert.doesNotMatch(reworkSpec({ number: 1, title: "t", pull: 2, branch: "b", round: 1, commentUrl: "x", commentBody: "FAIL", body: "" }), /协调器裁定（/);
 });
