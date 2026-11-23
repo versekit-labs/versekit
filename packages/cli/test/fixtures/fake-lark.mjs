@@ -15,7 +15,7 @@ appendFileSync(f("calls.log"), JSON.stringify(args.filter((a) => !/secret/i.test
 
 if (args[0] === "--version") { console.log("1.0.97"); process.exit(0); }
 // 和真的 lark-cli 1.0.97 一样：同名 add 报错、不能删唯一的 profile、remove/rename 只认位置参数；错误是多行缩进 JSON。
-const fail = (msg) => { console.error(JSON.stringify({ ok: false, error: { type: "validation", message: msg } }, null, 2)); process.exit(1); };
+const fail = (msg) => { console.error(JSON.stringify({ ok: false, error: { type: "validation", message: msg } }, null, 2)); process.exit(2); };
 const names = () => (has("profiles") ? readFileSync(f("profiles"), "utf8").split("\n").filter(Boolean) : has("profile") ? ["versekit"] : []);
 const save = (list) => writeFileSync(f("profiles"), list.join("\n"));
 if (args[0] === "profile" && args[1] === "add") {
@@ -38,14 +38,21 @@ if (args[0] === "profile" && args[1] === "add") {
   if (has("failremove") && name === "versekit") fail("remove failed on purpose");
   save(names().filter((n) => n !== name));
   if (name === "versekit") unlinkSync(f("profile"));
+  else if (name.startsWith("versekit-new-") && has("profile.new")) unlinkSync(f("profile.new"));
+  else if (has("profile.bak")) unlinkSync(f("profile.bak"));
   console.log(JSON.stringify({ ok: true }));
   process.exit(0);
 } else if (args[0] === "profile" && args[1] === "rename") {
   const [from, to] = [args[2], args[3]];
   if (!names().includes(from)) fail(`profile "${from}" not found`);
   if (names().includes(to)) fail(`profile "${to}" already exists`);
+  if (has("failbackup") && from === "versekit") fail("backup rename failed on purpose");
+  if (has("failrename") && from.startsWith("versekit-new-")) fail("rename failed on purpose");
   save(names().map((n) => (n === from ? to : n)));
-  if (to === "versekit" && has("profile.new")) { writeFileSync(f("profile"), readFileSync(f("profile.new"), "utf8")); unlinkSync(f("profile.new")); }
+  // 状态文件：profile=versekit 的 appId；profile.new=临时名的；profile.bak=被改名挪走的旧 versekit 的
+  const mv = (a, b) => { if (has(a)) { writeFileSync(f(b), readFileSync(f(a), "utf8")); unlinkSync(f(a)); } };
+  if (from === "versekit") mv("profile", "profile.bak");
+  else if (to === "versekit") mv(from.startsWith("versekit-new-") ? "profile.new" : "profile.bak", "profile");
   console.log(JSON.stringify({ ok: true }));
   process.exit(0);
 } else if (args[0] === "profile") {

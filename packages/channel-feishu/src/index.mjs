@@ -313,20 +313,27 @@ export default {
     if (!info.exists) {
       await runWithInput(addArgs(profile()), secretIn);
     } else {
-      // lark-cli 不让删唯一的 profile，也不允许同名覆盖：先加临时名，再删旧的，最后改名。
-      const tmp = `${profile()}-new-${process.pid}-${Date.now().toString(36)}`;
+      // lark-cli 不让删唯一的 profile，也不允许同名覆盖，改名也不能覆盖：
+      // 先加临时名；旧的先改名成备份（不删）；临时名改成正名；全成功后才删备份。任一步失败都还原，旧配置不丢、不留临时名。
+      const stamp = `${process.pid}-${Date.now().toString(36)}`;
+      const tmp = `${profile()}-new-${stamp}`;
+      const bak = `${profile()}-old-${stamp}`;
+      const quiet = (args) => runWithInput(args, "", args.slice(0, 2).join(" ")).catch(() => {});
       await runWithInput(addArgs(tmp), secretIn);
       try {
-        await runWithInput(["profile", "remove", profile()], "", "profile remove");
+        await runWithInput(["profile", "rename", profile(), bak], "", "profile rename");
       } catch (err) {
-        await runWithInput(["profile", "remove", tmp], "", "profile remove").catch(() => {});
+        await quiet(["profile", "remove", tmp]);
         throw new Error(`没能替换旧的机器人配置（旧的还在）：${err.message}`);
       }
       try {
         await runWithInput(["profile", "rename", tmp, profile()], "", "profile rename");
       } catch (err) {
-        throw new Error(`旧配置已删除，但新配置改名失败（临时名 ${tmp}）：${err.message}`);
+        await quiet(["profile", "rename", bak, profile()]);
+        await quiet(["profile", "remove", tmp]);
+        throw new Error(`没能替换旧的机器人配置（旧的还在）：${err.message}`);
       }
+      await quiet(["profile", "remove", bak]);
     }
     return { profile: profile(), appId: appId.trim() };
   },

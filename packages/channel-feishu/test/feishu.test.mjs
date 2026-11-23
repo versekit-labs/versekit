@@ -343,24 +343,36 @@ test("configure(): 第一次接，直接 add，不调 remove", async () => {
   });
 });
 
-test("configure(): 已有唯一 versekit 重新接——先加临时名、删旧、改名，secret 只走 stdin", async () => {
+test("configure(): 已有唯一 versekit 重新接——先加临时名、旧的改名备份、临时名转正、删备份，secret 只走 stdin", async () => {
   await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); }, async (state) => {
     await channel.configure({ appId: "cli_new1", appSecret: "super-secret-value" });
     assert.deepEqual(profilesOf(state), ["versekit"]);
     assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_new1");
     const verbs = larkCalls(state).map((c) => c.slice(0, 2).join(" ")).filter((v) => v.startsWith("profile ") && v !== "profile list");
-    assert.deepEqual(verbs, ["profile add", "profile remove", "profile rename"]);
+    assert.deepEqual(verbs, ["profile add", "profile rename", "profile rename", "profile remove"]);
     assert.equal(readFileSync(join(state, "secret.len"), "utf8"), String("super-secret-value".length));
     assert.ok(!readFileSync(join(state, "calls.log"), "utf8").includes("super-secret-value"));
   });
 });
 
 test("configure(): 替换中途失败——旧配置保留、临时名清掉、报错是人话", async () => {
-  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); writeFileSync(join(s, "failremove"), "1"); }, async (state) => {
+  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); writeFileSync(join(s, "failbackup"), "1"); }, async (state) => {
     await assert.rejects(channel.configure({ appId: "cli_new2", appSecret: "super-secret-value" }), (e) => {
       assert.match(e.message, /旧的还在/);
-      assert.match(e.message, /remove failed on purpose/);
+      assert.match(e.message, /backup rename failed on purpose/);
       assert.ok(!/^[}\s]+$/.test(e.message));
+      return true;
+    });
+    assert.deepEqual(profilesOf(state), ["versekit"]);
+    assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_old");
+  });
+});
+
+test("configure(): 替换中途改名失败——profile list 仍只有一个 versekit、appId 是旧的，不留临时名", async () => {
+  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); writeFileSync(join(s, "failrename"), "1"); }, async (state) => {
+    await assert.rejects(channel.configure({ appId: "cli_new4", appSecret: "super-secret-value" }), (e) => {
+      assert.match(e.message, /旧的还在/);
+      assert.match(e.message, /rename failed on purpose/);
       return true;
     });
     assert.deepEqual(profilesOf(state), ["versekit"]);
