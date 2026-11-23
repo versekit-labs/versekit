@@ -124,25 +124,6 @@ echo '{"ok":true,"result":{"dispatchId":"ctx_fake"}}'
   return spawnSync('bash', ['-c', script], { encoding: 'utf8', env: envFor(dir, extra) });
 }
 
-test('codex-01：cycle.sh 原生启动 → worker-start --agent codex --model gpt-6.2-sol；claude 全程没被调用', () => {
-  const dir = sandbox();
-  const r = dispatchWith(dir, 'model:codex,s:ready');
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /HANDLE=native:codex:gpt-6\.2-sol/);
-  assert.match(r.stdout, /REASON=issue 带 model:codex label → Codex/);
-  assert.match(calls(dir, 'orca.calls'), /worker-start .*--agent codex --model gpt-6\.2-sol --worktree \/wt/);
-  assert.equal(calls(dir, 'claude.calls'), '');
-});
-
-test('codex-01：CODEX_MODEL 传到 --model；不带 label 仍是 --agent claude --model sonnet', () => {
-  const dir = sandbox();
-  dispatchWith(dir, 'model:codex', '', { CODEX_MODEL: 'gpt-x' });
-  assert.match(calls(dir, 'orca.calls'), /--agent codex --model gpt-x /);
-  const dir2 = sandbox();
-  dispatchWith(dir2, 's:ready');
-  assert.match(calls(dir2, 'orca.calls'), /--agent claude --model sonnet /);
-});
-
 // ---- coordinator-loop：Codex worker 屏幕出现用量上限 ----
 function loopSandbox(limitText, channelName = 'codex') {
   const dir = sandbox();
@@ -177,37 +158,6 @@ const loop = (dir) => spawnSync('bash', [join(ROOT, 'bin/coordinator-loop.sh')],
     CYCLE_LOG: join(dir, 'cycle.log'), COORD_STATE_DIR: join(dir, 'coord'), COORD_WAIT_MS: '100' }),
 });
 
-test('codex-04：Codex worker 报用量上限 → 记冷却(解析时间)、worker-stop、issue 退回 s:ready；之后 model:codex 改派 Sonnet', () => {
-  const dir = loopSandbox("You've hit your usage limit. Upgrade to Pro or try again at 2099-11-22 03:04:00 +0800.");
-  const r = loop(dir);
-  assert.notEqual(r.status, 11, r.stdout + r.stderr);
-  assert.match(r.stdout, /Codex 额度用完.*#259/);
-  assert.match(r.stdout, /1\/3.*Codex 额度用完，到 2099-11-22 03:04:00 \+0800 为止/);
-  assert.match(r.stdout, /2\/3 已 worker-stop dispatch=ctx_cdx/);
-  assert.match(r.stdout, /3\/3 已把 #259 退回 s:ready/);
-  const rec = readFileSync(join(dir, 'state', 'codex-exhausted'), 'utf8').trim().split('\t');
-  assert.equal(Number(rec[0]), Date.parse('2099-11-21T19:04:00Z') / 1000);
-  assert.match(calls(dir, 'stop.calls'), /worker-stop --dispatch ctx_cdx/);
-  assert.match(calls(dir, 'agentctl.calls'), /set --issue 259 --to ready/);
-  const c = channel(dir, ['--role', 'engineer', '--labels', 'model:codex']);
-  assert.match(c.stdout, /^claude\|sonnet\|.*Codex 额度用完/);
-});
-
-test('codex-04：用量上限里没有时间 → 按 5 小时算', () => {
-  const dir = loopSandbox("You've hit your usage limit. Try again later.");
-  loop(dir);
-  const until = Number(readFileSync(join(dir, 'state', 'codex-exhausted'), 'utf8').split('\t')[0]);
-  const delta = until - Date.now() / 1000;
-  assert.ok(delta > 5 * 3600 - 120 && delta <= 5 * 3600 + 5, `delta=${delta}`);
-});
-
-test('codex-04：非 Codex 通道的 usage limit 仍以 11 停下，不记冷却', () => {
-  const dir = loopSandbox("You've hit your usage limit.", 'claude');
-  const r = loop(dir);
-  assert.equal(r.status, 11, r.stdout + r.stderr);
-  assert.ok(!existsSync(join(dir, 'state', 'codex-exhausted')));
-});
-
 // ---- ACC-harness-codex-06：Codex 任务书写明 GitHub 交付物允许执行 ----
 function renderSpecs(channel) {
   const script = [
@@ -221,18 +171,3 @@ function renderSpecs(channel) {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
 }
-
-test('codex-06：Codex 实现与返工任务书写明 GitHub 交付物允许直接执行', () => {
-  const out = renderSpecs('codex');
-  assert.equal((out.match(/GitHub 交付物（本单要求，允许直接执行，不用先问）/g) || []).length, 2);
-  assert.match(out, /bin\/ghx pr create/);
-  assert.match(out, /推送本单分支/);
-  assert.match(out, /不拿 GitHub 当汇报渠道/);
-  assert.match(out, /不在别的 issue\/PR 上发评论/);
-});
-
-test('codex-06：claude 与 DeepSeek 通道的任务书不含这段说明', () => {
-  for (const ch of ['claude', 'volc', 'qwen']) {
-    assert.doesNotMatch(renderSpecs(ch), /GitHub 交付物/, ch);
-  }
-});

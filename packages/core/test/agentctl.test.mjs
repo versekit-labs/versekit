@@ -140,50 +140,17 @@ test("ACC-harness-verdict-04：解析 PR #320 原始裸 YAML 判定及失败详�
   assert.equal(failed[1].repro.length, 4);
 });
 
-test("cycle.sh：dry-run 在 UTF-8 Bash 中渲染验收任务书、落后 main 的判定规则和判定样例", async () => {
-  const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
-  const template = /^acceptance_spec\(\) \{\n[\s\S]*?^\}$/m.exec(script)?.[0];
-  const dispatch = /^dispatch_acceptance\(\) \{\n[\s\S]*?^\}$/m.exec(script)?.[0];
-  assert.ok(template, "找不到验收任务书函数");
-  assert.ok(dispatch, "找不到验收派工函数");
-
-  const { stdout } = await promisify(execFile)("/bin/bash", ["-euo", "pipefail", "-c", `
-    ${template}
-    ${dispatch}
-    node() { printf '%s\\n' "$QUEUE"; }
-    log() { printf '%s\\n' "$*"; }
-    choose_worker_channel() { CHOSEN_CHANNEL=volc; CHOSEN_MODEL=deepseek-v4.1-flash; }
-    dispatch_acceptance
-  `], {
-    env: {
-      ...process.env,
-      LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
-      DRY: "1",
-      LOCK_DIR: "/dev/null",
-      STATE_DIR: "/dev/null",
-      ACCEPTANCE_WT: "/acceptance",
-      QUEUE: JSON.stringify({ queue: [{
-        number: 264,
-        pull: 265,
-        head: verdictHead,
-        acc: ["ACC-example-01", "ACC-example-02"],
-        title: "验收样例",
-      }] }),
-    },
-  });
-  // 新版 Bash 可能正常展开，仍禁止会破坏 Bash 3.2 的相邻写法。
-  assert.doesNotMatch(template, /\$[A-Za-z_]\w*[^\x00-\x7F]/);
-  assert.equal(stdout.split("\n")[1], `目标：验收 issue #264 的 PR #265（head ${verdictHead}）。`);
-  assert.match(
-    stdout,
-    /PR head 落后 main 时，.*只在 head 上失败.*本 PR 没改过的文件.*main 上已修好.*CLEAN.*按合并 main 后的结果判定.*note.*head 上的现象、合并后的现象和两边各自的复现命令.*本 PR 改过的文件.*按 head 上的结果判定.*无需发 question/,
-  );
-
+test("orca-flow：验收任务书含落后 main 的判定规则，两份判定样例都能被 parseVerdict 读出", async () => {
+  const { acceptSpec } = await import("../../../bin/orca-flow.mjs");
+  const stdout = acceptSpec({ number: 264, title: "验收样例", pull: 265, head: verdictHead, branch: "issue-264", acc: ["ACC-example-01", "ACC-example-02"], round: 1 });
+  assert.equal(stdout.split("\n")[0], `目标：验收 issue #264 验收样例 的 PR #265（head ${verdictHead}）。`);
+  assert.match(stdout, /PR head 落后 main 时，.*只在 head 上失败.*本 PR 没改过的文件.*main 上已修好.*CLEAN.*按合并 main 后的结果判定.*本 PR 改过的文件时按 head 判定/);
   const verdicts = [...stdout.matchAll(/```yaml\n[\s\S]*?\n```/g)].map(([block]) => parseVerdict(block));
   assert.deepEqual(verdicts.map(({ verdict, headSha }) => [verdict, headSha]), [
     ["PASS", verdictHead],
     ["FAIL", verdictHead],
   ]);
+  assert.deepEqual(verdicts[0].acceptance.map((a) => a.id), ["ACC-example-01", "ACC-example-02"], "样例逐条列出本单口径");
 });
 
 const verdictFormats = [
@@ -423,44 +390,6 @@ test("ACC-harness-verdict-04：已判定的 head 不复派，坏判定告警，�
   const { stdout } = await exec(process.execPath, args, { env, cwd, timeout: 10_000 });
   const eligible = issues.filter((_, i) => cases[i].eligible).map(({ number }) => number);
   assert.deepEqual(JSON.parse(stdout).queue.map(({ number }) => number), eligible);
-
-  const script = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
-  const functions = ["acceptance_spec", "dispatch_acceptance", "write_acceptance_verdict_alerts"].map((name) => {
-    const body = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, "m").exec(script)?.[0];
-    assert.ok(body, name);
-    return body;
-  });
-  const state = await mkdtemp(join(tmpdir(), "agentctl-verdict-"));
-  t.after(() => rm(state, { recursive: true, force: true }));
-  const alert = join(state, "cycle-owner-alert.txt");
-  const otherAlert = "[lane-worktree] /fixture\n";
-  await writeFile(alert, otherAlert);
-  const cycle = () => exec("/bin/bash", ["-euo", "pipefail", "-c", `
-    ${functions.join("\n")}
-    node() { "$NODE_BIN" "$@"; }
-    log() { printf '%s\\n' "$*"; }
-    choose_worker_channel() { CHOSEN_CHANNEL=volc; CHOSEN_MODEL=fixture; }
-    dispatch_acceptance
-    write_acceptance_verdict_alerts
-  `], {
-    cwd, timeout: 10_000,
-    env: { ...env, NODE_BIN: process.execPath, DRY: "1", LOCK_DIR: state, STATE_DIR: state, ACCEPTANCE_WT: state },
-  });
-  const dryRun = (await cycle()).stdout;
-  assert.deepEqual([...dryRun.matchAll(/会派验收：issue #(\d+)/g)].map((m) => Number(m[1])), [eligible[0]]);
-
-  const alerts = (await readFile(alert, "utf8")).split("\n");
-  assert.equal(alerts.filter((line) => line.startsWith("[验收判定]")).length, 3);
-  for (const [i, { problem }] of cases.entries()) {
-    if (!problem) continue;
-    const url = commentUrl(i);
-    assert.match(alerts.find((line) => line.includes(url)), problem);
-    assert.match(dryRun.split("\n").find((line) => line.includes(url)), problem);
-    comments[i][0].body = bareFailVerdict; // 协调器补正后仍已验收，告警应清除。
-  }
-  const fixed = (await cycle()).stdout;
-  assert.doesNotMatch(fixed, /\[验收判定\]/);
-  assert.equal(await readFile(alert, "utf8"), otherAlert);
 });
 
 test("ACC-harness-merge-01：冲突转 s:changes，列出冲突文件且不增加质量返工轮次", async (t) => {
@@ -526,13 +455,8 @@ test("ACC-harness-merge-01：冲突转 s:changes，列出冲突文件且不增�
   assert.equal(nextClaim.round, 1, "一次历史质量 FAIL 加一次合并冲突仍为第一轮，不触发升模型");
   assert.equal(nextClaim.commentBody, comment.body);
 
-  const cycle = await readFile(new URL("../../../bin/cycle.sh", import.meta.url), "utf8");
-  const spec = /^rework_spec\(\) \{\n[\s\S]*?^\}/m.exec(cycle)?.[0];
-  assert.ok(spec);
-  const { stdout } = await promisify(execFile)("/bin/bash", [
-    "-eu", "-c", `${spec}\nrework_spec "$@"`, "fixture",
-    "1", "example", "101", "issue-1", "1", comment.html_url, comment.body, dir, issue.body, "",
-  ]);
+  const { reworkSpec } = await import("../../../bin/orca-flow.mjs");
+  const stdout = reworkSpec({ number: 1, title: "example", pull: 101, branch: "issue-1", round: 1, commentUrl: comment.html_url, commentBody: comment.body, body: issue.body });
   assert.match(stdout, /在原分支拉取并合并 PR 的目标分支.*推送新 head 供重新验收/);
   assert.doesNotMatch(stdout, /按最近验收意见/);
 });

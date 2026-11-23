@@ -7,112 +7,73 @@
 
 人唯一对话的 agent。它把人的意图翻译成仓库里有记录的动作。
 
-**它拥有 Orca Run 和收件箱。** Run 同一时刻只有一个终端是所有者；人对话的协调器就是所有者：开场在自己的终端 `run-use` 绑定，`check` / `ack` 消费消息。定时的 `bin/cycle.sh` 是机械脚本，**不拥有 Run、不消费收件箱**，只做机械迁移、合并、派工与验收派工；它只从 `~/.orca/versekit-run-id` 读 Run id，不 `run-use`、不创建、不抢所有权。派工的 `task-create` / `worker-start` 显式带 `--run` 和 Run 所有者的 `--from` 句柄：automation precheck 没有自己的终端也能派工，Run 所有权仍留在协调器。
+**它拥有 Orca Run 和收件箱。** 开场在自己的终端 `run-use` 绑定 Run，`check` / `reply` / `ack` 处理 worker 的提问。
+派工、验收、返工、合并由 `bin/orca-flow.mjs` 按 **Orca 官方原生流程**做（2026-11-23 起，替代已删除的 `cycle.sh` / `coordinator-loop.sh` / `worker-up.sh`）：
 
-协调器靠这些了解情况（GitHub 状态是事实源，Orca 状态只作辅助）：
-issue 的 `s:*` / `hold:human`、PR 评论里的 verdict、`~/.orca/versekit-state/escalations.log`、
-`~/.orca/versekit-state/cycle-owner-state.log`（cycle.sh 无终端时每轮记一行，属正常）、
-`~/.orca/versekit-state/cycle-owner-failures.log`（非所有者终端的探测失败记录）、
-`~/.orca/versekit-state/cycle-owner-alert.txt`（连续失败 >=2 次时出现）、
-`orca orchestration inbox` / `worker-list`（只读）。
+| 层 | 谁管 | 内容 |
+|---|---|---|
+| 给人看的事实源 | GitHub（经 `bin/agentctl.mjs`） | issue 的 `s:*` / `hold:human`、PR、验收判定、合并闸门、返工轮数 |
+| 执行 | Orca 原生 | Task 与依赖、`worker-start` 放置（`--worktree new-top-level` 由 Orca 建目录）、交活后复用同一终端、`worker-list` 的 liveness / attention、`worker-release` |
+| 判断 | 协调器（你） | 回答 worker 提问、裁定口径、向人汇报；不写业务代码 |
+
+Orca 不做验收、不管合并（核实过 1.4.237 全部命令）：验收是派一个独立的 DeepSeek worker 写判定，合并只走 `agentctl merge` 的闸门。
+本仓库是免费组织的私有仓库，GitHub 分支保护不生效（所有者 2026-11-23 决定先不升级），**任何 PR 都不手动 `gh pr merge`**，包括协调器自己的文档 PR。
 
 | 能做 | 不能做 |
 |---|---|
 | 读 issue / PR 摘要 / 证据包 / label | 写或改业务代码、读 diff 做实现判断 |
-| 写 issue、给 PR 留评论、改 `s:*` 与 `hold:human`（经 `agentctl`） | 给 PR 发 verdict、自己合并（合并走 `agentctl merge`） |
-| `run-use` 绑定 Run；`check` / `ack` 消费收件箱 | 让 `cycle.sh` 消费消息或释放终端；和它抢 Run 所有权 |
-| 只读查看 inbox / worker-list | 私聊 worker、绕过 label 直接指挥、替人做产品或审美判断 |
-| 向人汇报、提问、要决策 | 抢 `cycle.sh` 的派工/合并：那两段不依赖所有权，归脚本 |
+| 写 issue、给 PR 留评论、改 `s:*` 与 `hold:human`（经 `agentctl`） | 给 PR 发 verdict、手动合并（合并只走 `agentctl merge`） |
+| `run-use`；`check` / `reply` / `ack`；给在跑的 worker 补话用 `orca orchestration send --to dispatch:<id>` | 往 worker 终端里 `orca terminal send` 打字；自己 `git worktree add` 给 worker 用 |
+| 只读 `orca-flow status`、`worker-list`、`worker-read --source auto` | 按「终端输出没变」判卡死；没有 `exited` 正证据就 stop / 重派 |
+| 向人汇报、提问、要决策 | 绕过 label 直接指挥、替人做产品或审美判断 |
 
 模型：Claude。它的工作是理解不满、判断该打回还是改口径、把话写清楚；不是写代码，所以单次开销小。
 
 ## 2. 开场（先绑定 Run，再巡检）
 
-开场第一件事是绑定 Run：这是协调器唯一的生命周期写操作，也是收件箱所有权来源。
-
 ```bash
 RUN="$(cat ~/.orca/versekit-run-id)"
-orca orchestration run-use --id "$RUN" --json                                # 绑定 Run（必须在协调器终端）
-node bin/agentctl.mjs tick                                                  # 谁该动、为什么
-orca orchestration inbox --json                                             # 谁给谁发了什么（只读，不消费）
-orca orchestration worker-list --run "$RUN" --json                          # 看 projection.attention
-tail -20 ~/.orca/versekit-state/escalations.log                             # worker 升级给人的事
-tail -20 ~/.orca/versekit-state/cycle-owner-state.log 2>/dev/null            # cycle.sh 每轮无终端跳过（正常）
-tail -20 ~/.orca/versekit-state/cycle-owner-failures.log 2>/dev/null        # 非所有者终端的探测失败
-cat ~/.orca/versekit-state/cycle-owner-alert.txt 2>/dev/null                # 连续失败 >=2 次时的告警
+orca orchestration run-use --id "$RUN" --json        # 绑定 Run（必须在协调器终端）
+node bin/agentctl.mjs tick                          # 谁该动、为什么
+node bin/orca-flow.mjs status                       # 在跑 / 保留着的 worker，requiresAction 的带 nextAction
+tail -30 ~/.orca/versekit-state/orca-flow.log       # 每轮做了什么；「⚠ 需要协调器」就是轮到你
+pgrep -fl 'orca-flow\[versekit\]'                   # 后台 watch 在不在
 ```
 
-如果 `~/.orca/versekit-run-id` 不存在，**由协调器**建 Run 并把 id 写进去，不要让 cycle.sh 建：
-`orca orchestration run-create --objective "versekit 多 agent 协作" --json`，取 `result.run.id` 写文件。
-
+如果 `~/.orca/versekit-run-id` 不存在，由协调器 `orca orchestration run-create --objective "versekit 多 agent 协作" --json`，取 `result.run.id` 写进去。
 然后用三五句话告诉人：有几个 issue 在哪个状态、有没有 `s:blocked` / `hold:human`、有什么要人决定的。
 
-## 3. worker 的消息怎么到你这里
+## 3. 一轮做什么（`node bin/orca-flow.mjs tick`）
 
-收件箱归你：`bin/cycle.sh` 只做一次只读 `check --peek` 看是否还有所有权问题，**不 ack、不处理消息**。
-所以你读收件箱本身，按类型落成 GitHub 上的状态，处理完再 ack：
+每轮都从「GitHub 现状 + `orca task-list` / `worker-list`」重新算，可重入、幂等；不建 worktree、不加锁、不写登记文件。Orca 的 Run / Task 是持久的（重启不丢，2026-11-23 核实 368 个 Task 跨过多次重启）。
 
-```bash
-bin/coordinator-loop.sh          # 在你自己的 Orca 终端里后台跑；它退出时你会被叫醒
-```
+| 段 | 做什么 |
+|---|---|
+| 0 收件箱 | `check`：一批里只有 `worker_done` / `heartbeat` / `merge_ready` 就 ack；有 `question` / `escalation` **不 ack**，日志写「⚠ 需要协调器」、`tick` 退出码 10，别的段照常跑 |
+| 1 迁移、合并 | `agentctl tick --apply`（doing → review）；`agentctl merge --pending`（PASS + 闸门全绿就合，FAIL / 冲突打回 `s:changes`） |
+| 2 交活的终端 | 实现 / 返工交活后 `worker-retain`（等验收结论，FAIL 时让同一个 agent 接着改）；验收交活、或 issue 已离开 review/accept/changes 的 `worker-release` |
+| 3 放行 | 实现 / 返工在跑的少于 `FLOW_LANES`（默认 2）时 `agentctl release-queued`：`s:queued` → `s:ready` |
+| 4 验收 | `s:review` 且当前 head 没有判定：建 Task `vk#N 验收 <head7>`，在**本单的 worktree** 里起 opencode（DeepSeek，`bin/worker-channel.sh` + `bin/opencode-model.sh` 选路），同时最多 `FLOW_ACCEPT_MAX`（默认 1）个 |
+| 5 返工 | `s:changes`：`agentctl claim --role rework`，建 Task `vk#N 返工 r<k>`；原实现终端还保留着、进程活着就 `worker-start --terminal <它>` 复用，否则在本单 worktree 起新 agent |
+| 6 实现 | `s:ready`：`agentctl claim --role engineer`，建 Task `vk#N 实现`，`worker-start --worktree new-top-level --name issue-N`，再 `worktree set --issue N` 把单子挂到 Orca 卡片上 |
 
-`bin/coordinator-loop.sh` 就是官方循环的脚本版，替你转这一圈，不用每次手动挂等待：
+Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca 之间唯一的对应关系，不要手建同名 Task。
 
-| 它遇到 | 它做什么 | 退出码 |
-|---|---|---|
-| `worker_done` succeeded / `merge_ready` | 跑一轮 `bin/cycle.sh`（迁移、合并、release、派下一单），ack，继续等 | 不退出 |
-| 超时 / 空结果 | 也跑一轮 `cycle.sh`（门禁晚绿的 PR 靠它合并），继续等 | 不退出 |
-| `escalation` / `question` / `worker_done` failed | **不 ack**，把消息打印出来 | 10 |
-| 连续 3 次空等且 `worker-list` 说有 worker 需要处理 | 列出那几行 | 11 |
-| 在跑的 worker 终端末尾出现额度/限流错误（`exceeded … quota`、`usage limit`、`HTTP 429`），或终端输出超过 30 分钟（`COORD_STALL_SECS`，默认 1800）没变化 | **下一次检查**就停下，打印 issue 号、dispatch id、原因（额度用尽 / 疑似卡住）和 `worker-read` 末尾几行；不自动 `worker-stop` / kill，由你确认后 stop 再重派 | 11 |
-| **跑在火山通道上的验收 worker** 终端末尾出现额度用尽（如 `You have exceeded the 5-hour usage quota. It will reset at …`） | 这是正证据，循环**自己处理、不退出**：① 解析报错里的重置时间（解析不出按 5 小时）写进 `$STATE_DIR/volc-exhausted`；② 对该 worker `worker-stop`；③ 清掉它的验收锁（`accept-<issue>-*.lock`）与验收终端记录，本轮 `cycle.sh` 用千问重派。三步都写日志。此后 `bin/dsh-model.sh` 到期前不探测火山、直接选千问并在 stderr 写原因，到期自动恢复火山（1 token 探测在额度用尽时仍返回 200，所以不能靠探测）。千问通道的额度错误仍按上一行以 11 停下 | — |
-| 等待被取消或 `check` 报错 | 说明原因 | 12 |
-| 同一项目已有循环在跑（锁里的 pid 还活着，且进程名是本项目的循环） | stderr 写「已有循环在跑：pid=N」，不调 `orca` / `cycle.sh`，直接退出 | 14 |
-| 没有可派的活，但 `s:triage` 里还有 issue | 列出它们：轮到你补验收口径、转 `s:queued`（循环会自动放行成 `s:ready`），再重新启动。`s:queued` 里有能放行的单时**不退出 13**，多等几轮（`COORD_QUEUE_WAITS`，默认 5）让循环放行 | 13 |
-| 没有在跑的 worker，也没有新单可派 | 结束 | 0 |
-
-退出码 14 的锁在 `$COORD_STATE_DIR/coordinator-loop.lock`（内容是 pid，默认目录 `~/.orca/<项目名>-state/`）。锁里的 pid 已不存在、或那个进程不是本项目的循环时算陈旧锁，新循环接管并在日志写一行；任何方式退出都只删自己的锁。重复起循环会让两个循环共用同一个 Run、把同一单派两次，所以这里宁可拒绝。
-
-**按项目名查进程**：脚本启动时用 `exec -a` 把进程名改成 `coordinator-loop[<项目名>]`。项目名默认取 `origin` 远端的仓库名（取不到用仓库目录名），可用 `COORD_PROJECT` 覆盖。本机同时跑着多个项目的循环，**不要**按 `coordinator-loop.sh` 这个名字 `pgrep`（会命中别的项目、误停对方）：
-
-```bash
-pgrep -fl 'coordinator-loop\[versekit\]'   # 只命中 versekit 的循环；换项目就换方括号里的名字
-```
-
-退出码 11 的停摆检测不看 `lastHeartbeatAt`（正常干活的 worker 心跳也可能只有派出时一次），只看终端输出；上次输出摘要与时间存在 `~/.orca/versekit-state/worker-watch/`，不进仓库。
-
-退出码 10 / 13 时轮到你：按下表处理，`orca orchestration check --run "$RUN" --ack <deliveryId> --json`，再重新启动脚本。
-手动走这一圈时的等价命令：
-
-```bash
-RUN="$(cat ~/.orca/versekit-run-id)"
-orca orchestration check --run "$RUN" --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
-orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_done,escalation,question,merge_ready --timeout-ms 900000 --json
-```
-
-这是 Orca 官方的协调器循环（`orca skills get orchestration --full`，以本机版本为准）。几条容易踩的：
-
-- **等待不要带 `--peek`。** `--peek` 只是只读查看，不推进收件箱，旧消息会一遍遍把你叫醒。
-- **每处理完一批就接着派。** worker 交活后跑一次 `bin/cycle.sh --no-consume`（它会迁移状态、合并、派下一单），再回到等待。流程停住几乎都是因为这里断了。
-- **连续 3 次空等**就别再盲等：`orca orchestration worker-list --run "$RUN" --json`，看每行的 `projection.liveness` 和 `projection.nextAction`。`unverifiable` 是「不知道」，不是「死了」——没有正证据（`exited`）不 stop、不 abandon、不重派。
-- **等待期间不要在同一个终端再跑 `run-use`**，它会取消正在进行的等待。
-- **worker 由 Orca 原生启动**（`worker-start --agent claude --model …` / `--agent opencode`），终端归 Dispatch 所有。交活后 `bin/cycle.sh` 在你的终端里跑时会自动 `worker-release`；你也可以手动 `orca orchestration worker-release --dispatch <id>`。不要用 `terminal close` 代替。
-- **DeepSeek 走 opencode**：通道配置在 `~/.config/opencode/opencode.json`（`bin/opencode-model.sh` 维护）。火山的密钥引用环境变量；千问备用通道用 opencode 内置的 `alibaba-token-plan-cn`，密钥在 opencode 凭据库（`opencode auth login`）。Orca 不能给 opencode 传 `--model`，所以用的是配置里的默认模型。
+**谁来跑 tick**：
+- 你在的时候：`nohup node bin/orca-flow.mjs watch --every 180 >> ~/.orca/versekit-state/orca-flow.out 2>&1 &`（进程名 `orca-flow[versekit]`，同一项目只允许一个，重复起会退出码 14）。用 Monitor 盯 `orca-flow.log` 里的「⚠ 需要协调器」「✗」「✓ 合并」。
+- 遇到「⚠ 需要协调器」：`orca orchestration check --json` 读那批消息，按下表处理，`reply` / 改 issue，最后 `check --ack <deliveryId>`。watch 不用重启，它不会因为提问停下。
 
 | 你看到 | 落成什么 | 你要做什么 |
 |---|---|---|
-| `worker_done` outcome=failed | issue `s:blocked` + `hold:human` | 告诉人 worker 报告了什么，问怎么办 |
-| `question`（worker 用 `ask` 提的，它正卡着等回答） | 你自己能答的：`orca orchestration reply --id <msgId> --body "…"`，worker 收到后继续干 | 答案同时写成 issue 评论（下一个 worker 只看得到 issue） |
-| `question`，但要人拍板 | 先建决策门记下「在等谁决定什么」：`orca orchestration gate-create --task <taskId> --question "…" --options '["A","B"]' --json`；issue 加 `hold:human` | **当面转述**选项和你的建议；人定了以后 `gate-resolve --id <gateId> --resolution "…"`，再 `reply` 给 worker，决定写成 issue 评论，解除 hold |
-| `escalation`（worker 报告卡住，没有在等回答） | issue `s:blocked` + `hold:human`，一行写进 `escalations.log` | **当面转述**，拿到人的决定后把决定写成 issue 评论，再解除 hold，让下一轮重新派工 |
-| `merge_ready` | 跑 `node bin/agentctl.mjs merge --pending` | 汇报合并结果 |
-| 验收 FAIL，但原因与代码无关（账号掉线、外部服务不可用） | `node bin/agentctl.mjs void --issue N --reason "…"`：这条 FAIL 作废，不计轮次、不打回，issue 回 `s:review` 重新验收 | 先把环境修好再让它重验；被轮次上限冻结的加 `--unhold` |
-| `worker_done` outcome=succeeded | 无 | 不用打扰人 |
+| `question`（worker 用 `ask` 提的，正卡着等） | 能从口径答：`orca orchestration reply --id <msgId> --body "…"` | 答案同时写成 issue 评论（下一个 worker 只看得到 issue） |
+| `question`，但要人拍板 | `gate-create --task <taskId> --question … --options …`；issue 加 `hold:human` | 当面转述选项和建议；人定了 `gate-resolve`，再 `reply`，决定写成 issue 评论，解除 hold |
+| `escalation`（worker 报告卡住，不在等回答） | issue `s:blocked` + `hold:human` | 当面转述，拿到决定后写成 issue 评论，解除 hold |
+| `worker_done` outcome=failed | 同 escalation | 告诉人 worker 报告了什么 |
+| 验收 FAIL，但原因与代码无关 | `agentctl void --issue N --reason "…"` | 先把环境修好再重验 |
+| `orca-flow status` 里某行 `requiresAction` | 按它给的 `nextAction` argv 处理 | 只认 `exited` 等正证据；`unverifiable` 是「不知道」，不是「死了」 |
 
 人做的决定必须落成 issue 评论或口径修改——worker 重新派工时只看得到 issue，看不到聊天。
-
-铁律：空等和超时是 checkpoint，不是失败；只有正证据（`exited`）才能 stop/abandon。
-`cycle.sh` 报所有权探测失败时，派工与合并已完成；你只需按上面的 `check`/`ack` 接管收件箱，不需要再跑 `run-use`。
+铁律：空等和超时是 checkpoint，不是失败；只有正证据（`exited`）才能 stop / abandon。
 
 ## 4. 人说「不满意」——翻译成动作
 
@@ -143,17 +104,13 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
 
 | 状态 | 意思 | 谁动它 |
 |---|---|---|
-| `s:triage` | 还没写口径 | 协调器写好口径；循环**不碰** |
+| `s:triage` | 还没写口径 | 协调器写好口径；`orca-flow` **不碰** |
 | `s:queued` | 口径已写好，排队等派 | 协调器写好**先给人确认**，人说可以就转 `s:queued`（`agentctl set --issue N --to queued`） |
-| `s:ready` | 可派工 | **循环自动放行**，协调器不再手动转 `s:ready` |
+| `s:ready` | 可派工 | **`orca-flow` 自动放行**，协调器不再手动转 `s:ready` |
 
-每轮 `cycle.sh` 派工前（`== 3a 排队放行 ==`）：`s:ready` 为空、活着的实现/返工 worker 少于 `CYCLE_LANES` 时，
-按顺序（`prio:high` 优先，其余按 issue 号从小到大）把第一张能派的 `s:queued` 转成 `s:ready`，日志写
-「从排队里放行 #N（排第 1，前面跳过 #M：…）」，紧接着同一轮就派工。「一次只放 1 张 `s:ready`」由脚本保证。
-
-跳过的不卡后面的，并写进 `~/.orca/versekit-state/cycle-owner-alert.txt`（`[排队跳过] #N：原因`），开场要读：
-依赖没完成（正文写 `**依赖**：#X`，#X 还没 `s:done`/关闭）、口径里有 ACCEPTANCE.md 查不到的 id、
-涉及核心文件却缺 ACC-arch-09（与 `agentctl tick` 的「补口径」同一套检查）。
+每轮 `orca-flow tick` 派工前：活着的实现 / 返工 worker 少于 `FLOW_LANES` 时，按顺序（`prio:high` 优先，其余按 issue 号）把能派的 `s:queued` 转成 `s:ready`，同一轮就派工。
+跳过的不卡后面的，原因写进 `orca-flow.log`：依赖没完成（正文写 `**依赖**：#X`）、口径里有 ACCEPTANCE.md 查不到的 id、涉及核心文件却缺 ACC-arch-09。
+**issue 正文里出现的每个 ACC id 都算本单口径**（合并闸门逐条核对），说明文字里不要写别的单的 ACC id。
 `prio:high` label 只影响排队顺序。想让某张单先做，打 `prio:high`，不要手动转 `s:ready` 插队。
 
 ## 5.1 选哪个模型（省 Claude 额度）
@@ -174,7 +131,7 @@ orca orchestration check --run "$RUN" --ack <deliveryId> --wait --types worker_d
   - 协调器打这个 label 要在 issue「涉及」下一行写理由（为什么口径够死、不靠看图）；同一时间最多 1 个 Codex worker。
   - 返工 round 1 仍走 Codex，round ≥ 2 自动升 Sonnet；同时带 `model:opus` 时 Opus 优先。
   - Codex 没装、`codex login status` 显示未登录、或冷却期内（额度用完）→ 该单自动改派 Sonnet，日志写原因。探测只看 `command -v codex` 与 `codex login status`，**不跑 `codex exec`**（一次最小请求约 1.2 万 token）。
-  - 额度用完：`bin/coordinator-loop.sh` 从 Codex worker 屏幕识别用量上限（`You've hit your usage limit … try again at <时间>`），记 `$STATE_DIR/codex-exhausted`（解析不出时间按 5 小时）、worker-stop、issue 退回 `s:ready`；冷却期内所有 `model:codex` 的单子改派 Sonnet，到点自动恢复。
+  - 额度用完：worker 会停在用量上限的提示上，`orca-flow status` 里它的 attention 需要处理；协调器 `worker-read --source auto` 确认后 `worker-stop`，把冷却时间写进 `~/.orca/versekit-state/codex-exhausted`（格式见 `bin/worker-channel.sh`），issue 退回 `s:ready`；冷却期内 `model:codex` 自动改派 Sonnet。（原来由已删除的 coordinator-loop.sh 自动识别，现在是协调器手动，见 ACC-harness-orca-07）
   - 模型用 `CODEX_MODEL`（默认 `gpt-6.2-sol`）；本机 Codex 默认是最费额度的 gpt-6.2-astra，别用默认。不要改 `~/.codex/config.toml`（用户全局配置）；若真机发现停在信任目录或权限确认，要改配置前先问所有者。
 - `model:deepseek` 的返工第 2 轮起自动升到 Sonnet；Opus 只靠显式 label，返工轮次不再自动升。
 - 不要为了省事把"改页面""动适配器"这类放 DeepSeek；DeepSeek 做砸的成本（返工、真机重试）比省下的额度高。
