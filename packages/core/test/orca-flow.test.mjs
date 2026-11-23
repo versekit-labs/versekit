@@ -249,3 +249,10 @@ test("返工：复用原终端失败就回收它、同一轮改派新 agent，�
   assert.match(block, /catch \(err\) \{[\s\S]*?worker-release[\s\S]*?\}\s*\}\s*\}\s*if \(!started\)/);
   assert.match(block, /reworkPlacement\(reuse, wt, c\.number\)/);
 });
+
+test("versekit 实现 / 返工任务书写明界面单证据包三件事（ACC-harness-orca-15）", () => {
+  const rule = projectRules("impl", readFileSync(new URL("../../../.orca-kit/flow-rules.md", import.meta.url), "utf8"));
+  for (const part of ["ACC-v3-fid-08", "1360 宽", "vk demo seed", "docs/design/screenshots/impl/", "docs/design/screenshots/v3/", "#fafaf8", "34px", "antialiased", "tabular-nums", "焦点环 2px", "#ffd84a"]) {
+    assert.ok(rule.includes(part), `实现约束缺：${part}`);
+  }
+});
