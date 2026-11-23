@@ -150,7 +150,19 @@ export function occupantOf(groupId, platform) {
   );
 }
 
+/** 账号名是 VerseKit 里给自己看的名字，不影响平台：只要求去掉首尾空格后非空、不超过 40 个字。
+ *  不要求和组名不同，也不要求和同组其他平台的账号不同（一个平台在一组里只有一个位置，靠平台区分）。
+ *  添加与改名共用这一处，网页不另加限制。 */
+export const ACCOUNT_NAME_MAX = 40;
+export function accountName(name) {
+  if (typeof name !== "string" || !name.trim()) fail("账号名不能为空：填一个你自己认得出的名字（不影响平台）");
+  const n = name.trim();
+  if ([...n].length > ACCOUNT_NAME_MAX) fail(`账号名太长（最多 ${ACCOUNT_NAME_MAX} 个字）`);
+  return n;
+}
+
 export function addAccount({ platform, handle, displayName = null, credentialRef = null, groupId = null }) {
+  if (displayName !== null) displayName = accountName(displayName);
   const p = requireString(platform, "platform", { max: 32 });
   const h = requireString(handle, "handle", { max: 200 });
   if (!groupId) fail("接入账号要先选账号组：先建一个账号组，或在已有的组里接入", "vk group add <名字>");
@@ -203,6 +215,19 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
     .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id) VALUES (?,?,?,?,?, 'ok', ?, ?)")
     .run(id, p, h, displayName, credentialRef, Date.now(), groupId);
   return { id, existed: false };
+}
+
+/** 改账号名：只改 display_name（VerseKit 里的名字）。id、handle / 平台用户 id、登录状态、凭据、
+ *  平台稿与发布记录都不碰。撞到自己的名字不算错（幂等）。 */
+export function renameAccount(accountId, name) {
+  const n = accountName(name);
+  const account = open().prepare("SELECT * FROM account WHERE id = ?").get(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`, "vk account list");
+  if (account.removed_at) fail(`账号 ${account.handle}（${accountId}）已经移除，不能改名`);
+  const previous = account.display_name || account.handle;
+  if (account.display_name === n) return { accountId, name: n, changed: false, previous };
+  open().prepare("UPDATE account SET display_name = ? WHERE id = ?").run(n, accountId);
+  return { accountId, name: n, changed: true, previous, platform: account.platform };
 }
 
 /**

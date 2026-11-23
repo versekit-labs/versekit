@@ -110,6 +110,7 @@
     credsMissingIds: new Set(), // 后端明确说「没有应用凭证」的账号 id（平台清单可能晚一拍，别让状态盖回去）
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
+    renamingAcc: null, renameAccName: "", renameAccBusy: false, renameAccNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
     checktime: null,      // { time, value, busy, note }：视频号每天检查登录的钟点
     egress: null, ipStep: null, ipBusy: false, // 出口位置：/api/egress；ipStep = null | stay（继续用新位置，行内再确认）
@@ -274,9 +275,12 @@
     const st = VK.loginState(a);
     const lg = ui.login[a.id];
     const name = a.display_name || a.handle;
-    const who = a.avatar_url && connected(a)
+    const shown = a.avatar_url && connected(a)
       ? `<img class="av" src="${esc(a.avatar_url)}" alt="" width="20" height="20" referrerpolicy="no-referrer">${esc(name)}`
       : esc(name);
+    const who = ui.renamingAcc === a.id
+      ? `<div class="grpname"><input type="text" id="acc-rename-input" value="${esc(ui.renameAccName)}" aria-label="账号的新名字" autocomplete="off" maxlength="40"><button class="btn" data-accrenamesave="${esc(a.id)}"${ui.renameAccBusy ? " disabled" : ""}>保存</button><button class="link" data-accrenamecancel>取消</button></div>${ui.renameAccNote ? `<span class="say bad" role="status">${esc(ui.renameAccNote)}</span>` : ""}`
+      : `${shown} <button class="link" data-accrename="${esc(a.id)}" aria-label="给 ${esc(name)} 改名">改名</button>`;
     const q = a.quota;
     const sendable = !lg && !credsMissing(a) && !credsUnknown(a) && !a.identityConflict && st.key === "ok";
     const quota = !q ? '<span class="sub">不限</span>' : sendable ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">现在发不了</span>';
@@ -342,7 +346,7 @@
     if (allTaken) return '<tr><td colspan="6" class="sub">这个组能接的平台都接上了。一个组里每个平台接一个号；要接第二个号，新建一个账号组。</td></tr>';
     const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
     return `<tr class="addrow" id="addrow"><td><select id="add-platform" aria-label="要接入的平台">${opts}</select></td>` +
-      `<td><input type="text" id="add-name" placeholder="账号名（平台上的名字）" aria-label="账号名" autocomplete="off" maxlength="200" value="${esc(ui.addName)}"></td>` +
+      `<td><input type="text" id="add-name" placeholder="账号名（你自己认得出就行，不影响平台）" aria-label="账号名" autocomplete="off" maxlength="40" value="${esc(ui.addName)}"></td>` +
       `<td colspan="3" class="sub"><span class="say${ui.addBad ? " bad" : ""}" role="status">${ui.addNote ? esc(ui.addNote) : `接入后当场登录，归到「${esc(group.name)}」。`}</span></td>` +
       `<td class="n">${B("data-add", "接入账号", "btn", ui.addBusy || !group ? " disabled" : "")}</td></tr>`;
   }
@@ -965,9 +969,7 @@
     const name = ui.addName.trim();
     const say = (t, bad = true) => { ui.addNote = t; ui.addBad = bad; draw(); };
     if (!ui.addPlatform) return say("先选一个平台");
-    if (!name) return say("请填账号名：同一平台可以用它区分不同账号");
-    if (name.toLocaleLowerCase() === String(group.name).trim().toLocaleLowerCase()) return say("别把账号组名当账号名：请填平台上的账号名");
-    if (ui.accounts.some((a) => String(a.handle ?? a.display_name ?? "").replace(/^@/, "").toLocaleLowerCase() === name.replace(/^@/, "").toLocaleLowerCase())) return say(`这个组里已经有叫「${name}」的账号，两个平台同名会分不清，换一个名字。`);
+    // 名字规则（非空、≤40 字）只在 core 一处；这里不再另加「不许和组名同名 / 不许同名」之类的限制。
     ui.addBusy = true; ui.addNote = ""; draw();
     try {
       const isOfficial = Boolean(OFFICIAL[ui.addPlatform]);
@@ -979,7 +981,7 @@
       await startLogin(r.id);
     } catch (err) {
       ui.addBusy = false;
-      say(`${err.message}（换号要先退出登录，再把旧账号移走）`);
+      say(/占用|已经在账号组/.test(err.message) ? `${err.message}（换号要先退出登录，再把旧账号移走）` : err.message);
     }
   }
 
@@ -1047,6 +1049,7 @@
   main.addEventListener("input", (e) => {
     const t = e.target;
     if (t.id === "add-name") ui.addName = t.value;
+    else if (t.id === "acc-rename-input") ui.renameAccName = t.value;
     else if (t.id === "ng-name") ui.newGroupName = t.value;
     else if (t.id === "cred-key") ui.cred.key = t.value;
     else if (t.id === "cred-secret") ui.cred.secret = t.value;
@@ -1076,8 +1079,11 @@
   });
   main.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
+    // 输入法组字时回车是「上屏」，不是提交（拼音打英文按回车会把字母连同空格存成名字）。
+    if (e.isComposing || e.keyCode === 229) return;
     const id = e.target.id;
     if (id === "add-name") { e.preventDefault(); addAccount(); }
+    else if (id === "acc-rename-input") { e.preventDefault(); main.querySelector("[data-accrenamesave]")?.click(); }
     else if (id === "ng-name") { e.preventDefault(); main.querySelector("[data-ngsave]")?.click(); }
     else if (id === "rename-input") { e.preventDefault(); main.querySelector("[data-renamesave]")?.click(); }
     else if (id === "cred-secret") { e.preventDefault(); saveCreds(); }
@@ -1085,7 +1091,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave],[data-ipx],[data-fs]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave],[data-ipx],[data-fs]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -1187,6 +1193,23 @@
       catch (err) { toast(`没重试成功：${err.message}`); }
       ui.retrying.delete(d.retry);
       await refresh();
+    } else if (d.accrename) {
+      const a = acc(d.accrename);
+      ui.renamingAcc = d.accrename; ui.renameAccName = a?.display_name || a?.handle || ""; ui.renameAccNote = "";
+      draw(); document.getElementById("acc-rename-input")?.select();
+    } else if ("accrenamecancel" in d) { ui.renamingAcc = null; ui.renameAccNote = ""; draw(); }
+    else if (d.accrenamesave) {
+      const id = d.accrenamesave;
+      ui.renameAccBusy = true; ui.renameAccNote = ""; draw();
+      try {
+        await post(accPath(id, "rename"), { accountId: id, name: ui.renameAccName });
+        ui.renamingAcc = null; ui.renameAccBusy = false;
+        toast("已改名（只改 VerseKit 里的名字，不影响平台）");
+        await refresh();
+      } catch (err) {
+        ui.renameAccBusy = false; ui.renameAccNote = err.message; draw();
+        document.getElementById("acc-rename-input")?.focus();
+      }
     } else if (d.rename) { ui.renaming = d.rename; ui.groupNote = ""; draw(); document.getElementById("rename-input")?.select(); }
     else if ("renamecancel" in d) { ui.renaming = null; draw(); }
     else if (d.renamesave) {

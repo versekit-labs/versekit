@@ -37,6 +37,8 @@ export const EVENTS = {
 
   // 改组名只影响显示名，不影响任何发布；留痕是为了以后能解释「这组以前叫什么」。
   "group.renamed": { severity: "info", required: false, internal: true },
+  // 改账号名只改 VerseKit 里的显示名（#374），不动登录、凭据、平台稿。
+  "account.renamed": { severity: "info", required: false, internal: true },
 
   // 保存平台应用凭证（#208）：只记平台与来源，绝不进 key / secret。
   "account.credentials_saved": { severity: "info", required: false, internal: true },
