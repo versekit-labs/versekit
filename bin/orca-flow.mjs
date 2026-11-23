@@ -385,7 +385,7 @@ function startWorker(ctx, { taskId, placement, channel, label, dryRun }) {
 }
 
 /** 选通道：沿用 bin/worker-channel.sh 的规则（Sonnet 默认、model:opus/codex/deepseek label、验收固定 DeepSeek）。 */
-function chooseChannel(role, labels = [], round = "") {
+function chooseChannel(role, labels = [], round = "", { dryRun = false } = {}) {
   const args = ["--role", role];
   if (labels.length) args.push("--labels", labels.join(","));
   if (round !== "") args.push("--round", String(round));
@@ -395,6 +395,7 @@ function chooseChannel(role, labels = [], round = "") {
   if (ch === "claude") return { agent: "claude", model, reason, channel: ch };
   if (ch === "codex") return { agent: "codex", model, reason, channel: ch };
   if (ch === "volc" || ch === "qwen") {
+    if (dryRun) return { agent: "opencode", model, reason, channel: ch }; // 空跑不改 opencode 配置
     const set = run(join(ROOT, "bin/opencode-model.sh"), [ch, model]);
     if (set.code !== 0) throw new Error(`无法把 opencode 切到 ${ch}/${model}：${set.stderr.trim().slice(0, 300)}`);
     return { agent: "opencode", model, reason, channel: ch };
@@ -507,7 +508,7 @@ export async function tick({ dryRun = false } = {}) {
         const pr = lastJson(run(join(ROOT, "bin/ghx"), ["pr", "view", String(q.pull), "--json", "headRefName,comments"]).stdout) ?? {};
         const branch = pr.headRefName;
         const round = 1 + (pr.comments ?? []).filter((c) => /^verdict:\s*FAIL/m.test(c.body ?? "")).length;
-        const channel = chooseChannel("acceptance");
+        const channel = chooseChannel("acceptance", [], "", { dryRun });
         log(`  → 验收 #${q.number}（PR #${q.pull}，head ${head7}，round ${round}，${channel.channel}/${channel.model}）`);
         const taskId = createTask(ctx, {
           title: taskTitle("accept", q.number, head7),
@@ -516,7 +517,8 @@ export async function tick({ dryRun = false } = {}) {
           dryRun,
         });
         const wt = worktreeFor(q.number, branch);
-        const placement = wt ? { worktreeId: wt.id } : { name: `issue-${q.number}` };
+        // 没有 Orca 登记的本单 worktree 时另建 accept-N：用 issue-N 会和已检出的同名分支撞上。
+        const placement = wt ? { worktreeId: wt.id } : { name: `accept-${q.number}` };
         const started = startWorker(ctx, { taskId, placement, channel, label: `验收 #${q.number}`, dryRun });
         linkWorktree(started.worktreeId, { issue: q.number, pr: q.pull, status: "in-review", comment: `验收中（head ${head7}）` }, dryRun);
         report.dispatched.push({ issue: q.number, kind: "accept", dispatchId: started.dispatchId });
@@ -544,7 +546,7 @@ export async function tick({ dryRun = false } = {}) {
         placement = { terminal: reuse.agentTerminalHandle, worktreeId: null };
         log(`  → 返工 #${c.number} round ${c.round}：复用原 agent 终端（${reuse.dispatchId}）`);
       } else {
-        channel = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round);
+        channel = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round, { dryRun });
         const wt = worktreeFor(c.number, c.branch);
         placement = wt ? { worktreeId: wt.id } : { name: `issue-${c.number}` };
         log(`  → 返工 #${c.number} round ${c.round}：新 agent（${channel.channel}/${channel.model}）`);
@@ -569,7 +571,7 @@ export async function tick({ dryRun = false } = {}) {
     if (!c) break;
     try {
       const labels = (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [];
-      const channel = chooseChannel("engineer", labels);
+      const channel = chooseChannel("engineer", labels, "", { dryRun });
       const branch = `issue-${c.number}`;
       log(`  → 实现 #${c.number} ${c.title}（${channel.channel}/${channel.model}，口径 ${(c.acc ?? c.ids ?? []).join(", ")}）`);
       const taskId = createTask(ctx, { title: taskTitle("impl", c.number), display: `#${c.number} 实现`, spec: implSpec({ number: c.number, title: c.title, body: c.body ?? "", branch }), dryRun });
