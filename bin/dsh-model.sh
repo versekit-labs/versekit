@@ -14,10 +14,11 @@
 #
 # 结果缓存 5 分钟（DSH_MODEL_TTL_S），避免每次派工都探。
 # 已知边界：只管"派工那一刻"。worker 跑到一半额度用尽，这里看不到——
-# 那一类由 bin/coordinator-loop.sh 在 worker-read 里发现，并写下面的「火山用尽」记录。
+# 那一类由协调器在 worker-read 里确认后手动写下面的「火山用尽」记录（docs/COORDINATOR.md §3「额度用尽（手动）」；
+# 原来由已删除的 coordinator-loop.sh 自动写）。
 #
 # 火山额度用尽（ACC-harness-model-07）：火山的 5 小时额度用完后，1 token 探测仍可能返回 200，
-# 探测判断不出来。循环发现后把「用尽到何时」写进 $STATE_DIR/volc-exhausted（制表符分隔：
+# 探测判断不出来。协调器确认后把「用尽到何时」写进 $STATE_DIR/volc-exhausted（制表符分隔：
 # 到期 epoch 秒、到期时间文本）。到期前本脚本不探测火山、直接选千问并在 stderr 写明原因；
 # 到期后自动删除记录、恢复火山优先。
 #

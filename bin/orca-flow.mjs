@@ -106,11 +106,12 @@ export function reusableTerminal(state, issue) {
   return rows[0] ?? null; // worker-list 新的在前
 }
 
-/** 同一个验收（issue + head）已经建过 Task 就不再建：失败的除外。 */
+/** 同一个验收（issue + head）已经建过 Task 就不再建：失败、被停（Orca 记为 blocked）、取消的除外。 */
+const REBUILDABLE = new Set(["failed", "blocked", "cancelled", "canceled"]);
 export function hasAcceptTask(state, issue, head7) {
   return state.tasks.some((t) => {
     const meta = parseTaskTitle(t.task_title);
-    return meta && meta.kind === "accept" && meta.issue === issue && meta.extra === head7 && t.status !== "failed";
+    return meta && meta.kind === "accept" && meta.issue === issue && meta.extra === head7 && !REBUILDABLE.has(t.status);
   });
 }
 

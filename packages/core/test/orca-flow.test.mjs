@@ -70,10 +70,11 @@ test("返工优先复用同一 issue 保留着、进程还活的实现终端；�
   assert.equal(reusableTerminal(s, 7), null);
 });
 
-test("同一 issue 同一 head 建过验收 Task 就不重复建；失败的可以重建；换了 head 要重验", () => {
-  const s = base({ tasks: [task("a", "vk#9 验收 1111111", "completed"), task("b", "vk#9 验收 2222222", "failed")] });
+test("同一 issue 同一 head 建过验收 Task 就不重复建；失败、被停（blocked）的可以重建；换了 head 要重验", () => {
+  const s = base({ tasks: [task("a", "vk#9 验收 1111111", "completed"), task("b", "vk#9 验收 2222222", "failed"), task("c", "vk#9 验收 4444444", "blocked")] });
   assert.equal(hasAcceptTask(s, 9, "1111111"), true);
   assert.equal(hasAcceptTask(s, 9, "2222222"), false);
+  assert.equal(hasAcceptTask(s, 9, "4444444"), false, "额度用尽被 worker-stop 的验收要能用千问重派");
   assert.equal(hasAcceptTask(s, 9, "3333333"), false);
 });
 

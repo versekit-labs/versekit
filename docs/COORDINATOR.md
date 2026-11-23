@@ -70,7 +70,23 @@ Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca �
 | `escalation`（worker 报告卡住，不在等回答） | issue `s:blocked` + `hold:human` | 当面转述，拿到决定后写成 issue 评论，解除 hold |
 | `worker_done` outcome=failed | 同 escalation | 告诉人 worker 报告了什么 |
 | 验收 FAIL，但原因与代码无关 | `agentctl void --issue N --reason "…"` | 先把环境修好再重验 |
+| 验收 worker 跑在火山上，屏幕末尾是额度用尽（如 `You have exceeded the 5-hour usage quota. It will reset at …`） | 写火山冷却、停掉它，下一轮自动用千问重派 | 见下面「额度用尽（手动）」 |
+| Codex 实现 worker 停在用量上限（`You've hit your usage limit … try again at <时间>`） | 写 Codex 冷却、停掉它、issue 退回 `s:ready` | 见下面「额度用尽（手动）」 |
 | `orca-flow status` 里某行 `requiresAction` | 按它给的 `nextAction` argv 处理 | 只认 `exited` 等正证据；`unverifiable` 是「不知道」，不是「死了」 |
+
+**额度用尽（手动，ACC-harness-orca-07）**：旧 `coordinator-loop.sh` 会从 worker 屏幕自动识别并冷却，这部分随它删掉了，现在由你处理。发现途径：`orca-flow status` 里它 `requiresAction`，或 `orca orchestration worker-read --dispatch <id> --source auto` 末尾是额度报错。1 token 探测在火山额度用尽时仍返回 200，所以**不写冷却文件，下一轮还会选火山**。
+
+```bash
+S=~/.orca/versekit-state
+# 火山（验收）：到期时间取报错里的 reset at；解析不出按 5 小时
+printf '%s\t%s\n' "$(date -v+5H +%s)" "$(date -v+5H '+%F %T')" > $S/volc-exhausted
+# Codex（实现 / 返工）：到期时间取报错里的 try again at；解析不出按 5 小时
+printf '%s\t%s\n' "$(date -v+5H +%s)" "$(date -v+5H '+%F %T')" > $S/codex-exhausted
+orca orchestration worker-stop --dispatch <id> --json      # 有额度报错这个正证据才 stop
+node bin/agentctl.mjs set --issue <N> --to ready --force   # 只有 Codex 实现单需要；验收不用改 label
+```
+
+文件格式都是「到期 epoch 秒<TAB>到期时间文本」：`bin/dsh-model.sh` 到期前不探测火山、直接选千问；`bin/worker-channel.sh` 冷却期内 `model:codex` 改派 Sonnet。到期自动恢复。被停掉的验收 Task 在 Orca 里是 `blocked`，下一轮 `orca-flow` 会为同一 head 重建一个、用千问派出。
 
 人做的决定必须落成 issue 评论或口径修改——worker 重新派工时只看得到 issue，看不到聊天。
 铁律：空等和超时是 checkpoint，不是失败；只有正证据（`exited`）才能 stop / abandon。
@@ -131,7 +147,7 @@ Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca �
   - 协调器打这个 label 要在 issue「涉及」下一行写理由（为什么口径够死、不靠看图）；同一时间最多 1 个 Codex worker。
   - 返工 round 1 仍走 Codex，round ≥ 2 自动升 Sonnet；同时带 `model:opus` 时 Opus 优先。
   - Codex 没装、`codex login status` 显示未登录、或冷却期内（额度用完）→ 该单自动改派 Sonnet，日志写原因。探测只看 `command -v codex` 与 `codex login status`，**不跑 `codex exec`**（一次最小请求约 1.2 万 token）。
-  - 额度用完：worker 会停在用量上限的提示上，`orca-flow status` 里它的 attention 需要处理；协调器 `worker-read --source auto` 确认后 `worker-stop`，把冷却时间写进 `~/.orca/versekit-state/codex-exhausted`（格式见 `bin/worker-channel.sh`），issue 退回 `s:ready`；冷却期内 `model:codex` 自动改派 Sonnet。（原来由已删除的 coordinator-loop.sh 自动识别，现在是协调器手动，见 ACC-harness-orca-07）
+  - 额度用完：协调器手动写 `codex-exhausted`、stop、退回 `s:ready`（§3「额度用尽（手动）」）；冷却期内 `model:codex` 自动改派 Sonnet，到点自动恢复。
   - 模型用 `CODEX_MODEL`（默认 `gpt-6.2-sol`）；本机 Codex 默认是最费额度的 gpt-6.2-astra，别用默认。不要改 `~/.codex/config.toml`（用户全局配置）；若真机发现停在信任目录或权限确认，要改配置前先问所有者。
 - `model:deepseek` 的返工第 2 轮起自动升到 Sonnet；Opus 只靠显式 label，返工轮次不再自动升。
 - 不要为了省事把"改页面""动适配器"这类放 DeepSeek；DeepSeek 做砸的成本（返工、真机重试）比省下的额度高。
