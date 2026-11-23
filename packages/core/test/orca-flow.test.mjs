@@ -5,6 +5,7 @@ import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
   projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
+  linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -142,7 +143,7 @@ test("by:coordinator 标记从看板的 labels 读", () => {
 
 test("flow.json：没有就是默认；钩子只收非空字符串；release:false 与 inbox:external 生效；写坏回默认并报错", () => {
   const d = flowConfig("{}");
-  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true });
+  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true, cleanup: true });
   assert.equal(flowConfig(JSON.stringify({ settle: false })).settle, false);
   assert.equal(flowConfig(JSON.stringify({ ci: "npm --prefix research-console run ci" })).ci, "npm --prefix research-console run ci");
   assert.equal(flowConfig(JSON.stringify({ ci: "  " })).ci, "npm run ci");
@@ -194,4 +195,42 @@ test("返工核查：记录对应的 dispatch 不在跑（或 Run 里找不到�
     { dispatchId: "d2", dispatchStatus: "completed", terminalState: "exited" },
   ];
   assert.deepEqual(settledReworks(recs, workers).map((r) => r.issue), [2, 3]);
+});
+
+test("回收 worktree：只看关联了 issue、不是主仓库、不是脚本所在目录的；issue 还开着或还有没回收的终端就不动", () => {
+  const list = [
+    { id: "a", path: "/w/issue-1", linkedIssue: 1 },
+    { id: "b", path: "/w/accept-2", linkedItems: [{ provider: "github", type: "issue", number: 2 }] },
+    { id: "c", path: "/repo", linkedIssue: 3, isMainWorktree: true },
+    { id: "d", path: "/w/coordinator", linkedIssue: 4 },
+    { id: "e", path: "/w/design" },
+  ];
+  assert.equal(linkedIssueOf(list[1]), 2);
+  assert.deepEqual(cleanupCandidates(list, { root: "/w/coordinator" }).map((w) => w.id), ["a", "b"]);
+  const s = base({
+    issues: { 5: "review" },
+    tasks: [task("t6", "vk#6 验收 abc1234", "completed"), task("t7", "vk#7 实现", "completed")],
+    workers: [
+      { dispatchId: "d6", taskId: "t6", dispatchStatus: "completed", terminalState: "reclaimable" },
+      { dispatchId: "d7", taskId: "t7", dispatchStatus: "completed", terminalState: "released" },
+    ],
+  });
+  assert.equal(isActiveIssue(s, 5), true, "还开着");
+  assert.equal(isActiveIssue(s, 6), true, "终端还没回收");
+  assert.equal(isActiveIssue(s, 7), false);
+});
+
+test("回收 worktree：有改动、有不在远端的提交、有要留的被忽略文件就不删；依赖与缓存不算", () => {
+  assert.equal(dirtyReason("", "0"), null);
+  assert.equal(dirtyReason("!! node_modules/\n!! dist/\n!! .playwright-mcp/\n!! .impeccable/hook.cache.json\n!! packages/cli/node_modules/", "0"), null);
+  assert.match(dirtyReason(" M a.js", "0"), /未提交/);
+  assert.match(dirtyReason("?? new.txt", "0"), /未提交/);
+  assert.match(dirtyReason("", "2"), /2 个提交不在任何远端/);
+  assert.match(dirtyReason("!! .accept-evidence/ci.log", "0"), /被忽略但可能要留.*\.accept-evidence/);
+  // 验收 #368 第 1 轮：任意层级的同名目录都算，按整段比
+  assert.equal(dirtyReason("!! research-console/dist/\n!! a/b/node_modules/\n!! web/.DS_Store", "0"), null);
+  assert.equal(dirtyReason("!! research-console/dist/app.js", "0"), null);
+  for (const f of ["dist-config.json", "dist-archive/", "node_modules-backup/", "dist", "notes/dist"]) {
+    assert.notEqual(dirtyReason(`!! ${f}`, "0"), null, f);
+  }
 });
