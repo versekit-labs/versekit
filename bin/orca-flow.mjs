@@ -23,7 +23,8 @@
 //           "release": true,          // false = 不跑 agentctl release-queued（项目用自己的放行，放进 beforeTick）
 //           "inbox": "flow",          // "external" = 收件箱归别人（如 automation 里的协调器 agent），tick 不读不 ack
 //           "ci": "npm run ci",       // 实现自查与验收要跑的 CI 命令（ACC-harness-orca-10）
-//           "settle": true }          // false = 不做 retain / release（watch 不在 Run 所有者终端里跑的项目，ACC-harness-orca-11）
+//           "settle": true,           // false = 不做 retain / release（watch 不在 Run 所有者终端里跑的项目，ACC-harness-orca-11）
+//           "cleanup": true }         // false = 合并后不回收 issue 的 worktree（ACC-harness-orca-12）
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -213,7 +214,7 @@ function reworkCheck(state, dryRun) {
 
 /** 读 .orca-kit/flow.json；没有或写坏都回默认（写坏会在日志里说）。 */
 export function flowConfig(text = null) {
-  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true };
+  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true, cleanup: true };
   let src = text;
   if (src == null) {
     try {
@@ -235,6 +236,7 @@ export function flowConfig(text = null) {
     inbox: j.inbox === "external" ? "external" : "flow",
     ci: typeof j.ci === "string" && j.ci.trim() ? j.ci.trim() : defaults.ci,
     settle: j.settle !== false,
+    cleanup: j.cleanup !== false,
   };
 }
 
@@ -481,6 +483,7 @@ function context() {
   const from = run?.coordinator_handle;
   if (!from) throw new Error(`Run ${runId} 没有协调器句柄：先在协调器终端 run-use`);
   const repoId = process.env.FLOW_REPO_ID ?? repoIdFor(ROOT);
+  REPO_ID = repoId;
   return { runId, from, repoId };
 }
 
@@ -521,8 +524,91 @@ function snapshot(ctx) {
   };
 }
 
+let REPO_ID = null;
+
+/** 只列本仓库的 worktree：Orca 里有多个项目，issue 号会撞（ACC-harness-orca-12）。 */
 function worktrees() {
-  return orca(["worktree", "list"]).worktrees ?? [];
+  return (orca(["worktree", "list"]).worktrees ?? []).filter((w) => !REPO_ID || w.repoId === REPO_ID);
+}
+
+/** issue 关联：Orca 的 linkedIssue 或 linkedItems 里的 GitHub issue。 */
+export function linkedIssueOf(w) {
+  if (w.linkedIssue) return Number(w.linkedIssue);
+  const it = (w.linkedItems ?? []).find((l) => l.provider === "github" && l.type === "issue");
+  return it ? Number(it.number) : null;
+}
+
+/**
+ * 纯函数：可以考虑回收的 worktree——关联了 issue、不是主仓库、不是脚本自己所在的目录、没有在跑的 worker。
+ * 是否真的关闭、目录是否干净，由 cleanupWorktrees 逐个再查。
+ */
+export function cleanupCandidates(list, { root, busyPaths = [] } = {}) {
+  return list.filter((w) => linkedIssueOf(w) && !w.isMainWorktree && w.path !== root && !busyPaths.includes(w.path));
+}
+
+/** 目录里有没有不能丢的东西：未提交改动、不在任何远端的提交、除依赖与构建产物外的被忽略文件。 */
+export function dirtyReason(porcelainIgnored, unpushed) {
+  const lines = String(porcelainIgnored ?? "").split("\n").filter(Boolean);
+  if (lines.some((l) => !l.startsWith("!!"))) return "有未提交的改动";
+  if (Number(unpushed) > 0) return `有 ${unpushed} 个提交不在任何远端`;
+  const kept = lines.map((l) => l.slice(3)).filter((f) => !/^(node_modules|dist|\.playwright-mcp|\.impeccable)\/?|\/node_modules\/?$|\.DS_Store$/.test(f));
+  if (kept.length) return `有被忽略但可能要留的文件（${kept.slice(0, 3).join("、")}${kept.length > 3 ? " 等" : ""}）`;
+  return null;
+}
+
+/** 合并后回收：issue 已关闭、目录干净、没人在用 → orca worktree rm。不干净就留着，日志说明一次。 */
+function cleanupWorktrees(state, dryRun) {
+  const busy = [];
+  const warned = join(STATE_DIR, "cleanup-warned");
+  let seen = "";
+  try {
+    seen = readFileSync(warned, "utf8");
+  } catch {
+    /* 没有 */
+  }
+  for (const w of cleanupCandidates(worktrees(), { root: ROOT, busyPaths: busy })) {
+    const n = linkedIssueOf(w);
+    if (isActiveIssue(state, n)) continue;
+    const st = run(join(ROOT, "bin/ghx"), ["issue", "view", String(n), "--json", "state", "-q", ".state"]);
+    if (st.code !== 0 || st.stdout.trim() !== "CLOSED") continue;
+    const porcelain = run("git", ["-C", w.path, "status", "--porcelain", "--ignored"]);
+    if (porcelain.code !== 0) continue;
+    const unpushed = run("git", ["-C", w.path, "rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() || "0";
+    const why = dirtyReason(porcelain.stdout, unpushed);
+    if (why) {
+      const key = `${w.path}\t${why}`;
+      if (!seen.includes(key)) {
+        log(`  ⚠ #${n} 已关闭，但 ${w.path} ${why}：不删，确认没用后 orca worktree rm`);
+        try {
+          appendFileSync(warned, key + "\n");
+        } catch {
+          /* 只是去重 */
+        }
+      }
+      continue;
+    }
+    if (dryRun) {
+      log(`  [dry-run] 会回收 #${n} 的 worktree ${w.path}`);
+      continue;
+    }
+    try {
+      orca(["worktree", "rm", "--worktree", `id:${w.id}`, "--force"]);
+      log(`  · 回收 #${n} 的 worktree（已关闭、干净）：${w.path}`);
+    } catch (err) {
+      log(`  ✗ 回收 worktree ${w.path}：${err.message.slice(0, 200)}`);
+    }
+  }
+}
+
+/** issue 还开着，或它还有没回收的终端（在跑、交活待定、保留中）→ 不动它的目录。 */
+export function isActiveIssue(state, n) {
+  if (state.issues?.[n]) return true;
+  const byTask = new Map((state.tasks ?? []).map((t) => [t.id, t]));
+  return (state.workers ?? []).some((w) => {
+    if (parseTaskTitle(byTask.get(w.taskId)?.task_title)?.issue !== n) return false;
+    if (w.projection?.liveness?.verdict === "exited") return false;
+    return !["released", "exited"].includes(w.terminalState);
+  });
 }
 
 /** 找某 issue 的 worktree：先认 Orca 里挂着的 issue 号，再认分支名。 */
@@ -666,6 +752,7 @@ export async function tick({ dryRun = false } = {}) {
   if (cfg.settle) settleTerminals(state, dryRun);
   if (!dryRun) state = snapshot(ctx);
   reworkCheck(state, dryRun);
+  if (flowConfig().cleanup) cleanupWorktrees(state, dryRun);
 
   let free = countActive(state);
   log(`  在跑：实现/返工 ${free.build}/${state.lanes}，验收 ${free.accept}/${state.acceptMax}`);
