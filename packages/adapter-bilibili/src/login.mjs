@@ -211,7 +211,7 @@ async function liveLoginTab(accountId) {
  */
 export async function login({ accountId, headless = false } = {}) {
   if (!accountId) throw new Error("login 需要 accountId");
-  const tab = await openAccount({ accountId, headless, url: LOGIN_URL });
+  const tab = await openAccount({ accountId, headless, url: LOGIN_URL, loginWindow: true });
   // 页面加载失败也把窗口留着：人可以在窗口里刷新，登录结果仍然能读到。
   await tab.waitFor("document.readyState === 'complete'", [], { timeout: 20e3, every: 250, what: "B站登录页" }).catch(() => {});
   sessions.set(accountId, { openedAt: Date.now(), tab });

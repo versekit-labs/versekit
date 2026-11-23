@@ -494,7 +494,7 @@ function daemonHandlers(adapters, log) {
       if (!url) throw new Error(`${account.platform} 没有网页登录地址`);
 
       // 有头浏览器：人能看见、能操作。登录成功后这个实例保持运行，发布直接复用。
-      const tab = await openAccount({ accountId, url, headless: false });
+      await openAccount({ accountId, url, headless: false, loginWindow: true });
       loginSessions.set(accountId, { openedAt: Date.now() });
       return {
         opened: true,
@@ -836,7 +836,7 @@ function daemonHandlers(adapters, log) {
       }
       const url = LOGIN_URL[account.platform];
       if (!url) return core["account.reauth"]({ accountId });
-      await openAccount({ accountId, url });
+      await openAccount({ accountId, url, loginWindow: true });
       log(`[reauth] 打开 ${account.platform} 登录页（账号 ${accountId}）`);
       return {
         accountId,

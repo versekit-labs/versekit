@@ -26,7 +26,9 @@ server.on("upgrade", (req, socket) => {
     const text = Buffer.from(buf.subarray(6, 6 + len).map((b, i) => b ^ mask[i % 4])).toString();
     const msg = JSON.parse(text);
     if (browser && msg.method === "Browser.close") process.exit(0);
-    const out = Buffer.from(JSON.stringify({ id: msg.id, result: {} }));
+    // 导航到 .invalid 域名：像断网/DNS 失败一样返回 errorText；其余页面永不触发 load/DOM 事件。
+    const failNav = msg.method === "Page.navigate" && String(msg.params?.url).includes(".invalid");
+    const out = Buffer.from(JSON.stringify({ id: msg.id, result: failNav ? { errorText: "net::ERR_NAME_NOT_RESOLVED" } : msg.method === "Runtime.evaluate" ? { result: { value: "loading" } } : {} }));
     socket.write(Buffer.concat([Buffer.from([0x81, out.length]), out]));
   });
   socket.on("error", () => {});
