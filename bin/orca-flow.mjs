@@ -18,6 +18,10 @@
 // 环境：FLOW_LANES（实现+返工并行上限，默认 2）、FLOW_ACCEPT_MAX（验收并行上限，默认 1）、
 //       FLOW_PROJECT（默认 origin 仓库名）、RUN_FILE（默认 ~/.orca/<项目>-run-id）、FLOW_LOG（默认 ~/.orca/<项目>-state/orca-flow.log）。
 //       issue 带 by:coordinator label：协调器自己实现，验收 FAIL 后不自动派返工 agent（ACC-harness-orca-08）。
+//       .orca-kit/flow.json（可选，ACC-harness-orca-09）：
+//         { "hooks": { "beforeTick": ["<命令>"…], "beforeMerge": ["<命令>"…] },
+//           "release": true,          // false = 不跑 agentctl release-queued（项目用自己的放行，放进 beforeTick）
+//           "inbox": "flow" }         // "external" = 收件箱归别人（如 automation 里的协调器 agent），tick 不读不 ack
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -138,6 +142,49 @@ export function hasAcceptTask(state, issue, head7) {
 export function inboxVerdict(messages) {
   const needs = messages.filter((m) => m.type === "question" || m.type === "escalation");
   return needs.length ? { ack: false, needs } : { ack: true, needs: [] };
+}
+
+// ------------------------------------------------------------------ 项目配置（.orca-kit/flow.json）
+
+/** 读 .orca-kit/flow.json；没有或写坏都回默认（写坏会在日志里说）。 */
+export function flowConfig(text = null) {
+  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow" };
+  let src = text;
+  if (src == null) {
+    try {
+      src = readFileSync(join(ROOT, ".orca-kit/flow.json"), "utf8");
+    } catch {
+      return defaults;
+    }
+  }
+  let j;
+  try {
+    j = JSON.parse(src);
+  } catch (err) {
+    return { ...defaults, error: `.orca-kit/flow.json 解析失败：${err.message}` };
+  }
+  const list = (v) => (Array.isArray(v) ? v.filter((c) => typeof c === "string" && c.trim()) : []);
+  return {
+    hooks: { beforeTick: list(j.hooks?.beforeTick), beforeMerge: list(j.hooks?.beforeMerge) },
+    release: j.release !== false,
+    inbox: j.inbox === "external" ? "external" : "flow",
+  };
+}
+
+/** 跑一个钩子命令（sh -c，仓库根目录）：失败只记日志，不中断本轮。 */
+function runHook(stage, cmd, dryRun) {
+  if (dryRun) {
+    log(`  [dry-run] 钩子 ${stage}：${cmd}`);
+    return true;
+  }
+  const r = spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf8", timeout: 30 * 60 * 1000 });
+  const tail = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").filter(Boolean).slice(-3).join(" ｜ ").slice(0, 400);
+  if (r.status === 0) {
+    log(`  · 钩子 ${stage}：${cmd}${tail ? ` → ${tail}` : ""}`);
+    return true;
+  }
+  log(`  ✗ 钩子 ${stage} 失败（rc=${r.status ?? r.signal}）：${cmd}${tail ? ` → ${tail}` : ""}`);
+  return false;
 }
 
 // ------------------------------------------------------------------ 任务书（官方 Task-spec contract）
@@ -466,9 +513,12 @@ export async function tick({ dryRun = false } = {}) {
   const ctx = context();
   const report = { needsCoordinator: [], dispatched: [], merged: [], errors: [] };
   log(`== tick（Run ${ctx.runId}${dryRun ? "，dry-run" : ""}）==`);
+  const cfg = flowConfig();
+  if (cfg.error) log(`  ✗ ${cfg.error}（按默认配置跑）`);
+  for (const cmd of cfg.hooks.beforeTick) if (!runHook("beforeTick", cmd, dryRun)) report.errors.push(`beforeTick: ${cmd}`);
 
   // 0. 收件箱：纯事实类 ack 掉；有提问 / 升级就留给协调器（不 ack，后面的消息也先不读）。
-  try {
+  if (cfg.inbox === "flow") try {
     const box = orca(["orchestration", "check", "--run", ctx.runId, "--terminal", ctx.from]);
     const messages = box.messages ?? [];
     if (messages.length) {
@@ -490,6 +540,7 @@ export async function tick({ dryRun = false } = {}) {
     ["合并", ["merge", "--pending", ...(dryRun ? ["--dry-run"] : [])]],
   ]) {
     if (dryRun && what === "迁移") continue;
+    if (what === "合并") for (const cmd of cfg.hooks.beforeMerge) if (!runHook("beforeMerge", cmd, dryRun)) report.errors.push(`beforeMerge: ${cmd}`);
     try {
       const out = agentctl(args).trim();
       for (const line of out.split("\n").filter((l) => /✓|↩|✗ 不合并|已迁移|→/.test(l))) {
@@ -523,8 +574,8 @@ export async function tick({ dryRun = false } = {}) {
   let free = countActive(state);
   log(`  在跑：实现/返工 ${free.build}/${state.lanes}，验收 ${free.accept}/${state.acceptMax}`);
 
-  // 3. 排队放行：s:queued → s:ready（只补空位）。
-  if (free.freeBuild > 0) {
+  // 3. 排队放行：s:queued → s:ready（只补空位）。项目用自己的放行（flow.json release:false）就跳过。
+  if (cfg.release && free.freeBuild > 0) {
     try {
       const out = agentctl(["release-queued", "--free-lanes", String(free.freeBuild), ...(dryRun ? ["--dry-run"] : [])]).trim();
       for (const line of out.split("\n").filter((l) => /#\d+/.test(l))) log(`  放行：${line.trim()}`);
@@ -707,13 +758,13 @@ async function main(argv) {
     for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
     const i = argv.indexOf("--every");
     const every = Math.max(60, Number(i >= 0 ? argv[i + 1] : 180)) * 1000;
+    // 每轮起一个子进程跑 tick：main 更新（含 beforeTick 里的 pull）后下一轮就用新代码，不用重启 watch。
     for (;;) {
-      try {
-        await tick({});
-      } catch (err) {
-        log(`✗ tick 失败：${err.message.slice(0, 400)}`);
-      }
-      await new Promise((r) => setTimeout(r, every));
+      const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "tick"], {
+        cwd: ROOT, stdio: ["ignore", "inherit", "inherit"], timeout: 60 * 60 * 1000, env: process.env,
+      });
+      if (r.error || (r.status !== 0 && r.status !== 10)) log(`✗ tick 子进程异常退出（rc=${r.status ?? r.signal}${r.error ? `，${r.error.message}` : ""}）`);
+      await new Promise((res) => setTimeout(res, every));
     }
   }
   process.stderr.write("用法：node bin/orca-flow.mjs tick|status|watch [--dry-run] [--json] [--every <秒>]\n");
