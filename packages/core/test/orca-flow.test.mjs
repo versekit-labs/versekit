@@ -227,4 +227,10 @@ test("回收 worktree：有改动、有不在远端的提交、有要留的被�
   assert.match(dirtyReason("?? new.txt", "0"), /未提交/);
   assert.match(dirtyReason("", "2"), /2 个提交不在任何远端/);
   assert.match(dirtyReason("!! .accept-evidence/ci.log", "0"), /被忽略但可能要留.*\.accept-evidence/);
+  // 验收 #368 第 1 轮：任意层级的同名目录都算，按整段比
+  assert.equal(dirtyReason("!! research-console/dist/\n!! a/b/node_modules/\n!! web/.DS_Store", "0"), null);
+  assert.equal(dirtyReason("!! research-console/dist/app.js", "0"), null);
+  for (const f of ["dist-config.json", "dist-archive/", "node_modules-backup/", "dist", "notes/dist"]) {
+    assert.notEqual(dirtyReason(`!! ${f}`, "0"), null, f);
+  }
 });

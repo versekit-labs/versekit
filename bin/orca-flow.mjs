@@ -546,12 +546,23 @@ export function cleanupCandidates(list, { root, busyPaths = [] } = {}) {
   return list.filter((w) => linkedIssueOf(w) && !w.isMainWorktree && w.path !== root && !busyPaths.includes(w.path));
 }
 
+const DISPOSABLE_DIRS = new Set(["node_modules", "dist", ".playwright-mcp", ".impeccable"]);
+
+/** 被忽略的路径是不是依赖 / 构建产物 / 缓存：路径里某一级目录正好叫这些名字（任意层级），或文件是 .DS_Store。按整段比，dist-config.json 不算。 */
+export function disposable(path) {
+  const isDir = path.endsWith("/");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.at(-1) === ".DS_Store") return true;
+  const dirs = isDir ? parts : parts.slice(0, -1);
+  return dirs.some((d) => DISPOSABLE_DIRS.has(d));
+}
+
 /** 目录里有没有不能丢的东西：未提交改动、不在任何远端的提交、除依赖与构建产物外的被忽略文件。 */
 export function dirtyReason(porcelainIgnored, unpushed) {
   const lines = String(porcelainIgnored ?? "").split("\n").filter(Boolean);
   if (lines.some((l) => !l.startsWith("!!"))) return "有未提交的改动";
   if (Number(unpushed) > 0) return `有 ${unpushed} 个提交不在任何远端`;
-  const kept = lines.map((l) => l.slice(3)).filter((f) => !/^(node_modules|dist|\.playwright-mcp|\.impeccable)\/?|\/node_modules\/?$|\.DS_Store$/.test(f));
+  const kept = lines.map((l) => l.slice(3)).filter((f) => !disposable(f));
   if (kept.length) return `有被忽略但可能要留的文件（${kept.slice(0, 3).join("、")}${kept.length > 3 ? " 等" : ""}）`;
   return null;
 }
