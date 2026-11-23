@@ -804,10 +804,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       // 命令层 args 已把 group 标成必填；这里再挡一次，直接调 handler 的调用方也不能绕过。
       if (!group) fail("接入账号要先选账号组：先建一个账号组，或在已有的组里接入", "vk group add <名字>");
       const g = requireGroup(group);
+      const shown = store.accountName(name);
       const result = store.addAccount({
         platform,
-        handle: handle ?? name,
-        displayName: name,
+        handle: handle ?? shown,
+        displayName: shown,
         credentialRef: credentialRef ?? null,
         groupId: g.id,
       });
@@ -819,6 +820,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     },
 
     "account.remove": ({ accountId }) => store.removeAccount(accountId),
+
+    "account.rename": ({ accountId, name }) => {
+      const result = store.renameAccount(accountId, name);
+      if (result.changed) emit({ type: "account.renamed", payload: { accountId, from: result.previous, to: result.name } });
+      return result;
+    },
 
     "account.mode": ({ accountId, mode }) => store.setAccountMode(accountId, mode),
 

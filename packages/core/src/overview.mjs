@@ -502,7 +502,7 @@ function todayRows(conn, groupId) {
     .prepare(
       `SELECT p.id, p.state, p.mode, p.scheduled_at AS scheduledAt, p.published_at AS publishedAt,
               p.error_code, p.error_message, p.external_url AS url, p.work_id AS workId, p.cut_id AS cutId,
-              p.account_id AS accountId, a.platform, a.handle, a.group_id AS groupId,
+              p.account_id AS accountId, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, a.group_id AS groupId,
               w.title AS workTitle, c.title AS cutTitle, v.language
          FROM publish p
          JOIN account a ON a.id = p.account_id
@@ -524,6 +524,7 @@ const baseItem = (r) => ({
   accountId: r.accountId,
   platform: r.platform,
   handle: r.handle,
+  accountName: r.account_name,
   language: r.language ?? null,
   state: r.state,
   scheduledAt: r.scheduledAt,
@@ -586,6 +587,7 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
     cutTitle: r.cutTitle,
     platform: r.platform,
     handle: r.handle,
+    accountName: r.account_name,
     state: r.state,
     publishedAt: r.publishedAt,
     url: r.url,

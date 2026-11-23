@@ -1140,6 +1140,14 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
+  if (sub === "rename") {
+    const accountId = pos[2];
+    if (!accountId || val("--name") === undefined) throw new Error("用法：vk account rename <账号 id> --name <新名字>");
+    const data = await send("account.rename", { accountId, name: val("--name") }, { log });
+    if (human) console.log(data.changed ? `已改名：${data.previous} → ${data.name}（只改 VerseKit 里的名字，不影响平台）` : `名字本来就是「${data.name}」，没有改动`);
+    else out(data);
+    return data;
+  }
   if (sub === "remove") {
     const accountId = pos[2];
     if (!accountId) throw new Error("用法：vk account remove <accountId>");
@@ -1246,7 +1254,7 @@ async function cmdAccount() {
     else out(data);
     return data;
   }
-  throw new Error("用法：vk account list [--group <组>] | show <accountId> | checktime [时:分] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
+  throw new Error("用法：vk account list [--group <组>] | show <accountId> | checktime [时:分] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
 }
 
 async function cmdBootstrap() {
@@ -2117,7 +2125,7 @@ function usage() {
       "  vk group list | add <名字> | use <组 id 或名字>",
       // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
       // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
-      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
+      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
       "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
       "  vk work push <清单.json> --group <组名>                  制作机：把清单和成片传到云端中转，等发布机拉取入库（本机不建作品）",

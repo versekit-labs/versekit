@@ -150,7 +150,19 @@ export function occupantOf(groupId, platform) {
   );
 }
 
+/** 账号名是 VerseKit 里给自己看的名字，不影响平台：只要求去掉首尾空格后非空、不超过 40 个字。
+ *  不要求和组名不同，也不要求和同组其他平台的账号不同（一个平台在一组里只有一个位置，靠平台区分）。
+ *  添加与改名共用这一处，网页不另加限制。 */
+export const ACCOUNT_NAME_MAX = 40;
+export function accountName(name) {
+  if (typeof name !== "string" || !name.trim()) fail("账号名不能为空：填一个你自己认得出的名字（不影响平台）");
+  const n = name.trim();
+  if ([...n].length > ACCOUNT_NAME_MAX) fail(`账号名太长（最多 ${ACCOUNT_NAME_MAX} 个字）`);
+  return n;
+}
+
 export function addAccount({ platform, handle, displayName = null, credentialRef = null, groupId = null }) {
+  if (displayName !== null) displayName = accountName(displayName);
   const p = requireString(platform, "platform", { max: 32 });
   const h = requireString(handle, "handle", { max: 200 });
   if (!groupId) fail("接入账号要先选账号组：先建一个账号组，或在已有的组里接入", "vk group add <名字>");
@@ -203,6 +215,19 @@ export function addAccount({ platform, handle, displayName = null, credentialRef
     .prepare("INSERT INTO account (id, platform, handle, display_name, credential_ref, state, created_at, group_id) VALUES (?,?,?,?,?, 'ok', ?, ?)")
     .run(id, p, h, displayName, credentialRef, Date.now(), groupId);
   return { id, existed: false };
+}
+
+/** 改账号名：只改 display_name（VerseKit 里的名字）。id、handle / 平台用户 id、登录状态、凭据、
+ *  平台稿与发布记录都不碰。撞到自己的名字不算错（幂等）。 */
+export function renameAccount(accountId, name) {
+  const n = accountName(name);
+  const account = open().prepare("SELECT * FROM account WHERE id = ?").get(accountId);
+  if (!account) fail(`没有这个账号：${accountId}`, "vk account list");
+  if (account.removed_at) fail(`账号 ${account.handle}（${accountId}）已经移除，不能改名`);
+  const previous = account.display_name || account.handle;
+  if (account.display_name === n) return { accountId, name: n, changed: false, previous };
+  open().prepare("UPDATE account SET display_name = ? WHERE id = ?").run(n, accountId);
+  return { accountId, name: n, changed: true, previous, platform: account.platform };
 }
 
 /**
@@ -838,7 +863,7 @@ function workView(work) {
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
-                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, v.language, v.meta_json AS version_meta
+                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, v.language, v.meta_json AS version_meta
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
@@ -854,6 +879,7 @@ function workView(work) {
         id: p.id,
         platform: p.platform,
         handle: p.handle,
+        accountName: p.account_name,
         state: p.state,
         mode: p.mode,
         title: copy.title,
@@ -998,7 +1024,7 @@ export function createPublish({
 export function getPublish(publishId) {
   return open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.state AS account_state, w.title AS work_title, w.asset_path, w.meta_json
+      `SELECT p.*, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, a.state AS account_state, w.title AS work_title, w.asset_path, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -1121,7 +1147,7 @@ export function listStats({ range = "all", publishId = null, groupId = null } = 
   const conn = open();
   const rows = conn
     .prepare(
-      `SELECT p.id, p.state, p.visibility, p.external_url, a.platform, a.handle,
+      `SELECT p.id, p.state, p.visibility, p.external_url, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name,
               w.title,
               s.captured_at, s.source, s.status, s.metrics_json
          FROM publish p
@@ -1140,6 +1166,7 @@ export function listStats({ range = "all", publishId = null, groupId = null } = 
     publishId: r.id,
     platform: r.platform,
     handle: r.handle,
+    accountName: r.account_name,
     title: r.title,
     state: r.state,
     url: r.external_url,

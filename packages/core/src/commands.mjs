@@ -237,6 +237,17 @@ export const COMMANDS = [
     audit: "never",
   },
   {
+    name: "account.rename",
+    summary: "给账号改个名字（只改 VerseKit 里的名字，不影响平台；id、登录、凭据、平台稿都不动）",
+    remote: false,
+    localOnly: true,
+    args: { accountId: "string", name: "string" },
+    http: { method: "POST", path: "/api/accounts/:accountId/rename" },
+    cli: { usage: "vk account rename <账号 id> --name <新名字>" },
+    card: null,
+    audit: "always",
+  },
+  {
     name: "account.list",
     summary: "列出账号与登录状态（--group 只看某个组，附占用者信息）",
     remote: true,
