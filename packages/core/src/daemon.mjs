@@ -646,7 +646,7 @@ function listen(server, options) {
  */
 export const OFFLINE_BLOCKED = new Set([
   "publish", "check", "collect", // runner 的 kind
-  "account.check", "account.connect", "egress.recheck", "account.creator", "account.logout", "collect.now",
+  "account.check", "account.connect", "egress.recheck", "account.creator", "account.logout", "account.switch", "collect.now",
 ]);
 const OFFLINE_BLOCKED_PREFIXES = ["account.login."];
 
@@ -670,7 +670,7 @@ export function offlineHandlers(handlers) {
       : fn;
   }
   // 命令层可能没有注册这些 handler（没装适配器）；仍要给出 offline_mode 而不是 not_implemented。
-  for (const name of ["account.check", "account.connect", "account.creator", "account.logout", "collect.now", "account.login.open", "account.login.start", "account.login.qr", "account.login.resend", "account.login.status", "account.login.verify", "account.login.cancel"]) {
+  for (const name of ["account.check", "account.connect", "account.creator", "account.logout", "account.switch", "collect.now", "account.login.open", "account.login.start", "account.login.qr", "account.login.resend", "account.login.status", "account.login.verify", "account.login.cancel"]) {
     out[name] ??= () => {
       throw offlineError(name);
     };

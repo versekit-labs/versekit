@@ -822,3 +822,21 @@ test("ACC-youtube-04 强制私享：今天页列出、作品状态算出了问�
   assert.match(html, /forcedPrivate/);
   assert.match(readFileSync(join(ROOT, "../web/public/today.html"), "utf8"), /published_limited/);
 });
+
+test("ACC-acct-iso-05/06：官方接口换号清授权令牌：这个账号的令牌文件没了、check 判没连上，别的账号的令牌还在", async () => {
+  const a = await connectedAccount();
+  const b = await connectedAccount();
+  const refOf = (id) => db().prepare("SELECT credential_ref FROM account WHERE id=?").get(id).credential_ref;
+  const refA = refOf(a.accountId);
+  const refB = refOf(b.accountId);
+  assert.ok(existsSync(credentialPath(refA)) && existsSync(credentialPath(refB)));
+  const out = adapterModule.default.logout({ accountId: a.accountId, credentialRef: refA });
+  assert.equal(out.removed, true);
+  assert.equal(existsSync(credentialPath(refA)), false, "这个账号的令牌文件已删");
+  assert.equal(existsSync(credentialPath(refB)), true, "别的账号的令牌不动");
+  assert.equal(adapterModule.default.logout({ accountId: a.accountId, credentialRef: refA }).removed, false, "重复清不报错");
+  db().prepare("UPDATE account SET credential_ref = NULL WHERE id=?").run(a.accountId); // vk 的 logout 同步清账号行
+  await assert.rejects(checkAccount(adapters, a.accountId), (err) => err.code === "auth", "清掉令牌后 check 判需要重新登录");
+  assert.equal(db().prepare("SELECT state FROM account WHERE id=?").get(a.accountId).state, "expired", "状态变没连上");
+  assert.equal((await checkAccount(adapters, b.accountId)).state, "ok", "别的账号照常");
+});

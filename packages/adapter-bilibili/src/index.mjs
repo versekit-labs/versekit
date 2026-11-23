@@ -14,7 +14,7 @@ import { delimiter, join } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 import { resolvePublishAsset, resolvePublishCopy } from "../../core/src/publish-flow.mjs";
-import { login, loginStatus } from "./login.mjs";
+import { login, loginStatus, clearCredentials } from "./login.mjs";
 
 const BILIUP = () => process.env.VK_BILIUP_BIN ?? "biliup";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
@@ -243,6 +243,8 @@ export default {
   // `biliup login` 本身必须有 TTY（实测 0.2.4 报 not a terminal），所以不再要求人开终端。
   login,
   loginStatus,
+  /** 退出登录 / 换号：删掉这个账号的 biliup 登录文件。 */
+  logout: ({ accountId, credentialRef = null }) => ({ removed: clearCredentials(accountId, credentialRef) }),
   check,
   publish,
   collect,

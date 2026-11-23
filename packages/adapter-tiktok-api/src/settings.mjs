@@ -6,7 +6,7 @@
 //   TIKTOK_API_BASE（默认 https://open.tiktokapis.com）、TIKTOK_AUTH_BASE（默认 https://www.tiktok.com）
 //     —— 开发机测试时指向本地 mock，不连真实服务。
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { paths } from "../../core/src/index.mjs";
 import { readConfig, updateConfig } from "../../core/src/config.mjs";
@@ -92,4 +92,17 @@ export function writeTokens(ref, data) {
   writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, file);
+}
+
+/** 退出登录 / 换号：删掉这个账号的授权令牌文件；引用不合法或文件本来就没有都算清干净。返回是否真删了文件。 */
+export function clearTokens(ref) {
+  let file;
+  try {
+    file = credentialPath(ref);
+  } catch {
+    return false;
+  }
+  if (!existsSync(file)) return false;
+  rmSync(file, { force: true });
+  return true;
 }

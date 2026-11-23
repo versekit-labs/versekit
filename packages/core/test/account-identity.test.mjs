@@ -71,3 +71,12 @@ test("ACC-acct-iso-03：account.logout 在命令表里只定义一次，CLI 用�
   assert.equal(c.http.path, "/api/accounts/:accountId/logout");
   assert.equal(c.card, null, "退出登录会删资料，不给卡片按钮");
 });
+
+test("ACC-acct-iso-05：account.switch 在命令表里只定义一次，CLI 用法是 vk account switch，不给卡片按钮", () => {
+  const c = findCommand("account.switch");
+  assert.ok(c);
+  assert.equal(c.cli.usage, "vk account switch <accountId>");
+  assert.equal(c.http.path, "/api/accounts/:accountId/switch");
+  assert.equal(c.card, null);
+  assert.equal(c.audit, "always");
+});

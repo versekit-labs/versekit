@@ -451,6 +451,27 @@ function daemonHandlers(adapters, log) {
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
   // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
   const adapterOf = (platform) => adapters.find((a) => a.platform === platform)?.adapter ?? null;
+
+  /** 退出登录与换号共用：浏览器资料 + 平台凭据文件 + 官方接口令牌，一个都不留。 */
+  async function logoutEverything(accountId, what) {
+    const account = getAccount(accountId);
+    if (!account) throw new Error(`没有这个账号：${accountId}`);
+    const session = loginSessions.get(accountId);
+    loginSessions.delete(accountId);
+    if (session?.mode === "qr") await endQrSession(accountId, session).catch(() => {});
+    const r = await logoutAccount(accountId);
+    // 平台凭据：适配器自己知道文件在哪；账号行的 credential_ref 清空，发布与检查就不会再用旧号。
+    const adapter = adapterOf(account.platform);
+    let credentialsRemoved = false;
+    if (typeof adapter?.logout === "function") {
+      const out = await adapter.logout({ accountId, credentialRef: account.credential_ref ?? null });
+      credentialsRemoved = Array.isArray(out?.removed) ? out.removed.length > 0 : Boolean(out?.removed);
+      open().prepare("UPDATE account SET credential_ref = NULL WHERE id = ?").run(accountId);
+    }
+    markAccountLoggedOut(accountId);
+    log(`[logout] ${accountId} ${what}（浏览器资料${r.removed ? "已删除" : "本来就没有"}，平台凭据${credentialsRemoved ? "已删除" : "本来就没有"}）`);
+    return { accountId, state: "expired", browserClosed: r.closed, profileRemoved: r.removed, credentialsRemoved, next: "现在可以重新登录：vk account login " + accountId + " --qr（或 --phone / --open）" };
+  }
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
@@ -665,19 +686,16 @@ function daemonHandlers(adapters, log) {
     },
 
     /**
-     * 退出登录（#220）：关浏览器、删这个账号自己的 profile、状态变「没连上」。
+     * 退出登录（#220、#376）：关浏览器、删这个账号自己的 profile，再删它的平台凭据文件
+     * （B站 cookies 文件、官方接口授权令牌）并清掉账号行的 credential_ref，状态变「没连上」。
      * 只动这一个账号；别的账号的 profile 与凭证文件不碰。
      */
-    "account.logout": async ({ accountId }) => {
-      const account = getAccount(accountId);
-      if (!account) throw new Error(`没有这个账号：${accountId}`);
-      const session = loginSessions.get(accountId);
-      loginSessions.delete(accountId);
-      if (session?.mode === "qr") await endQrSession(accountId, session).catch(() => {});
-      const r = await logoutAccount(accountId);
-      markAccountLoggedOut(accountId);
-      log(`[logout] ${accountId} 已退出登录（浏览器资料${r.removed ? "已删除" : "本来就没有"}）`);
-      return { accountId, state: "expired", browserClosed: r.closed, profileRemoved: r.removed, next: "现在可以重新登录：vk account login " + accountId + " --qr（或 --phone / --open）" };
+    "account.logout": async ({ accountId }) => logoutEverything(accountId, "已退出登录"),
+
+    /** 换号（#376）：清得和退出登录一样干净；调用方（系统页、CLI）随后直接进入登录流程。排期与平台稿不动。 */
+    "account.switch": async ({ accountId }) => {
+      const data = await logoutEverything(accountId, "换号：已清掉旧号的登录数据");
+      return { ...data, switched: true, next: `现在登录要接的号：vk account login ${accountId}（扫码登录的是手机 App 当前的号，先在 App 里切到要接的号）` };
     },
 
     "account.login.cancel": async ({ accountId }) => {
@@ -1136,7 +1154,15 @@ async function cmdAccount() {
     const accountId = pos[2];
     if (!accountId) throw new Error("用法：vk account logout <accountId>");
     const data = await send("account.logout", { accountId }, { log });
-    if (human) console.log(`已退出登录：${accountId} 的浏览器已关闭、浏览器资料已删除，状态是「没连上」\n${data.next}`);
+    if (human) console.log(`已退出登录：${accountId} 的浏览器已关闭、浏览器资料和平台凭据已删除，状态是「没连上」\n${data.next}`);
+    else out(data);
+    return data;
+  }
+  if (sub === "switch") {
+    const accountId = pos[2];
+    if (!accountId) throw new Error("用法：vk account switch <账号 id>");
+    const data = await send("account.switch", { accountId }, { log });
+    if (human) console.log(`已换号：${accountId} 的浏览器资料、平台凭据文件、授权令牌都已清掉，状态是「没连上」；排期和平台稿还在这个账号位置上\n${data.next}`);
     else out(data);
     return data;
   }
