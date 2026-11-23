@@ -8,9 +8,9 @@
 //
 // 凭证只落本机：文件写到 ~/.config/versekit/credentials/，目录 0700、文件 0600，不上传。
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { paths } from "../../core/src/index.mjs";
 import { closeLoginWindow, hasLiveBrowser, openAccount } from "../../driver-browser/src/index.mjs";
 
@@ -37,6 +37,22 @@ const REQUIRED_COOKIES = ["SESSDATA", "bili_jct"];
 export function credentialPathFor(accountId, existing = null) {
   if (existing) return existing;
   return join(paths().credentials, `bili-${accountId}.json`);
+}
+
+/**
+ * 退出登录 / 换号：删掉这个账号自己的 biliup 登录文件。
+ * 只删凭证目录里的文件（账号行可能指着用户自己放的外部路径，那份不替用户删，
+ * 由调用方清掉账号行的 credential_ref，发布就不会再用它）。返回已删除的文件列表。
+ */
+export function clearCredentials(accountId, credentialRef = null) {
+  const root = resolve(paths().credentials);
+  const removed = [];
+  for (const file of new Set([credentialPathFor(accountId, credentialRef), credentialPathFor(accountId)])) {
+    if (!resolve(file).startsWith(root + sep) || !existsSync(file)) continue;
+    rmSync(file, { force: true });
+    removed.push(file);
+  }
+  return removed;
 }
 
 /**

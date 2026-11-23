@@ -82,7 +82,7 @@
   const labelOf = (p) => LABEL[p] ?? p;
   // 走官方接口的账号：先填应用凭证，再在新标签页授权；不靠发布机的浏览器资料（TikTok 官方接口、YouTube）。
   const OFFICIAL = { "tiktok-api": { name: "TikTok", idName: "client key", where: "TikTok 开发者后台里这个应用的凭证" }, youtube: { name: "YouTube", idName: "client id", where: "你自己在 Google Cloud 控制台里建的 OAuth 客户端的凭证" } };
-  const WEB_LOGIN = (p) => p !== "bilibili" && !OFFICIAL[p]; // 靠自己的浏览器资料保持登录的平台
+  const WEB_LOGIN = (p) => !OFFICIAL[p]; // 有「退出登录」的平台：浏览器资料（含 B站的凭据文件）都能清；官方接口平台用「换号」清授权令牌
   // 发布机能在后台替你取二维码、发短信验证码的平台；其余平台只有「在发布机上打开登录窗口」。
   const HEADLESS = new Set(["xiaohongshu"]);   // 能取二维码也能发短信
   const QR_ONLY = new Set(["shipinhao"]);      // 只能取二维码（视频号：用开通视频号的微信扫）
@@ -106,6 +106,9 @@
     // accountId → { step: qr | scanned | qrold | sms1 | sms2 | win | auth | fail, qr, text, masked }
     login: {},
     logoutAsk: null,      // 正在二次确认「退出登录」的账号 id
+    switchAsk: null,      // 正在二次确认「换号」的账号 id
+    switched: {},         // 换号后正在登录的账号：{ [id]: true }；登录成功后行内显示「已换成 <新号>」
+    switchedTo: {},       // 换号登录成功后的提示：{ [id]: "已换成 …" }
     credOpen: null,       // 展开「填应用凭证」的账号 id
     credsMissingIds: new Set(), // 后端明确说「没有应用凭证」的账号 id（平台清单可能晚一拍，别让状态盖回去）
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
@@ -238,6 +241,7 @@
     if (OFFICIAL[a.platform]) html = B(`data-login="${esc(a.id)}"`, connected(a) ? "重新授权" : `Connect ${OFFICIAL[a.platform].name}`, connected(a) ? "link" : "btn", dis);
     else if (st.key === "ok") html = (WEB_LOGIN(a.platform) ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, "重新登录", "link", dis);
     else html = (WEB_LOGIN(a.platform) && st.key !== "down" ? B(`data-logout="${esc(a.id)}"`, "退出登录", "link") : "") + B(`data-login="${esc(a.id)}"`, st.key === "down" ? "登录" : "重新登录", "btn", dis);
+    html = B(`data-switch="${esc(a.id)}"`, "换号", "link", dis) + html;
     return `<span class="acts">${html}</span>${off ? `<div class="sub">${OFFLINE_SAY}</div>` : ""}`;
   }
 
@@ -251,7 +255,7 @@
     const box = (inner, cls = "") => `<div class="qr${cls ? ` ${cls}` : ""}">${inner}</div>`;
     switch (lg.step) {
       case "qr":
-        return subRow(6, `${box(lg.qr ? `<img src="${esc(lg.qr)}" alt="登录二维码">` : esc(lg.text || "正在取二维码…"))}<div class="how"><b>用${esc(pf)} App 扫这个码</b><span class="sub">二维码是发布机「${m}」取回来的，几分钟内有效。登录数据只存在那台电脑上，这个服务拿不到。${esc(qrHint(a.platform))}${lg.note ? ` ${esc(lg.note)}` : ""}</span>${alt(sms, win)}</div>`);
+        return subRow(6, `${box(lg.qr ? `<img src="${esc(lg.qr)}" alt="登录二维码">` : esc(lg.text || "正在取二维码…"))}<div class="how"><b>用${esc(pf)} App 扫这个码</b><span class="sub">二维码是发布机「${m}」取回来的，几分钟内有效。登录数据只存在那台电脑上，这个服务拿不到。${esc(qrHint(a.platform))}${ui.switched[a.id] ? " 换号：先在 App 里切到要接的号再扫。" : ""}${lg.note ? ` ${esc(lg.note)}` : ""}</span>${alt(sms, win)}</div>`);
       case "scanned":
         return subRow(6, `${box("已扫码")}<div class="how"><b>在手机上点「确认登录」</b><span class="sub">点完这里会自己变成正常，不用回来按什么。</span>${alt()}</div>`);
       case "qrold":
@@ -284,10 +288,13 @@
     const q = a.quota;
     const sendable = !lg && !credsMissing(a) && !credsUnknown(a) && !a.identityConflict && st.key === "ok";
     const quota = !q ? '<span class="sub">不限</span>' : sendable ? `${q.left} 条 <span class="sub">每天最多 ${q.cap} 条</span>` : '<span class="sub">现在发不了</span>';
+    const switchedNote = ui.switchedTo[a.id] ? ` <span class="sub" role="status">${esc(ui.switchedTo[a.id])}</span>` : "";
     const note = [NOTE[a.platform], a.mode === "manual" ? "仅手动跟踪" : ""].filter(Boolean).join("，");
 
     let sub = "";
-    if (ui.logoutAsk === a.id) {
+    if (ui.switchAsk === a.id) {
+      sub = subRow(6, `<p>会清掉这个号在发布机「${esc(machineName())}」上的登录数据（浏览器资料、平台凭据文件、官方接口授权令牌）；排着的内容留在这个账号位置上，换好后按新号发。</p><span class="acts">${B("data-switchno", "取消", "link")}${B(`data-switchyes="${esc(a.id)}"`, "换号并登录")}</span>`);
+    } else if (ui.logoutAsk === a.id) {
       sub = subRow(6, `<p>退出后会清掉这个账号在发布机「${esc(machineName())}」上的登录数据，要重新登录才能发；排着要发的这个账号的内容，退出后不会发。</p><span class="acts">${B("data-logoutno", "取消", "link")}${B(`data-logoutyes="${esc(a.id)}"`, "退出登录")}</span>`);
     // 缺凭证时，就算上一次 Connect 已经失败（lg.step = fail），也直接给填写的表单，不留红框死路。
     } else if ((credsMissing(a) || ui.credOpen === a.id) && (ui.credOpen === a.id || lg?.step === "fail")) {
@@ -302,7 +309,7 @@
     else if (a.identityConflict) {
       sub = subRow(6, `<p>${esc(a.identityConflict)}</p><span class="acts">${B(`data-logoutyes="${esc(a.id)}"`, "退出登录，换一个号")}</span>`, "bad");
     }
-    const row = `<tr${sub ? ' class="has-sub"' : ""} data-acc="${esc(a.id)}"><td>${pfn(a.platform)}</td><td class="acct">${who}</td><td>${statusCell(a, st, lg)}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${accountActions(a, st, lg)}</td></tr>`;
+    const row = `<tr${sub ? ' class="has-sub"' : ""} data-acc="${esc(a.id)}"><td>${pfn(a.platform)}</td><td class="acct">${who}${switchedNote}</td><td>${statusCell(a, st, lg)}</td><td>${quota}</td><td class="sub">${esc(note)}</td><td class="n">${accountActions(a, st, lg)}</td></tr>`;
     return row + sub;
   }
 
@@ -777,8 +784,16 @@
   async function succeed(id) {
     stopPoll(id);
     delete ui.login[id];
+    const swapped = ui.switched[id];
+    delete ui.switched[id];
     toast("登录正常");
     await refresh();
+    if (swapped) {
+      const a = acc(id);
+      ui.switchedTo[id] = `已换成 ${a?.display_name || a?.handle || "新号"}`;
+      toast(ui.switchedTo[id]);
+      draw();
+    }
   }
 
   /** account.check：适配器真实检查（B站走自己的续期检查）。只有 ok 才算登上。 */
@@ -1091,7 +1106,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-ctsave],[data-ipx],[data-fs]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-switch],[data-switchyes],[data-switchno],[data-ctsave],[data-ipx],[data-fs]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -1103,11 +1118,23 @@
     } else if ("sw" in d) {
       e.preventDefault();
       try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
-    } else if (d.logout) { ui.logoutAsk = d.logout; draw(); }
+    } else if (d.switch) { ui.switchAsk = d.switch; ui.logoutAsk = null; draw(); }
+    else if ("switchno" in d) { ui.switchAsk = null; draw(); }
+    else if (d.switchyes) {
+      const id = d.switchyes;
+      ui.switchAsk = null; stopPoll(id); delete ui.login[id]; delete ui.switchedTo[id];
+      try {
+        await post(accPath(id, "switch"), { accountId: id });
+        ui.switched[id] = true;
+        toast("已清掉旧号的登录数据，现在登录要接的号");
+        await refresh();
+        await startLogin(id);
+      } catch (err) { toast(`没换成：${err.message}`); await refresh(); }
+    } else if (d.logout) { ui.logoutAsk = d.logout; ui.switchAsk = null; draw(); }
     else if ("logoutno" in d) { ui.logoutAsk = null; draw(); }
     else if (d.logoutyes) {
       const id = d.logoutyes;
-      ui.logoutAsk = null; stopPoll(id); delete ui.login[id];
+      ui.logoutAsk = null; stopPoll(id); delete ui.login[id]; delete ui.switched[id]; delete ui.switchedTo[id];
       try { await post(accPath(id, "logout"), { accountId: id }); toast("已退出登录，现在可以重新登录另一个号"); }
       catch (err) { toast(`没退出成功：${err.message}`); }
       await refresh();

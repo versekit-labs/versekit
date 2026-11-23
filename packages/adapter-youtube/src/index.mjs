@@ -32,7 +32,7 @@ import { proxiedFetch } from "./proxy.mjs";
 import * as quota from "./quota.mjs";
 import {
   PLATFORM, SCOPE_ANALYTICS, SCOPE_MANAGE, MISSING_CLIENT_HINT, analyticsBase, apiBase, clientCredentials, credentialStatus, defaultCategoryId,
-  saveClientCredentials,
+  saveClientCredentials, clearTokens,
 } from "./settings.mjs";
 
 export const MAX_TITLE_CHARS = 100;
@@ -561,6 +561,8 @@ export default {
   publish,
   collect,
   connect,
+  /** 退出登录 / 换号：删掉这个账号的授权令牌文件。 */
+  logout: ({ credentialRef = null }) => ({ removed: clearTokens(credentialRef) }),
   /** 应用凭证：状态（不含 secret）与保存；core 的 account.credentials 命令只通过它们读写。 */
   credentials: { status: credentialStatus, save: saveClientCredentials },
 };

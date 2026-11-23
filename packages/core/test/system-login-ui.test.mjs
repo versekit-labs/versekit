@@ -82,6 +82,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     "account.login.open": async ({ accountId }) => { script.opened++; script.seen.push({ cmd: "open", accountId }); return { opened: true }; },
     "account.login.cancel": async () => ({ canceled: true }),
     "account.check": async ({ accountId }) => ({ accountId, state: "ok" }),
+    "account.switch": async ({ accountId }) => { script.seen.push({ cmd: "switch", accountId }); db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired", switched: true }; },
     "account.logout": async ({ accountId }) => { db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired" }; },
     "update.status": () => script.updated
       ? { version: "0.9.2", display: "0.9.2+bbbbbbb", commit: "b".repeat(40), short: "bbbbbbb", auto: true, intervalHours: 6, lastCheckAt: Date.now(), lastCheck: { up_to_date: true, message: "已是最新" }, lastUpdate: { at: Date.now(), display: "0.9.2+bbbbbbb", commits: ["通用文案按字段覆盖", "现在发和预约发"] }, lastFailure: null, inProgress: false }
@@ -202,6 +203,22 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     assert.equal(await tab.eval(`!!document.querySelector("[role=dialog]")`), false, "不弹窗");
     await shot("system-logout-confirm.png");
     await click("[data-logoutno]");
+
+    // ── ACC-acct-iso-05：每个平台的账号行都有「换号」；确认后清旧号、直接进入登录流程，成功后显示「已换成」──
+    for (const id of ["a_xhs", "a_dy"]) assert.equal(await tab.eval(`!!document.querySelector(${JSON.stringify(`${row(id)} [data-switch]`)})`), true, `${id} 行上没有「换号」`);
+    await click(`${row("a_xhs")} [data-switch]`);
+    await waitText(/排着的内容留在这个账号位置上，换好后按新号发/, "换号行内确认");
+    assert.equal(await tab.eval(`!!document.querySelector("[role=dialog]")`), false, "不弹窗");
+    await shot("system-switch-confirm.png");
+    await click("[data-switchno]");
+    assert.equal(script.seen.some((x) => x.cmd === "switch"), false, "取消不换号");
+    await click(`${row("a_xhs")} [data-switch]`);
+    await click("[data-switchyes]");
+    await tab.waitFor(`/先在 App 里切到要接的号再扫/.test(document.querySelector(${JSON.stringify(row("a_xhs"))}).nextElementSibling?.innerText || "")`, [], { timeout: 15e3, every: 150, what: "换号后直接出二维码与切号提示" });
+    assert.deepEqual(script.seen.filter((x) => x.cmd === "switch"), [{ cmd: "switch", accountId: "a_xhs" }]);
+    script.qr = "ok";
+    await tab.waitFor(`/已换成/.test(document.querySelector(${JSON.stringify(row("a_xhs"))}).innerText)`, [], { timeout: 15e3, every: 150, what: "换号登录成功后行内显示已换成" });
+    script.qr = "waiting";
 
     // ── ACC-youtube-02：缺应用凭证时给「填应用凭证」，不给点了必然失败的 Connect ──
     // 所有者真机（2026-11-21）就是这样断的：新接一个 YouTube 账号→页面直接发起授权→后端说没有应用凭证→

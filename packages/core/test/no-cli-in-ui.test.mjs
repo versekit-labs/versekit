@@ -150,6 +150,7 @@ test("ACC-v3-nocli-03：以前靠命令才能做的事，页面脚本里都有�
     短信登录: /login\/start[\s\S]*login\/verify/,
     窗口登录: /login\/open/,
     退出登录: /"logout"/,
+    换号: /"switch"/,
     填应用凭证: /platforms\/tiktok-api\/credentials/,
     改发布方案: /\/api\/plan"/,
     现在更新: /data-updnow[\s\S]*\/api\/update", \{\}/,
@@ -165,7 +166,7 @@ test("ACC-v3-nocli-04：CLI 完整律：上面每个入口对应的命令都在 
   const names = new Set((out.commands ?? out).map((c) => c.name));
   for (const n of [
     "group.add", "group.rename", "group.use", "account.add", "account.login.qr", "account.login.start", "account.login.verify", "account.login.resend",
-    "account.login.open", "account.login.status", "account.login.cancel", "account.logout", "account.credentials", "plan.set", "plan.reset", "update",
+    "account.login.open", "account.login.status", "account.login.cancel", "account.logout", "account.switch", "account.credentials", "plan.set", "plan.reset", "update",
     "update.status", "relay.connect", "relay.disconnect",
   ]) assert.ok(names.has(n), `命令表里缺 ${n}`);
   const cmd = findCommand("relay.disconnect");

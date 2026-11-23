@@ -20,7 +20,7 @@ import { resolvePublishCopy } from "../../core/src/publish-flow.mjs";
 import { callApi, fetchWithBackoff, classifyError, PauseError, PAUSE_CODES } from "./api.mjs";
 import { connect, ensureAccessToken, fetchProfile, REFRESH_EXPIRING_MS } from "./auth.mjs";
 import { mp4DurationSeconds } from "./mp4.mjs";
-import { clientCredentials, credentialStatus, saveClientCredentials, MISSING_CLIENT_HINT, PLATFORM } from "./settings.mjs";
+import { clientCredentials, clearTokens, credentialStatus, saveClientCredentials, MISSING_CLIENT_HINT, PLATFORM } from "./settings.mjs";
 
 export { PAUSE_CODES, PauseError };
 
@@ -331,6 +331,8 @@ export default {
   check,
   publish,
   connect: connectAccount,
+  /** 退出登录 / 换号：删掉这个账号的授权令牌文件。 */
+  logout: ({ credentialRef = null }) => ({ removed: clearTokens(credentialRef) }),
   creatorInfo,
   fetchProfile,
   /** 应用凭证：状态（不含 secret）与保存；core 的 account.credentials 命令只通过它们读写。 */
