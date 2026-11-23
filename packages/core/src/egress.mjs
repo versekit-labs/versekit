@@ -608,14 +608,14 @@ const humanError = (err) => {
  * 边收边写临时文件（.part），不整份读进内存。已有 .part 就用 Range 接着下；服务器不认 Range（回 200）就从头下并说明。
  * 超时是「连续 idleMs 没收到数据」。返回 .part 路径；不完整就抛错，.part 留着下次续传。
  */
-async function downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh = true }) {
+async function downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh = true, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const part = `${dest}.${createHash("sha1").update(src.url).digest("hex").slice(0, 8)}.part`;
   const have = existsSync(part) ? statSync(part).size : 0;
   const ctrl = new AbortController();
   let idle = null;
   const arm = () => {
-    clearTimeout(idle);
-    idle = setTimeout(() => ctrl.abort(new Error(`连续 ${Math.round(idleMs / 1000)} 秒没有收到数据`)), idleMs);
+    clearTimer(idle);
+    idle = setTimer(() => ctrl.abort(new Error(`连续 ${Math.round(idleMs / 1000)} 秒没有收到数据`)), idleMs);
   };
   let fd = null;
   let got = have;
@@ -624,7 +624,7 @@ async function downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, ret
     const res = await fetchImpl(src.url, { signal: ctrl.signal, headers: have ? { Range: `bytes=${have}-` } : {} });
     if (res.status === 416 && have && retryFresh) {
       rmSync(part, { force: true });
-      return await downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh: false });
+      return await downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, retryFresh: false, setTimer, clearTimer });
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let resumed = res.status === 206 && have > 0;
@@ -649,7 +649,7 @@ async function downloadPart(src, dest, { fetchImpl, idleMs, onProgress, log, ret
     }
     throw err;
   } finally {
-    clearTimeout(idle);
+    clearTimer(idle);
     if (fd !== null) closeSync(fd);
   }
 }
@@ -678,7 +678,7 @@ export function startGeoDbDownload(opts = {}) {
 
 export const geoDbDownloading = () => inflight !== null;
 
-async function doRefreshGeoDb({ now = Date.now(), dir = geoDir(), fetchImpl = (...a) => (geoFetch ?? fetch)(...a), sources = geoSources({ now }), log = () => {}, idleMs = GEO_IDLE_TIMEOUT_MS, progressMs = 1000 } = {}) {
+async function doRefreshGeoDb({ now = Date.now(), dir = geoDir(), fetchImpl = (...a) => (geoFetch ?? fetch)(...a), sources = geoSources({ now }), log = () => {}, idleMs = GEO_IDLE_TIMEOUT_MS, progressMs = 1000, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   mkdirSync(dir, { recursive: true });
   const errors = [];
   const reasons = [];
@@ -695,7 +695,7 @@ async function doRefreshGeoDb({ now = Date.now(), dir = geoDir(), fetchImpl = (.
     let part = null;
     try {
       patchGeoMeta({ downloading: { name: src.name, received: 0, total: 0, at: Date.now() } });
-      part = await downloadPart(src, target, { fetchImpl, idleMs, onProgress, log });
+      part = await downloadPart(src, target, { fetchImpl, idleMs, onProgress, log, setTimer, clearTimer });
       const tmp = `${target}.tmp`;
       if (src.gz) {
         await pipeline(createReadStream(part), createGunzip(), createWriteStream(tmp));
