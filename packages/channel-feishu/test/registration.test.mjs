@@ -42,14 +42,36 @@ const fs = require("node:fs");
 const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(AUDIT)}, "argv " + JSON.stringify(a) + "\\n");
 if (a[0] === "auth" && a[1] === "qrcode") { fs.writeFileSync(a[a.indexOf("-o") + 1], Buffer.from([137, 80, 78, 71])); process.exit(0); }
+const P = ${JSON.stringify(join(DIR, "profiles.json"))};
+const load = () => (fs.existsSync(P) ? JSON.parse(fs.readFileSync(P, "utf8")) : {});
+const fail = (m) => { console.error(JSON.stringify({ ok: false, error: { type: "validation", message: m } }, null, 2)); process.exit(2); };
 if (a[0] === "profile" && a[1] === "add") {
   let d = "";
   process.stdin.on("data", (c) => (d += c));
-  process.stdin.on("end", () => { fs.writeFileSync(${JSON.stringify(join(DIR, "stdin.txt"))}, d); fs.writeFileSync(${JSON.stringify(join(DIR, "profile"))}, a[a.indexOf("--app-id") + 1]); console.log(JSON.stringify({ ok: true })); });
+  process.stdin.on("end", () => {
+    const p = load(); const name = a[a.indexOf("--name") + 1];
+    if (p[name]) fail('profile "' + name + '" already exists');
+    p[name] = a[a.indexOf("--app-id") + 1];
+    fs.writeFileSync(${JSON.stringify(join(DIR, "stdin.txt"))}, d); fs.writeFileSync(P, JSON.stringify(p));
+    fs.writeFileSync(${JSON.stringify(join(DIR, "profile"))}, p.versekit ?? "");
+    console.log(JSON.stringify({ ok: true }));
+  });
   return;
 }
-if (a[0] === "profile" && a[1] === "remove") process.exit(0);
-if (a[0] === "profile") { const f = ${JSON.stringify(join(DIR, "profile"))}; console.log(JSON.stringify(fs.existsSync(f) ? [{ name: "versekit", appId: fs.readFileSync(f, "utf8") }] : [])); process.exit(0); }
+if (a[0] === "profile" && a[1] === "remove") {
+  const p = load(); const n = a[2];
+  if (!p[n]) fail('profile "' + n + '" not found');
+  if (Object.keys(p).length === 1) fail("cannot remove the only profile");
+  delete p[n]; fs.writeFileSync(P, JSON.stringify(p)); process.exit(0);
+}
+if (a[0] === "profile" && a[1] === "rename") {
+  const p = load(); const [from, to] = [a[2], a[3]];
+  if (!p[from]) fail('profile "' + from + '" not found');
+  if (p[to]) fail('profile "' + to + '" already exists');
+  p[to] = p[from]; delete p[from]; fs.writeFileSync(P, JSON.stringify(p));
+  fs.writeFileSync(${JSON.stringify(join(DIR, "profile"))}, p.versekit ?? ""); process.exit(0);
+}
+if (a[0] === "profile") { const p = load(); console.log(JSON.stringify(Object.entries(p).map(([name, appId]) => ({ name, appId })))); process.exit(0); }
 process.exit(0);
 `,
   );
@@ -113,7 +135,7 @@ test("成功：一次扫码拿到 client_id / client_secret / open_id；secret �
 });
 
 test("用户在飞书里点了拒绝：写人话、二维码收起、不配对、不存应用", async () => {
-  rmSync(join(DIR, "profile"), { force: true });
+  rmSync(join(DIR, "profile"), { force: true }); rmSync(join(DIR, "profiles.json"), { force: true });
   script = [pending, { error: "access_denied" }];
   const log = captureLog();
   let paired = false;
@@ -144,7 +166,7 @@ test("二维码过期：写「二维码过期了」，二维码收起", async ()
 });
 
 test("品牌矛盾：飞书报告 lark 租户、却在 lark 域名上又说 feishu → 报错，不保存任何凭证", async () => {
-  rmSync(join(DIR, "profile"), { force: true });
+  rmSync(join(DIR, "profile"), { force: true }); rmSync(join(DIR, "profiles.json"), { force: true });
   // 第一次 poll 报 lark → 立即切到 lark 域名；最终凭证上的品牌却是 feishu：矛盾
   script = [{ error: "authorization_pending", user_info: { tenant_brand: "lark" } }, done({ user_info: { open_id: "ou_x", tenant_brand: "feishu" } })];
   const log = captureLog();
@@ -162,7 +184,7 @@ test("品牌矛盾：飞书报告 lark 租户、却在 lark 域名上又说 feis
 });
 
 test("注册结果没有 open_id：报错，不静默地接一个发不出去的机器人", async () => {
-  rmSync(join(DIR, "profile"), { force: true });
+  rmSync(join(DIR, "profile"), { force: true }); rmSync(join(DIR, "profiles.json"), { force: true });
   script = [done({ user_info: { tenant_brand: "feishu" } })];
   const log = captureLog();
   try {
@@ -176,7 +198,7 @@ test("注册结果没有 open_id：报错，不静默地接一个发不出去的
 });
 
 test("用户在页面上取消：停掉轮询，不留错误、不保存", async () => {
-  rmSync(join(DIR, "profile"), { force: true });
+  rmSync(join(DIR, "profile"), { force: true }); rmSync(join(DIR, "profiles.json"), { force: true });
   script = [pending];
   await channel.createAppStart();
   assert.equal(channel.createAppStatus().running, true);
@@ -190,7 +212,7 @@ test("用户在页面上取消：停掉轮询，不留错误、不保存", async
 });
 
 test("已建应用、没配对的发布机点「重新接」：直接再走一遍注册，覆盖旧应用，不要求先删", async () => {
-  writeFileSync(join(DIR, "profile"), "cli_old");
+  writeFileSync(join(DIR, "profiles.json"), JSON.stringify({ versekit: "cli_old" }));
   script = [done({ client_id: "cli_new" })];
   const log = captureLog();
   let paired = null;
@@ -199,6 +221,7 @@ test("已建应用、没配对的发布机点「重新接」：直接再走一�
     const st = await waitDone();
     assert.equal(st.appId, "cli_new");
     assert.equal(paired.openId, "ou_owner");
+    assert.deepEqual(JSON.parse(readFileSync(join(DIR, "profiles.json"), "utf8")), { versekit: "cli_new" });
   } finally {
     log.restore();
   }

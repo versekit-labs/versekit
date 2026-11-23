@@ -26,7 +26,7 @@ const LARK_TIMEOUT = 25e3;
 const profile = () => process.env.VK_FEISHU_PROFILE ?? "versekit";
 
 /** 需要喂 stdin 的命令（app secret 只能走 stdin，不能进 argv）。 */
-function runWithInput(args, input) {
+function runWithInput(args, input, what = "profile add") {
   return new Promise((resolve, reject) => {
     const child = spawn(bin(), args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
@@ -34,7 +34,7 @@ function runWithInput(args, input) {
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (err += c));
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : (logRaw("profile add", err || out), reject(new Error(explainLarkFailure(err || out))))));
+    child.on("close", (code) => (code === 0 ? resolve(out) : (logRaw(what, err || out), reject(new Error(explainLarkFailure(err || out))))));
     child.stdin.end(input);
   });
 }
@@ -45,18 +45,37 @@ function runWithInput(args, input) {
  * 真正的错误 JSON 跟在后面；这里只取 `{"ok":false,"error":{"message":...}}` 的 message。
  * 授权码作废/过期、拒绝翻成人话，其余照原文，最多两行。完整原文只写日志，不进页面。
  */
+/** 从一段文本里依次取出所有 JSON 对象（单行或多行缩进都行；括号配对时跳过字符串里的括号）。 */
+function* jsonObjectsIn(text) {
+  let i = text.indexOf("{");
+  while (i >= 0) {
+    let depth = 0;
+    let inStr = false;
+    let end = -1;
+    for (let k = i; k < text.length; k++) {
+      const c = text[k];
+      if (inStr) {
+        if (c === "\\") k++;
+        else if (c === '"') inStr = false;
+      } else if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) { end = k; break; }
+    }
+    if (end < 0) return;
+    try {
+      yield JSON.parse(text.slice(i, end + 1));
+      i = text.indexOf("{", end + 1);
+    } catch {
+      i = text.indexOf("{", i + 1);
+    }
+  }
+}
+
 export function explainLarkFailure(raw) {
   const text = String(raw ?? "");
   let message = null;
-  for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t.startsWith("{")) continue;
-    try {
-      const j = JSON.parse(t);
-      if (j && j.ok === false) message = j.error?.message ?? (typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? j));
-    } catch {
-      /* 不是 JSON 行 */
-    }
+  for (const j of jsonObjectsIn(text)) {
+    if (j && j.ok === false) message = j.error?.message ?? (typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? j));
   }
   if (message == null) {
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -287,12 +306,35 @@ export default {
   async configure({ appId, appSecret, brand = "feishu" }) {
     if (typeof appId !== "string" || !/^cli_[0-9a-z]+$/i.test(appId.trim())) throw new Error("app_id 格式不对：应以 cli_ 开头");
     if (typeof appSecret !== "string" || appSecret.trim().length < 8) throw new Error("app_secret 看起来不合法");
-    try {
-      await lark(["profile", "remove", "--name", profile()], { timeout: 10e3 });
-    } catch {
-      /* 第一次配置时本来就不存在 */
+    const addArgs = (name) => ["profile", "add", "--name", name, "--app-id", appId.trim(), "--app-secret-stdin", ...(brand === "lark" ? ["--brand", "lark"] : [])];
+    const secretIn = appSecret.trim() + "\n";
+    const info = profileInfo();
+    if (info.error) throw new Error(info.error);
+    if (!info.exists) {
+      await runWithInput(addArgs(profile()), secretIn);
+    } else {
+      // lark-cli 不让删唯一的 profile，也不允许同名覆盖，改名也不能覆盖：
+      // 先加临时名；旧的先改名成备份（不删）；临时名改成正名；全成功后才删备份。任一步失败都还原，旧配置不丢、不留临时名。
+      const stamp = `${process.pid}-${Date.now().toString(36)}`;
+      const tmp = `${profile()}-new-${stamp}`;
+      const bak = `${profile()}-old-${stamp}`;
+      const quiet = (args) => runWithInput(args, "", args.slice(0, 2).join(" ")).catch(() => {});
+      await runWithInput(addArgs(tmp), secretIn);
+      try {
+        await runWithInput(["profile", "rename", profile(), bak], "", "profile rename");
+      } catch (err) {
+        await quiet(["profile", "remove", tmp]);
+        throw new Error(`没能替换旧的机器人配置（旧的还在）：${err.message}`);
+      }
+      try {
+        await runWithInput(["profile", "rename", tmp, profile()], "", "profile rename");
+      } catch (err) {
+        await quiet(["profile", "rename", bak, profile()]);
+        await quiet(["profile", "remove", tmp]);
+        throw new Error(`没能替换旧的机器人配置（旧的还在）：${err.message}`);
+      }
+      await quiet(["profile", "remove", bak]);
     }
-    await runWithInput(["profile", "add", "--name", profile(), "--app-id", appId.trim(), "--app-secret-stdin", ...(brand === "lark" ? ["--brand", "lark"] : [])], appSecret.trim() + "\n");
     return { profile: profile(), appId: appId.trim() };
   },
 
