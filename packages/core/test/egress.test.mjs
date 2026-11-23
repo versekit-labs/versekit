@@ -501,8 +501,34 @@ test("ACC-v3-egress 回显页解析：JSON 和纯文本都认；IPv6 也认；�
 const SRC = [{ kind: "city", name: "DB-IP City Lite", url: "https://example.invalid/city.mmdb.gz", gz: true }];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 假时钟：idle 超时用它的计时器，不依赖真实时间；机器再卡也不会误判。
+ * advance(ms) 把假时间往前推，到点的计时器按顺序触发。夹具里「等 delay」「卡住」都靠它推进。
+ */
+const fakeClock = () => {
+  let now = 0, seq = 0;
+  const timers = new Map();
+  const advance = (ms) => {
+    const end = now + ms;
+    for (;;) {
+      const due = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!due) break;
+      timers.delete(due[0]);
+      now = Math.max(now, due[1].at);
+      due[1].fn();
+    }
+    now = end;
+  };
+  return {
+    get now() { return now; },
+    advance,
+    setTimer: (fn, ms) => { timers.set(++seq, { at: now + ms, fn }); return seq; },
+    clearTimer: (id) => { timers.delete(id); },
+  };
+};
+
 /** @param {Buffer} buf  @param {{chunk?:number, delay?:number, stallAfter?:number, noRange?:boolean, headers?:object[]}} o */
-const fakeSource = (buf, { chunk = 16, delay = 0, stallAfter = Infinity, noRange = false } = {}) => {
+const fakeSource = (buf, { chunk = 16, delay = 0, stallAfter = Infinity, noRange = false, clock } = {}) => {
   const requests = [];
   const fetchImpl = async (url, { signal, headers = {} } = {}) => {
     requests.push(headers);
@@ -515,10 +541,12 @@ const fakeSource = (buf, { chunk = 16, delay = 0, stallAfter = Infinity, noRange
         const pos = start + sent;
         if (pos >= buf.length) return ctrl.close();
         if (sent >= stallAfter) {
-          // 卡住：不再有数据，直到调用方放弃（超时）。
-          await new Promise((_, rej) => signal?.addEventListener("abort", () => rej(signal.reason)));
+          // 卡住：不再有数据，直到调用方放弃（超时）。假时钟把时间推过去，idle 计时器立刻到点。
+          const stuck = new Promise((_, rej) => signal?.addEventListener("abort", () => rej(signal.reason)));
+          clock?.advance(1e9);
+          await stuck;
         }
-        if (delay) await sleep(delay);
+        if (delay) { if (clock) clock.advance(delay); else await sleep(delay); } // 有假时钟就推进假时间，不真等
         const n = Math.min(chunk, buf.length - pos, stallAfter - sent);
         ctrl.enqueue(buf.subarray(pos, pos + n));
         sent += n;
@@ -544,10 +572,10 @@ test("ACC-v3-egress-09 慢但一直有数据的下载能成功：超时按「连
   const idleMs = 120;
   const chunk = 8, delay = 20; // 每块都在 idle 之内，总时长远超 idle
   assert.ok((gz.length / chunk) * delay > idleMs * 2, "夹具要够慢，才能证明不是按总时长");
-  const src = fakeSource(gz, { chunk, delay });
-  const t0 = Date.now();
-  const r = await egress.refreshGeoDb({ dir, now: Date.UTC(2026, 10, 22), sources: SRC, fetchImpl: src.fetchImpl, idleMs });
-  assert.ok(Date.now() - t0 > idleMs, "总时长超过了 idle 超时");
+  const clock = fakeClock();
+  const src = fakeSource(gz, { chunk, delay, clock });
+  const r = await egress.refreshGeoDb({ dir, now: Date.UTC(2026, 10, 22), sources: SRC, fetchImpl: src.fetchImpl, idleMs, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+  assert.ok(clock.now > idleMs, "总时长超过了 idle 超时");
   assert.deepEqual(r.updated, ["DB-IP City Lite"]);
   assert.equal(r.error, null);
   assert.equal(egress.openMmdb(readFileSync(join(dir, egress.GEO_FILES.city))).lookup(TYO).country.iso_code, "JP");
@@ -561,8 +589,9 @@ test("ACC-v3-egress-09 中途断开：留下已收到的部分，下次用 Range
   const dir = freshDir();
   const gz = gzCity();
   const now = Date.UTC(2026, 10, 22);
-  const stalled = fakeSource(gz, { chunk: 8, stallAfter: 40 });
-  const first = await egress.refreshGeoDb({ dir, now, sources: SRC, fetchImpl: stalled.fetchImpl, idleMs: 80 });
+  const c1 = fakeClock();
+  const stalled = fakeSource(gz, { chunk: 8, stallAfter: 40, clock: c1 });
+  const first = await egress.refreshGeoDb({ dir, now, sources: SRC, fetchImpl: stalled.fetchImpl, idleMs: 80, setTimer: c1.setTimer, clearTimer: c1.clearTimer });
   assert.match(first.error, /连续 \d+ 秒没有收到数据|连续 0 秒没有收到数据/);
   assert.match(first.error, /已收到/);
   assert.equal(existsSync(join(dir, egress.GEO_FILES.city)), false, "没下完不出库");
@@ -571,7 +600,8 @@ test("ACC-v3-egress-09 中途断开：留下已收到的部分，下次用 Range
   assert.equal(statSync(join(dir, parts[0])).size, 40);
 
   const ok = fakeSource(gz, { chunk: 16 });
-  const second = await egress.refreshGeoDb({ dir, now: now + 1000, sources: SRC, fetchImpl: ok.fetchImpl, idleMs: 80 });
+  const c2 = fakeClock();
+  const second = await egress.refreshGeoDb({ dir, now: now + 1000, sources: SRC, fetchImpl: ok.fetchImpl, idleMs: 80, setTimer: c2.setTimer, clearTimer: c2.clearTimer });
   assert.equal(second.error, null);
   assert.equal(ok.requests[0].Range, "bytes=40-", "从断点接着要");
   assert.equal(egress.openMmdb(readFileSync(join(dir, egress.GEO_FILES.city))).lookup(LA).city.names.en, "Los Angeles");
@@ -583,9 +613,11 @@ test("ACC-v3-egress-09 服务器不支持断点：从头下载并说明，下完
   const dir = freshDir();
   const gz = gzCity();
   const logs = [];
-  await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(gz, { chunk: 8, stallAfter: 24 }).fetchImpl, idleMs: 60, log: (m) => logs.push(m) });
+  const clock = fakeClock();
+  const timers = { setTimer: clock.setTimer, clearTimer: clock.clearTimer };
+  await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(gz, { chunk: 8, stallAfter: 24, clock }).fetchImpl, idleMs: 60, log: (m) => logs.push(m), ...timers });
   const noRange = fakeSource(gz, { noRange: true });
-  const r = await egress.refreshGeoDb({ dir, now: 2, sources: SRC, fetchImpl: noRange.fetchImpl, idleMs: 60, log: (m) => logs.push(m) });
+  const r = await egress.refreshGeoDb({ dir, now: 2, sources: SRC, fetchImpl: noRange.fetchImpl, idleMs: 60, log: (m) => logs.push(m), ...timers });
   assert.equal(r.error, null);
   assert.equal(noRange.requests[0].Range, "bytes=24-", "先尝试续传");
   assert.ok(logs.some((m) => /不支持断点续传，从头下载/.test(m)));
@@ -598,7 +630,7 @@ test("ACC-v3-egress-09 解压或校验不过的下载不换旧库，也不留着
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, egress.GEO_FILES.city), cityDb());
   const before = readFileSync(join(dir, egress.GEO_FILES.city));
-  const r = await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(Buffer.from("this is not gzip at all")).fetchImpl, idleMs: 60 });
+  const r = await egress.refreshGeoDb({ dir, now: 1, sources: SRC, fetchImpl: fakeSource(Buffer.from("this is not gzip at all")).fetchImpl, idleMs: 60, setTimer: fakeClock().setTimer, clearTimer: () => {} });
   assert.ok(r.error);
   assert.deepEqual(readFileSync(join(dir, egress.GEO_FILES.city)), before);
   assert.deepEqual(readdirSync(dir).filter((n) => /\.(part|tmp)$/.test(n)), []);
@@ -638,9 +670,11 @@ test("ACC-v3-egress-09 系统页两种说法：从来没成功过 / 有旧库才
   resetGeoMeta();
   const empty = freshDir();
   const t = Date.UTC(2026, 10, 22, 8);
-  const timeout = async (_url, { signal }) => { await new Promise((_, rej) => signal.addEventListener("abort", () => rej(signal.reason))); };
-  await egress.refreshGeoDb({ dir: empty, now: t, sources: SRC, fetchImpl: timeout, idleMs: 30 });
-  await egress.refreshGeoDb({ dir: empty, now: t + 700e3, sources: SRC, fetchImpl: timeout, idleMs: 30 });
+  const clock = fakeClock();
+  const timeout = async (_url, { signal }) => { const w = new Promise((_, rej) => signal.addEventListener("abort", () => rej(signal.reason))); clock.advance(1e9); await w; };
+  const timers = { setTimer: clock.setTimer, clearTimer: clock.clearTimer };
+  await egress.refreshGeoDb({ dir: empty, now: t, sources: SRC, fetchImpl: timeout, idleMs: 30, ...timers });
+  await egress.refreshGeoDb({ dir: empty, now: t + 700e3, sources: SRC, fetchImpl: timeout, idleMs: 30, ...timers });
   const never = egress.geoDbNote(egress.geoDbStatus(empty));
   assert.match(never, /^位置库还没下载下来：连续 \d+ 秒没有收到数据/);
   assert.match(never, /已试 2 次，下次 /);
@@ -711,7 +745,7 @@ test("ACC-v3-egress-09 下载进度：按收到的字节写进度（含总大小
   const inner = fakeSource(gz, { chunk: 8, delay: 5 });
   let watch;
   const p = egress.refreshGeoDb({
-    dir, now: 1, sources: SRC, idleMs: 200, progressMs: 0,
+    dir, now: 1, sources: SRC, idleMs: 200, progressMs: 0, setTimer: fakeClock().setTimer, clearTimer: () => {}, // 真实间隔只用来采样进度，idle 超时不走真实时钟
     fetchImpl: async (url, opts) => {
       watch = setInterval(() => { const d = store.getEgressGeoDb()?.downloading; if (d) seen.push(d); }, 10);
       return inner.fetchImpl(url, opts);
