@@ -142,3 +142,30 @@ test("系统页（真浏览器）：组字中的回车不提交；改名就地�
     await daemon.close();
   }
 });
+
+test("改名后今天页、排期、作品页、飞书卡片都用新名字（accountName），handle 不变", async () => {
+  const { buildToday } = await import("../src/overview.mjs");
+  const { listSchedule } = await import("../src/schedule.mjs");
+  const { getPublishRow } = await import("../src/publish-flow.mjs");
+  const { buildEventCard } = await import("../src/cards.mjs");
+  const g = h["group.add"]({ name: "展示组" });
+  const { id } = h["account.add"]({ platform: "tiktok", name: "旧展示名", group: g.id, handle: "@demo_show" });
+  const db = core.open();
+  const now = Date.now();
+  const w = store.createWork({ title: "展示作品", assetPath: "/tmp/x.mp4" });
+  db.prepare("INSERT INTO publish (id, work_id, account_id, state, scheduled_at, created_at, updated_at) VALUES ('pub_show', ?, ?, 'queued', ?, ?, ?)").run(w.id ?? w, id, now + 3600e3, now, now);
+
+  h["account.rename"]({ accountId: id, name: "TikTok主号" });
+
+  const today = JSON.stringify(buildToday({ groupId: g.id }));
+  assert.match(today, /TikTok主号/);
+  const sched = listSchedule({ group: g.id, from: now, to: now + 7 * 864e5, now });
+  const hit = JSON.stringify(sched);
+  assert.match(hit, /"accountName":"TikTok主号"/);
+  assert.match(hit, /"handle":"@demo_show"/, "handle 不变");
+  const row = getPublishRow("pub_show");
+  assert.equal(row.account_name, "TikTok主号");
+  const card = JSON.stringify(buildEventCard({ type: "publish.failed", severity: "error", payload: {} }, { publish: row, now }) ?? "");
+  assert.match(card, /TikTok主号/);
+  assert.doesNotMatch(card, /@demo_show/);
+});

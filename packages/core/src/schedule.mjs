@@ -80,7 +80,7 @@ function scheduledRows(conn, { from, to, group }) {
   return conn
     .prepare(
       `SELECT p.id AS publish_id, p.work_id, w.title, p.scheduled_at AS at, p.state,
-              p.account_id, a.platform, a.handle, p.error_code
+              p.account_id, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, p.error_code
          FROM publish p
          JOIN work w ON w.id = p.work_id
          JOIN account a ON a.id = p.account_id
@@ -137,6 +137,7 @@ export function aggregateCards(rows, conflicts = []) {
     card.platforms.push({
       platform: r.platform,
       handle: r.handle,
+      accountName: r.account_name,
       accountId: r.account_id,
       publishId: r.publish_id,
       at: r.at,

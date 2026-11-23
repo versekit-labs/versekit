@@ -21,7 +21,7 @@ const SNAPSHOT_STATUSES = ["ok", "partial", "failed"];
 export function getPublishRow(publishId) {
   return open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.state AS account_state, a.id AS account_id, w.title AS work_title
+      `SELECT p.*, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, a.state AS account_state, a.id AS account_id, w.title AS work_title
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id

@@ -863,7 +863,7 @@ function workView(work) {
     const publishes = conn
       .prepare(
         `SELECT p.id, p.state, p.mode, p.version_id, p.scheduled_at, p.external_url, p.error_code, p.error_message,
-                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, v.language, v.meta_json AS version_meta
+                p.overrides_json, p.published_at, p.account_id, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, v.language, v.meta_json AS version_meta
            FROM publish p
            JOIN account a ON a.id = p.account_id
            LEFT JOIN cut_version v ON v.id = p.version_id
@@ -879,6 +879,7 @@ function workView(work) {
         id: p.id,
         platform: p.platform,
         handle: p.handle,
+        accountName: p.account_name,
         state: p.state,
         mode: p.mode,
         title: copy.title,
@@ -1023,7 +1024,7 @@ export function createPublish({
 export function getPublish(publishId) {
   return open()
     .prepare(
-      `SELECT p.*, a.platform, a.handle, a.state AS account_state, w.title AS work_title, w.asset_path, w.meta_json
+      `SELECT p.*, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name, a.state AS account_state, w.title AS work_title, w.asset_path, w.meta_json
          FROM publish p
          JOIN account a ON a.id = p.account_id
          JOIN work w ON w.id = p.work_id
@@ -1146,7 +1147,7 @@ export function listStats({ range = "all", publishId = null, groupId = null } = 
   const conn = open();
   const rows = conn
     .prepare(
-      `SELECT p.id, p.state, p.visibility, p.external_url, a.platform, a.handle,
+      `SELECT p.id, p.state, p.visibility, p.external_url, a.platform, a.handle, COALESCE(NULLIF(a.display_name, ''), a.handle) AS account_name,
               w.title,
               s.captured_at, s.source, s.status, s.metrics_json
          FROM publish p
@@ -1165,6 +1166,7 @@ export function listStats({ range = "all", publishId = null, groupId = null } = 
     publishId: r.id,
     platform: r.platform,
     handle: r.handle,
+    accountName: r.account_name,
     title: r.title,
     state: r.state,
     url: r.external_url,

@@ -165,7 +165,7 @@
       return `<tr><td><a class="wcell" href="/work?id=${encodeURIComponent(r.workId)}${r.cutId ? "&cut=" + encodeURIComponent(r.cutId) : ""}">` +
         `${cover(state.covers.get(r.workId), 48, 36)}<span><b>${esc(r.workTitle)}</b>` +
         `<span class="sub">${esc(r.cutTitle ?? "")}${r.cutTitle ? " · " : ""}${esc(when(r.publishedAt).day)} 发</span></span></a></td>` +
-        `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span></td>` +
+        `<td><span class="pfn">${pfBadge(r.platform)}${esc(pfName(r.platform))}</span>${r.accountName ? `<div class="sub">${esc(r.accountName)}</div>` : ""}</td>` +
         `<td class="n">${fmt(r.play24h)}</td><td class="n sub">${fmt(r.baselineMedian)}</td><td>${typ}</td>` +
         `<td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span><div class="sub"${verdictTitle}>${verdict}</div></td></tr>`;
     }).join("");

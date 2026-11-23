@@ -24,7 +24,7 @@ const line = (...parts) => parts.filter(Boolean).join("\n");
 /** 事件 → 卡片。返回 null 表示这类事件不发卡片（内部 trace 或还没有对应动作）。 */
 export function buildEventCard(event, { publish = null, account = null, now = Date.now(), approvalUrl = null } = {}) {
   const payload = event.payload ?? {};
-  const who = publish ? `${publish.platform} @${publish.handle}` : payload.platform ? `${payload.platform} @${payload.handle ?? ""}` : "";
+  const who = publish ? `${publish.platform} ${publish.account_name ?? `@${publish.handle}`}` : payload.platform ? `${payload.platform} @${payload.handle ?? ""}` : "";
   const what = publish?.title ? `「${publish.title}」` : "";
   const reason = payload.code ? ERROR_CODES[payload.code]?.human ?? payload.message ?? "" : payload.message ?? payload.reason ?? "";
 

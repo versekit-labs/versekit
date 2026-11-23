@@ -104,7 +104,7 @@
       const verdictTitle = q == null ? ` title="${esc(p.reason ?? "")}"` : "";
       const typ = q == null ? '<span class="sub">—</span>'
         : `<div class="typ ${ratioCls(q)}" role="img" aria-label="${ratioText(q)}，${verdict}" title="竖线是这个账号最近 20 条的中位数"><i style="width:${Math.min(100, q * 40)}%"></i><u></u></div>`;
-      return `<tr><td><span class="pfn">${pfBadge(p.platform)}${esc(pfName(p.platform))}</span></td>` +
+      return `<tr><td><span class="pfn">${pfBadge(p.platform)}${esc(pfName(p.platform))}</span>${p.accountName ? `<div class="sub">${esc(p.accountName)}</div>` : ""}</td>` +
         `<td class="sub">${esc(when(p.publishedAt).text)}</td><td class="n">${fmt(p.play24h)}</td><td class="n sub">${fmt(p.baselineMedian)}</td><td>${typ}</td>` +
         `<td class="n"><span class="x ${ratioCls(q)}">${ratioText(q)}</span><div class="sub"${verdictTitle}>${verdict}</div></td></tr>`;
     }).join("");
