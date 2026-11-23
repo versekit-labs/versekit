@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  projectName, projectRules, hasLabel, flowConfig, coordinatorNotes,
+  projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -142,7 +142,8 @@ test("by:coordinator 标记从看板的 labels 读", () => {
 
 test("flow.json：没有就是默认；钩子只收非空字符串；release:false 与 inbox:external 生效；写坏回默认并报错", () => {
   const d = flowConfig("{}");
-  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci" });
+  assert.deepEqual(d, { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true });
+  assert.equal(flowConfig(JSON.stringify({ settle: false })).settle, false);
   assert.equal(flowConfig(JSON.stringify({ ci: "npm --prefix research-console run ci" })).ci, "npm --prefix research-console run ci");
   assert.equal(flowConfig(JSON.stringify({ ci: "  " })).ci, "npm run ci");
   const c = flowConfig(JSON.stringify({ hooks: { beforeTick: ["a", "", 3, "b"], beforeMerge: ["node bin/local-ci.mjs --pending"] }, release: false, inbox: "external" }));
@@ -174,4 +175,23 @@ test("协调器裁定：只取上一轮验收之后、以协调器开头的评�
   assert.match(spec, /协调器裁定（上一轮验收之后，原文，优先于工单旧口径）/);
   assert.match(spec, /先 git merge origin\/main/);
   assert.doesNotMatch(reworkSpec({ number: 1, title: "t", pull: 2, branch: "b", round: 1, commentUrl: "x", commentBody: "FAIL", body: "" }), /协调器裁定（/);
+});
+
+test("返工原因：认领结果自带 reasonComments 就照抄；上一轮是 PASS 要点明", () => {
+  const reason = reasonText([{ author: "owner", createdAt: "2026-11-23", body: "标题再短一点" }]);
+  assert.match(reason, /owner（2026-11-23）：\n标题再短一点/);
+  assert.equal(reasonText(undefined), "");
+  const spec = reworkSpec({ number: 1, title: "t", pull: 2, branch: "b", round: 1, commentUrl: "x", commentBody: "PASS", body: "", reason, lastVerdict: "PASS" });
+  assert.match(spec, /验收已 PASS，本次返工原因见下方评论/);
+  assert.match(spec, /返工原因（最近一条验收之后的评论）：\n- owner/);
+  assert.doesNotMatch(reworkSpec({ number: 1, title: "t", pull: 2, branch: "b", round: 1, commentUrl: "x", commentBody: "FAIL", body: "", lastVerdict: "FAIL" }), /验收已 PASS|返工原因（/);
+});
+
+test("返工核查：记录对应的 dispatch 不在跑（或 Run 里找不到）才交给 rework-check", () => {
+  const recs = [{ issue: 1, dispatch: "d1" }, { issue: 2, dispatch: "d2" }, { issue: 3, dispatch: "gone" }];
+  const workers = [
+    { dispatchId: "d1", dispatchStatus: "dispatched", terminalState: "live" },
+    { dispatchId: "d2", dispatchStatus: "completed", terminalState: "exited" },
+  ];
+  assert.deepEqual(settledReworks(recs, workers).map((r) => r.issue), [2, 3]);
 });

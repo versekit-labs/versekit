@@ -22,10 +22,11 @@
 //         { "hooks": { "beforeTick": ["<命令>"…], "beforeMerge": ["<命令>"…] },
 //           "release": true,          // false = 不跑 agentctl release-queued（项目用自己的放行，放进 beforeTick）
 //           "inbox": "flow",          // "external" = 收件箱归别人（如 automation 里的协调器 agent），tick 不读不 ack
-//           "ci": "npm run ci" }      // 实现自查与验收要跑的 CI 命令（ACC-harness-orca-10）
+//           "ci": "npm run ci",       // 实现自查与验收要跑的 CI 命令（ACC-harness-orca-10）
+//           "settle": true }          // false = 不做 retain / release（watch 不在 Run 所有者终端里跑的项目，ACC-harness-orca-11）
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -156,11 +157,63 @@ function fetchNotes(issue, since) {
   }
 }
 
+// ------------------------------------------------------------------ 返工核查（agentctl 支持时才做，ACC-harness-orca-11）
+//
+// agentctl 的返工认领结果带 bodyHash（trustbridge）＝ 它认 <状态目录>/rework/<issue>.json 这份记录：
+// tick 据此判断「返工 worker 还没推新提交」不转 review；worker 结束后 rework-check 决定退回或挂人工。
+// 认领结果没有 bodyHash（versekit、market-research）就什么都不写、不调。
+
+const REWORK_DIR = join(STATE_DIR, "rework");
+
+function writeReworkRecord(c, dispatchId) {
+  try {
+    mkdirSync(REWORK_DIR, { recursive: true });
+    writeFileSync(join(REWORK_DIR, `${c.number}.json`), JSON.stringify({ head: c.head, bodyHash: c.bodyHash, dispatch: dispatchId, pull: String(c.pull) }) + "\n");
+  } catch (err) {
+    log(`  ✗ 返工记录没写上（#${c.number}）：${err.message.slice(0, 160)}`);
+  }
+}
+
+/** 记录对应的 dispatch 已不在跑（Run 里找不到也算结束）的返工：交给 agentctl rework-check，再删记录。 */
+export function settledReworks(records, workers) {
+  return records.filter((r) => {
+    const w = workers.find((x) => x.dispatchId === r.dispatch);
+    return !w || !isActive(w);
+  });
+}
+
+function reworkCheck(state, dryRun) {
+  if (!existsSync(REWORK_DIR)) return;
+  const records = [];
+  for (const f of readdirSync(REWORK_DIR)) {
+    const m = /^(\d+)\.json$/.exec(f);
+    if (!m) continue;
+    try {
+      records.push({ issue: Number(m[1]), file: join(REWORK_DIR, f), ...JSON.parse(readFileSync(join(REWORK_DIR, f), "utf8")) });
+    } catch {
+      /* 坏文件跳过 */
+    }
+  }
+  for (const r of settledReworks(records, state.workers ?? [])) {
+    if (dryRun) {
+      log(`  [dry-run] 返工 #${r.issue} 已结束，会 rework-check（派工时 head ${String(r.head).slice(0, 7)}）`);
+      continue;
+    }
+    try {
+      const out = agentctl(["rework-check", "--issue", String(r.issue), "--head", r.head, "--body-hash", r.bodyHash ?? ""]).trim();
+      if (out) log(`  · 返工核查 #${r.issue}：${out.split("\n")[0].slice(0, 200)}`);
+      unlinkSync(r.file);
+    } catch (err) {
+      log(`  ✗ 返工核查 #${r.issue}：${err.message.slice(0, 200)}`);
+    }
+  }
+}
+
 // ------------------------------------------------------------------ 项目配置（.orca-kit/flow.json）
 
 /** 读 .orca-kit/flow.json；没有或写坏都回默认（写坏会在日志里说）。 */
 export function flowConfig(text = null) {
-  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci" };
+  const defaults = { hooks: { beforeTick: [], beforeMerge: [] }, release: true, inbox: "flow", ci: "npm run ci", settle: true };
   let src = text;
   if (src == null) {
     try {
@@ -181,6 +234,7 @@ export function flowConfig(text = null) {
     release: j.release !== false,
     inbox: j.inbox === "external" ? "external" : "flow",
     ci: typeof j.ci === "string" && j.ci.trim() ? j.ci.trim() : defaults.ci,
+    settle: j.settle !== false,
   };
 }
 
@@ -261,7 +315,13 @@ export function coordinatorNotes(comments, since = "") {
   return out.slice(-3).join("\n\n");
 }
 
-export function reworkSpec({ number, title, pull, branch, round, commentUrl, commentBody, body, notes = "" }) {
+/** agentctl 认领结果里自带的返工原因（trustbridge #737：最近验收之后的评论，含所有者的）。 */
+export function reasonText(reasonComments) {
+  if (!Array.isArray(reasonComments) || !reasonComments.length) return "";
+  return reasonComments.map((c) => `- ${c.author ?? "?"}（${c.createdAt ?? ""}）：\n${c.body ?? ""}`).join("\n\n");
+}
+
+export function reworkSpec({ number, title, pull, branch, round, commentUrl, commentBody, body, notes = "", reason = "", lastVerdict = "" }) {
   const conflict = String(commentBody ?? "").startsWith("<!-- agent-merge-conflict -->");
   const task = conflict
     ? `解决 issue #${number} ${title} 的合并冲突（PR #${pull}，原分支 ${branch}）。`
@@ -271,13 +331,13 @@ export function reworkSpec({ number, title, pull, branch, round, commentUrl, com
     : "按最近验收意见在原分支继续修改";
   return `目标：${task}
 
-改动：${change}；不新建分支、不新建 issue、不改写历史。
+${lastVerdict === "PASS" ? "验收已 PASS，本次返工原因见下方评论。\n\n" : ""}改动：${change}；不新建分支、不新建 issue、不改写历史。
 
 最近评论：${commentUrl}
 
 ${conflict ? "合并冲突说明" : "验收意见"}（节选）：
 ${String(commentBody ?? "").slice(0, 6000)}
-${notes ? `\n协调器裁定（上一轮验收之后，原文，优先于工单旧口径）：\n${notes}\n` : ""}
+${reason ? `\n返工原因（最近一条验收之后的评论）：\n${reason}\n` : ""}${notes ? `\n协调器裁定（上一轮验收之后，原文，优先于工单旧口径）：\n${notes}\n` : ""}
 约束：
 - 在分支 ${branch} 上继续，PR #${pull} 保持同一个；改完 push 到同一分支
 - 口径若在 main 上有修订，先 git merge origin/main
@@ -539,6 +599,23 @@ function linkWorktree(worktreeId, fields, dryRun) {
 
 // ------------------------------------------------------------------ 一轮
 
+/** 官方 Completion accounting：交活终端 retain 或 release。只做这一件事，不派工，可以和 watch 并行跑。 */
+function settleTerminals(state, dryRun) {
+  for (const a of planCompletion(state)) {
+    if (dryRun) {
+      log(`  [dry-run] ${a.op} ${a.dispatchId}（#${a.issue} ${a.kind ?? ""}）`);
+      continue;
+    }
+    try {
+      if (a.op === "retain") orca(["orchestration", "worker-retain", "--dispatch", a.dispatchId]);
+      else orca(["orchestration", "worker-release", "--dispatch", a.dispatchId]);
+      log(`  · ${a.op === "retain" ? "保留" : "回收"} #${a.issue ?? "?"} ${a.kind ? KINDS[a.kind] : ""} 终端（${a.dispatchId}）`);
+    } catch (err) {
+      log(`  ✗ ${a.op} ${a.dispatchId}：${err.message.slice(0, 200)}`);
+    }
+  }
+}
+
 export async function tick({ dryRun = false } = {}) {
   const ctx = context();
   const report = { needsCoordinator: [], dispatched: [], merged: [], errors: [] };
@@ -585,21 +662,10 @@ export async function tick({ dryRun = false } = {}) {
 
   let state = snapshot(ctx);
 
-  // 2. 交活后的终端：保留（等验收结论，FAIL 时复用）或回收。
-  for (const a of planCompletion(state)) {
-    if (dryRun) {
-      log(`  [dry-run] ${a.op} ${a.dispatchId}（#${a.issue} ${a.kind ?? ""}）`);
-      continue;
-    }
-    try {
-      if (a.op === "retain") orca(["orchestration", "worker-retain", "--dispatch", a.dispatchId]);
-      else orca(["orchestration", "worker-release", "--dispatch", a.dispatchId]);
-      log(`  · ${a.op === "retain" ? "保留" : "回收"} #${a.issue ?? "?"} ${a.kind ? KINDS[a.kind] : ""} 终端（${a.dispatchId}）`);
-    } catch (err) {
-      log(`  ✗ ${a.op} ${a.dispatchId}：${err.message.slice(0, 200)}`);
-    }
-  }
+  // 2. 交活后的终端：保留（等验收结论，FAIL 时复用）或回收。settle:false 的项目由 Run 所有者跑 `orca-flow settle`。
+  if (cfg.settle) settleTerminals(state, dryRun);
   if (!dryRun) state = snapshot(ctx);
+  reworkCheck(state, dryRun);
 
   let free = countActive(state);
   log(`  在跑：实现/返工 ${free.build}/${state.lanes}，验收 ${free.accept}/${state.acceptMax}`);
@@ -657,7 +723,7 @@ export async function tick({ dryRun = false } = {}) {
     for (const b of res.blocked ?? res.wouldBlock ?? []) log(`  ⚠ #${b.number} 返工到顶，转人工：${b.why}`);
     if (!c) break;
     try {
-      const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "", notes: fetchNotes(c.number, c.commentCreatedAt) });
+      const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "", notes: c.reasonComments ? "" : fetchNotes(c.number, c.commentCreatedAt), reason: reasonText(c.reasonComments), lastVerdict: c.lastVerdict ?? "" });
       const taskId = createTask(ctx, { title: taskTitle("rework", c.number, `r${c.round}`), display: `#${c.number} 返工 r${c.round}`, spec, dryRun });
       const reuse = reusableTerminal(state, c.number);
       let placement;
@@ -674,6 +740,7 @@ export async function tick({ dryRun = false } = {}) {
       const started = startWorker(ctx, { taskId, placement, channel: channel ?? {}, label: `返工 #${c.number}`, dryRun });
       linkWorktree(started.worktreeId, { issue: c.number, pr: c.pull, status: "in-progress", comment: `返工 round ${c.round}` }, dryRun);
       report.dispatched.push({ issue: c.number, kind: "rework", dispatchId: started.dispatchId });
+      if (c.bodyHash && !dryRun) writeReworkRecord(c, started.dispatchId);
     } catch (err) {
       report.errors.push(err.message);
       log(`  ✗ 返工 #${c.number}：${err.message.slice(0, 400)}，退回 s:changes`);
@@ -757,6 +824,13 @@ async function main(argv) {
     if (json) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
     return r.needsCoordinator.length ? 10 : 0;
   }
+  if (cmd === "settle") {
+    // 给 watch 不在 Run 所有者终端里的项目（flow.json settle:false）：所有者处理完收件箱后跑这一条收尾。
+    const ctx = context();
+    log(`== settle（Run ${ctx.runId}${dryRun ? "，dry-run" : ""}）==`);
+    settleTerminals(snapshot(ctx), dryRun);
+    return 0;
+  }
   if (cmd === "status") {
     const s = status();
     if (json) process.stdout.write(JSON.stringify(s, null, 2) + "\n");
@@ -797,7 +871,7 @@ async function main(argv) {
       await new Promise((res) => setTimeout(res, every));
     }
   }
-  process.stderr.write("用法：node bin/orca-flow.mjs tick|status|watch [--dry-run] [--json] [--every <秒>]\n");
+  process.stderr.write("用法：node bin/orca-flow.mjs tick|settle|status|watch [--dry-run] [--json] [--every <秒>]\n");
   return 2;
 }
 
