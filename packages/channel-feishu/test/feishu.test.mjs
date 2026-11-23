@@ -313,3 +313,72 @@ for (const [message, expected] of CASES) {
     assert.ok(text.split("\n").length <= 2);
   });
 }
+
+// ---- configure()：用 cli 的假 lark-cli（行为对齐真 1.0.97：不能删唯一 profile、同名 add 报错、多行 JSON 报错）----
+const FAKE_LARK = new URL("../../cli/test/fixtures/fake-lark.mjs", import.meta.url).pathname;
+
+async function withFakeLark(setup, fn) {
+  const state = mkdtempSync(join(tmpdir(), "vk-feishu-cfg-"));
+  const prev = { bin: process.env.VK_LARK_BIN, dir: process.env.FAKE_LARK_DIR };
+  process.env.VK_LARK_BIN = FAKE_LARK;
+  process.env.FAKE_LARK_DIR = state;
+  try {
+    setup?.(state);
+    return await fn(state);
+  } finally {
+    process.env.VK_LARK_BIN = prev.bin;
+    if (prev.dir === undefined) delete process.env.FAKE_LARK_DIR; else process.env.FAKE_LARK_DIR = prev.dir;
+  }
+}
+const profilesOf = (state) => readFileSync(join(state, "profiles"), "utf8").split("\n").filter(Boolean);
+const larkCalls = (state) => readFileSync(join(state, "calls.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+test("configure(): 第一次接，直接 add，不调 remove", async () => {
+  await withFakeLark(null, async (state) => {
+    const res = await channel.configure({ appId: "cli_first1", appSecret: "super-secret-value" });
+    assert.equal(res.appId, "cli_first1");
+    assert.deepEqual(profilesOf(state), ["versekit"]);
+    assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_first1");
+    assert.ok(!larkCalls(state).some((c) => c[1] === "remove"));
+  });
+});
+
+test("configure(): 已有唯一 versekit 重新接——先加临时名、删旧、改名，secret 只走 stdin", async () => {
+  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); }, async (state) => {
+    await channel.configure({ appId: "cli_new1", appSecret: "super-secret-value" });
+    assert.deepEqual(profilesOf(state), ["versekit"]);
+    assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_new1");
+    const verbs = larkCalls(state).map((c) => c.slice(0, 2).join(" ")).filter((v) => v.startsWith("profile ") && v !== "profile list");
+    assert.deepEqual(verbs, ["profile add", "profile remove", "profile rename"]);
+    assert.equal(readFileSync(join(state, "secret.len"), "utf8"), String("super-secret-value".length));
+    assert.ok(!readFileSync(join(state, "calls.log"), "utf8").includes("super-secret-value"));
+  });
+});
+
+test("configure(): 替换中途失败——旧配置保留、临时名清掉、报错是人话", async () => {
+  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); writeFileSync(join(s, "failremove"), "1"); }, async (state) => {
+    await assert.rejects(channel.configure({ appId: "cli_new2", appSecret: "super-secret-value" }), (e) => {
+      assert.match(e.message, /旧的还在/);
+      assert.match(e.message, /remove failed on purpose/);
+      assert.ok(!/^[}\s]+$/.test(e.message));
+      return true;
+    });
+    assert.deepEqual(profilesOf(state), ["versekit"]);
+    assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_old");
+  });
+});
+
+test("configure(): 临时名加不上时，旧配置原样不动", async () => {
+  await withFakeLark((s) => { writeFileSync(join(s, "profile"), "cli_old"); writeFileSync(join(s, "failadd"), "1"); }, async (state) => {
+    await assert.rejects(channel.configure({ appId: "cli_new3", appSecret: "super-secret-value" }), /add failed on purpose/);
+    assert.equal(readFileSync(join(state, "profile"), "utf8"), "cli_old");
+  });
+});
+
+test("explainLarkFailure(): 多行缩进 JSON 也能取出 error.message", async () => {
+  const { explainLarkFailure } = await import("../src/index.mjs");
+  const raw = JSON.stringify({ ok: false, error: { type: "validation", message: 'profile "versekit" already exists' } }, null, 2);
+  assert.equal(explainLarkFailure(AI_BLOCK + raw + "\n"), 'profile "versekit" already exists');
+  const withBraces = JSON.stringify({ ok: false, error: { message: "bad } brace {x}" } }, null, 2);
+  assert.equal(explainLarkFailure(withBraces), "bad } brace {x}");
+});
