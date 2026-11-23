@@ -455,6 +455,12 @@ test("ACC-harness-merge-01：冲突转 s:changes，列出冲突文件且不增�
   assert.equal(nextClaim.round, 1, "一次历史质量 FAIL 加一次合并冲突仍为第一轮，不触发升模型");
   assert.equal(nextClaim.commentBody, comment.body);
 
+  // ACC-harness-orca-08：协调器自己实现的单打回后不派返工 agent。
+  const saved = issue.labels;
+  issue.labels = [...saved, "by:coordinator"];
+  assert.deepEqual((await run("claim", "--role", "rework", "--dry-run")).wouldClaim, []);
+  issue.labels = saved;
+
   const { reworkSpec } = await import("../../../bin/orca-flow.mjs");
   const stdout = reworkSpec({ number: 1, title: "example", pull: 101, branch: "issue-1", round: 1, commentUrl: comment.html_url, commentBody: comment.body, body: issue.body });
   assert.match(stdout, /在原分支拉取并合并 PR 的目标分支.*推送新 head 供重新验收/);

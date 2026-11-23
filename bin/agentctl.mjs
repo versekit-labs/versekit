@@ -853,8 +853,9 @@ async function addHumanHold(repo, number) {
  * 与 engineer 一样用「先删旧 label」做原子锁：多个协调器同时跑时只有一个能派出去。
  */
 async function claimRework(repo, candidates, pulls, { json, dryRun }) {
+  // by:coordinator：协调器自己实现的单，打回后由协调器自己改，不派返工 agent（ACC-harness-orca-08）。
   const changes = candidates
-    .filter((i) => readState(i).state === "changes" && !readState(i).hold)
+    .filter((i) => readState(i).state === "changes" && !readState(i).hold && !(i.labels ?? []).some((l) => (l.name ?? l) === "by:coordinator"))
     .sort((a, b) => a.number - b.number);
 
   const skipped = [];

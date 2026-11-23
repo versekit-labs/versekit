@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// versekit 的 Orca 原生派工（ACC-harness-orca-03..07，替代 cycle.sh / coordinator-loop.sh / worker-up.sh）。
+// Orca 原生派工（versekit ACC-harness-orca-03..08，替代 cycle.sh / coordinator-loop.sh / worker-up.sh）。
+// 不绑项目：项目名取 FLOW_PROJECT，否则 origin 远端的仓库名；项目专属的任务书约束放 .orca-kit/flow-rules.md。
 //
 // 分工：
 //   - GitHub（issue label、PR、验收判定）是给人看的事实源，读写只经 bin/agentctl.mjs。
@@ -15,7 +16,8 @@
 //   node bin/orca-flow.mjs watch [--every 180]         前台每 N 秒 tick 一次（协调器不在时用；可放进 LaunchAgent）
 //
 // 环境：FLOW_LANES（实现+返工并行上限，默认 2）、FLOW_ACCEPT_MAX（验收并行上限，默认 1）、
-//       RUN_FILE（默认 ~/.orca/versekit-run-id）、FLOW_LOG（默认 ~/.orca/versekit-state/orca-flow.log）。
+//       FLOW_PROJECT（默认 origin 仓库名）、RUN_FILE（默认 ~/.orca/<项目>-run-id）、FLOW_LOG（默认 ~/.orca/<项目>-state/orca-flow.log）。
+//       issue 带 by:coordinator label：协调器自己实现，验收 FAIL 后不自动派返工 agent（ACC-harness-orca-08）。
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -26,16 +28,29 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const HOME = homedir();
 
+/** 项目名：显式 FLOW_PROJECT > origin 远端仓库名 > 仓库目录名。决定 Run 文件、状态目录、进程名、Task 前缀。 */
+export function projectName(env = process.env, originUrl = null, rootDir = ROOT) {
+  if (env.FLOW_PROJECT) return env.FLOW_PROJECT;
+  const url = originUrl ?? spawnSync("git", ["remote", "get-url", "origin"], { cwd: rootDir, encoding: "utf8" }).stdout?.trim();
+  const m = /([^/:]+?)(?:\.git)?$/.exec(url ?? "");
+  return m?.[1] || rootDir.split("/").pop();
+}
+const PROJECT = projectName();
+const STATE_DIR = join(HOME, `.orca/${PROJECT}-state`);
+/** Task 前缀：versekit 沿用 vk，其余用项目名。 */
+const PREFIX = process.env.FLOW_TASK_PREFIX ?? (PROJECT === "versekit" ? "vk" : PROJECT);
+
 export const KINDS = { impl: "实现", rework: "返工", accept: "验收" };
 const KIND_BY_ZH = Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [v, k]));
 
-/** Task 标题是脚本与 Orca 之间唯一的对应关系：`vk#<issue> <实现|返工 r<k>|验收 <head7>>`。 */
-export function taskTitle(kind, issue, extra = "") {
-  return `vk#${issue} ${KINDS[kind]}${extra ? ` ${extra}` : ""}`;
+/** Task 标题是脚本与 Orca 之间唯一的对应关系：`<前缀>#<issue> <实现|返工 r<k>|验收 <head7>>`（versekit 前缀 vk）。 */
+export function taskTitle(kind, issue, extra = "", prefix = PREFIX) {
+  return `${prefix}#${issue} ${KINDS[kind]}${extra ? ` ${extra}` : ""}`;
 }
 
-export function parseTaskTitle(title) {
-  const m = /^vk#(\d+) (实现|返工|验收)(?: (\S+))?$/.exec(String(title ?? ""));
+export function parseTaskTitle(title, prefix = PREFIX) {
+  const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`^${esc}#(\\d+) (实现|返工|验收)(?: (\\S+))?$`).exec(String(title ?? ""));
   if (!m) return null;
   return { issue: Number(m[1]), kind: KIND_BY_ZH[m[2]], extra: m[3] ?? "" };
 }
@@ -82,6 +97,10 @@ export function planCompletion(state) {
   return actions;
 }
 
+export function hasLabel(state, issue, label) {
+  return ((state.board?.rows ?? []).find((r) => r.number === issue)?.labels ?? []).includes(label);
+}
+
 export function countActive(state) {
   const byTask = new Map(state.tasks.map((t) => [t.id, t]));
   let build = 0;
@@ -123,13 +142,32 @@ export function inboxVerdict(messages) {
 
 // ------------------------------------------------------------------ 任务书（官方 Task-spec contract）
 
-const COMMON_CONSTRAINTS = `- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径；不改 api 形状、数据库 schema、commands.mjs 的命令定义
+/**
+ * 项目专属约束：.orca-kit/flow-rules.md 里 `## 验收` / `## 实现` 两节的列表行，原样拼进任务书「约束」。
+ * 没有这个文件就是空：通用任务书不带任何项目的端口、红线。
+ */
+export function projectRules(section, text = null) {
+  let src = text;
+  if (src == null) {
+    try {
+      src = readFileSync(join(ROOT, ".orca-kit/flow-rules.md"), "utf8");
+    } catch {
+      return "";
+    }
+  }
+  const title = section === "accept" ? "验收" : "实现";
+  const m = new RegExp(`^## ${title}\\s*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m").exec(src);
+  if (!m) return "";
+  return m[1].split("\n").filter((l) => /^- /.test(l)).map((l) => l + "\n").join("");
+}
+
+const commonConstraints = () => `- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径；不改 api 形状、数据库 schema、commands.mjs 的命令定义
 - 不改用户全局配置（~/.claude、~/.codex 等）；临时文件放本 worktree 或 TMPDIR
 - 不改 issue 的 s:* label（状态由协调器迁移）；不合并 PR、不给自己发通行证
 - 完成后必须能通过 npm run ci
 - 需要协调器回答才能继续时（口径有歧义、要越出「涉及」范围、缺权限或账号），用任务书前言里给出的 ask 命令提问并等回答；不要自己猜，也不要用本地提问界面（协调器看不到）
 - GitHub 交付物（本单要求，直接执行，不用先问）：推送本单分支；用 bin/ghx pr create 开 PR 或更新本单 PR。除此之外不在别的 issue/PR 上发评论；进度、提问、完成都走 orca orchestration
-`;
+${projectRules("impl")}`;
 
 export function implSpec({ number, title, body, branch }) {
   return `目标：#${number} ${title}
@@ -137,7 +175,7 @@ export function implSpec({ number, title, body, branch }) {
 改动：按下面工单的「口径」逐条实现。
 
 约束：
-${COMMON_CONSTRAINTS}
+${commonConstraints()}
 归属：你在 Orca 为本单新建的 worktree 里工作。先 git fetch origin，再 git switch -c ${branch} origin/main（分支已存在就 git switch ${branch}），只动这个分支。
 
 可观察验收：
@@ -167,7 +205,7 @@ ${String(commentBody ?? "").slice(0, 6000)}
 
 约束：
 - 在分支 ${branch} 上继续，PR #${pull} 保持同一个；改完 push 到同一分支
-${COMMON_CONSTRAINTS}
+${commonConstraints()}
 归属：本 worktree；先 git fetch origin，若当前不在 ${branch}，先 git switch ${branch} 并 git pull --ff-only。
 
 可观察验收：
@@ -189,11 +227,8 @@ export function acceptSpec({ number, title, pull, head, branch, acc, round }) {
 - 只按 docs/design/ACCEPTANCE.md 的条目判定（本单：${ids.join(", ")}），条目外的「我觉得」不阻塞 PR
 - PR head 落后 main 时，如果某条口径只在 head 上失败、失败来自本 PR 没改过的文件、main 上已修好，且 PR 与 main 的合并状态为 CLEAN，按合并 main 后的结果判定，并在该条 note 里记录两边现象与复现命令；失败来自本 PR 改过的文件时按 head 判定
 - 不改实现代码、不合并 PR、不改 s:* label；不看实现方的思考过程，自己跑、留自己的证据
-- 需要看界面时用 8788 端口，避开实现方可能占用的 8787
 - 需要协调器回答才能继续时，用任务书前言里给出的 ask 命令提问并等回答
-- 真机红线（docs/design/ACCEPTANCE.md 开头）：本机是开发机，不得让任何平台的真实站点被访问；起 vk 服务只能用 VK_HOME=$(mktemp -d) vk serve --offline；需要真实平台的口径在 PR 评论里列为「待人工」，不计 pass 也不计 fail
-- 收尾关闭自己起的 Chrome 与测试服务（只按自己的 pid / 端口关），不碰 ~/.local/state/versekit/browser/ 下的登录窗口
-
+${projectRules("accept")}
 归属：你和实现方共用本单的 worktree。开始前 git status 必须为空；git fetch origin && git switch --detach ${head}（即 origin/${branch} 的当前 head）；验收完 git switch ${branch} 并保证 git status 为空。
 
 可观察验收（必须逐条做到）：
@@ -285,7 +320,7 @@ function agentctlJson(args) {
 
 // ------------------------------------------------------------------ 日志
 
-const LOG = process.env.FLOW_LOG ?? join(HOME, ".orca/versekit-state/orca-flow.log");
+const LOG = process.env.FLOW_LOG ?? join(STATE_DIR, "orca-flow.log");
 let QUIET = false;
 function log(line) {
   const stamp = new Date().toTimeString().slice(0, 8);
@@ -302,7 +337,7 @@ function log(line) {
 // ------------------------------------------------------------------ 现状
 
 function context() {
-  const runFile = process.env.RUN_FILE ?? join(HOME, ".orca/versekit-run-id");
+  const runFile = process.env.RUN_FILE ?? join(HOME, `.orca/${PROJECT}-run-id`);
   if (!existsSync(runFile)) throw new Error(`没有 Run id 文件 ${runFile}：先在协调器终端 orca orchestration run-use，并把 id 写进去`);
   const runId = readFileSync(runFile, "utf8").trim();
   const run = orca(["orchestration", "run-show", "--id", runId]).run;
@@ -532,6 +567,9 @@ export async function tick({ dryRun = false } = {}) {
   }
 
   // 5. 返工：s:changes → s:doing；优先复用同一个实现 agent 的终端。
+  //    by:coordinator 的单由协调器自己返工：不认领，只提醒一次（ACC-harness-orca-08）。
+  const selfOwned = Object.entries(state.issues).filter(([n, st]) => st === "changes" && hasLabel(state, Number(n), "by:coordinator"));
+  for (const [n] of selfOwned) log(`  ⚠ #${n} 验收打回，是协调器自己实现的单（by:coordinator）：不派返工 agent，等协调器自己改`);
   while (free.freeBuild > 0) {
     const res = agentctlJson(["claim", "--role", "rework", ...(dryRun ? ["--dry-run"] : [])]);
     const c = dryRun ? res.wouldClaim?.[0] : res.claimed;
@@ -625,7 +663,7 @@ function alive(pid) {
   }
   // pid 可能被别的进程复用：只认本项目的 watch。
   const cmd = run("ps", ["-o", "command=", "-p", String(pid)]).stdout;
-  return /orca-flow/.test(cmd);
+  return cmd.includes(`orca-flow[${PROJECT}]`) || /orca-flow\.mjs/.test(cmd);
 }
 
 async function main(argv) {
@@ -649,8 +687,8 @@ async function main(argv) {
   }
   if (cmd === "watch") {
     // 同一项目只允许一个 watch：两个 watch 会同时认领、把同一单派两次。
-    process.title = "orca-flow[versekit]";
-    const lock = process.env.FLOW_LOCK ?? join(HOME, ".orca/versekit-state/orca-flow.lock");
+    process.title = `orca-flow[${PROJECT}]`;
+    const lock = process.env.FLOW_LOCK ?? join(STATE_DIR, "orca-flow.lock");
     const other = existsSync(lock) ? Number(readFileSync(lock, "utf8").trim()) : 0;
     if (other && other !== process.pid && alive(other)) {
       process.stderr.write(`已有 orca-flow watch 在跑：pid=${other}\n`);
