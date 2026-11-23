@@ -5,6 +5,7 @@
 ## 实现
 
 - 真机红线（docs/design/ACCEPTANCE.md 开头）：本机是开发机，不访问任何平台的真实站点；起 vk 服务只能用 VK_HOME=$(mktemp -d) vk serve --offline
+- 界面单（口径里有 ACC-v3-fid-08）的证据包三件事缺一不可：① 截图 1360 宽、用 `vk demo seed` 的演示数据截（不要用测试替身数据），放 `docs/design/screenshots/impl/<页面>.png`；② PR 描述里用相对链接把它和 `docs/design/screenshots/v3/` 里同一页的图并排；③ 贴出 ACC-v3-fid-01 的实测值（页面底色 #fafaf8、导航项高 34px、body 的 -webkit-font-smoothing:antialiased 与 tabular-nums、焦点环 2px 墨色偏移 2px、选中色 #ffd84a）
 
 ## 验收
 
