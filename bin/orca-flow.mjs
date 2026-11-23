@@ -132,6 +132,15 @@ export function reusableTerminal(state, issue) {
   return rows[0] ?? null; // worker-list 新的在前
 }
 
+/**
+ * 返工放在哪：复用原终端时也要带上本单 worktree——只带 --terminal，Orca 会按 --from（Run 所有者终端）
+ * 所在的目录核对，报 terminal_worktree_mismatch（ACC-harness-orca-13）。新 agent 有本单目录就用，没有就新建 issue-N。
+ */
+export function reworkPlacement(reuse, wt, issue) {
+  if (reuse) return { terminal: reuse.agentTerminalHandle, worktreeId: wt?.id ?? null };
+  return wt ? { worktreeId: wt.id } : { name: `issue-${issue}` };
+}
+
 /** 同一个验收（issue + head）已经建过 Task 就不再建：失败、被停（Orca 记为 blocked）、取消的除外。 */
 const REBUILDABLE = new Set(["failed", "blocked", "cancelled", "canceled"]);
 export function hasAcceptTask(state, issue, head7) {
@@ -824,18 +833,29 @@ export async function tick({ dryRun = false } = {}) {
       const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "", notes: c.reasonComments ? "" : fetchNotes(c.number, c.commentCreatedAt), reason: reasonText(c.reasonComments), lastVerdict: c.lastVerdict ?? "" });
       const taskId = createTask(ctx, { title: taskTitle("rework", c.number, `r${c.round}`), display: `#${c.number} 返工 r${c.round}`, spec, dryRun });
       const reuse = reusableTerminal(state, c.number);
-      let placement;
-      let channel = null;
+      const wt = worktreeFor(c.number, c.branch);
+      let started = null;
       if (reuse) {
-        placement = { terminal: reuse.agentTerminalHandle, worktreeId: null };
         log(`  → 返工 #${c.number} round ${c.round}：复用原 agent 终端（${reuse.dispatchId}）`);
-      } else {
-        channel = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round, { dryRun });
-        const wt = worktreeFor(c.number, c.branch);
-        placement = wt ? { worktreeId: wt.id } : { name: `issue-${c.number}` };
-        log(`  → 返工 #${c.number} round ${c.round}：新 agent（${channel.channel}/${channel.model}）`);
+        try {
+          started = startWorker(ctx, { taskId, placement: reworkPlacement(reuse, wt, c.number), channel: {}, label: `返工 #${c.number}`, dryRun });
+        } catch (err) {
+          // 复用不成（终端已不在本单目录、已退出等）：回收它，同一轮改派新 agent，不把单子来回迁移（ACC-harness-orca-13）。
+          log(`  ⚠ 复用 #${c.number} 原终端失败（${err.message.slice(0, 200)}），回收它，改派新 agent`);
+          if (!dryRun) {
+            try {
+              orca(["orchestration", "worker-release", "--dispatch", reuse.dispatchId]);
+            } catch {
+              /* 回收失败不挡新派 */
+            }
+          }
+        }
       }
-      const started = startWorker(ctx, { taskId, placement, channel: channel ?? {}, label: `返工 #${c.number}`, dryRun });
+      if (!started) {
+        const channel = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round, { dryRun });
+        log(`  → 返工 #${c.number} round ${c.round}：新 agent（${channel.channel}/${channel.model}）`);
+        started = startWorker(ctx, { taskId, placement: reworkPlacement(null, wt, c.number), channel, label: `返工 #${c.number}`, dryRun });
+      }
       linkWorktree(started.worktreeId, { issue: c.number, pr: c.pull, status: "in-progress", comment: `返工 round ${c.round}` }, dryRun);
       report.dispatched.push({ issue: c.number, kind: "rework", dispatchId: started.dispatchId });
       if (c.bodyHash && !dryRun) writeReworkRecord(c, started.dispatchId);

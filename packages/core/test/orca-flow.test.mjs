@@ -1,11 +1,12 @@
 // bin/orca-flow.mjs 的纯逻辑（ACC-harness-orca-03..07）：不碰 orca / GitHub。
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
   projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
-  linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue,
+  linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -233,4 +234,18 @@ test("回收 worktree：有改动、有不在远端的提交、有要留的被�
   for (const f of ["dist-config.json", "dist-archive/", "node_modules-backup/", "dist", "notes/dist"]) {
     assert.notEqual(dirtyReason(`!! ${f}`, "0"), null, f);
   }
+});
+
+test("返工放置：复用原终端时带上本单 worktree（否则 Orca 按 Run 所有者目录核对报 terminal_worktree_mismatch）", () => {
+  const reuse = { agentTerminalHandle: "term_x", dispatchId: "d1" };
+  assert.deepEqual(reworkPlacement(reuse, { id: "wt-267" }, 267), { terminal: "term_x", worktreeId: "wt-267" });
+  assert.deepEqual(reworkPlacement(null, { id: "wt-267" }, 267), { worktreeId: "wt-267" });
+  assert.deepEqual(reworkPlacement(null, null, 267), { name: "issue-267" });
+});
+
+test("返工：复用原终端失败就回收它、同一轮改派新 agent，不退回 s:changes", () => {
+  const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
+  const block = src.slice(src.indexOf("const reuse = reusableTerminal(state, c.number);"), src.indexOf("// 6. 实现"));
+  assert.match(block, /catch \(err\) \{[\s\S]*?worker-release[\s\S]*?\}\s*\}\s*\}\s*if \(!started\)/);
+  assert.match(block, /reworkPlacement\(reuse, wt, c\.number\)/);
 });
