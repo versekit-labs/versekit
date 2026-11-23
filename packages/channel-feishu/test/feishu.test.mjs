@@ -387,6 +387,32 @@ test("configure(): 临时名加不上时，旧配置原样不动", async () => {
   });
 });
 
+test("explainLarkFailure(): lark-cli 1.0.97 原样 stderr（多行 JSON + _notice.update）取出 error.message", async () => {
+  const { explainLarkFailure } = await import("../src/index.mjs");
+  // 真机 lark-cli 1.0.97：`profile remove p`（唯一 profile），退出码 2，原样 stderr
+  const raw = [
+    "{",
+    '  "ok": false,',
+    '  "error": {',
+    '    "type": "validation",',
+    '    "subtype": "failed_precondition",',
+    '    "message": "cannot remove the only profile",',
+    '    "hint": "add another profile first: lark-cli profile add"',
+    "  },",
+    '  "_notice": {',
+    '    "update": {',
+    '      "command": "lark-cli update",',
+    '      "current": "1.0.97",',
+    '      "latest": "1.0.100",',
+    '      "message": "lark-cli 1.0.100 available, current 1.0.97, run: lark-cli update"',
+    "    }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  assert.equal(explainLarkFailure(raw), "cannot remove the only profile");
+});
+
 test("explainLarkFailure(): 多行缩进 JSON 也能取出 error.message", async () => {
   const { explainLarkFailure } = await import("../src/index.mjs");
   const raw = JSON.stringify({ ok: false, error: { type: "validation", message: 'profile "versekit" already exists' } }, null, 2);
