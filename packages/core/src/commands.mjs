@@ -988,6 +988,34 @@ export const COMMANDS = [
 
 export const findCommand = (name) => COMMANDS.find((c) => c.name === name) ?? null;
 
+// 云端命令只挂在 Hifabu 账号服务，供它的 CLI 和 HTTP 投影使用。
+export const CLOUD_COMMANDS = [
+  {
+    name: "session.create",
+    summary: "在浏览器用 Google 登录 Hifabu",
+    permission: "public",
+    args: { code: "string?" },
+    http: { method: "POST", path: "/login/google" },
+    cli: { usage: "vk-cloud session create", browserPath: "/login" },
+  },
+  {
+    name: "session.get",
+    summary: "查看当前 Hifabu 会话",
+    permission: "public",
+    args: {},
+    http: { method: "GET", path: "/api/session" },
+    cli: { usage: "vk-cloud session get" },
+  },
+  {
+    name: "session.revoke",
+    summary: "退出当前 Hifabu 会话",
+    permission: "session",
+    args: {},
+    http: { method: "POST", path: "/api/session/revoke" },
+    cli: { usage: "vk-cloud session revoke" },
+  },
+];
+
 /**
  * 卡片上的「翻页」按钮（开始确认、切换按时间/现在发、取消回到确认卡）。它们只换卡片、不改数据，
  * 所以不是命令；但它们也必须在这张表里声明，并指明服务于哪条远程命令（`serves`）。

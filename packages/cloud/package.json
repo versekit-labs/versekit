@@ -1,0 +1,12 @@
+{
+  "name": "@versekit-app/cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hifabu 账号服务",
+  "exports": "./src/server.mjs",
+  "bin": { "vk-cloud": "./src/cli.mjs" },
+  "scripts": {
+    "start": "node src/serve.mjs"
+  }
+}
