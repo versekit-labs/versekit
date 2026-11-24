@@ -17,7 +17,7 @@
     "vk": "node packages/cli/src/vk.mjs",
     "serve": "node packages/cli/src/vk.mjs serve --open",
     "doctor": "node packages/cli/src/vk.mjs doctor --human",
-    "test": "node scripts/ci/test-all.mjs",
+    "test": "node plugins/versekit/test/run-tests.mjs",
     "check:parity": "node scripts/ci/parity.mjs",
     "check:contract": "node scripts/ci/adapter-contract.mjs",
     "check:backdoor": "node scripts/ci/no-backdoor.mjs",
