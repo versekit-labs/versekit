@@ -1,12 +1,15 @@
 // bin/orca-flow.mjs 的纯逻辑（ACC-harness-orca-03..07）：不碰 orca / GitHub。
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, chmodSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
   projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
   linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
+  codexExhaustion, codexCooldown, rerouteExhaustedCodex, chooseChannel,
 } from "../../../bin/orca-flow.mjs";
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
@@ -245,7 +248,7 @@ test("返工放置：复用原终端时带上本单 worktree（否则 Orca 按 R
 
 test("返工：复用原终端失败就回收它、同一轮改派新 agent，不退回 s:changes", () => {
   const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
-  const block = src.slice(src.indexOf("const reuse = reusableTerminal(state, c.number);"), src.indexOf("// 6. 实现"));
+  const block = src.slice(src.indexOf("let reuse = reusableTerminal(state, c.number);"), src.indexOf("// 6. 实现"));
   assert.match(block, /catch \(err\) \{[\s\S]*?worker-release[\s\S]*?\}\s*\}\s*\}\s*if \(!started\)/);
   assert.match(block, /reworkPlacement\(reuse, wt, c\.number\)/);
 });
@@ -254,5 +257,114 @@ test("versekit 实现 / 返工任务书写明界面单证据包三件事（ACC-h
   const rule = projectRules("impl", readFileSync(new URL("../../../.orca-kit/flow-rules.md", import.meta.url), "utf8"));
   for (const part of ["ACC-v3-fid-08", "1360 宽", "vk demo seed", "docs/design/screenshots/impl/", "docs/design/screenshots/v3/", "#fafaf8", "34px", "antialiased", "tabular-nums", "焦点环 2px", "#ffd84a"]) {
     assert.ok(rule.includes(part), `实现约束缺：${part}`);
+  }
+});
+
+// ---- ACC-harness-route-02：Codex 额度用完，同一轮改派 Sonnet ----
+
+const LIMIT = "■ You've hit your usage limit. Upgrade to Pro or try again at Nov 25th, 2099 3:41 AM.";
+const TIP = "Tip: When signed in with ChatGPT, use /usage to check your account usage and access available usage limit resets.";
+
+test("route-02：用量上限提示认得出（含时间解析）；只有 Tip 提示行不算；解析不出时间按 5 小时", () => {
+  const now = Date.parse("2026-11-24T10:00:00");
+  const hit = codexExhaustion(`working...\n${LIMIT}\n❯`, now);
+  assert.equal(hit.text, "2099-11-25 03:41:00");
+  assert.equal(hit.until, Math.floor(new Date(2099, 10, 25, 3, 41).getTime() / 1000));
+  assert.equal(codexExhaustion(TIP, now), null);
+  assert.equal(codexExhaustion(`${TIP}\nsome output\n`, now), null);
+  const noTime = codexExhaustion("You've hit your usage limit.", now);
+  assert.equal(noTime.until, Math.floor((now + 5 * 3600 * 1000) / 1000));
+  // Tip 在上限提示之后也不盖掉它
+  assert.ok(codexExhaustion(`${LIMIT}\n${TIP}`, now));
+  assert.equal(codexExhaustion("hit usage limit of tokens in file foo.txt", now), null);
+});
+
+function fakeState(provider = "codex", { title = "vk#99999 实现", status = "dispatched", labels = [] } = {}) {
+  return {
+    tasks: [{ id: "t1", task_title: title, status, spec: "原任务书" }],
+    workers: [{ dispatchId: "d1", taskId: "t1", dispatchStatus: "dispatched", terminalState: "owned", agentTerminalHandle: "term_1",
+      resource: { worktreeId: "repo::/wt/issue-99999" }, projection: { liveness: { verdict: "live" }, provider: { id: provider } } }],
+    board: { rows: [{ number: 99999, labels }] },
+  };
+}
+function fakeIo(text) {
+  const calls = [];
+  return {
+    calls,
+    io: {
+      read: () => text,
+      stop: (id) => calls.push(["stop", id]),
+      choose: (role, labels, round) => { calls.push(["choose", role, round]); return { agent: "claude", model: "sonnet", channel: "claude", reason: "cooldown" }; },
+      createTask: (_c, t) => { calls.push(["task", t.title, t.spec]); return "t2"; },
+      start: (_c, a) => { calls.push(["start", a.placement, a.channel.agent]); return { dispatchId: "d2", worktreeId: a.placement.worktreeId }; },
+      link: () => {},
+    },
+  };
+}
+
+test("route-02：Codex worker 屏幕出现用量上限 → 写 codex-exhausted、停掉、同一轮在原 worktree 改派 Sonnet", () => {
+  const dir = mkdtempSync(join(tmpdir(), "flow-route-"));
+  const { io, calls } = fakeIo(`x\n${LIMIT}`);
+  const out = rerouteExhaustedCodex(fakeState(), { runId: "r" }, { stateDir: dir, io });
+  assert.deepEqual(out.map((o) => [o.issue, o.kind, o.dispatchId]), [[99999, "impl", "d2"]]);
+  const body = readFileSync(join(dir, "codex-exhausted"), "utf8").trim();
+  const [ts, text] = body.split("\t");
+  assert.equal(text, "2099-11-25 03:41:00");
+  assert.ok(Number(ts) > Date.now() / 1000);
+  assert.deepEqual(calls.map((c) => c[0]), ["stop", "choose", "task", "start"]);
+  assert.deepEqual(calls[3], ["start", { worktreeId: "repo::/wt/issue-99999" }, "claude"]);
+  assert.match(calls[2][1], /^vk#99999 实现 sonnet$/);
+  assert.match(calls[2][2], /原任务书[\s\S]*已有它的提交/);
+  assert.equal(codexCooldown(dir)?.text, "2099-11-25 03:41:00");
+});
+
+test("route-02：只有 Tip 提示行、worker 不是 Codex、验收 worker、已结算 worker：什么都不做", () => {
+  const dir = mkdtempSync(join(tmpdir(), "flow-route-"));
+  for (const [state, text] of [
+    [fakeState(), TIP],
+    [fakeState("claude"), LIMIT],
+    [fakeState("codex", { title: "vk#99999 验收 abc1234" }), LIMIT],
+    [(() => { const s = fakeState(); s.workers[0].dispatchStatus = "completed"; return s; })(), LIMIT],
+  ]) {
+    const { io, calls } = fakeIo(text);
+    assert.deepEqual(rerouteExhaustedCodex(state, { runId: "r" }, { stateDir: dir, io }), []);
+    assert.deepEqual(calls, []);
+  }
+  assert.equal(existsSync(join(dir, "codex-exhausted")), false);
+});
+
+test("route-02：返工 worker 也改派（Task 标题带 -sonnet、round 传给选路）；dry-run 只记日志不动手", () => {
+  const dir = mkdtempSync(join(tmpdir(), "flow-route-"));
+  let { io, calls } = fakeIo(LIMIT);
+  rerouteExhaustedCodex(fakeState("codex", { title: "vk#99999 返工 r1" }), { runId: "r" }, { stateDir: dir, io });
+  assert.deepEqual(calls[1], ["choose", "rework", "1"]);
+  assert.match(calls[2][1], /^vk#99999 返工 r1-sonnet$/);
+  assert.deepEqual(parseTaskTitle("vk#99999 返工 r1-sonnet"), { issue: 99999, kind: "rework", extra: "r1-sonnet" });
+  const dry = mkdtempSync(join(tmpdir(), "flow-route-"));
+  ({ io, calls } = fakeIo(LIMIT));
+  assert.deepEqual(rerouteExhaustedCodex(fakeState(), { runId: "r" }, { stateDir: dry, dryRun: true, io }), []);
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(join(dry, "codex-exhausted")), false);
+});
+
+test("route-02：冷却期内派新单直接走 Sonnet，到点恢复 Codex（chooseChannel 读同一个冷却文件）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "flow-route-"));
+  mkdirSync(join(dir, "bin"));
+  const exe = (n, b) => { writeFileSync(join(dir, "bin", n), `#!/usr/bin/env bash\n${b}\n`); chmodSync(join(dir, "bin", n), 0o755); };
+  exe("codex", 'echo "Logged in"; exit 0');
+  exe("agy", "exit 0");
+  const saved = { ...process.env };
+  Object.assign(process.env, { PATH: `${join(dir, "bin")}:/usr/bin:/bin:${process.env.PATH}`, STATE_DIR: dir, CLAUDE_PROBE: "0" });
+  try {
+    writeFileSync(join(dir, "codex-exhausted"), `${Math.floor(Date.now() / 1000) + 3600}\t2099-01-01 00:00:00\n`);
+    assert.equal(chooseChannel("engineer", []).agent, "claude");
+    writeFileSync(join(dir, "codex-exhausted"), `${Math.floor(Date.now() / 1000) - 5}\t过去\n`);
+    assert.equal(chooseChannel("engineer", []).agent, "codex");
+    // route-03：Neon 走 antigravity 通道，worker-start 带 --agent antigravity --model gemini-4-neon-high
+    const neon = chooseChannel("engineer", ["model:neon"]);
+    assert.deepEqual([neon.agent, neon.model], ["antigravity", "gemini-4-neon-high"]);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
   }
 });

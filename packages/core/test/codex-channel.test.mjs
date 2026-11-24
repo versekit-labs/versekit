@@ -45,12 +45,12 @@ test('codex-01：model:codex → codex|gpt-6.2-sol，不调用 claude、不跑 c
   assert.equal(calls(dir, 'codex.calls').trim(), 'login status'); // 只有登录状态，没有 exec
 });
 
-test('codex-01：CODEX_MODEL 可改；不带 label 照旧 Sonnet，验收不走 codex', () => {
+test('codex-01：CODEX_MODEL 可改；验收不走 codex', () => {
   const dir = sandbox();
   let r = channel(dir, ['--role', 'engineer', '--labels', 'model:codex'], { CODEX_MODEL: 'gpt-x' });
   assert.match(r.stdout, /^codex\|gpt-x\|/);
   r = channel(dir, ['--role', 'engineer', '--labels', 's:ready']);
-  assert.match(r.stdout, /^claude\|sonnet\|/);
+  assert.match(r.stdout, /^codex\|gpt-6\.2-sol\|默认先用 Codex/); // 2026-11-24 起默认 Codex
   assert.doesNotMatch(calls(dir, 'codex.calls'), /exec/);
   r = channel(dir, ['--role', 'acceptance', '--labels', 'model:codex'], { ARKCLI_CODING_PLAN_API_KEY: '' });
   assert.doesNotMatch(r.stdout, /^codex\|/);
@@ -171,3 +171,84 @@ function renderSpecs(channel) {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
 }
+
+// ---- ACC-harness-route-01 / 03：默认 Codex、model:sonnet、model:neon ----
+function withAgy(dir) {
+  writeFileSync(join(dir, 'bin', 'agy'), `#!/usr/bin/env bash\necho "$*" >> "${dir}/agy.calls"\nexit 0\n`);
+  chmodSync(join(dir, 'bin', 'agy'), 0o755);
+}
+
+test('route-01：没有 model label / model:codex 默认 Codex；返工 round 1 Codex、round >= 2 Sonnet', () => {
+  const dir = sandbox();
+  for (const labels of ['', 's:ready', 'model:codex']) {
+    const r = channel(dir, ['--role', 'engineer', ...(labels ? ['--labels', labels] : [])]);
+    assert.match(r.stdout, /^codex\|gpt-6\.2-sol\|/, labels);
+  }
+  let r = channel(dir, ['--role', 'rework', '--round', '1']);
+  assert.match(r.stdout, /^codex\|/);
+  r = channel(dir, ['--role', 'rework', '--round', '2']);
+  assert.match(r.stdout, /^claude\|sonnet\|.*Codex 第 2 轮仍未过 → 升 Sonnet/);
+  assert.equal(calls(dir, 'claude.calls'), '');
+  assert.doesNotMatch(calls(dir, 'codex.calls'), /exec/); // 探测不花 token
+});
+
+test('route-01：Codex 没装 / 未登录 / 冷却期内，默认单改派 Sonnet 并写明原因', () => {
+  let dir = sandbox({ codex: 'missing' });
+  assert.match(channel(dir, ['--role', 'engineer']).stdout, /^claude\|sonnet\|.*Codex 不可用（找不到 codex 命令）→ 改派 Sonnet/);
+  dir = sandbox({ codex: 'loggedout' });
+  assert.match(channel(dir, ['--role', 'engineer']).stdout, /^claude\|sonnet\|.*Codex 不可用（Codex 未登录）→ 改派 Sonnet/);
+  dir = sandbox();
+  writeFileSync(join(dir, 'state', 'codex-exhausted'), `${Math.floor(Date.now() / 1000) + 3600}\t2099-01-01 00:00:00\n`);
+  assert.match(channel(dir, ['--role', 'rework', '--round', '1']).stdout, /^claude\|sonnet\|.*Codex 额度用完，到 2099-01-01 00:00:00 为止/);
+});
+
+test('route-01：model:sonnet 强制 Sonnet；model:opus 优先；model:deepseek 行为不变；验收仍 DeepSeek', () => {
+  const dir = sandbox();
+  assert.match(channel(dir, ['--role', 'engineer', '--labels', 'model:sonnet']).stdout, /^claude\|sonnet\|.*model:sonnet/);
+  assert.equal(calls(dir, 'codex.calls'), ''); // 强制 Sonnet 不碰 Codex
+  assert.match(channel(dir, ['--role', 'rework', '--round', '1', '--labels', 'model:sonnet']).stdout, /^claude\|sonnet\|/);
+  assert.match(channel(dir, ['--role', 'engineer', '--labels', 'model:sonnet,model:opus']).stdout, /^claude\|opus\|/);
+  assert.match(channel(dir, ['--role', 'engineer', '--labels', 'model:opus,model:codex']).stdout, /^claude\|opus\|/);
+  const ds = channel(dir, ['--role', 'engineer', '--labels', 'model:deepseek']);
+  assert.doesNotMatch(ds.stdout, /^(codex|claude)\|/);
+  assert.equal(calls(dir, 'claude.calls'), '');
+  assert.doesNotMatch(channel(dir, ['--role', 'acceptance']).stdout, /^(codex|claude|antigravity)\|/);
+});
+
+test('route-03：model:neon → antigravity|gemini-4-neon-high；NEON_MODEL 可改；round 2 升 Sonnet；不碰 codex、不发请求', () => {
+  const dir = sandbox();
+  withAgy(dir);
+  let r = channel(dir, ['--role', 'engineer', '--labels', 'model:neon']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout.trim(), /^antigravity\|gemini-4-neon-high\|issue 带 model:neon label → Neon/);
+  assert.match(channel(dir, ['--role', 'rework', '--round', '1', '--labels', 'model:neon']).stdout, /^antigravity\|/);
+  assert.match(channel(dir, ['--role', 'engineer', '--labels', 'model:neon'], { NEON_MODEL: 'neon-x' }).stdout, /^antigravity\|neon-x\|/);
+  assert.match(channel(dir, ['--role', 'rework', '--round', '2', '--labels', 'model:neon']).stdout, /^claude\|sonnet\|.*Neon 第 2 轮仍未过 → 升 Sonnet/);
+  assert.match(channel(dir, ['--role', 'engineer', '--labels', 'model:neon,model:opus']).stdout, /^claude\|opus\|/);
+  assert.equal(calls(dir, 'agy.calls'), ''); // 只看 command -v，agy 一次都没被执行
+  assert.equal(calls(dir, 'codex.calls'), '');
+  assert.doesNotMatch(channel(dir, ['--role', 'acceptance', '--labels', 'model:neon']).stdout, /^antigravity\|/);
+});
+
+test('route-03：agy 不在 PATH 里 → 改派 Sonnet，原因写明', () => {
+  const dir = sandbox();
+  const r = channel(dir, ['--role', 'engineer', '--labels', 'model:neon']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^claude\|sonnet\|.*Neon 不可用（找不到 agy 命令）→ 改派 Sonnet/);
+});
+
+test('route-05：DeepSeek 都不可用时验收改用 Neon；实现方是 Neon 时改用 Sonnet；agy 也没有就不派', () => {
+  const noDsh = { ARKCLI_CODING_PLAN_API_KEY: '', QWEN_TOKEN_PLAN_CN_API_KEY: '', ARKCLI_BIN: '/nonexistent/arkcli' };
+  const dir = sandbox();
+  withAgy(dir);
+  let r = channel(dir, ['--role', 'acceptance'], noDsh);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout.trim(), /^antigravity\|gemini-4-neon-high\|DeepSeek 不可用 → 验收改用 Neon/);
+  r = channel(dir, ['--role', 'acceptance', '--labels', 'model:neon'], noDsh);
+  assert.match(r.stdout.trim(), /^claude\|sonnet\|DeepSeek 不可用，实现方是 Neon → 验收改用 Sonnet/);
+  assert.equal(calls(dir, 'agy.calls'), ''); // 只看 command -v，不执行 agy
+  const bare = sandbox();
+  r = channel(bare, ['--role', 'acceptance'], noDsh);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /备用 Neon/);
+});
