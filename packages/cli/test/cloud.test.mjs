@@ -233,10 +233,14 @@ test("ACC-cloud-08: 关掉固定令牌后，制作机队列与发布机后台拉
     return row.state === "failed" && row;
   });
   assert.match(failed.reason, /没有账号组「测试账号组」/);
-  const status = await cli("e", "relay", "status");
+  const status = await until(async () => {
+    const state = await cli("e", "relay", "status");
+    return state.lastPullAt && state;
+  });
   assert.equal(status.url, relayUrl);
   assert.equal(status.configured, true);
   assert.equal(status.failures[0].id, id);
   assert.notEqual(JSON.parse(readFileSync(executor.credentials)).machineToken, executor.linked.machineToken);
-  assert.match(await cli("e", "relay", "pull").then(({ at }) => String(at)), /^\d+$/);
+  const { ingested, failed: failures, pending } = await cli("e", "relay", "pull");
+  assert.deepEqual({ ingested, failures, pending }, { ingested: [], failures: [], pending: [] });
 });
