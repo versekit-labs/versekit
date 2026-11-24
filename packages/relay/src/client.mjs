@@ -27,6 +27,9 @@ export async function hashFile(path) {
   return h.digest("hex");
 }
 
+/** 同内容的文件共用中转里的同一份 blob。 */
+export const uniqueBlobs = (files) => [...new Map(files.map((file) => [file.sha256, file])).values()];
+
 /** 网络错误和 5xx/408/429 值得重试；401/409/422/507 这类重试也没用。 */
 export async function withRetry(fn, { retries = 5, backoffMs = 1000, sleepImpl = sleep, onRetry = () => {} } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -68,13 +71,13 @@ async function failOf(res, fallback) {
   return new RelayError(data?.message ?? `${fallback}（中转返回 ${res.status}）`, {
     status: res.status,
     code: data?.error ?? "relay_error",
-    retryable: res.status >= 500 || res.status === 408 || res.status === 429,
+    retryable: (res.status >= 500 && res.status !== 507) || res.status === 408 || res.status === 429,
     data,
   });
 }
 
-export async function ping({ url, token }) {
-  const res = await request({ url, token, path: "/v1/ping" });
+export async function ping({ url, token, details = false }) {
+  const res = await request({ url, token, path: details ? "/v1/ping?details=1" : "/v1/ping", signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw await failOf(res, "连接中转失败");
   return res.json();
 }
@@ -142,11 +145,21 @@ export async function pushBlob({ url, token, file, sha256, size, onProgress = ()
   );
 }
 
+export const newDeliveryId = () => `dl_${randomBytes(8).toString("hex")}`;
+
 /** 上传一次投递：所有文件（同 sha 只传一次）+ 清单。返回投递 id。 */
-export async function pushDelivery({ url, token, group, manifest, files, onProgress = () => {}, retries = 5, backoffMs = 1000, id = `dl_${randomBytes(8).toString("hex")}` }) {
+export async function pushDelivery({ url, token, group, manifest, files, onProgress = () => {}, retries = 5, backoffMs = 1000, id = newDeliveryId() }) {
   // files: [{ sha256, size, name, path }]
-  const unique = [...new Map(files.map((f) => [f.sha256, f])).values()];
-  for (const f of unique) await pushBlob({ url, token, file: f.path, sha256: f.sha256, size: f.size, onProgress: (sent, total) => onProgress({ name: f.name, sent, total }), retries, backoffMs });
+  const unique = uniqueBlobs(files);
+  const deliveryTotal = unique.reduce((sum, file) => sum + file.size, 0);
+  let completedBytes = 0;
+  for (const f of unique) {
+    await pushBlob({
+      url, token, file: f.path, sha256: f.sha256, size: f.size, retries, backoffMs,
+      onProgress: (sent, total) => onProgress({ name: f.name, sent, total, deliverySent: completedBytes + sent, deliveryTotal }),
+    });
+    completedBytes += f.size;
+  }
   const body = JSON.stringify({ id, group, manifest, blobs: unique.map(({ sha256, size, name }) => ({ sha256, size, name })) });
   const delivery = await withRetry(
     async () => {
@@ -165,8 +178,21 @@ export async function listDeliveries({ url, token, states = null }) {
   return (await res.json()).deliveries;
 }
 
-export async function reportState({ url, token, id, state, reason }) {
-  const res = await request({ url, token, method: "POST", path: `/v1/deliveries/${id}/state`, body: JSON.stringify({ state, ...(reason ? { reason } : {}) }) });
+export async function listDeliveryStatus({ url, token }) {
+  const res = await request({ url, token, path: "/v1/deliveries?view=maker", signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw await failOf(res, "查看投递列表失败");
+  return res.json();
+}
+
+export async function getDeliveryStatus({ url, token, id }) {
+  const res = await request({ url, token, path: `/v1/deliveries/${encodeURIComponent(id)}`, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw await failOf(res, "查看投递失败");
+  return res.json();
+}
+
+export async function reportState({ url, token, id, state, reason, summary, progress, errorCode, nextStep, downloadBytesPerSecond }) {
+  const body = JSON.stringify({ state, reason, summary, progress, errorCode, nextStep, downloadBytesPerSecond });
+  const res = await request({ url, token, method: "POST", path: `/v1/deliveries/${id}/state`, body, signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw await failOf(res, "回报状态失败");
   return res.json();
 }

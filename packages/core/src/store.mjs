@@ -434,7 +434,7 @@ export function getWork(workId) {
  * 清单的校验与规整：只看清单本身，不碰库、不看文件在不在。work.add 入库前用它，
  * 制作机 `vk work push` 上传前也用它——同一套规则，不合格当场报错。
  */
-export function checkWorkPlan({ title, source = null, cuts }) {
+export function checkWorkPlan({ title, source = null, cuts }, { onCopyViolation } = {}) {
   const t = requireString(title, "作品标题", { max: 200 });
   if (!Array.isArray(cuts) || !cuts.length) fail("至少要有一支成片");
   const seenCuts = new Set();
@@ -445,7 +445,7 @@ export function checkWorkPlan({ title, source = null, cuts }) {
     const versions = Array.isArray(c?.versions) ? c.versions : [];
     if (!versions.length) fail(`成片「${cutTitle}」至少要有一个语言版本`);
     const seenLang = new Set();
-    const cutCopy = normaliseCopy(c?.copy, `成片「${cutTitle}」的文案`);
+    const cutCopy = normaliseCopy(c?.copy, `成片「${cutTitle}」的文案`, onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle })));
     return {
       title: cutTitle,
       versions: versions.map((v) => {
@@ -453,7 +453,7 @@ export function checkWorkPlan({ title, source = null, cuts }) {
         if (seenLang.has(language)) fail(`成片「${cutTitle}」的语言重复：${language}`);
         seenLang.add(language);
         const where = `成片「${cutTitle}」${language} 版本`;
-        const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`));
+        const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`, onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle, language }))));
         const cover = normaliseCover(v, c, where);
         const meta0 = copy ? { ...(v?.meta ?? {}), copy } : v?.meta ?? null;
         const meta = cover ? { ...(meta0 ?? {}), cover } : meta0;
@@ -662,7 +662,7 @@ export function copyViolations(platform, copy) {
  * 是按平台写；也可以显式写 `default`。平台名写错（表里没有）直接拒绝，免得文案悄悄落空。
  * 平台文案在这里就按平台限制校验；默认文案要到生成平台稿、知道发哪个平台时才能判（plan.apply）。
  */
-export function normaliseCopy(raw, where) {
+export function normaliseCopy(raw, where, onViolation) {
   if (raw == null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) fail(`${where}：copy 必须是对象`);
   const out = {};
@@ -675,7 +675,10 @@ export function normaliseCopy(raw, where) {
       if (!COPY_LIMITS[platform]) fail(`${where}：不认识的平台「${key}」（可选：${Object.keys(COPY_LIMITS).join(" / ")}；不分平台的默认文案直接写 title / body / tags）`);
       const entry = normaliseEntry(value, `${where} 的 ${COPY_LIMITS[platform].label} 文案`);
       const bad = copyViolations(platform, entry);
-      if (bad.length) fail(`${where}：${bad.join("；")}（超限不会自动截断，请改短后重新入库）`);
+      if (bad.length) {
+        if (!onViolation) fail(`${where}：${bad.join("；")}（超限不会自动截断，请改短后重新入库）`);
+        onViolation({ platform, reason: bad.join("；") });
+      }
       out[platform] = entry;
     }
   }
@@ -1001,6 +1004,7 @@ export function createPublish({
   visibility = "public",
   scheduledAt = null,
   overrides = null,
+  fromRelay = false,
 }) {
   if (!getWork(workId)) fail(`没有这条内容：${workId}`);
   const account = getAccount(accountId);
@@ -1044,7 +1048,7 @@ export function createPublish({
     type: "work.awaiting_confirm",
     severity: "info",
     publishId: id,
-    payload: { workId },
+    payload: { workId, ...(fromRelay ? { fromRelay: true } : {}) },
     dedupeKey: `work:${workId}:awaiting_confirm`,
   });
 

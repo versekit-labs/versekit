@@ -8,9 +8,12 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 process.env.VERSEKIT_OFFLINE = "1";
-const ROOT = mkdtempSync(join(tmpdir(), "vk-relay-flow-"));
+const ROOT = mkdtempSync(join(tmpdir(), "vk-rf-")); // macOS 的 Unix socket 路径最多 104 字节
 const MAKER = join(ROOT, "maker");
 const PUBLISHER = join(ROOT, "publisher");
 const CLOUD = join(ROOT, "cloud");
@@ -24,6 +27,7 @@ const { startDaemon } = await import("../src/daemon.mjs");
 const { findCommand } = await import("../src/commands.mjs");
 const { updateConfig, readConfig } = await import("../src/config.mjs");
 const { createRelayServer } = await import("../../relay/src/index.mjs");
+const { deliverPending, NEW_WORK_DELAY_MS } = await import("../src/notify.mjs");
 
 const PUSH = "push-secret-xyz";
 const PULL = "pull-secret-abc";
@@ -34,8 +38,13 @@ const adapters = [
 ];
 const mk = () => createCoreHandlers({ adapters, log: (l) => logs.push(String(l)) });
 let maker, publisher, relay, url;
+let freeBytes = 50 * 1024 ** 3;
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const cli = async (...args) => {
+  const vk = fileURLToPath(new URL("../../cli/src/vk.mjs", import.meta.url));
+  return (await promisify(execFile)(process.execPath, [vk, ...args], { env: process.env })).stdout;
+};
 
 function video(name, bytes) {
   const path = join(ROOT, "src", name);
@@ -63,7 +72,7 @@ const cloudDeliveries = () => readdirSync(join(CLOUD, "deliveries"));
 before(async () => {
   const { mkdirSync } = await import("node:fs");
   mkdirSync(join(ROOT, "src"), { recursive: true });
-  relay = createRelayServer({ dataDir: CLOUD, pushToken: PUSH, pullToken: PULL });
+  relay = createRelayServer({ dataDir: CLOUD, pushToken: PUSH, pullToken: PULL, freeBytes: () => freeBytes });
   url = `http://127.0.0.1:${await relay.listen({ port: 0 })}`;
 
   as(MAKER);
@@ -85,8 +94,8 @@ after(async () => {
 
 const works = (home) => { as(home); return store.listWorks(); };
 
-test("ACC-relay-02 work.push / relay.* 都在命令表里（三端一致），--group 必填", () => {
-  for (const name of ["work.push", "relay.status", "relay.connect", "relay.pull"]) assert.ok(findCommand(name), name);
+test("ACC-relay-02 / ACC-deliver-02 work.push / relay.* / delivery.* 都在命令表里", () => {
+  for (const name of ["work.push", "relay.status", "relay.connect", "relay.pull", "delivery.list", "delivery.show"]) assert.ok(findCommand(name), name);
   assert.equal(findCommand("work.push").http.method, "POST");
 });
 
@@ -183,6 +192,33 @@ test("ACC-relay-04 新作品出现在「今天」等确认；vk relay status 给
   assert.ok(!JSON.stringify(s).includes(PULL), "状态里没有 token");
 });
 
+test("ACC-deliver-04 制作机读到入库摘要与来取时间，同一待确认事件供今天和飞书复用", async () => {
+  as(PUBLISHER);
+  const work = store.listWorks()[0];
+  const expected = `新到 1 期：${work.title}，2 条等你确认`;
+  assert.deepEqual(publisher.today({}).arrivals, [{ workId: work.id, count: 2, message: expected }]);
+  const cardTitles = [];
+  const channel = { channel: "feishu", async send({ card }) {
+    cardTitles.push(card.header.title.content);
+    return { messageId: "om_local" };
+  } };
+  const notification = { channel, binding: { external_user_id: "fake-owner" }, now: Date.now() + NEW_WORK_DELAY_MS + 1 };
+  assert.equal((await deliverPending(notification)).sent, 1);
+  assert.equal((await deliverPending(notification)).sent, 0);
+  assert.deepEqual(cardTitles, [`主号组 · ${expected}`]);
+
+  as(MAKER);
+  const row = await maker["delivery.show"]({ id: deliveryId });
+  assert.equal(row.state, "awaiting_confirmation");
+  assert.ok(row.lastPullAt > Date.now() - 60e3);
+  assert.equal(row.summary.workId, work.id);
+  assert.deepEqual(row.summary.drafts.map((d) => [d.platform, d.account]).sort(), [["bilibili", "@b"], ["xiaohongshu", "@x"]]);
+  assert.ok(row.summary.drafts.every((draft) => Number.isFinite(draft.suggestedAt)));
+  assert.deepEqual(row.summary.rejected, []);
+  assert.deepEqual((await maker["delivery.list"]()).deliveries.find((d) => d.id === deliveryId), row);
+  assert.ok(!JSON.stringify(row).includes(ROOT), "查投递不会带上源文件路径");
+});
+
 test("ACC-relay-03 同一投递 id 只入库一次：重复拉取、中转状态丢了、服务重启都不重复", async () => {
   as(PUBLISHER);
   await publisher["relay.pull"]();
@@ -191,13 +227,14 @@ test("ACC-relay-03 同一投递 id 只入库一次：重复拉取、中转状态
   // 模拟「回报没送到」：中转还把它当待拉取
   const f = join(CLOUD, "deliveries", `${deliveryId}.json`);
   const d = JSON.parse(readFileSync(f));
-  writeFileSync(f, JSON.stringify({ ...d, state: "pending", ingested_at: undefined }));
+  writeFileSync(f, JSON.stringify({ ...d, state: "pending", ingested_at: undefined, summary: undefined }));
   const restarted = mk(); // 服务重启 = 新的 handlers，记录在库里
   const r = await restarted["relay.pull"]();
   assert.deepEqual(r.skipped, [deliveryId]);
   assert.equal(store.listWorks().length, 1, "没有重复作品");
   assert.equal(core.open().prepare("SELECT COUNT(*) n FROM publish").get().n, 2, "没有重复平台稿");
   assert.equal(JSON.parse(readFileSync(f)).state, "ingested", "补报了「已入库」");
+  assert.deepEqual(JSON.parse(readFileSync(f)).summary, d.summary, "补报也带原有摘要");
 });
 
 test("ACC-relay-03 组不存在：不入库，系统页「最近出的问题」有人话原因，回报中转「失败」", async () => {
@@ -217,6 +254,13 @@ test("ACC-relay-03 组不存在：不入库，系统页「最近出的问题」�
   // 再拉一轮不会反复失败、反复入库
   await publisher["relay.pull"]();
   assert.equal(publisher["relay.status"]().failures.length, 1);
+  assert.equal(core.open().prepare("SELECT COUNT(*) n FROM event WHERE dedupe_key = ?").get(`delivery:${r.id}:failed`).n, 1);
+  as(MAKER);
+  const failed = await maker["delivery.show"]({ id: r.id });
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.errorCode, "ingest_failed");
+  assert.match(failed.reason, /没有账号组「不存在的组」/);
+  assert.match(failed.nextStep, /group add/);
 });
 
 test("ACC-relay-03 空账号组 / 清单不合法：同样不入库并回报失败", async () => {
@@ -421,4 +465,121 @@ test("ACC-deliver-01 同一期再交更新成片、封面和待确认稿，已�
   assert.deepEqual((await mk()["relay.pull"]()).skipped, [second.id]);
   assert.equal((await readReceipt()).reason, report.reason);
   assert.equal(store.showWork(workId).cuts[0].rev, updated.cuts[0].rev);
+});
+
+test("ACC-deliver-02 CLI 与 HTTP 走相同预览，只读校验、估到达时间、提示空间和文案超限", async () => {
+  as(MAKER);
+  video("preview.mp4", Buffer.alloc(1_300_000, 7));
+  video("preview.png", Buffer.from("preview-cover"));
+  const doc = { ...goodDoc("preview.mp4"), title: "预览作品" };
+  doc.cuts[0].cover = "preview.png";
+  doc.cuts[0].copy = { title: "长".repeat(24), bilibili: { title: "短标题" } };
+  const manifest = manifestFile("preview.json", doc);
+  const explicit = structuredClone(doc);
+  explicit.cuts[0].copy.xiaohongshu = { title: "长".repeat(25) };
+  const explicitManifest = manifestFile("preview-explicit.json", explicit);
+  const wireCalls = [];
+  const capture = (req) => wireCalls.push([req.method, req.url]);
+  relay.server.prependListener("request", capture);
+  const daemon = await startDaemon({ handlers: maker, port: 0, runQueue: false, offline: true });
+  try {
+    const connect = JSON.parse(await cli("relay", "connect", url, "--token", PUSH, "--push", "--group", "主号组"));
+    assert.equal(connect.defaultGroup, "主号组");
+    assert.equal(readConfig().relay.default_group, "主号组");
+    assert.equal(statSync(core.paths().configFile).mode & 0o777, 0o600);
+    wireCalls.length = 0;
+    freeBytes = 1.5 * 1024 ** 3;
+    const before = { blobs: cloudBlobs(), deliveries: cloudDeliveries(), config: readConfig() };
+    const preview = JSON.parse(await cli("work", "push", manifest, "--dry-run"));
+    const response = await fetch(`http://127.0.0.1:${daemon.port}/api/works/push`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ manifest, dryRun: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), preview);
+    assert.equal(preview.group, "主号组");
+    assert.deepEqual(preview.files, [{ name: "preview.mp4", size: 1_300_000 }, { name: "preview.png", size: 13 }]);
+    assert.equal(preview.etaSeconds, preview.transfer.uploadSeconds + preview.transfer.downloadSeconds);
+    assert.equal(preview.transfer.downloadSeconds, Math.ceil(preview.bytes / preview.transfer.downloadBytesPerSecond));
+    assert.equal(preview.freeBytes, freeBytes);
+    assert.match(preview.warnings[0].message, /中转空间不够.*1\.5GB/);
+    assert.deepEqual(preview.rejected.map((r) => r.platform), ["xiaohongshu"]);
+    assert.match(preview.rejected[0].reason, /标题最多 20 字，现在是 24 字/);
+    const named = await maker["work.push"]({ manifest: explicitManifest, group: "临时组", dryRun: true });
+    assert.equal(named.group, "临时组");
+    assert.match(named.rejected[0].reason, /标题最多 20 字，现在是 25 字/);
+    assert.deepEqual({ blobs: cloudBlobs(), deliveries: cloudDeliveries(), config: readConfig() }, before);
+    assert.deepEqual(wireCalls, Array(3).fill(["GET", "/v1/ping?details=1"]));
+    assert.equal(store.listWorks().length, 0);
+    const listing = JSON.parse(await cli("delivery", "list"));
+    const status = JSON.parse(await cli("delivery", "show", deliveryId));
+    const apiStatus = await fetch(`http://127.0.0.1:${daemon.port}/api/deliveries/${deliveryId}`).then((res) => res.json());
+    assert.deepEqual(status, apiStatus);
+    assert.deepEqual(listing.deliveries.find((row) => row.id === deliveryId), Object.fromEntries(Object.entries(status).filter(([key]) => key !== "ok")));
+  } finally {
+    freeBytes = 50 * 1024 ** 3;
+    relay.server.off("request", capture);
+    await daemon.close();
+  }
+});
+
+test("ACC-deliver-04 制作机上传中可查看进度，默认组用于正式交付，发布机回报部分拒绝", async () => {
+  as(MAKER);
+  const asset = "partial-drafts.mp4";
+  const contents = Buffer.alloc(300_000, 8);
+  video(asset, contents);
+  const doc = { ...goodDoc(asset), title: "部分平台拒绝" };
+  doc.cuts[0].copy = { title: "长".repeat(24), bilibili: { title: "B站短标题" } };
+  const manifest = manifestFile("partial-drafts.json", doc);
+  const realFetch = globalThis.fetch;
+  const { promise: blocked, resolve: started } = Promise.withResolvers();
+  const { promise: proceed, resolve: resume } = Promise.withResolvers();
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === `${url}/v1/blobs/${sha(contents)}/status`) {
+      started();
+      await proceed;
+    }
+    return realFetch(input, init);
+  };
+  const pushing = maker["work.push"]({ manifest });
+  let sent;
+  try {
+    await Promise.race([blocked, pushing]);
+    const active = (await maker["delivery.list"]()).deliveries.find((row) => row.state === "uploading");
+    assert.equal(active.group, "主号组");
+    assert.deepEqual(active.progress, { bytes: 0, totalBytes: contents.length, percent: 0, etaSeconds: 1, bytesPerSecond: 1.1e6 });
+    assert.equal((await maker["delivery.show"]({ id: active.id })).label, "正在传");
+  } finally {
+    resume();
+    globalThis.fetch = realFetch;
+    sent = await pushing;
+  }
+  assert.equal((await maker["delivery.show"]({ id: sent.id })).state, "waiting");
+  as(PUBLISHER);
+  await publisher["relay.pull"]();
+  as(MAKER);
+  const received = await maker["delivery.show"]({ id: sent.id });
+  assert.equal(received.state, "awaiting_confirmation");
+  assert.deepEqual(received.summary.drafts.map((d) => d.platform), ["bilibili"]);
+  assert.deepEqual(received.summary.rejected.map((r) => r.platform), ["xiaohongshu"]);
+  assert.match(received.summary.rejected[0].reason, /标题最多 20 字，现在是 24 字/);
+});
+
+test("ACC-deliver-04 上传未到中转也有失败原因和下一步，重启后可查", async () => {
+  as(MAKER);
+  const asset = "upload-failure.mp4";
+  video(asset, "low-disk-upload");
+  const manifest = manifestFile("upload-failure.json", { ...goodDoc(asset), title: "上传失败" });
+  freeBytes = 1024 ** 3;
+  try {
+    await assert.rejects(maker["work.push"]({ manifest }), { code: "disk_low" });
+    const restarted = mk();
+    const failure = (await restarted["delivery.list"]()).deliveries.find((row) => row.title === "上传失败");
+    assert.equal(failure.errorCode, "disk_low");
+    assert.match(failure.reason, /中转空间不够/);
+    assert.match(failure.nextStep, /清出中转空间/);
+    assert.equal((await restarted["delivery.show"]({ id: failure.id })).state, "failed");
+  } finally {
+    freeBytes = 50 * 1024 ** 3;
+  }
 });

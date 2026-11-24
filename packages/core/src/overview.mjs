@@ -14,6 +14,7 @@ import { getBinding, getFeishuSettings, getFeishuDelivery, currentGroup, listAcc
 import { withBaselines } from "./baseline.mjs";
 import { LOGIN_TRACKED } from "./scheduler.mjs";
 import { pausedAccountIds, view as egressView } from "./egress.mjs";
+import { relayArrivalMessage } from "./events.mjs";
 
 /** 1 小时内采集算「新鲜」；超过 24 小时仍未采集算「坏掉」。与总览页的 5/8 口径一致。 */
 export const FRESH_AFTER_MS = 3600e3;
@@ -568,6 +569,13 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
     w.cuts.get(key).publishes.push({ ...item(r), perItem: PER_ITEM_PLATFORMS.includes(r.platform) });
   }
   const awaiting = [...works.values()].map((w) => ({ ...w, cuts: [...w.cuts.values()] }));
+  const arrivalEvent = conn.prepare("SELECT json_extract(payload_json, '$.fromRelay') AS arrived FROM event WHERE dedupe_key = ?");
+  const arrivals = [];
+  for (const work of awaiting) {
+    if (!arrivalEvent.get(`work:${work.workId}:awaiting_confirm`)?.arrived) continue;
+    const count = work.cuts.flatMap((c) => c.publishes).filter((p) => p.state === "pending_confirm").length;
+    if (count) arrivals.push({ workId: work.workId, count, message: relayArrivalMessage(work.title, count) });
+  }
 
   const problems = rows
     .filter(isProblem)
@@ -621,6 +629,7 @@ export function buildToday({ groupId = null, now = Date.now() } = {}) {
   return {
     group: scope ? { id: scope.id, name: scope.name } : null,
     awaiting,
+    arrivals,
     problems,
     relogin,
     notify: notifyRoute(),

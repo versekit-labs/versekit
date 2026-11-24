@@ -5,6 +5,7 @@
 
 import { ERROR_CODES } from "./errors.mjs";
 import { CARD_VIEWS, cardCallbackValue, findCommand } from "./commands.mjs";
+import { relayArrivalMessage } from "./events.mjs";
 
 export const CARD_TTL_MS = 24 * 3600e3;
 
@@ -240,10 +241,10 @@ const v2Card = ({ template = "yellow", title, subtitle = null, elements }) => ({
 const noteLine = (note) => (note ? [md(note.error ? `<font color='red'>${note.text}</font>` : grey(note.text))] : []);
 
 /** 「新作品，等你确认」：只有一个入口——开始确认。数量是投递那一刻的真实状态。 */
-export function buildNewWorkCard({ workId, workTitle, cutCount, publishCount, groupName = null, eventId, now = Date.now(), note = null }) {
+export function buildNewWorkCard({ workId, workTitle, cutCount, publishCount, groupName = null, eventId, now = Date.now(), note = null, fromRelay = false }) {
   return v2Card({
-    title: withGroup("新作品，等你确认", groupName),
-    subtitle: workTitle,
+    title: withGroup(fromRelay ? relayArrivalMessage(workTitle, publishCount) : "新作品，等你确认", groupName),
+    subtitle: fromRelay ? null : workTitle,
     elements: [
       md(`**${cutCount} 支成片 · ${publishCount} 条平台稿**等你确认\n${grey("确认之后才会排进发布；没确认的到时间也不会发。")}`),
       ...noteLine(note),

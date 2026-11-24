@@ -6,6 +6,7 @@
 //   · 动作幂等：同一张卡点两次只会执行一次（command_audit.idempotency_key 唯一）
 
 import { open, newId, emit } from "./index.mjs";
+import { EVENTS } from "./events.mjs";
 import { findCommand, findCardView, parseArgs } from "./commands.mjs";
 import {
   buildEventCard,
@@ -32,6 +33,7 @@ import { basename } from "node:path";
 
 const RETRY_AFTER_MS = 60e3;
 const MAX_ATTEMPTS = 3;
+const CARD_EVENT_TYPES = Object.keys(EVENTS).filter((type) => EVENTS[type].card);
 /** 新作品卡片晚发这么久，等同一批平台稿建完（#150；ACC-v2-card-01 要求 1 分钟内）。 */
 export const NEW_WORK_DELAY_MS = 30e3;
 
@@ -58,10 +60,11 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
       `SELECT e.* FROM event e
          LEFT JOIN delivery d ON d.event_id = e.id AND d.channel = ?
         WHERE e.created_at >= ?
+          AND e.type IN (${CARD_EVENT_TYPES.map(() => "?").join(",")})
           AND (d.id IS NULL OR (d.state = 'failed' AND d.attempted < ? AND (d.sent_at IS NULL OR d.sent_at < ?)))
         ORDER BY e.created_at ASC LIMIT ?`,
     )
-    .all(channel.channel, now - 7 * 24 * 3600e3, MAX_ATTEMPTS, now - RETRY_AFTER_MS, limit);
+    .all(channel.channel, now - 7 * 24 * 3600e3, ...CARD_EVENT_TYPES, MAX_ATTEMPTS, now - RETRY_AFTER_MS, limit);
 
   let sent = 0;
   for (const raw of rows) {
@@ -76,7 +79,7 @@ export async function deliverPending({ channel, binding, log = () => {}, now = D
         markDelivery(conn, event.id, channel.channel, "skipped", null, now);
         continue;
       }
-      card = buildNewWorkCard({ ...summary, eventId: event.id, now });
+      card = buildNewWorkCard({ ...summary, eventId: event.id, now, fromRelay: event.payload?.fromRelay });
     } else {
       const publish = event.publish_id ? getPublishRow(event.publish_id) : null;
       const approvalUrl =

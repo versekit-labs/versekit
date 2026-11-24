@@ -185,12 +185,15 @@
     const notifyNote = notifyWhy && awaiting.length
       ? `<div class="sub" data-notify-note style="padding:0 0 10px">${esc(notifyWhy)}，要你确认的只在这里。<a class="link" href="system.html#tab=notify">去看通知</a></div>`
       : "";
+    const arrivals = (data.arrivals ?? []).map(({ message }) =>
+      `<div class="sub" data-delivery-arrival style="padding:0 0 10px">${esc(message)}</div>`).join("");
 
     main.innerHTML =
       `<div class="hd"><h1>今天</h1><span class="sub">${heading}${current ? " · " + esc(current.name) : ""}</span></div>` +
       (current ? "" : `<div class="panel empty">还没有账号组。<a class="link" href="/system#groups">先建一个账号组 →</a></div>`) +
       egressTodo +
       notifyNote +
+      arrivals +
       focus +
       `<div class="others" ${more || badOnes || relogin ? "" : "hidden"}>${relogin}${more}${badOnes}</div>` +
       groupRows +
