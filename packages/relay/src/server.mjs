@@ -255,7 +255,11 @@ export function createRelayServer({
     if (d.state === "ingested" || (d.state === "failed" && state === "downloaded")) return send(res, 200, view(d));
     const at = now();
     const next = { ...d, state, updated_at: at };
-    if (state === "ingested") next.ingested_at = at;
+    if (state === "ingested") {
+      next.ingested_at = at;
+      if (typeof reason === "string" && reason) next.reason = reason.slice(0, 500);
+      else delete next.reason;
+    }
     if (state === "failed") next.reason = String(reason ?? "").slice(0, 500) || "发布机没说原因";
     writeDelivery(next);
     log(`[relay] 投递 ${id} → ${state}`);

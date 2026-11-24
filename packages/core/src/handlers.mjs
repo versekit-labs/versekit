@@ -404,7 +404,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const sha = /^blob:([0-9a-f]{64})$/.exec(String(ref ?? ""))?.[1];
       const local = sha ? filePaths[sha] : null;
       if (!local) fail(`清单引用了没有上传的文件：${ref ?? "（空）"}`);
-      return local;
+      return resolvePath(local);
     };
     // 封面（ACC-v3-fid-10）和成片一样是中转里的文件：换成发布机上的本地路径，没写的保持没写。
     const coverOf = (o) => (o?.cover ? { cover: blobPath(o.cover) } : {});
@@ -413,21 +413,27 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       ...coverOf(c),
       versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...coverOf(v), asset: blobPath(v?.asset) })),
     }));
-    const source = joinPath(inboxDir, delivery.id); // 同一投递永远是同一来源，重复入库只会是更新
-    store.checkWorkPlan({ title: m.title, source, cuts });
-    const added = handlers["work.add"]({ title: m.title, source, cuts });
+    const plan = { title: m.title, source: m.source ?? joinPath(inboxDir, delivery.id), cuts };
+    // 旧清单没有制作机来源，只能沿用投递号。新清单按制作机的一期路径识别作品。
+    const work = m.source == null
+      ? handlers["work.add"](plan).work
+      : store.showWork(store.upsertWork(plan, { relay: true }).id);
     const created = [];
     const notes = [];
-    for (const cut of added.work.cuts) {
+    for (const cut of work.cuts) {
       const r = handlers["plan.apply"]({ cutId: cut.id, group: g.id });
       created.push(...(r.created ?? []));
       for (const x of r.rejected ?? []) notes.push(`${x.platform}：${x.reason}`);
     }
-    if (!created.length && !added.work.cuts.some((c) => c.publishes?.length)) {
+    if (!created.length && !work.cuts.some((c) => c.publishes?.length)) {
       fail(`作品「${m.title}」已入库，但一条平台稿都没生成：${notes.join("；") || "账号组里没有能发的账号"}`);
     }
-    log(`[relay] 投递 ${delivery.id} 已入库为作品 ${added.id}，${created.length} 条平台稿待确认`);
-    return { workId: added.id, drafts: created.length };
+    const published = work.cuts.flatMap((cut) => cut.publishes
+      .filter((p) => p.state === "published" || p.state === "published_limited")
+      .map((p) => `${platformLabel(p.platform)} ${store.handleLabel(p.handle)}「${cut.title}」`));
+    const reason = published.length ? `以下平台稿已发布，保留原发布：${published.join("、")}` : null;
+    log(`[relay] 投递 ${delivery.id} 已入库为作品 ${work.id}，${created.length} 条新平台稿待确认`);
+    return { workId: work.id, drafts: created.length, ...(reason ? { reason } : {}) };
   }
 
   function recordRelay(id, rec) {
@@ -540,7 +546,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...(v?.cover ? { cover: rel(v.cover) } : {}), asset: rel(v?.asset) })),
       }));
       // 规则和 work.add 同一套：不合格当场报错，一个字节都不上传。
-      store.checkWorkPlan({ title: raw?.title, cuts });
+      store.checkWorkPlan({ title: raw?.title, source: raw?.source, cuts });
       const covers = [...new Set(cuts.flatMap((c) => [c.cover, ...c.versions.map((v) => v.cover)]).filter(Boolean))];
       const missingCovers = covers.filter((a) => !existsSync(a) || !statSync(a).isFile());
       if (missingCovers.length) fail(`找不到封面图片：${missingCovers.join("、")}（路径相对清单所在目录）`);
@@ -560,6 +566,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       const blobOf = (o) => (o?.cover ? { cover: `blob:${bySha.get(o.cover)}` } : {});
       const wire = {
         title: raw.title,
+        ...(raw.source == null ? {} : { source: rel(raw.source.trim()) }),
         cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: `blob:${bySha.get(v.asset)}` })) })),
       };
       log(`[relay] 上传 ${files.length} 个文件到中转…`);

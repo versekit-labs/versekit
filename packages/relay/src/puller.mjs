@@ -83,7 +83,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
         record(d.id, { state: "ingested", at: Date.now(), title: d.manifest?.title ?? null, ...(res ?? {}) });
         out.ingested.push(d.id);
         onEvent({ type: "ingested", index, total: todo.length, id: d.id, title, drafts: res?.drafts ?? 0 });
-        await reportState({ url, token, id: d.id, state: "ingested" }).catch((err) => log(`[relay] 回报「已入库」失败（下一轮补报）：${err.message}`));
+        await reportState({ url, token, id: d.id, state: "ingested", reason: res?.reason }).catch((err) => log(`[relay] 回报「已入库」失败（下一轮补报）：${err.message}`));
         continue;
       } catch (err) {
         failure = err.message;

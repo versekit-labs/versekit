@@ -117,6 +117,7 @@ test("ACC-relay-02 清单不合格当场报错、不上传（云端一个字节�
     [manifestFile("bad2.json", { ...goodDoc(), cuts: [{ title: "长片", copy: { 微博: { title: "x" } }, versions: [{ language: "zh", asset: "a.mp4" }] }] }), /不认识的平台/],
     [manifestFile("bad3.json", { ...goodDoc(), cuts: [{ title: "长片", copy: { xiaohongshu: { title: "这个标题肯定超过了小红书的二十个字的限制所以要被拒绝" } }, versions: [{ language: "zh", asset: "a.mp4" }] }] }), /小红书/],
     [manifestFile("bad4.json", { title: "没有成片", cuts: [] }), /至少要有一支成片/],
+    [manifestFile("bad-source.json", { ...goodDoc(), source: " " }), /来源\s*不能为空/],
     [join(ROOT, "src", "nope.json"), /找不到清单/],
   ];
   for (const [manifest, re] of cases) await assert.rejects(maker["work.push"]({ manifest, group: "主号组" }), re);
@@ -152,6 +153,7 @@ test("ACC-relay-03 发布机 connect 后 pull：下载、核对、入库，平�
   assert.equal(list.length, 1);
   const w = store.showWork(list[0].id);
   assert.equal(w.title, "中转测试作品");
+  assert.equal(w.source, join(core.paths().state, "relay-inbox", deliveryId), "旧清单按投递号入库");
   const pubs = w.cuts.flatMap((c) => c.publishes);
   assert.deepEqual(pubs.map((p) => p.platform).sort(), ["bilibili", "xiaohongshu"]);
   assert.ok(pubs.every((p) => p.state === "pending_confirm"), "一律待确认");
@@ -343,4 +345,80 @@ test("ACC-relay-04 系统页「发布机」一块显示中转，「最近出的�
   assert.match(html, /正在下载/);
   assert.match(html, /ui\.relay\?\.failures/);
   assert.doesNotMatch(html, /vk relay/, "界面上不写命令（ACC-v3-nocli-01）");
+});
+
+test("ACC-deliver-01 同一期再交更新成片、封面和待确认稿，已发布的跳过并回报", async () => {
+  const source = join(ROOT, "src", "episode-395");
+  const send = async (version, body) => {
+    as(MAKER);
+    const asset = `episode-395-v${version}.mp4`;
+    const cover = `episode-395-v${version}.png`;
+    video(asset, `video v${version}`);
+    video(cover, `cover v${version}`);
+    const doc = { ...goodDoc(asset), title: `同一期标题第${version}版`, source: "episode-395" };
+    doc.cuts[0].title = `片名第${version}版`;
+    doc.cuts[0].cover = cover;
+    doc.cuts[0].copy.default = { body };
+    doc.cuts[0].copy.bilibili = { title: `B站第${version}版` };
+    if (version === 1) doc.cuts[0].copy.bilibili.body = "旧B站专用正文";
+    doc.cuts[0].copy.xiaohongshu.title = `小红书第${version}版`;
+    return maker["work.push"]({ manifest: manifestFile("episode-395.json", doc), group: "主号组" });
+  };
+
+  const first = await send(1, "第一版通用正文");
+  as(PUBLISHER);
+  assert.deepEqual((await publisher["relay.pull"]()).ingested, [first.id]);
+  const total = store.listWorks().length;
+  const { workId } = store.getRelayDelivery(first.id);
+  const original = store.showWork(workId);
+  assert.equal(original.source, source);
+  const [cut] = original.cuts;
+  const draft = cut.publishes.find((p) => p.platform === "bilibili");
+  const sent = cut.publishes.find((p) => p.platform === "xiaohongshu");
+  core.transitionPublish(sent.id, "notify_pending");
+  core.transitionPublish(sent.id, "published", { patch: { external_id: "local-fake", published_at: Date.now() } });
+  const publishedRow = () => core.open().prepare("SELECT * FROM publish WHERE id = ?").get(sent.id);
+  const before = publishedRow();
+
+  const second = await send(2, "第二版通用正文");
+  assert.notEqual(second.id, first.id);
+  as(PUBLISHER);
+  assert.deepEqual((await publisher["relay.pull"]()).ingested, [second.id]);
+  assert.equal(store.listWorks().length, total);
+  assert.equal(store.getRelayDelivery(second.id).workId, workId);
+  const updated = store.showWork(workId);
+  assert.equal(updated.title, "同一期标题第2版");
+  assert.equal(updated.cuts.length, 1);
+  assert.equal(updated.cuts[0].id, cut.id);
+  assert.equal(updated.cuts[0].title, "片名第2版");
+  const [version] = updated.cuts[0].versions;
+  assert.equal(readFileSync(version.asset, "utf8"), "video v2");
+  assert.equal(version.generic.body, "第二版通用正文");
+  const { meta_json: versionMeta } = core.open().prepare("SELECT meta_json FROM cut_version WHERE id = ?").get(version.id);
+  assert.equal(readFileSync(JSON.parse(versionMeta).cover, "utf8"), "cover v2");
+
+  assert.equal(updated.cuts[0].publishes.length, 2);
+  const refreshed = updated.cuts[0].publishes.find((p) => p.id === draft.id);
+  assert.equal(refreshed.state, "pending_confirm");
+  assert.equal(refreshed.title, "B站第2版");
+  assert.equal(refreshed.body, "第二版通用正文");
+  assert.deepEqual(publishedRow(), before);
+  assert.equal(updated.cuts[0].publishes.find((p) => p.id === sent.id).title, "小红书第1版");
+  const readReceipt = async () => {
+    const response = await fetch(`${url}/v1/deliveries/${second.id}`, { headers: { authorization: `Bearer ${PUSH}` } });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const report = await readReceipt();
+  assert.equal(report.state, "ingested");
+  assert.match(report.reason, /已发布.*小红书 @x/);
+
+  // 中转没收到回报时，重启后使用本地记录补报，并且不重新入库。
+  const deliveryFile = join(CLOUD, "deliveries", `${second.id}.json`);
+  const delivery = JSON.parse(readFileSync(deliveryFile, "utf8"));
+  delete delivery.reason;
+  writeFileSync(deliveryFile, JSON.stringify({ ...delivery, state: "downloaded" }));
+  assert.deepEqual((await mk()["relay.pull"]()).skipped, [second.id]);
+  assert.equal((await readReceipt()).reason, report.reason);
+  assert.equal(store.showWork(workId).cuts[0].rev, updated.cuts[0].rev);
 });
