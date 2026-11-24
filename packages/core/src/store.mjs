@@ -487,31 +487,55 @@ const editedList = (json) => {
 };
 
 /** 再次入库时：人改过的通用字段取库里现有的值（现有没有就保持没有），其余取这次入库的。 */
-function keepEditedCopy(meta, have) {
+function keepEditedCopy(meta, have, replace = false) {
   const edited = editedList(have.edited_fields);
-  if (!edited.length || !meta?.copy) return meta;
+  if (!edited.length || (!meta?.copy && !replace)) return meta;
   const current = asObject(have.meta_json)?.copy?.default ?? {};
-  const def = { ...(meta.copy.default ?? {}) };
+  const def = { ...meta?.copy?.default };
   for (const f of edited) {
     if (f in current) def[f] = current[f];
     else delete def[f];
   }
-  return { ...meta, copy: { ...meta.copy, default: def } };
+  return { ...meta, copy: { ...meta?.copy, default: def } };
 }
 
-export function upsertWork({ title, source = null, cuts, meta = null }) {
+/** 只替换制作机提供的平台文案，保留平台稿上人工编辑的字段及排期。 */
+function refreshRelayDrafts(conn, cutId, versionId, copy, now) {
+  const rows = conn.prepare(
+    `SELECT p.id, p.overrides_json, a.platform
+       FROM publish p JOIN account a ON a.id = p.account_id
+      WHERE p.cut_id = ? AND p.version_id = ? AND p.state NOT IN ('published', 'published_limited', 'canceled')`,
+  ).all(cutId, versionId);
+  for (const row of rows) {
+    const overrides = asObject(row.overrides_json);
+    const own = copy?.[copyPlatformOf(row.platform)];
+    if (own && Object.keys(own).length) overrides.copy = own;
+    else delete overrides.copy;
+    const json = Object.keys(overrides).length ? JSON.stringify(overrides) : null;
+    if (json !== row.overrides_json) {
+      conn.prepare("UPDATE publish SET overrides_json = ?, updated_at = ? WHERE id = ?").run(json, now, row.id);
+    }
+  }
+}
+
+export function upsertWork({ title, source = null, cuts, meta = null }, { relay = false } = {}) {
   const { t, plan, sourceKey } = checkWorkPlan({ title, source, cuts });
 
   const conn = open();
   const now = Date.now();
   const stats = { cuts: { created: 0, updated: 0 }, versions: { created: 0, updated: 0 } };
-  conn.exec("BEGIN");
+  conn.exec(relay ? "BEGIN IMMEDIATE" : "BEGIN");
   try {
     let work = conn.prepare("SELECT * FROM work WHERE source = ? AND title = ?").get(sourceKey, t);
+    if (relay && !work) {
+      const matches = conn.prepare("SELECT id FROM work WHERE source = ? LIMIT 2").all(sourceKey);
+      if (matches.length > 1) fail(`同一来源有多个作品，无法确定要更新哪一个：请用已有作品的标题重新交付「${t}」`);
+      work = matches[0];
+    }
     const existed = Boolean(work);
     const primary = plan[0].versions[0];
     if (work) {
-      conn.prepare("UPDATE work SET meta_json = COALESCE(?, meta_json) WHERE id = ?").run(meta ? JSON.stringify(meta) : null, work.id);
+      conn.prepare("UPDATE work SET title = ?, meta_json = COALESCE(?, meta_json) WHERE id = ?").run(t, meta ? JSON.stringify(meta) : null, work.id);
     } else {
       const id = newId("work");
       conn
@@ -519,12 +543,16 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
         .run(id, t, primary.asset, meta ? JSON.stringify(meta) : null, now, sourceKey);
       work = { id };
     }
+    // 交付通常只有一支成片。改了片名也沿用原成片和平台稿，多成片清单继续按片名匹配。
+    const priorCuts = relay && existed && plan.length === 1
+      ? conn.prepare("SELECT id FROM cut WHERE work_id = ? LIMIT 2").all(work.id)
+      : [];
     let position = (conn.prepare("SELECT COALESCE(MAX(position), -1) m FROM cut WHERE work_id = ?").get(work.id).m ?? -1) + 1;
     for (const c of plan) {
-      let cut = conn.prepare("SELECT id FROM cut WHERE work_id = ? AND title = ?").get(work.id, c.title);
+      let cut = priorCuts.length === 1 ? priorCuts[0] : conn.prepare("SELECT id FROM cut WHERE work_id = ? AND title = ?").get(work.id, c.title);
       if (cut) {
         stats.cuts.updated++;
-        conn.prepare("UPDATE cut SET rev = rev + 1 WHERE id = ?").run(cut.id);
+        conn.prepare("UPDATE cut SET title = ?, rev = rev + 1 WHERE id = ?").run(c.title, cut.id);
       } else {
         cut = { id: newId("cut") };
         conn.prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,?,?)").run(cut.id, work.id, c.title, position++, now);
@@ -533,9 +561,11 @@ export function upsertWork({ title, source = null, cuts, meta = null }) {
       for (const v of c.versions) {
         const have = conn.prepare("SELECT id, meta_json, edited_fields FROM cut_version WHERE cut_id = ? AND language = ?").get(cut.id, v.language);
         // 人改过的通用文案字段不被再次入库覆盖（ACC-v3-edit-07）。
-        const metaJson = v.meta ? JSON.stringify(have ? keepEditedCopy(v.meta, have) : v.meta) : null;
+        const versionMeta = have ? keepEditedCopy(v.meta, have, relay) : v.meta;
+        const metaJson = versionMeta ? JSON.stringify(versionMeta) : null;
         if (have) {
-          conn.prepare("UPDATE cut_version SET asset_path = ?, meta_json = COALESCE(?, meta_json) WHERE id = ?").run(v.asset, metaJson, have.id);
+          conn.prepare("UPDATE cut_version SET asset_path = ?, meta_json = ? WHERE id = ?").run(v.asset, metaJson ?? (relay ? null : have.meta_json), have.id);
+          if (relay) refreshRelayDrafts(conn, cut.id, have.id, versionMeta?.copy, now);
           stats.versions.updated++;
         } else {
           conn
