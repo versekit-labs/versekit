@@ -1,0 +1,6 @@
+{
+  "name": "versekit",
+  "version": "0.1.0",
+  "description": "从制作会话把成片、封面和发布文案交给发布机，并查看投递进度。",
+  "author": { "name": "versekit-labs" }
+}
