@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -9,6 +10,7 @@ import { test } from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createMachineSigner } from "../../../packages/cloud/src/machine-token.mjs";
 import { createRelayServer } from "../../../packages/relay/src/server.mjs";
 import { inspectEpisode } from "../skills/handoff/inspect.mjs";
 
@@ -197,7 +199,12 @@ test("ACC-deliver-05: 离线 vk 登录后用原清单预览并登记，回查同
   const manifestFile = join(temp, "handoff.json");
   writeFileSync(manifestFile, JSON.stringify(manifest));
 
-  const relay = createRelayServer({ dataDir: join(temp, "relay"), pushToken: "local-push", pullToken: "local-pull", freeBytes: () => 5 * 1024 ** 3 });
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const signer = createMachineSigner(privateKey.export({ type: "pkcs8", format: "pem" }));
+  const relay = createRelayServer({
+    dataDir: join(temp, "relay"), machinePublicKey: signer.publicPem, allowLegacyTokens: false,
+    freeBytes: () => 5 * 1024 ** 3,
+  });
   const relayOrigin = `http://127.0.0.1:${await relay.listen()}`;
   t.after(() => relay.close());
   let allowed = false;
@@ -210,10 +217,15 @@ test("ACC-deliver-05: 离线 vk 登录后用原清单预览并登记，回查同
       loginRole = JSON.parse(Buffer.concat(parts)).role;
       res.end(JSON.stringify({ code: "123456", url: `${origin}/link?code=${"a".repeat(32)}`, expiresAt: Date.now() + 60_000, pollToken: "p".repeat(43) }));
     } else if (req.method === "POST" && req.url === "/api/devices/link/poll") {
-      res.end(JSON.stringify(allowed ? {
+      if (!allowed) return res.end(JSON.stringify({ state: "waiting" }));
+      const credential = signer.issue({
+        userId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", deviceId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+        role: "maker", relayEnabled: true, capacityBytes: 10 * 1024 ** 3,
+      });
+      res.end(JSON.stringify({
         state: "linked", role: "maker", email: "local@example.test", relayEnabled: true, relayUrl: relayOrigin,
-        machineToken: "local-signed-token", refreshToken: "r".repeat(43), expiresAt: Date.now() + 3_600_000,
-      } : { state: "waiting" }));
+        refreshToken: "r".repeat(43), ...credential,
+      }));
     } else {
       res.writeHead(404).end(JSON.stringify({ message: "unexpected local test request" }));
     }
@@ -236,8 +248,6 @@ test("ACC-deliver-05: 离线 vk 登录后用原清单预览并登记，回查同
   daemon.stderr.on("data", (value) => { output += value; });
   await until(() => output.includes("守护进程已启动"));
 
-  // 现有中转配置只用于本地测试。产品里的接入凭证由 #398 接到上传命令。
-  await cli("relay", "connect", relayOrigin, "--token", "local-push", "--push", "--group", "南竹");
   assert.equal((await json("cloud", "status")).loggedIn, false);
   const login = cli("cloud", "login", "--role", "maker").catch((error) => ({ error }));
   const waiting = await until(async () => {
@@ -253,12 +263,13 @@ test("ACC-deliver-05: 离线 vk 登录后用原清单预览并登记，回查同
   assert.equal(JSON.parse(linked.stdout).relayEnabled, true);
   assert.match(linked.stderr, /123456/);
 
-  const preview = await json("work", "push", manifestFile, "--dry-run");
+  // 新登录的制作机没有默认账号组，传片凭证来自本次 Hifabu 登录。
+  const preview = await json("work", "push", manifestFile, "--dry-run", "--group", "南竹");
   assert.equal(preview.dryRun, true);
   assert.equal(preview.group, "南竹");
   assert.deepEqual(preview.rejected, []);
   assert.deepEqual((await json("delivery", "list")).deliveries, []);
-  const sent = await json("work", "push", manifestFile);
+  const sent = await json("work", "push", manifestFile, "--group", preview.group);
   assert.equal(sent.state, "pending");
   assert.match(sent.id, /^dl_[a-f0-9]+$/);
   const delivery = await until(async () => {
