@@ -45,6 +45,11 @@
 .app .kv{padding:14px 16px;display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 12px;font-size:14px;margin:0}
 .app .kv dt{color:var(--ink2);font-size:13px}
 .app .kv dd{margin:0}
+.app .cloud-panel{display:grid;gap:10px;padding:14px 16px}
+.app .cloud-panel p{margin:0}
+.app .cloud-panel .kv{padding:0;grid-template-columns:max-content minmax(0,1fr)}
+.app .cloud-panel dd{overflow-wrap:anywhere}
+.app .cloud-panel .acts{justify-content:flex-start}
 .app .plan td:first-child{white-space:nowrap;font-weight:600}
 .app .pfs{display:flex;gap:10px 14px;flex-wrap:wrap}
 .app tr.planedit td{background:var(--mark-bg);border-bottom:1px solid var(--mark-line)}
@@ -116,6 +121,7 @@
     renamingAcc: null, renameAccName: "", renameAccBusy: false, renameAccNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
     checktime: null,      // { time, value, busy, note }：视频号每天检查登录的钟点
+    cloud: null, cloudError: null, cloudAction: null, cloudNote: "", cloudRecent: null,
     egress: null, ipStep: null, ipBusy: false, // 出口位置：/api/egress；ipStep = null | stay（继续用新位置，行内再确认）
     plan: null, machine: null, update: null, relay: null, problems: [], planEdit: null, planNote: "", planBusy: false, retrying: new Set(), sectionErr: null,
     notesOpen: false, upd: null, updNote: "", updBusy: false,
@@ -208,6 +214,111 @@
   const pfn = (platform, name) => `<span class="pfn">${pfBadge(platform)}${esc(name ?? labelOf(platform))}</span>`;
   const B = (attrs, text, cls = "btn", extra = "") => `<button class="${cls}" ${attrs}${extra}>${text}</button>`;
   const subRow = (cols, html, cls = "") => `<tr class="subrow"><td colspan="${cols}"><div class="subin${cls ? ` ${cls}` : ""}">${html}</div></td></tr>`;
+
+  function cloudContent() {
+    const s = ui.cloud;
+    const busy = ui.cloudAction ? ' aria-disabled="true"' : "";
+    const action = (key, label, cls) => B(`data-cloud-action="${key}"`, label, cls, busy);
+    const unreadable = ui.cloudError?.code === "cloud_credential_unreadable";
+    const note = ui.cloudNote || (unreadable ? ui.cloudError.message : ui.cloudError && "读不到 Hifabu 账号状态，稍后会再试。") || s?.message;
+    const alert = note ? `<p class="note bad" role="alert">${esc(note)}</p>` : "";
+    const actions = (html) => `<div class="acts">${html}</div>`;
+    if (!s) {
+      if (unreadable) return alert + actions(action("logout", ui.cloudAction ? "正在退出…" : "退出这台", "link"));
+      return alert || `<p class="sub">正在核对 Hifabu 账号…</p>`;
+    }
+    if (s.state === "waiting") {
+      return `<div class="subin wait"><p>已经在浏览器里打开了<a class="link" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">登录页</a>。核对码 <strong class="mono">${esc(s.code)}</strong>，和网页上的一样就点「允许」。</p></div>` +
+        alert + actions(action("logout", ui.cloudAction ? "正在取消…" : "取消", "link"));
+    }
+    if (!s.loggedIn) {
+      return `<p>没登录。</p><p class="sub">在这台电脑上做片、发布都不需要登录。登录后，这台电脑可以接收你另一台电脑送来的成片。</p>` +
+        alert + actions(action("login", ui.cloudAction ? "正在打开登录页…" : "登录 Hifabu", "btn pri"));
+    }
+    const email = `<dt>Hifabu 账号</dt><dd>${esc(s.email)}</dd>`;
+    const exit = actions(action("logout", ui.cloudAction ? "正在退出…" : "退出这台", "link"));
+    const exitNote = `<p class="sub">退出这台会停止接收新成片，平台登录和已经收到的作品会保留。</p>`;
+    if (s.reachable === false) {
+      const checked = s.lastCheckedAt
+        ? `上次核对成功于 ${esc(new Date(s.lastCheckedAt).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" }))}。`
+        : "还没有核对成功的记录。";
+      return `<dl class="kv">${email}<dt>传片</dt><dd><span class="st bad">连不上</span></dd></dl>` +
+        `<div class="subin bad"><p>连不上 hifabu.com，${checked}已经排好的发布照常进行。新送来的成片会在网络恢复后继续接收，无需重新登录。</p></div>` +
+        alert + exit + exitNote;
+    }
+    const role = s.role === "maker" ? "制作机" : "发布机";
+    const name = ui.machine?.name;
+    const machine = name && name !== "发布机" ? `${esc(name)} <span class="st">${role}</span>` : role;
+    const recent = ui.cloudRecent;
+    const receive = recent ? ` <span class="sub">上次收到：${esc(recent.title)}，${esc(whenText(recent.at))}</span>` : "";
+    const transfer = s.relayEnabled
+      ? `<span class="st done">已开通</span>${receive}`
+      : `<span class="st">没开通</span> <span class="sub">要从另一台电脑送成片过来，到 hifabu.com 申请开通。</span>`;
+    return `<dl class="kv">${email}<dt>这台机器</dt><dd>${machine}</dd><dt>传片</dt><dd>${transfer}</dd></dl>` +
+      alert + exit + (s.relayEnabled ? exitNote : "");
+  }
+
+  function cloudBlock() {
+    return `<section aria-labelledby="cloud-heading"><h2 class="sec" id="cloud-heading" tabindex="-1">Hifabu 账号</h2>` +
+      `<div id="cloud-panel" class="panel cloud-panel" aria-live="polite">${cloudContent()}</div></section>`;
+  }
+
+  function drawCloud() {
+    const box = document.getElementById("cloud-panel");
+    if (!box) return;
+    const moveFocus = box.contains(document.activeElement);
+    box.innerHTML = cloudContent();
+    if (moveFocus) (box.querySelector("button") ?? document.getElementById("cloud-heading")).focus();
+  }
+
+  let cloudTimer;
+  let cloudRevision = 0;
+
+  function scheduleCloudTick() {
+    clearTimeout(cloudTimer);
+    cloudTimer = setTimeout(cloudTick, ui.cloud?.state === "waiting" ? Math.max(500, POLL_MS) : 30_000);
+  }
+
+  async function cloudTick() {
+    const revision = cloudRevision;
+    const before = cloudContent();
+    try {
+      const status = await VK.request("/api/cloud/status");
+      const relay = status.relayEnabled && status.reachable && status.role === "executor"
+        ? await VK.request("/api/relay").catch(() => null) : null;
+      if (revision !== cloudRevision) return;
+      ui.cloudError = null;
+      if (ui.cloud?.state !== status.state) ui.cloudNote = "";
+      ui.cloud = status;
+      ui.cloudRecent = relay?.recent?.find((r) => r.state === "ingested" && r.title) ?? null;
+    } catch (err) {
+      if (revision !== cloudRevision) return;
+      ui.cloudError = err;
+    }
+    if (before !== cloudContent()) drawCloud();
+    scheduleCloudTick();
+  }
+
+  async function changeCloud(action) {
+    if (ui.cloudAction) return;
+    clearTimeout(cloudTimer);
+    cloudRevision++;
+    ui.cloudAction = action;
+    ui.cloudNote = "";
+    drawCloud();
+    try {
+      const path = action === "login" ? "/api/cloud/login" : "/api/cloud/logout";
+      ui.cloud = await post(path, {});
+      ui.cloudRecent = null;
+      ui.cloudError = null;
+    } catch (err) {
+      ui.cloudNote = err.code === "cloud_unavailable" ? "连不上 hifabu.com，请检查网络后重试。" : err.message;
+    } finally {
+      ui.cloudAction = null;
+      drawCloud();
+      scheduleCloudTick();
+    }
+  }
 
   /** 这一行的登录状态词和颜色：正常 / 要重新登录 / 登录到了别的号 / 等你扫码 / 二维码过期了 / 缺应用凭证。 */
   function statusCell(a, st, lg) {
@@ -656,7 +767,7 @@
     const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0) + (egressPaused().length ? 1 : 0);
     const counts = { accounts: group ? ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length : 0, plan: 0, devices: devN, notify: fsTodo() };
     const tabs = `<div class="seg tabs" role="group" aria-label="系统的哪一部分">${TABS.map(([k, n]) => `<button data-tab="${k}" aria-pressed="${k === ui.tab}">${n}${counts[k] ? ` ${counts[k]}` : ""}</button>`).join("")}</div>`;
-    const body = { accounts: () => tabAccounts(group, pending), plan: () => tabPlan(group), devices: tabDevices, notify: tabNotify }[ui.tab]();
+    const body = { accounts: () => cloudBlock() + tabAccounts(group, pending), plan: () => tabPlan(group), devices: tabDevices, notify: tabNotify }[ui.tab]();
     // 重画前记住正在打字的输入框，重画后放回去，不丢字。
     const act = document.activeElement;
     const keep = act && main.contains(act) && act.id ? { id: act.id, s: act.selectionStart, e: act.selectionEnd } : null;
@@ -1106,7 +1217,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-switch],[data-switchyes],[data-switchno],[data-ctsave],[data-ipx],[data-fs]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-switch],[data-switchyes],[data-switchno],[data-ctsave],[data-ipx],[data-fs],[data-cloud-action]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -1115,6 +1226,8 @@
       ui.tab = d.tab;
       history.replaceState(null, "", `#tab=${ui.tab}`);
       draw();
+    } else if (d.cloudAction) {
+      await changeCloud(d.cloudAction);
     } else if ("sw" in d) {
       e.preventDefault();
       try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
@@ -1267,6 +1380,7 @@
     .then(load)
     .then(() => {
       draw();
+      void cloudTick();
       const params = new URLSearchParams(location.search);
       if (params.get("platform") && ui.platforms.some((p) => p.platform === params.get("platform"))) { ui.addPlatform = params.get("platform"); draw(); }
       const hash = location.hash.slice(1);

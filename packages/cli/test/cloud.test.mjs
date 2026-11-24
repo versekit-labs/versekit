@@ -38,7 +38,7 @@ async function until(probe) {
   assert.fail("等不到离线 vk 的登录状态");
 }
 
-test("ACC-cloud-03: vk 和本机 HTTP 共用接入状态，浏览器允许后 CLI 自动继续", {
+test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传片连接并在断网时保留登录", {
   skip: process.platform === "win32",
 }, async (t) => {
   const home = mkdtempSync(join(tmpdir(), "vk-cl-"));
@@ -64,10 +64,11 @@ test("ACC-cloud-03: vk 和本机 HTTP 共用接入状态，浏览器允许后 CL
   const signingKeyFile = join(home, "key.pem");
   const { privateKey } = generateKeyPairSync("ed25519");
   writeFileSync(signingKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-  cloud = createCloudServer({ origin, google: google.config, signingKeyFile, dataDir: home, clock });
+  const relayUrl = `http://127.0.0.1:${await freePort()}`;
+  cloud = createCloudServer({ origin, google: google.config, signingKeyFile, dataDir: home, clock, relayUrl });
   await listen(cloud, cloudPort);
   const store = openControlStore(join(home, "control.db"), { clock });
-  const { token } = store.signIn({ provider: "google", subject: randomUUID(), email: "offline@example.test" });
+  const { token, user } = store.signIn({ provider: "google", subject: randomUUID(), email: "offline@example.test" });
   store.close();
   const session = { Cookie: `${sessionCookieName}=${token}` };
   const browserPath = join(home, "opened-url");
@@ -87,11 +88,18 @@ test("ACC-cloud-03: vk 和本机 HTTP 共用接入状态，浏览器允许后 CL
     return res.json();
   };
   const status = () => request("/api/cloud/status");
+  async function startDaemon() {
+    daemon = spawn(process.execPath, [vk, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });
+    daemonExit = once(daemon, "exit");
+    return until(() => status().catch(() => false));
+  }
+  async function stopDaemon() {
+    daemon.kill("SIGTERM");
+    await daemonExit;
+    daemon = null;
+  }
   await cli(["demo", "seed"]);
-  daemon = spawn(process.execPath, [vk, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });
-  daemonExit = once(daemon, "exit");
-  await until(() => status().catch(() => false));
-  assert.equal((await status()).loggedIn, false);
+  assert.equal((await startDaemon()).loggedIn, false);
 
   const login = cli(["cloud", "login", "--role", "maker", "--name", "本地测试制作机"]);
   // Attach a rejection handler while the browser is being exercised.
@@ -129,6 +137,53 @@ test("ACC-cloud-03: vk 和本机 HTTP 共用接入状态，浏览器允许后 CL
   assert.equal(expiring.state, "waiting");
   delta += 600_001;
   await until(async () => (await status()).state === "expired");
+  assert.ok(!existsSync(credentialFile));
+
+  delta = 0;
+  const canceled = await request("/api/cloud/login", {});
+  assert.equal(canceled.state, "waiting");
+  assert.equal((await request("/api/cloud/logout", {})).state, "logged_out");
+  await callCloud(origin, "device.link.decide", { code: new URL(canceled.url).searchParams.get("code"), decision: "allow" }, session);
+  assert.equal((await status()).state, "logged_out");
+
+  const webLogin = await request("/api/cloud/login", {});
+  assert.equal(webLogin.state, "waiting");
+  assert.equal(webLogin.role, "executor");
+  await callCloud(origin, "device.link.decide", { code: new URL(webLogin.url).searchParams.get("code"), decision: "allow" }, session);
+  const linked = await until(async () => {
+    const current = await status();
+    return current.loggedIn && current;
+  });
+  assert.equal(linked.relayEnabled, false);
+  const initial = JSON.parse(readFileSync(credentialFile, "utf8"));
+  assert.equal(initial.relayUrl, relayUrl);
+  assert.ok(initial.machineToken);
+  assert.equal(initial.checkedAt, linked.lastCheckedAt);
+  assert.doesNotMatch(JSON.stringify(linked), /relayUrl|machineToken|refreshToken/);
+
+  const db = new DatabaseSync(join(home, "control.db"));
+  try {
+    db.prepare("UPDATE relay_grant SET enabled = 1 WHERE user_id = ?").run(user.id);
+  } finally {
+    db.close();
+  }
+  await stopDaemon();
+  const enabled = await startDaemon();
+  assert.equal(enabled.relayEnabled, true, "重启后重新核对，旧状态不等到令牌过期才更新");
+  assert.equal((await request("/api/relay")).url, relayUrl, "后台直接使用账号服务带下来的地址");
+  const refreshed = JSON.parse(readFileSync(credentialFile, "utf8"));
+  assert.notEqual(refreshed.machineToken, initial.machineToken);
+
+  await stopDaemon();
+  await close(cloud);
+  const unreachable = await startDaemon();
+  assert.equal(unreachable.reachable, false);
+  assert.equal(unreachable.loggedIn, true);
+  assert.equal(unreachable.email, enabled.email);
+  assert.equal(unreachable.relayEnabled, true);
+  assert.equal(unreachable.lastCheckedAt, enabled.lastCheckedAt);
+  assert.equal(await fetch(`${base}/api/bootstrap`).then((r) => r.ok), true, "账号服务不可用时本机仍能用");
+  assert.equal((await request("/api/cloud/logout", {})).state, "logged_out", "断网也能退出这台");
   assert.ok(!existsSync(credentialFile));
 });
 
