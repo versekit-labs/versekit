@@ -60,7 +60,7 @@ hifabu.com（首尔，走 Cloudflare 隧道；只有小请求）
 
 - 无运行时依赖。账号服务是同一个仓库里的新包（暂名 `packages/cloud`），控制库用 `node:sqlite`：`user`、`identity`、`session`、`login_code`、`device`、`relay_grant`。
 - **机器令牌**：hifabu.com 用 Ed25519 私钥签（`node:crypto`），内容是账号 id、机器 id、角色、能不能用中转、容量上限、1 小时过期。中转只拿公钥离线验，不用和首尔实时通信。机器用长期的刷新凭证每小时换一次；「退出这台」后刷新被拒，最多 1 小时内失效。
-- **Google 登录**：授权码 + PKCE，只要 `openid email profile`。仓库里 `adapter-youtube/src/pkce.mjs` 可以参考。
+- **Google 登录**：授权码 + PKCE，只要 `openid email`（2026-11-24 按隐私政策去掉 `profile`）。仓库里 `adapter-youtube/src/pkce.mjs` 可以参考。
 - **邮箱验证码**：6 位数字，10 分钟有效，错 5 次作废；按邮箱和 IP 分别限速；库里只存哈希。发信是配置（SMTP 或一家发信服务的 HTTP 接口），不引入 SDK。
 - **会话**：HttpOnly、Secure、SameSite=Lax 的 cookie；改状态的请求校验 Origin（ADR-0005 §5 不变）。
 - **命令**（CLI 完整律，只在 `commands.mjs` 定义一次）：本机 `cloud.login / cloud.logout / cloud.status`；账号服务上 `device.list / device.revoke / relay.grant.request / relay.grant.set / user.list`。不用 `account.*`，它已经是平台账号的命令。
