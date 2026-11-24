@@ -76,6 +76,31 @@ async function failOf(res, fallback) {
   });
 }
 
+const pushSignal = (signal) => {
+  const timeout = AbortSignal.timeout(10_000);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+};
+
+async function pushReply(res) {
+  try {
+    return await res.json();
+  } catch {
+    throw new RelayError("读取中转回报中断，稍后重试", { code: "interrupted", retryable: true });
+  }
+}
+
+function checkUploadSource(file, size) {
+  let stat;
+  try {
+    stat = statSync(file);
+  } catch (err) {
+    throw new RelayError(`读不到制作机上的素材「${file}」（${err.code}）`, { code: "source_unavailable" });
+  }
+  if (!stat.isFile() || stat.size !== size) {
+    throw new RelayError(`制作机上的素材「${file}」在登记后发生了变化`, { code: "source_unavailable" });
+  }
+}
+
 export async function ping({ url, token, details = false }) {
   const res = await request({ url, token, path: details ? "/v1/ping?details=1" : "/v1/ping", signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw await failOf(res, "连接中转失败");
@@ -83,7 +108,7 @@ export async function ping({ url, token, details = false }) {
 }
 
 /** 读流时盯着进度：停住太久就掐断让重试接上，不然一条死连接会把后台拉取永远挂住。 */
-function watch(onBytes, controller, stallMs) {
+function watch(onBytes, controller, stallMs, { waitForReply = false } = {}) {
   let timer = null;
   const arm = () => {
     clearTimeout(timer);
@@ -97,7 +122,7 @@ function watch(onBytes, controller, stallMs) {
       cb(null, chunk);
     },
     flush(cb) {
-      clearTimeout(timer);
+      if (!waitForReply) clearTimeout(timer);
       cb();
     },
   });
@@ -109,37 +134,49 @@ function watch(onBytes, controller, stallMs) {
  * 上传一个文件。先问云端收到多少，从那里续传；整个文件传满后云端核对 sha256。
  * `retries` 内的网络失败自动续传，调用方不用管。
  */
-export async function pushBlob({ url, token, file, sha256, size, onProgress = () => {}, retries = 5, backoffMs = 1000, stallMs = 60e3 }) {
+export async function pushBlob({ url, token, file, sha256, size, onProgress = () => {}, retries = 5, backoffMs = 1000, stallMs = 60e3, signal }) {
   return withRetry(
     async () => {
-      const st = await request({ url, token, path: `/v1/blobs/${sha256}/status` });
+      signal?.throwIfAborted();
+      const st = await request({ url, token, path: `/v1/blobs/${sha256}/status`, signal: pushSignal(signal) });
       if (!st.ok) throw await failOf(st, "查询上传进度失败");
-      const { complete, received } = await st.json();
+      const { complete, received } = await pushReply(st);
       if (complete) {
         onProgress(size, size);
         return { skipped: true };
       }
+      if (received < size) checkUploadSource(file, size);
       const controller = new AbortController();
-      const w = watch((n) => onProgress(Math.min(size, (w.sent += n)), size), controller, stallMs);
+      const uploadSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      const w = watch((n) => onProgress(Math.min(size, (w.sent += n)), size), controller, stallMs, { waitForReply: true });
       w.sent = received;
       onProgress(received, size);
-      const body = Readable.toWeb(createReadStream(file, { start: received }).pipe(w.stream));
-      let res;
+      // 上次连接可能在最后一字节写入后断了；用空 PUT 让中转校验半截文件并转正。
+      const source = received < size ? createReadStream(file, { start: received, end: size - 1 }) : null;
+      let readError;
+      source?.on("error", (err) => { if (err.syscall === "open" || err.syscall === "read") readError = err; });
+      const feeding = source && pipeline(source, w.stream).catch(() => {});
       try {
-        res = await request({ url, token, method: "PUT", path: `/v1/blobs/${sha256}?offset=${received}&total=${size}`, body, duplex: "half", signal: controller.signal });
+        const body = source ? Readable.toWeb(w.stream) : null;
+        const res = await request({ url, token, method: "PUT", path: `/v1/blobs/${sha256}?offset=${received}&total=${size}`, body, duplex: "half", signal: uploadSignal });
+        if (res.status === 409) {
+          const data = await pushReply(res);
+          throw new RelayError(data.message ?? "云端收到的位置和本地对不上，从云端的位置重新续传", {
+            status: 409, code: data.error ?? "offset_mismatch", retryable: true, data,
+          });
+        }
+        if (!res.ok) throw await failOf(res, "上传失败");
+        const out = await pushReply(res);
+        if (!out.complete) throw new RelayError("上传中断，续传", { code: "incomplete", retryable: true });
+        return out;
       } catch (err) {
-        w.stop();
+        if (readError) throw new RelayError(`读不到制作机上的素材「${file}」（${readError.code}）`, { code: "source_unavailable" });
         throw err;
+      } finally {
+        w.stop();
+        w.stream.destroy();
+        await feeding;
       }
-      w.stop();
-      if (res.status === 409) {
-        const data = await res.json().catch(() => ({}));
-        throw new RelayError("云端收到的位置和本地对不上，从云端的位置重新续传", { status: 409, code: "offset_mismatch", retryable: true, data });
-      }
-      if (!res.ok) throw await failOf(res, "上传失败");
-      const out = await res.json();
-      if (!out.complete) throw new RelayError("上传中断，续传", { code: "incomplete", retryable: true });
-      return out;
     },
     { retries, backoffMs },
   );
@@ -148,14 +185,14 @@ export async function pushBlob({ url, token, file, sha256, size, onProgress = ()
 export const newDeliveryId = () => `dl_${randomBytes(8).toString("hex")}`;
 
 /** 上传一次投递：所有文件（同 sha 只传一次）+ 清单。返回投递 id。 */
-export async function pushDelivery({ url, token, group, manifest, files, onProgress = () => {}, retries = 5, backoffMs = 1000, id = newDeliveryId() }) {
+export async function pushDelivery({ url, token, group, manifest, files, onProgress = () => {}, retries = 5, backoffMs = 1000, id = newDeliveryId(), signal }) {
   // files: [{ sha256, size, name, path }]
   const unique = uniqueBlobs(files);
   const deliveryTotal = unique.reduce((sum, file) => sum + file.size, 0);
   let completedBytes = 0;
   for (const f of unique) {
     await pushBlob({
-      url, token, file: f.path, sha256: f.sha256, size: f.size, retries, backoffMs,
+      url, token, file: f.path, sha256: f.sha256, size: f.size, retries, backoffMs, signal,
       onProgress: (sent, total) => onProgress({ name: f.name, sent, total, deliverySent: completedBytes + sent, deliveryTotal }),
     });
     completedBytes += f.size;
@@ -163,9 +200,12 @@ export async function pushDelivery({ url, token, group, manifest, files, onProgr
   const body = JSON.stringify({ id, group, manifest, blobs: unique.map(({ sha256, size, name }) => ({ sha256, size, name })) });
   const delivery = await withRetry(
     async () => {
-      const res = await request({ url, token, method: "POST", path: "/v1/deliveries", body });
+      signal?.throwIfAborted();
+      const res = await request({ url, token, method: "POST", path: "/v1/deliveries", body, signal: pushSignal(signal) });
       if (!res.ok) throw await failOf(res, "建投递失败");
-      return res.json();
+      const reply = await pushReply(res);
+      if (reply?.id !== id) throw new RelayError("中转回报缺少投递号，稍后重试", { code: "interrupted", retryable: true });
+      return reply;
     },
     { retries, backoffMs },
   );

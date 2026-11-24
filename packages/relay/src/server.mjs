@@ -80,6 +80,7 @@ export function createRelayServer({
 
   const blobPath = (sha) => join(blobsDir, sha);
   const partPath = (sha) => join(partialDir, `${sha}.part`);
+  const uploading = new Set();
   const deliveryPath = (id) => join(deliveriesDir, `${id}.json`);
   const sizeOf = (p) => (existsSync(p) ? statSync(p).size : null);
   const readDelivery = (id) => {
@@ -139,6 +140,7 @@ export function createRelayServer({
     }
     let partials = 0;
     for (const f of readdirSync(partialDir)) {
+      if (f.endsWith(".part") && uploading.has(f.slice(0, -5))) continue;
       const p = join(partialDir, f);
       if (at - statSync(p).mtimeMs >= STALE_PARTIAL_MS) {
         rmSync(p, { force: true });
@@ -207,8 +209,9 @@ export function createRelayServer({
     const started = performance.now();
     try {
       await pipeline(req, createWriteStream(part, { flags: offset ? "a" : "w", mode: 0o600 }));
-    } catch {
-      return; // 连接断了：半截留着，下次从云端收到的位置续传
+    } catch (err) {
+      if (["ECONNRESET", "ERR_STREAM_PREMATURE_CLOSE"].includes(err.code)) return; // 半截留着，下次续传
+      throw err;
     }
     const elapsed = performance.now() - started;
     const got = sizeOf(part) ?? 0;
@@ -335,7 +338,20 @@ export function createRelayServer({
         const done = sizeOf(blobPath(key));
         return send(res, 200, done != null ? { complete: true, received: done } : { complete: false, received: sizeOf(partPath(key)) ?? 0 });
       }
-      if (!tail && m === "PUT") return need("push") && putBlob(req, res, key, url);
+      if (!tail && m === "PUT") {
+        if (!need("push")) return;
+        // 上一条连接的文件流可能还在关闭，等它结束再追加，防止两个 PUT 从同一位置写。
+        if (uploading.has(key)) {
+          drain(req);
+          return send(res, 409, { error: "upload_busy", received: sizeOf(partPath(key)) ?? 0, message: "中转还在收同一个文件，稍后续传" });
+        }
+        uploading.add(key);
+        try {
+          return await putBlob(req, res, key, url);
+        } finally {
+          uploading.delete(key);
+        }
+      }
       if (!tail && m === "GET") return need("pull") && getBlob(req, res, key);
     }
     if (kind === "deliveries") {
