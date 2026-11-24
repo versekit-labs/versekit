@@ -2,8 +2,8 @@
 //
 //   · 不是数据库：成片按 sha256 存成文件，投递是一个 JSON 文件；没有 SQLite，不存平台登录态，不连任何平台。
 //   · 只监听 127.0.0.1，HTTPS 由反向代理（Caddy）提供。
-//   · 两个 token：推送（制作机）和拉取（发布机）。没有 token 或 token 错，所有路径一律 401，
-//     也不区分「路径不存在」，不泄露有哪些投递。token 不进日志。
+//   · 用 Hifabu 公钥离线验机器令牌。每个账号的文件、投递和来取记录独立保存。
+//     迁移期可启用旧的推送、拉取令牌。无有效令牌一律 401，令牌不进日志。
 //   · 发布机回报「已入库」满 7 天后清理文件；磁盘剩余不足 2GB 拒收，并说人话。
 //
 // 协议（都在 /v1 下）：
@@ -21,13 +21,16 @@ import { createServer } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { createMachineTokenVerifier } from "../../cloud/src/machine-token.mjs";
 
 export const MIN_FREE_BYTES = 2 * 1024 ** 3;
 export const RETENTION_MS = 7 * 864e5;
 const STALE_PARTIAL_MS = 7 * 864e5;
 const SHA = /^[0-9a-f]{64}$/;
 const DELIVERY_ID = /^dl_[0-9a-f]{12,32}$/;
+const ACCOUNT_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const STATES = ["pending", "downloaded", "ingested", "failed"];
 const MAX_JSON = 5 * 1024 * 1024;
 
@@ -36,53 +39,26 @@ const sameToken = (given, expected) => Boolean(expected) && timingSafeEqual(dige
 
 const gb = (n) => `${Math.round((n / 1024 ** 3) * 10) / 10}GB`;
 
-export function createRelayServer({
-  dataDir,
-  pushToken,
-  pullToken,
-  minFreeBytes = MIN_FREE_BYTES,
-  retentionMs = RETENTION_MS,
-  freeBytes = null,
-  now = () => Date.now(),
-  log = () => {},
-  sweepEveryMs = 3600e3,
-} = {}) {
-  if (!dataDir) throw new Error("relay：缺数据目录");
-  if (!pushToken || !pullToken) throw new Error("relay：推送 token 和拉取 token 都要有");
-  if (pushToken === pullToken) throw new Error("relay：推送 token 和拉取 token 不能相同");
+const sizeOf = (p) => statSync(p, { throwIfNoEntry: false })?.size ?? null;
 
-  const blobsDir = join(dataDir, "blobs");
-  const partialDir = join(dataDir, "partial");
-  const deliveriesDir = join(dataDir, "deliveries");
-  for (const dir of [blobsDir, partialDir, deliveriesDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const activityPath = join(dataDir, "activity.json");
-  let activity = {};
-  if (existsSync(activityPath)) activity = JSON.parse(readFileSync(activityPath, "utf8"));
+function storageAt(root) {
+  const blobsDir = join(root, "blobs");
+  const partialDir = join(root, "partial");
+  const deliveriesDir = join(root, "deliveries");
+  const ensure = () => {
+    for (const dir of [blobsDir, partialDir, deliveriesDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  };
+  const activityPath = join(root, "activity.json");
+  const readActivity = () => existsSync(activityPath) ? JSON.parse(readFileSync(activityPath, "utf8")) : {};
   const saveActivity = (patch) => {
-    const next = { ...activity, ...patch };
+    const next = { ...readActivity(), ...patch };
     const tmp = `${activityPath}.tmp`;
     writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
     renameSync(tmp, activityPath);
-    activity = next;
   };
-
-  const free = () => {
-    if (freeBytes) return freeBytes();
-    const s = statfsSync(dataDir);
-    return Number(s.bavail) * Number(s.bsize);
-  };
-  const lowDisk = (incoming = 0) => {
-    const left = free();
-    return left - incoming < minFreeBytes
-      ? `中转空间不够：云端磁盘剩余 ${gb(left)}，${left < minFreeBytes ? "不足" : "上传后会不足"} ${gb(minFreeBytes)}。先清理云端磁盘，或等已入库的文件满 7 天自动清理`
-      : null;
-  };
-
   const blobPath = (sha) => join(blobsDir, sha);
   const partPath = (sha) => join(partialDir, `${sha}.part`);
-  const uploading = new Set();
   const deliveryPath = (id) => join(deliveriesDir, `${id}.json`);
-  const sizeOf = (p) => (existsSync(p) ? statSync(p).size : null);
   const readDelivery = (id) => {
     try {
       return JSON.parse(readFileSync(deliveryPath(id), "utf8"));
@@ -100,6 +76,62 @@ export function createRelayServer({
       .filter((f) => f.endsWith(".json"))
       .map((f) => readDelivery(f.slice(0, -5)))
       .filter(Boolean);
+  const usedBytes = (uploading) => {
+    const filesBytes = (dir) => readdirSync(dir, { withFileTypes: true }).reduce((sum, entry) => {
+      const path = join(dir, entry.name);
+      return entry.isFile() && !uploading.has(path) ? sum + (sizeOf(path) ?? 0) : sum;
+    }, 0);
+    let active = 0;
+    for (const upload of uploading.values()) {
+      if (upload.root === root) active += upload.total;
+    }
+    return filesBytes(blobsDir) + filesBytes(partialDir) + active;
+  };
+  return { root, ensure, blobsDir, partialDir, blobPath, partPath, readDelivery, writeDelivery, allDeliveries, usedBytes, readActivity, saveActivity };
+}
+
+export function createRelayServer({
+  dataDir,
+  pushToken,
+  pullToken,
+  machinePublicKey,
+  allowLegacyTokens = machinePublicKey == null,
+  minFreeBytes = MIN_FREE_BYTES,
+  retentionMs = RETENTION_MS,
+  freeBytes = null,
+  now = () => Date.now(),
+  log = () => {},
+  sweepEveryMs = 3600e3,
+} = {}) {
+  if (!dataDir) throw new Error("relay：缺数据目录");
+  if (allowLegacyTokens && (!pushToken || !pullToken)) throw new Error("relay：推送 token 和拉取 token 都要有");
+  if (allowLegacyTokens && pushToken === pullToken) throw new Error("relay：推送 token 和拉取 token 不能相同");
+  if (!allowLegacyTokens && machinePublicKey == null) throw new Error("relay：关闭固定令牌后必须配置 Hifabu 验签公钥");
+  const verifyMachine = machinePublicKey == null ? null : createMachineTokenVerifier(machinePublicKey, { clock: now });
+
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const legacy = storageAt(dataDir);
+  if (allowLegacyTokens) legacy.ensure();
+  const uploading = new Map();
+  const reservedBytes = () => {
+    let bytes = 0;
+    for (const [part, upload] of uploading) {
+      bytes += Math.max(0, upload.total - (sizeOf(part) ?? 0));
+    }
+    return bytes;
+  };
+  const free = () => {
+    if (freeBytes) return freeBytes();
+    const s = statfsSync(dataDir);
+    return Number(s.bavail) * Number(s.bsize);
+  };
+  const lowDisk = (incoming = 0) => {
+    const reserved = reservedBytes();
+    const left = free();
+    return left - reserved - incoming < minFreeBytes
+      ? `中转空间不够：云端磁盘剩余 ${gb(left)}，${left < minFreeBytes ? "不足" : "上传后会不足"} ${gb(minFreeBytes)}。先清理云端磁盘，或等已入库的文件满 7 天自动清理`
+      : null;
+  };
 
   /** 对外只给发布机需要的字段。 */
   const view = (d) => ({
@@ -120,7 +152,8 @@ export function createRelayServer({
   });
 
   /** 已入库满保留期的投递：文件不再被任何还需要它的投递引用时删掉。 */
-  function sweep({ at = now() } = {}) {
+  function sweepStorage(storage, at, account) {
+    const { allDeliveries, blobPath, writeDelivery, blobsDir, partialDir } = storage;
     const all = allDeliveries();
     const keep = new Set();
     const due = [];
@@ -140,14 +173,41 @@ export function createRelayServer({
     }
     let partials = 0;
     for (const f of readdirSync(partialDir)) {
-      if (f.endsWith(".part") && uploading.has(f.slice(0, -5))) continue;
       const p = join(partialDir, f);
+      if (uploading.has(p)) continue;
       if (at - statSync(p).mtimeMs >= STALE_PARTIAL_MS) {
         rmSync(p, { force: true });
         partials += 1;
       }
     }
-    if (removed || partials) log(`[relay] 清理了 ${removed} 个已入库超过 ${Math.round(retentionMs / 864e5)} 天的文件、${partials} 个过期的半截上传`);
+    // 上传完成但没有建投递的文件也会占容量，给断点续传和重试保留七天。
+    if (account) {
+      for (const sha of readdirSync(blobsDir)) {
+        const path = blobPath(sha);
+        if (keep.has(sha) || at - statSync(path).mtimeMs < STALE_PARTIAL_MS) continue;
+        rmSync(path, { force: true });
+        removed += 1;
+      }
+    }
+    return { removed, partials };
+  }
+
+  function sweep({ at = now() } = {}) {
+    let removed = 0;
+    let partials = 0;
+    if (allowLegacyTokens || existsSync(legacy.blobsDir)) {
+      legacy.ensure();
+      ({ removed, partials } = sweepStorage(legacy, at, false));
+    }
+    for (const entry of readdirSync(dataDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !ACCOUNT_ID.test(entry.name)) continue;
+      const storage = storageAt(join(dataDir, entry.name));
+      storage.ensure();
+      const result = sweepStorage(storage, at, true);
+      removed += result.removed;
+      partials += result.partials;
+    }
+    if (removed || partials) log(`[relay] 清理了 ${removed} 个过期成片、${partials} 个过期的半截上传`);
     return { removed, partials };
   }
 
@@ -175,18 +235,28 @@ export function createRelayServer({
     }
   }
 
-  const roleOf = (req) => {
+  const authOf = (req) => {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? "");
     if (!m) return null;
-    if (sameToken(m[1], pushToken)) return "push";
-    if (sameToken(m[1], pullToken)) return "pull";
-    return null;
+    if (allowLegacyTokens) {
+      if (sameToken(m[1], pushToken)) return { role: "push", storage: legacy };
+      if (sameToken(m[1], pullToken)) return { role: "pull", storage: legacy };
+    }
+    const claims = verifyMachine?.(m[1]);
+    if (!claims) return null;
+    return {
+      role: claims.role === "maker" ? "push" : "pull",
+      relayEnabled: claims.relayEnabled,
+      capacityBytes: claims.capacityBytes,
+      storage: storageAt(join(dataDir, claims.sub)),
+    };
   };
 
-  async function putBlob(req, res, sha, url) {
+  async function putBlob(req, res, sha, url, { storage, capacityBytes }) {
+    const { root, blobPath, partPath, usedBytes, saveActivity } = storage;
     const total = Number(url.searchParams.get("total"));
     const offset = Number(url.searchParams.get("offset") ?? 0);
-    if (!Number.isInteger(total) || total <= 0 || !Number.isInteger(offset) || offset < 0) {
+    if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(offset) || offset < 0 || offset > total) {
       drain(req);
       return send(res, 400, { error: "bad_request", message: "缺 total 或 offset" });
     }
@@ -196,38 +266,66 @@ export function createRelayServer({
     }
     const part = partPath(sha);
     const have = sizeOf(part) ?? 0;
-    const low = lowDisk(total - have);
-    if (low) {
-      drain(req);
-      log("[relay] 磁盘不足，拒收");
-      return send(res, 507, { error: "disk_low", message: low });
-    }
     if (offset !== have) {
       drain(req);
       return send(res, 409, { error: "offset_mismatch", received: have, message: `续传位置不对：云端已收到 ${have} 字节` });
     }
+    const incoming = total - have;
+    if (capacityBytes != null) {
+      const remainingBytes = Math.max(0, capacityBytes - usedBytes(uploading));
+      if (incoming > remainingBytes) {
+        drain(req);
+        log(`[relay] quota_exceeded 传片容量不足，剩余 ${remainingBytes} 字节`);
+        return send(res, 413, { error: "quota_exceeded", remainingBytes, message: `Hifabu 账号的传片容量不足，还剩 ${remainingBytes} 字节。等已入库的文件满 7 天清理后再试。` });
+      }
+    }
+    const low = lowDisk(incoming);
+    if (low) {
+      drain(req);
+      log("[relay] disk_low 磁盘不足，拒收");
+      return send(res, 507, { error: "disk_low", message: low });
+    }
+    if (Number(req.headers["content-length"]) > incoming) {
+      drain(req);
+      return send(res, 422, { error: "size_mismatch", message: "上传的文件超过声明的大小，请核对素材后重新上传" });
+    }
     const started = performance.now();
+    let remaining = incoming;
+    let oversized = false;
+    const limit = new Transform({
+      transform(chunk, _encoding, callback) {
+        if (chunk.length > remaining) oversized = true;
+        remaining -= chunk.length;
+        callback(null, oversized ? undefined : chunk);
+      },
+    });
+    uploading.set(part, { root, total });
     try {
-      await pipeline(req, createWriteStream(part, { flags: offset ? "a" : "w", mode: 0o600 }));
+      await pipeline(req, limit, createWriteStream(part, { flags: offset ? "a" : "w", mode: 0o600 }));
+      if (oversized) {
+        rmSync(part, { force: true });
+        return send(res, 422, { error: "size_mismatch", message: "上传的文件超过声明的大小，请核对素材后重新上传" });
+      }
+      const elapsed = performance.now() - started;
+      const got = sizeOf(part) ?? 0;
+      if (got < total) return send(res, 202, { complete: false, received: got });
+      const h = createHash("sha256");
+      await pipeline(createReadStream(part), h);
+      if (h.digest("hex") !== sha) {
+        rmSync(part, { force: true });
+        return send(res, 422, { error: "hash_mismatch", message: "上传的文件和声明的 sha256 对不上，已丢弃，请重新上传" });
+      }
+      renameSync(part, blobPath(sha));
+      if (elapsed >= 100 && got > have) saveActivity({ uploadBytesPerSecond: Math.round((got - have) * 1000 / elapsed) });
+      return send(res, 201, { complete: true, received: got });
     } catch (err) {
-      if (["ECONNRESET", "ERR_STREAM_PREMATURE_CLOSE"].includes(err.code)) return; // 半截留着，下次续传
-      throw err;
+      if (!["ECONNRESET", "ERR_STREAM_PREMATURE_CLOSE"].includes(err.code)) throw err;
+    } finally {
+      uploading.delete(part);
     }
-    const elapsed = performance.now() - started;
-    const got = sizeOf(part) ?? 0;
-    if (got < total) return send(res, 202, { complete: false, received: got });
-    const h = createHash("sha256");
-    await pipeline(createReadStream(part), h);
-    if (got > total || h.digest("hex") !== sha) {
-      rmSync(part, { force: true });
-      return send(res, 422, { error: "hash_mismatch", message: "上传的文件和声明的 sha256 对不上，已丢弃，请重新上传" });
-    }
-    renameSync(part, blobPath(sha));
-    if (elapsed >= 100 && got > have) saveActivity({ uploadBytesPerSecond: Math.round((got - have) * 1000 / elapsed) });
-    return send(res, 201, { complete: true, received: got });
   }
 
-  function getBlob(req, res, sha) {
+  function getBlob(req, res, sha, { blobPath }) {
     const p = blobPath(sha);
     const size = sizeOf(p);
     if (size == null) return send(res, 404, { error: "not_found", message: "没有这个文件（可能已清理）" });
@@ -247,7 +345,7 @@ export function createRelayServer({
     pipeline(createReadStream(p, { start }), res).catch(() => {});
   }
 
-  async function postDelivery(req, res) {
+  async function postDelivery(req, res, { readDelivery, writeDelivery, blobPath }) {
     const body = await readJson(req);
     const { id, group, manifest, blobs } = body;
     if (!DELIVERY_ID.test(id ?? "")) return send(res, 400, { error: "bad_request", message: "投递 id 不合法" });
@@ -269,7 +367,7 @@ export function createRelayServer({
     return send(res, 201, view(d));
   }
 
-  async function postState(req, res, id) {
+  async function postState(req, res, id, { readDelivery, writeDelivery, saveActivity }) {
     const { state, reason, summary, progress, errorCode, nextStep, downloadBytesPerSecond } = await readJson(req);
     const d = readDelivery(id);
     if (!d) return send(res, 404, { error: "not_found", message: "没有这个投递" });
@@ -307,12 +405,19 @@ export function createRelayServer({
   }
 
   async function handle(req, res) {
-    const role = roleOf(req);
-    const deny = () => send(res, 401, { error: "unauthorized", message: "需要有效的 token" });
-    if (!role) {
+    const auth = authOf(req);
+    const deny = () => send(res, 401, { error: "unauthorized", message: "中转不认这个 token。请核对这台机器的 Hifabu 登录、机器角色和中转连接。" });
+    if (!auth) {
       drain(req);
       return deny();
     }
+    if (auth.relayEnabled === false) {
+      drain(req);
+      log("[relay] relay_disabled Hifabu 账号未开通传片");
+      return send(res, 403, { error: "relay_disabled", message: "你的 Hifabu 账号还没开通两台电脑之间传片。请到我的 Hifabu 申请开通。" });
+    }
+    const { role, storage } = auth;
+    const { blobPath, partPath, allDeliveries, readDelivery, readActivity, saveActivity } = storage;
     const url = new URL(req.url, "http://relay.local");
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts[0] !== "v1") {
@@ -326,11 +431,12 @@ export function createRelayServer({
       deny();
       return false;
     };
+    storage.ensure();
     const m = req.method;
 
     if (kind === "ping" && m === "GET") {
       const details = url.searchParams.get("details") === "1";
-      return send(res, 200, { ok: true, role, ...(details ? { ...activity, freeBytes: free(), minFreeBytes } : {}) });
+      return send(res, 200, { ok: true, role, ...(details ? { ...readActivity(), freeBytes: free(), minFreeBytes } : {}) });
     }
     if (kind === "blobs" && SHA.test(key ?? "")) {
       if (tail === "status" && m === "GET") {
@@ -341,25 +447,21 @@ export function createRelayServer({
       if (!tail && m === "PUT") {
         if (!need("push")) return;
         // 上一条连接的文件流可能还在关闭，等它结束再追加，防止两个 PUT 从同一位置写。
-        if (uploading.has(key)) {
+        if (uploading.has(partPath(key))) {
           drain(req);
           return send(res, 409, { error: "upload_busy", received: sizeOf(partPath(key)) ?? 0, message: "中转还在收同一个文件，稍后续传" });
         }
-        uploading.add(key);
-        try {
-          return await putBlob(req, res, key, url);
-        } finally {
-          uploading.delete(key);
-        }
+        return putBlob(req, res, key, url, auth);
       }
-      if (!tail && m === "GET") return need("pull") && getBlob(req, res, key);
+      if (!tail && m === "GET") return need("pull") && getBlob(req, res, key, storage);
     }
     if (kind === "deliveries") {
-      if (!key && m === "POST") return need("push") && postDelivery(req, res);
+      if (!key && m === "POST") return need("push") && postDelivery(req, res, storage);
       if (!key && m === "GET") {
         if (url.searchParams.get("view") === "maker") {
           if (!need("push")) return;
           const rows = allDeliveries().sort((a, b) => b.created_at - a.created_at);
+          const activity = readActivity();
           return send(res, 200, { deliveries: rows.map(view), lastPullAt: activity.lastPullAt ?? null, downloadBytesPerSecond: activity.downloadBytesPerSecond ?? null });
         }
         if (!need("pull")) return;
@@ -371,11 +473,12 @@ export function createRelayServer({
       if (DELIVERY_ID.test(key ?? "")) {
         if (!tail && m === "GET") {
           const d = readDelivery(key);
+          const activity = d && readActivity();
           return d
             ? send(res, 200, { ...view(d), lastPullAt: activity.lastPullAt ?? null, downloadBytesPerSecond: activity.downloadBytesPerSecond ?? null })
             : send(res, 404, { error: "not_found", message: "没有这个投递" });
         }
-        if (tail === "state" && m === "POST") return need("pull") && postState(req, res, key);
+        if (tail === "state" && m === "POST") return need("pull") && postState(req, res, key, storage);
       }
     }
     drain(req);
