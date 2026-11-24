@@ -926,7 +926,7 @@ export async function tick({ dryRun = false } = {}) {
         const pr = lastJson(run(join(ROOT, "bin/ghx"), ["pr", "view", String(q.pull), "--json", "headRefName,comments"]).stdout) ?? {};
         const branch = pr.headRefName;
         const round = 1 + (pr.comments ?? []).filter((c) => /^verdict:\s*FAIL/m.test(c.body ?? "")).length;
-        const channel = chooseChannel("acceptance", [], "", { dryRun });
+        const channel = chooseChannel("acceptance", (state.board.rows ?? []).find((i) => i.number === q.number)?.labels ?? [], "", { dryRun });
         log(`  → 验收 #${q.number}（PR #${q.pull}，head ${head7}，round ${round}，${channel.channel}/${channel.model}）`);
         const taskId = createTask(ctx, {
           title: taskTitle("accept", q.number, head7),

@@ -338,12 +338,22 @@ cache_write() {
 
 # ---------------------------------------------------------------- 验收：固定 DeepSeek
 if [ "$ROLE" = "acceptance" ]; then
-  if ! dsh_choice; then
-    printf 'worker-channel: 验收固定 DeepSeek，但火山与千问都不可用\n' >&2
-    exit 1
+  if dsh_choice; then
+    printf '%s|%s|%s\n' "$DSH_CHANNEL" "$DSH_MODEL" "验收固定 DeepSeek（与实现模型独立）"
+    exit 0
   fi
-  printf '%s|%s|%s\n' "$DSH_CHANNEL" "$DSH_MODEL" "验收固定 DeepSeek（与实现模型独立）"
-  exit 0
+  # 火山与千问都不可用（所有者 2026-11-24 定，ACC-harness-route-05）：改用 Neon；
+  # 实现方就是 Neon（model:neon）时改用 Sonnet，验收与实现不用同一个模型。
+  if labels_has_neon; then
+    printf 'claude|sonnet|DeepSeek 不可用，实现方是 Neon → 验收改用 Sonnet\n'
+    exit 0
+  fi
+  if probe_neon; then
+    printf 'antigravity|%s|%s\n' "$NEON_MODEL" "DeepSeek 不可用 → 验收改用 Neon（agy）"
+    exit 0
+  fi
+  printf 'worker-channel: 验收的 DeepSeek（火山、千问）与备用 Neon（%s）都不可用\n' "$NEON_REASON" >&2
+  exit 1
 fi
 
 case "$ROLE" in

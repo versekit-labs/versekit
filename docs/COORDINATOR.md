@@ -144,7 +144,7 @@ orca orchestration worker-stop --dispatch <id> --json      # 有额度报错这�
 | 难单 | `model:opus` | Claude Opus | **须人点头**；只在 Sonnet 反复做不过且原因是推理难度时用 | 状态机重构；并发与时序类缺陷 |
 
 规则：
-- 验收 worker 始终是 DeepSeek，与实现分开。
+- 验收 worker 优先用 DeepSeek，与实现分开；火山和千问都不可用时改用 Neon（实现方是 Neon 时改用 Sonnet），见 ACC-harness-route-05。
 - **默认 Codex**（2026-11-24 所有者：「worker 可以先让codex去做，额度用完了再切换成sonnet，设计方面的活、出图啊之类的可以让agy的neon模型去做」）：
   - 没有 model label 的实现 / 返工单都先走 Codex；`model:codex` 只是旧写法，效果和默认一样。「同一时间最多 1 个 Codex worker」已取消，并行上限仍是实现 2 个（`FLOW_LANES`）。
   - **不适合 Codex、要打 `model:sonnet` 或 `model:neon`**：界面还原、要看设计稿的单 → `model:neon`；对外文案、跨模块推理重的单 → `model:sonnet`。须人拍板的单照旧由人定。
@@ -160,7 +160,7 @@ orca orchestration worker-stop --dispatch <id> --json      # 有额度报错这�
 
 ## 6. 模型与通道（供你解释给人听）
 
-- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认先走 Codex，额度用完（或没装、未登录）由 orca-flow 自动切 Claude Sonnet；`model:sonnet` 强制 Sonnet，`model:neon` 的设计和出图单走 agy 的 Neon（Orca agent `antigravity`，`gemini-4-neon-high`），带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude；Codex / agy 不可用时该单改派 Sonnet。
+- 验收 worker 优先走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）；两个都不可用时改用 Neon（`--agent antigravity`），实现方是 Neon 时改用 Sonnet。实现 / 返工 worker 默认先走 Codex，额度用完（或没装、未登录）由 orca-flow 自动切 Claude Sonnet；`model:sonnet` 强制 Sonnet，`model:neon` 的设计和出图单走 agy 的 Neon（Orca agent `antigravity`，`gemini-4-neon-high`），带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude；Codex / agy 不可用时该单改派 Sonnet。
 - 你自己（协调器）用 Claude。验收是否也换 Claude 由人决定，目前未换。
 
 ## 7. 汇报格式

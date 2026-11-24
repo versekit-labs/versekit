@@ -236,3 +236,19 @@ test('route-03：agy 不在 PATH 里 → 改派 Sonnet，原因写明', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^claude\|sonnet\|.*Neon 不可用（找不到 agy 命令）→ 改派 Sonnet/);
 });
+
+test('route-05：DeepSeek 都不可用时验收改用 Neon；实现方是 Neon 时改用 Sonnet；agy 也没有就不派', () => {
+  const noDsh = { ARKCLI_CODING_PLAN_API_KEY: '', QWEN_TOKEN_PLAN_CN_API_KEY: '', ARKCLI_BIN: '/nonexistent/arkcli' };
+  const dir = sandbox();
+  withAgy(dir);
+  let r = channel(dir, ['--role', 'acceptance'], noDsh);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout.trim(), /^antigravity\|gemini-4-neon-high\|DeepSeek 不可用 → 验收改用 Neon/);
+  r = channel(dir, ['--role', 'acceptance', '--labels', 'model:neon'], noDsh);
+  assert.match(r.stdout.trim(), /^claude\|sonnet\|DeepSeek 不可用，实现方是 Neon → 验收改用 Sonnet/);
+  assert.equal(calls(dir, 'agy.calls'), ''); // 只看 command -v，不执行 agy
+  const bare = sandbox();
+  r = channel(bare, ['--role', 'acceptance'], noDsh);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /备用 Neon/);
+});
