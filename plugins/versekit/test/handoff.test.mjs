@@ -15,7 +15,15 @@ import { inspectEpisode } from "../skills/handoff/inspect.mjs";
 const exec = promisify(execFile);
 const vk = fileURLToPath(new URL("../../../packages/cli/src/vk.mjs", import.meta.url));
 const inspector = fileURLToPath(new URL("../skills/handoff/inspect.mjs", import.meta.url));
-const copy = `## 02 习得性无助
+const copy = `## 01 赌徒谬误
+
+封面：01_赌徒谬误_封面.png
+
+第一期的发布文案。
+
+#概率
+
+## 02 习得性无助
 
 **封面**：\`02_习得性无助_封面.png\`
 
@@ -25,25 +33,45 @@ const copy = `## 02 习得性无助
 
 #心理学 #知识科普
 
-## 17 AI算法简史
+## 17 AI 算法简史（革命练习曲版）
 
-这是 17 的发布文案。
+封面：17_AI算法简史_封面.png
 
-#AI`;
+革命练习曲版的发布文案。
+
+#AI #算法
+
+## 17 AI 算法简史（灵动版）
+
+封面：17_AI算法简史_灵动版_封面.png
+
+灵动版的发布文案。
+
+#AI #技术史`;
 
 function fixture(t) {
   const temp = realpathSync(mkdtempSync(join(tmpdir(), "handoff-")));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const project = join(temp, "vibe-video");
-  const put = (path, contents = "local fixture") => {
+  const put = (path, contents = "") => {
     const filename = join(project, path);
     mkdirSync(dirname(filename), { recursive: true });
     writeFileSync(filename, contents);
     return filename;
   };
-  put("文案/发布文案.md", copy);
+  put("成片/文案/发布文案.md", copy);
   return { temp, project, put };
 }
+
+test("ACC-deliver-05: 01 从成片内的封面和文案目录取素材", (t) => {
+  const { project, put } = fixture(t);
+  put("成片/01_赌徒谬误_v2.mp4");
+  const cover = put("成片/封面/01_赌徒谬误_封面.png");
+  const result = inspectEpisode(project, "01");
+  assert.equal(result.state, "ready");
+  assert.equal(result.manifest.cuts[0].cover, cover);
+  assert.deepEqual(result.manifest.cuts[0].copy.default, { title: "01 赌徒谬误", body: "第一期的发布文案。", tags: ["概率"] });
+});
 
 test("ACC-deliver-05: 多版本选最大编号，带封面和对应一节的发布文案", async (t) => {
   const { project, put } = fixture(t);
@@ -72,17 +100,30 @@ test("ACC-deliver-05: 多版本选最大编号，带封面和对应一节的发�
   assert.equal(next.manifest.source, source);
 });
 
-test("ACC-deliver-05: 灵动版每次需要选择，共用这一期的来源", (t) => {
+test("ACC-deliver-05: 17 两版各用对应封面和文案，灵动版每次需确认", (t) => {
   const { project, put } = fixture(t);
   const original = put("成片/17_AI算法简史.mp4");
   const variant = put("成片/17_AI算法简史_灵动版.mp4");
+  const originalCover = put("成片/封面/17_AI算法简史_封面.png");
+  const variantCover = put("成片/封面/17_AI算法简史_灵动版_封面.png");
   const result = inspectEpisode(project, "17");
   assert.equal(result.state, "choice_required");
   assert.deepEqual(result.choices.map(({ name }) => name).sort(), ["17_AI算法简史.mp4", "17_AI算法简史_灵动版.mp4"]);
+  const regular = inspectEpisode(project, "17", "17_AI算法简史.mp4");
+  assert.equal(regular.state, "ready");
+  assert.equal(regular.manifest.cuts[0].cover, originalCover);
+  assert.deepEqual(regular.manifest.cuts[0].copy.default, {
+    title: "17 AI 算法简史（革命练习曲版）", body: "革命练习曲版的发布文案。", tags: ["AI", "算法"],
+  });
+
   const chosen = inspectEpisode(project, "17", "17_AI算法简史_灵动版.mp4");
   assert.equal(chosen.state, "ready");
   assert.equal(chosen.manifest.source, original);
   assert.equal(chosen.manifest.cuts[0].versions[0].asset, variant);
+  assert.equal(chosen.manifest.cuts[0].cover, variantCover);
+  assert.deepEqual(chosen.manifest.cuts[0].copy.default, {
+    title: "17 AI 算法简史（灵动版）", body: "灵动版的发布文案。", tags: ["AI", "技术史"],
+  });
   assert.equal(inspectEpisode(project, "17").state, "choice_required");
   rmSync(original);
   assert.equal(inspectEpisode(project, "17").state, "choice_required");
@@ -92,7 +133,7 @@ test("ACC-deliver-05: 同号不同选题需要选择，文案按编号和选题�
   const { project, put } = fixture(t);
   put("成片/08_时空的维度.mp4");
   put("成片/08_从一维到十维.mp4");
-  put("文案/发布文案.md", "## 08 时空的维度\n\n另一部的发布文案\n\n## 08 从一维到十维\n\n这一部的发布文案\n\n#科学");
+  put("成片/文案/发布文案.md", "## 08 时空的维度\n\n另一部的发布文案\n\n## 08 从一维到十维\n\n这一部的发布文案\n\n#科学");
 
   const result = inspectEpisode(project, "08");
   assert.equal(result.state, "choice_required");
@@ -114,12 +155,15 @@ test("ACC-deliver-05: 缺封面时省略 cover，仍可交付", (t) => {
 test("ACC-deliver-05: 缺发布文案时等待草稿，字幕只作为参考", (t) => {
   const { project, put } = fixture(t);
   put("成片/21_李白的一生.mp4");
-  const subtitle = put("文案/21_李白的一生_文案.txt", "00:00:00 --> 00:00:05\n字幕内容");
+  const cover = put("成片/封面/21_李白的一生_封面.png");
+  const subtitle = put("成片/文案/21_李白的一生_文案.txt", "00:00:00 --> 00:00:05\n字幕内容");
 
   const result = inspectEpisode(project, "21");
   assert.equal(result.state, "missing_copy");
-  assert.equal(result.copyFile, join(project, "文案/发布文案.md"));
+  assert.equal(result.copyFile, join(project, "成片/文案/发布文案.md"));
+  assert.equal(result.copyHeading, "## 21 李白的一生");
   assert.equal(result.subtitle, subtitle);
+  assert.equal(result.manifest.cuts[0].cover, cover);
   assert.equal(Object.hasOwn(result.manifest.cuts[0], "copy"), false);
   assert.doesNotMatch(JSON.stringify(result.manifest), /字幕内容|_文案\.txt/);
   assert.equal(readFileSync(result.copyFile, "utf8"), copy);
@@ -147,7 +191,8 @@ test("ACC-deliver-05: 离线 vk 登录后用原清单预览并登记，回查同
   timeout: 25_000,
 }, async (t) => {
   const { temp, project, put } = fixture(t);
-  put("成片/02_习得性无助_v3.mp4");
+  // vk 校验文件大小，联调用几个合成字节。解析夹具只需要空文件。
+  put("成片/02_习得性无助_v3.mp4", "local fixture");
   const { manifest } = inspectEpisode(project, "02");
   const manifestFile = join(temp, "handoff.json");
   writeFileSync(manifestFile, JSON.stringify(manifest));

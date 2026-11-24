@@ -29,15 +29,25 @@ function readConvention(root) {
   throw new Error(`项目「${project}」还没有交付约定。`);
 }
 
-const render = (template, fields) => template.replace(/\{(episode|topic)\}/g, (_, name) => fields[name]);
+const render = (template, fields) => template.replace(/\{(episode|topic|variant)\}/g, (_, name) => fields[name]);
+const headingKey = (title) => title.replace(/\s/gu, "").replaceAll("（", "(").replaceAll("）", ")");
 
-function readCopy(path, headingPattern, target, coverName) {
+function findFile(root, paths) {
+  for (const filename of paths) {
+    const path = readProjectPath(root, filename);
+    if (path && statSync(path).isFile()) return path;
+  }
+  return null;
+}
+
+function readCopy(path, headingPattern, episode, topic, coverNames) {
   if (!path) return null;
   const lines = readFileSync(path, "utf8").replace(/^\uFEFF/, "").normalize("NFC").split(/\r?\n/);
   const heading = new RegExp(headingPattern, "u");
+  const key = headingKey(topic);
   const headings = lines.map((line, index) => ({ index, fields: heading.exec(line)?.groups }))
-    .filter(({ fields }) => fields?.episode === target.episode && fields.topic === target.topic);
-  if (headings.length > 1) throw new Error(`发布文案.md 里有重复的「${target.episode} ${target.topic}」，请确认用哪一节。`);
+    .filter(({ fields }) => fields?.episode === episode && headingKey(fields.topic) === key);
+  if (headings.length > 1) throw new Error(`发布文案.md 里有重复的「${episode} ${topic}」，请确认用哪一节。`);
   if (!headings.length) return null;
 
   const { index, fields } = headings[0];
@@ -45,7 +55,7 @@ function readCopy(path, headingPattern, target, coverName) {
   const section = lines.slice(index + 1, next < 0 ? undefined : next).filter((line) => {
     const content = line.trim().replace(/^[-*] +/, "").replaceAll("**", "").replaceAll("`", "");
     const labelledCover = /^封面[：:]\s*.+\.(?:png|jpe?g|webp)$/iu.test(content);
-    return !labelledCover && basename(content) !== coverName;
+    return !labelledCover && !coverNames.includes(basename(content));
   });
   const body = section.join("\n").trim().split("\n");
   const lastLine = body.at(-1).trim();
@@ -89,13 +99,17 @@ export function inspectEpisode(projectRoot, selector = "", selectedVideo = "") {
   }
 
   const title = `${video.episode} ${video.topic}`;
-  const coverPath = render(convention.coverTemplate, video);
-  const cover = readProjectPath(root, coverPath);
+  const stem = `${video.episode}_${video.topic}`;
+  const coverPaths = [video.variant && convention.variantCoverTemplate, convention.coverTemplate]
+    .filter(Boolean).map((template) => render(template, video));
+  const cover = findFile(root, coverPaths);
+  const copyVariant = video.variant ?? convention.originalCopyVariants?.[stem];
+  const copyTopic = copyVariant ? `${video.topic}（${copyVariant}）` : video.topic;
   const copyPath = readProjectPath(root, convention.copyFile);
-  const copy = readCopy(copyPath, convention.copyHeadingPattern, video, basename(coverPath));
+  const copy = readCopy(copyPath, convention.copyHeadingPattern, video.episode, copyTopic, coverPaths.map((path) => basename(path)));
   const cut = {
     title,
-    ...(cover && statSync(cover).isFile() ? { cover } : {}),
+    ...(cover ? { cover } : {}),
     ...(copy ? { copy: { default: copy } } : {}),
     versions: [{ language: convention.language, asset: join(videoDirectory, video.name) }],
   };
@@ -104,8 +118,11 @@ export function inspectEpisode(projectRoot, selector = "", selectedVideo = "") {
     video,
     coverMissing: !cut.cover,
     copyFile: copyPath ?? join(root, convention.copyFile),
-    ...(!copy ? { subtitle: readProjectPath(root, render(convention.subtitleTemplate, video)) } : {}),
-    manifest: { title, source: join(videoDirectory, `${video.episode}_${video.topic}.mp4`), cuts: [cut] },
+    ...(!copy ? {
+      copyHeading: `## ${video.episode} ${copyTopic}`,
+      subtitle: readProjectPath(root, render(convention.subtitleTemplate, video)),
+    } : {}),
+    manifest: { title, source: join(videoDirectory, `${stem}.mp4`), cuts: [cut] },
   };
 }
 
