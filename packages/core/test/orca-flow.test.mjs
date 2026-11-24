@@ -621,3 +621,11 @@ test("不合并的原因并进同一行写进流程日志（ACC-harness-orca-16�
   assert.deepEqual(transcribeAgentctl("✗ 不合并 #9："), ["✗ 不合并 #9："]);
   assert.deepEqual(transcribeAgentctl(""), []);
 });
+
+test("通用约束只禁改已有的 API、schema、命令，口径要的新增可以加（ACC-harness-orca-17）", () => {
+  const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
+  const line = src.split("\n").find((l) => l.startsWith("const commonConstraints"));
+  assert.ok(line.includes("不改已有的 API 形状、数据库 schema 和 commands.mjs 里已有的命令定义"));
+  assert.ok(line.includes("口径要求新增的命令、字段、表，可以向后兼容地加"));
+  assert.ok(!line.includes("不改 api 形状"));
+});

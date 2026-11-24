@@ -9,7 +9,8 @@ import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit, paths, DEFAULT_LANGUAGE } from "./index.mjs";
-import { hashFile, ping, pushDelivery, pullOnce } from "../../relay/src/index.mjs";
+import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES } from "../../relay/src/index.mjs";
+import { BASELINE_TRANSFER, deliveryProgress, deliveryStatusView, formatBytes, formatDuration, transferSeconds } from "../../relay/src/status.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
@@ -387,6 +388,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       url: typeof r.url === "string" && r.url ? r.url.replace(/\/+$/, "") : null,
       pushToken: r.push_token || null,
       pullToken: r.pull_token || null,
+      defaultGroup: r.default_group || null,
       intervalMinutes: Number.isFinite(mins) && mins > 0 ? mins : 5,
     };
   };
@@ -394,6 +396,27 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   let relayPulling = null;
   // 这一轮（或刚结束的一轮）的逐个投递进展，给 vk relay pull 和 relay.status 看（ACC-relay-06）
   let relayRound = null;
+  const uploading = new Map();
+  const makerConnection = () => {
+    const cfg = relayConfig();
+    if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先到系统页的设备里接入", "vk relay connect <地址> --token <推送 token> --push");
+    return { ...cfg, token: cfg.pushToken };
+  };
+  const makerFailures = (url) => (store.getRelayState().push_failures ?? []).filter((row) => row.url === url && Date.now() - row.updatedAt < RELAY_WEEK_MS);
+  const localStatus = (row, lastPullAt = null) => {
+    const elapsed = (Date.now() - row.createdAt) / 1000;
+    const speed = elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
+    const progress = deliveryProgress(row.sent, row.totalBytes, speed);
+    const state = row.errorCode ? "failed" : "uploading";
+    const { id, title, group, totalBytes, createdAt, updatedAt } = row;
+    const view = { id, title, group, totalBytes, createdAt, updatedAt, lastPullAt, state, progress };
+    if (state === "failed") {
+      const { errorCode, reason, nextStep } = row;
+      return { ...view, label: "没交成", errorCode, reason, nextStep, message: `没交成：${reason}` };
+    }
+    return { ...view, label: "正在传",
+      message: `正在传 ${title}：${formatBytes(progress.bytes)} / ${formatBytes(totalBytes)}，还要约 ${formatDuration(progress.etaSeconds)}。` };
+  };
 
   /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
   function ingestDelivery(delivery, filePaths, inboxDir) {
@@ -419,25 +442,37 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       ? handlers["work.add"](plan).work
       : store.showWork(store.upsertWork(plan, { relay: true }).id);
     const created = [];
-    const notes = [];
+    const draftIds = [];
+    const rejected = [];
     for (const cut of work.cuts) {
-      const r = handlers["plan.apply"]({ cutId: cut.id, group: g.id });
+      const r = handlers["plan.apply"]({ cutId: cut.id, group: g.id, fromRelay: true });
       created.push(...(r.created ?? []));
-      for (const x of r.rejected ?? []) notes.push(`${x.platform}：${x.reason}`);
+      draftIds.push(...[...r.created, ...r.skipped].filter((p) => p.state === "pending_confirm").map((p) => p.publishId));
+      rejected.push(...r.rejected);
     }
     if (!created.length && !work.cuts.some((c) => c.publishes?.length)) {
+      const notes = rejected.map((x) => `${x.platform}：${x.reason}`);
       fail(`作品「${m.title}」已入库，但一条平台稿都没生成：${notes.join("；") || "账号组里没有能发的账号"}`);
     }
+    const drafts = draftIds.map((id) => {
+      const row = store.getPublish(id);
+      return { platform: row.platform, accountId: row.account_id, account: row.account_name, handle: row.handle, suggestedAt: row.scheduled_at };
+    });
     const published = work.cuts.flatMap((cut) => cut.publishes
       .filter((p) => p.state === "published" || p.state === "published_limited")
       .map((p) => `${platformLabel(p.platform)} ${store.handleLabel(p.handle)}「${cut.title}」`));
     const reason = published.length ? `以下平台稿已发布，保留原发布：${published.join("、")}` : null;
     log(`[relay] 投递 ${delivery.id} 已入库为作品 ${work.id}，${created.length} 条新平台稿待确认`);
-    return { workId: work.id, drafts: created.length, ...(reason ? { reason } : {}) };
+    return { workId: work.id, drafts: created.length, summary: { workId: work.id, drafts, rejected }, ...(reason ? { reason } : {}) };
+  }
+
+  function emitDeliveryFailure(id, { errorCode, reason, nextStep }) {
+    emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${id}:failed` });
   }
 
   function recordRelay(id, rec) {
     store.setRelayDelivery(id, rec);
+    if (rec.state === "failed") emitDeliveryFailure(id, rec);
     const st = store.getRelayState();
     const recent = [{ id, state: rec.state, title: rec.title ?? null, at: rec.at }, ...(st.recent ?? []).filter((r) => r.id !== id)].slice(0, 5);
     const failures = rec.state === "failed" ? [{ id, at: rec.at, title: rec.title ?? null, message: rec.reason }, ...(st.failures ?? []).filter((f) => f.id !== id)].slice(0, 20) : st.failures ?? [];
@@ -526,11 +561,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     // 程序版本与后台自动更新（#217）。
     // 云端中转（#226）。
-    "work.push": async ({ manifest, group }) => {
-      const cfg = relayConfig();
-      if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先到系统页的设备里接入", "vk relay connect <地址> --token <推送 token> --push");
-      const groupName = String(group ?? "").trim();
-      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>");
+    "work.push": async ({ manifest, group, dryRun = false }) => {
+      const cfg = makerConnection();
+      const groupName = String(group ?? cfg.defaultGroup ?? "").trim();
+      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>，或用 vk relay connect 记住默认组");
       if (!manifest || !existsSync(manifest)) fail(`找不到清单：${manifest ?? "（没给）"}`);
       let raw;
       try {
@@ -546,22 +580,64 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...(v?.cover ? { cover: rel(v.cover) } : {}), asset: rel(v?.asset) })),
       }));
       // 规则和 work.add 同一套：不合格当场报错，一个字节都不上传。
-      store.checkWorkPlan({ title: raw?.title, source: raw?.source, cuts });
+      const rejected = [];
+      const onCopyViolation = dryRun ? (violation) => {
+        if (!rejected.some((r) => r.platform === violation.platform && r.cut === violation.cut && r.reason === violation.reason)) rejected.push(violation);
+      } : undefined;
+      const checked = store.checkWorkPlan({ title: raw?.title, source: raw?.source, cuts }, { onCopyViolation });
       const covers = [...new Set(cuts.flatMap((c) => [c.cover, ...c.versions.map((v) => v.cover)]).filter(Boolean))];
       const missingCovers = covers.filter((a) => !existsSync(a) || !statSync(a).isFile());
       if (missingCovers.length) fail(`找不到封面图片：${missingCovers.join("、")}（路径相对清单所在目录）`);
       const assets = [...new Set(cuts.flatMap((c) => c.versions.map((v) => v.asset)))];
       const missing = assets.filter((a) => !existsSync(a));
       if (missing.length) fail(`找不到成片：${missing.join("、")}（路径相对清单所在目录）`);
-      const dirs = assets.filter((a) => statSync(a).isDirectory());
-      if (dirs.length) fail(`中转目前只支持视频文件，不支持图片目录：${dirs.join("、")}`);
+      const nonFiles = assets.filter((a) => !statSync(a).isFile());
+      if (nonFiles.length) fail(`中转目前只支持视频文件，不支持图片目录：${nonFiles.join("、")}`);
 
       const files = [];
       const bySha = new Map();
-      for (const path of [...assets, ...covers]) {
+      for (const path of new Set([...assets, ...covers])) {
+        const size = statSync(path).size;
+        if (!size) fail(`文件是空的：${path}，补好后再交付`);
         const sha256 = await hashFile(path);
-        files.push({ path, sha256, size: statSync(path).size, name: basename(path) });
+        files.push({ path, sha256, size, name: basename(path) });
         bySha.set(path, sha256);
+      }
+      const unique = uniqueBlobs(files);
+      const bytes = unique.reduce((n, f) => n + f.size, 0);
+      if (dryRun) {
+        // 发布机才知道账号组里有哪些平台，先按本机已有的所有平台文案规则预检。
+        for (const cut of checked.plan) {
+          const version = cut.versions.find((v) => v.language === "zh") ?? cut.versions[0];
+          for (const platform of Object.keys(store.COPY_LIMITS)) {
+            const copy = store.copyFor(version.meta?.copy, platform);
+            const bad = store.copyViolations(platform, { ...copy, title: copy.title ?? cut.title });
+            if (bad.length) onCopyViolation({ platform, cut: cut.title, language: version.language, reason: bad.join("；") });
+          }
+        }
+        const warnings = [];
+        const details = await ping({ ...cfg, details: true }).catch((err) => {
+          if (!err.retryable) throw err;
+          warnings.push({ code: err.code, message: err.message });
+          return {};
+        });
+        const { freeBytes = null, minFreeBytes = MIN_FREE_BYTES } = details;
+        const speeds = { ...BASELINE_TRANSFER };
+        for (const key of Object.keys(speeds)) {
+          if (Number.isFinite(details[key]) && details[key] > 0) speeds[key] = details[key];
+        }
+        if (freeBytes == null && !warnings.length) warnings.push({ code: "disk_unknown", message: "中转未回报剩余空间，请更新中转后再检查。" });
+        if (freeBytes != null && freeBytes - bytes < minFreeBytes) {
+          const gb = (n) => `${(n / 1024 ** 3).toFixed(1)}GB`;
+          warnings.push({ code: "disk_low", message: `中转空间不够：剩余 ${gb(freeBytes)}，交付后需保留 ${gb(minFreeBytes)}。先清理中转，或等已入库的旧期满 7 天自动清理。` });
+        }
+        const uploadSeconds = transferSeconds(bytes, speeds.uploadBytesPerSecond);
+        const downloadSeconds = transferSeconds(bytes, speeds.downloadBytesPerSecond);
+        return {
+          dryRun: true, group: groupName, title: checked.t, files: unique.map(({ name, size }) => ({ name, size })), bytes,
+          etaSeconds: uploadSeconds + downloadSeconds, transfer: { ...speeds, uploadSeconds, downloadSeconds },
+          freeBytes, minFreeBytes, rejected, warnings,
+        };
       }
       const blobOf = (o) => (o?.cover ? { cover: `blob:${bySha.get(o.cover)}` } : {});
       const wire = {
@@ -570,18 +646,69 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: `blob:${bySha.get(v.asset)}` })) })),
       };
       log(`[relay] 上传 ${files.length} 个文件到中转…`);
-      const delivery = await pushDelivery({ url: cfg.url, token: cfg.pushToken, group: groupName, manifest: wire, files, onProgress: () => {} });
-      const bytes = files.reduce((n, f) => n + f.size, 0);
-      return { id: delivery.id, state: delivery.state, group: groupName, files: files.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
+      const id = newDeliveryId();
+      const createdAt = Date.now();
+      const upload = { id, url: cfg.url, title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
+        uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
+      uploading.set(id, upload);
+      try {
+        const delivery = await pushDelivery({
+          ...cfg, id, group: groupName, manifest: wire, files: unique,
+          onProgress: ({ deliverySent }) => { upload.sent = deliverySent; upload.updatedAt = Date.now(); },
+        });
+        return { id: delivery.id, state: delivery.state, group: groupName, files: unique.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
+      } catch (err) {
+        const errorCode = err.code ?? "upload_failed";
+        const nextStep = errorCode === "disk_low" ? "清出中转空间后，再从制作机重新交付。" : "检查中转连接后，从制作机重新交付。";
+        const failed = { ...upload, updatedAt: Date.now(), errorCode, reason: err.message, nextStep };
+        const history = (store.getRelayState().push_failures ?? []).filter((r) => r.updatedAt >= Date.now() - RELAY_WEEK_MS);
+        store.patchRelayState({ push_failures: [failed, ...history].slice(0, 20) });
+        emitDeliveryFailure(id, failed);
+        throw Object.assign(err, { hint: `${nextStep} 投递号 ${id}` });
+      } finally {
+        uploading.delete(id);
+      }
+    },
+
+    "delivery.list": async () => {
+      const cfg = makerConnection();
+      const local = [...uploading.values()].filter((row) => row.url === cfg.url).concat(makerFailures(cfg.url));
+      const result = await listDeliveryStatus(cfg).catch((err) => {
+        if (!local.length || !err.retryable) throw err;
+        return { deliveries: [], warning: err.message };
+      });
+      const { lastPullAt = null, downloadBytesPerSecond, warning } = result;
+      const deliveries = result.deliveries.map((row) => deliveryStatusView(row, { lastPullAt, downloadBytesPerSecond }));
+      const remoteIds = new Set(deliveries.map((row) => row.id));
+      for (const row of local) if (!remoteIds.has(row.id)) deliveries.push(localStatus(row, lastPullAt));
+      deliveries.sort((a, b) => b.createdAt - a.createdAt);
+      return { deliveries, lastPullAt, ...(warning ? { warning } : {}) };
+    },
+
+    "delivery.show": async ({ id }) => {
+      if (!/^dl_[0-9a-f]{12,32}$/.test(id)) fail("投递号不合法：请核对投递列表里的编号", "vk delivery list");
+      const cfg = makerConnection();
+      const active = uploading.get(id);
+      if (active?.url === cfg.url) return localStatus(active);
+      try {
+        const cloud = await getDeliveryStatus({ ...cfg, id });
+        return deliveryStatusView(cloud, cloud);
+      } catch (err) {
+        const failed = makerFailures(cfg.url).find((row) => row.id === id);
+        if (failed && (err.status === 404 || err.retryable)) return localStatus(failed);
+        throw err;
+      }
     },
 
     "relay.status": () => relayStatusView(),
 
-    "relay.connect": async ({ url, token, push = false }) => {
+    "relay.connect": async ({ url, token, push = false, group }) => {
       const clean = String(url ?? "").trim().replace(/\/+$/, "");
       if (!/^https?:\/\/[^\s/]+/.test(clean)) fail("中转地址要以 https:// 开头（本机测试可以用 http://127.0.0.1:端口）");
       const t = String(token ?? "").trim();
       if (!t) fail("缺令牌：把中转给你的令牌填上", "--token <token>");
+      const defaultGroup = group?.trim();
+      if (group != null && !defaultGroup) fail("默认账号组名不能为空");
       const want = push ? "push" : "pull";
       let warning = null;
       try {
@@ -591,14 +718,14 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         if (err.code === "unauthorized" || err.message.startsWith("这是")) fail(err.message);
         warning = `暂时没连上中转（${err.message}），配置已写入，网络通了会自动连`;
       }
-      updateConfig({ relay: { url: clean, [push ? "push_token" : "pull_token"]: t } });
+      updateConfig({ relay: { url: clean, [push ? "push_token" : "pull_token"]: t, ...(defaultGroup ? { default_group: defaultGroup } : {}) } });
       try {
         chmodSync(paths().configFile, 0o600); // 里面有 token
       } catch {
         /* 非 POSIX */
       }
       log(`[relay] 已连接 ${clean}（${push ? "推送" : "拉取"}）`);
-      return { url: clean, role: want, connected: !warning, ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以送作品了" : "已连接中转，后台会自动拉取（也可以在系统页立刻拉一轮）；成片大的话下载要几分钟，进度在系统页能看到") };
+      return { url: clean, role: want, connected: !warning, ...(defaultGroup ? { defaultGroup } : {}), ...(warning ? { warning } : {}), message: warning ?? (push ? "已连接中转，可以送作品了" : "已连接中转，后台会自动拉取（也可以在系统页立刻拉一轮）；成片大的话下载要几分钟，进度在系统页能看到") };
     },
 
     "relay.disconnect": () => {
@@ -936,7 +1063,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
      * 不给 --accounts：当前账号组（或 --group）里所有已接入平台的账号各一条，状态一律待确认。
      * 每条要么建出来，要么跳过（已有）、要么拒绝（说明原因）——没有静默丢掉的账号。
      */
-    "plan.apply": ({ cutId, accounts = null, group = null }) => {
+    "plan.apply": ({ cutId, accounts = null, group = null, fromRelay = false }) => {
       const conn = open();
       const cut = conn.prepare("SELECT * FROM cut WHERE id = ?").get(cutId);
       if (!cut) fail(`没有这支成片：${cutId}（到作品页看有哪些成片）`);
@@ -1029,7 +1156,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           continue;
         }
         const overrides = Object.keys(ownCopy).length ? { copy: ownCopy } : null;
-        const made = store.createPublish({ workId: cut.work_id, accountId: account.id, cutId: cut.id, versionId: version.id, scheduledAt: suggestedAt, overrides });
+        const made = store.createPublish({ workId: cut.work_id, accountId: account.id, cutId: cut.id, versionId: version.id, scheduledAt: suggestedAt, overrides, fromRelay });
         const shown = store.effectiveCopy({ overrides: overrides ? JSON.stringify(overrides) : null, versionMeta: version.meta_json, cutTitle: cut.title });
         created.push({
           ...who(account),

@@ -26,6 +26,7 @@ import { browserReady, openAccount, closeAccount, logoutAccount, closeAllAccount
 import { call, send, ensureDaemon } from "./client.mjs";
 import { createCloudHandlers } from "./cloud.mjs";
 import { createRelayServer } from "../../relay/src/index.mjs";
+import { formatBytes, formatDuration } from "../../relay/src/status.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
 import { finishWindowLogin, fallbackLoginStatus } from "./login-web.mjs";
 import * as service from "./service.mjs";
@@ -1325,6 +1326,7 @@ async function cmdToday() {
   const data = await send("today", { ...(val("--group") ? { group: val("--group") } : {}) });
   if (!human) return out(data), data;
   console.log(`账号组：${data.group?.name ?? "全部"}`);
+  for (const arrival of data.arrivals ?? []) console.log(arrival.message);
   console.log(`\n等确认（${data.awaiting.length} 个作品）`);
   for (const w of data.awaiting) {
     for (const c of w.cuts) {
@@ -1344,17 +1346,23 @@ async function cmdToday() {
 async function cmdWork() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json> | push <清单.json> --group <组名>";
+  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json> | push <清单.json> [--group <组名>] [--dry-run]";
   if (sub === "push") {
     const target = pos[2];
-    if (!target) throw new Error(usage);
-    if (!val("--group")) throw new Error("vk work push 要 --group <组名>：投递到发布机上的哪个账号组");
+    if (!target || (Object.hasOwn(flags, "--group") && !val("--group"))) throw new Error(usage);
     // 上传可能很久（出口带宽窄）：守护进程那一头不设上限，这里也放宽到 3 小时。
-    const data = await send("work.push", { manifest: resolve(target), group: val("--group") }, { log, timeout: 3 * 3600e3 });
+    const data = await send("work.push", { manifest: resolve(target), group: val("--group"), dryRun: has("--dry-run") }, { log, timeout: 3 * 3600e3 });
     if (human) {
-      console.log(`已上传：${data.files} 个文件，${(data.bytes / 1048576).toFixed(1)}MB`);
-      console.log(`投递 ${data.id} → 账号组「${data.group}」`);
-      console.log("等发布机拉取（发布机上入库后一律待确认，不会自动发）");
+      if (data.dryRun) {
+        console.log(`预览「${data.title}」→ 账号组「${data.group}」，传输约 ${formatDuration(data.etaSeconds)}`);
+        for (const file of data.files) console.log(`  ${file.name} · ${formatBytes(file.size)}`);
+        for (const row of data.rejected) console.log(`  ${row.cut}：${row.reason}`);
+        for (const warning of data.warnings) console.log(warning.message);
+      } else {
+        console.log(`已上传：${data.files} 个文件，${formatBytes(data.bytes)}`);
+        console.log(`投递 ${data.id} → 账号组「${data.group}」`);
+        console.log("等发布机拉取（发布机上入库后一律待确认，不会自动发）");
+      }
     } else out(data);
     return data;
   }
@@ -1463,11 +1471,39 @@ async function cmdCloud() {
   else console.log(data.message ?? "这台机器未登录 Hifabu。");
 }
 
+function printDelivery(row) {
+  console.log(`${row.id}${row.title ? ` · ${row.title}` : ""} · ${row.label}：${row.message}`);
+  for (const draft of row.summary?.drafts ?? []) {
+    console.log(`  ${platformLabelOf(draft.platform)} ${draft.account ?? draft.handle} · ${clock(draft.suggestedAt)}`);
+  }
+  for (const rejection of row.summary?.rejected ?? []) {
+    console.log(`  ${platformLabelOf(rejection.platform)} ${rejection.handle}：${rejection.reason}`);
+  }
+  if (row.reason && row.state !== "failed") console.log(row.reason);
+  if (row.nextStep) console.log(`下一步：${row.nextStep}`);
+}
+
+async function cmdDelivery() {
+  const sub = pos[1] ?? "list";
+  if (sub === "list") {
+    const data = await send("delivery.list");
+    if (!human) return out(data);
+    if (data.warning) console.log(data.warning);
+    if (!data.deliveries.length) console.log("还没有投递");
+    for (const row of data.deliveries) printDelivery(row);
+    return;
+  }
+  if (sub !== "show" || !pos[2]) throw new Error("用法：vk delivery list | show <投递号>");
+  const data = await send("delivery.show", { id: pos[2] });
+  if (human) printDelivery(data);
+  else out(data);
+}
+
 /** vk relay serve|status|connect|pull|token（#226）。serve 是云端（volc1）上跑的中转，不需要数据库。 */
 async function cmdRelay() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] | disconnect | pull | token push|pull";
+  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] [--group <默认组名>] | disconnect | pull | token push|pull";
   if (sub === "serve") {
     const { mkdirSync, chmodSync: chmod } = await import("node:fs");
     const { randomBytes } = await import("node:crypto");
@@ -1518,9 +1554,12 @@ async function cmdRelay() {
     return data;
   }
   if (sub === "connect") {
-    if (!pos[2] || !val("--token")) throw new Error(usage);
-    const data = await send("relay.connect", { url: pos[2], token: val("--token"), ...(has("--push") ? { push: true } : {}) }, { log });
-    if (human) console.log(data.message);
+    if (!pos[2] || !val("--token") || (Object.hasOwn(flags, "--group") && !val("--group"))) throw new Error(usage);
+    const data = await send("relay.connect", { url: pos[2], token: val("--token"), push: has("--push"), group: val("--group") }, { log });
+    if (human) {
+      console.log(data.message);
+      if (data.defaultGroup) console.log(`默认交给账号组「${data.defaultGroup}」`);
+    }
     else out(data);
     return data;
   }
@@ -2204,9 +2243,10 @@ function usage() {
       "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
       "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
       "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
-      "  vk work push <清单.json> --group <组名>                  制作机：把清单和成片传到云端中转，等发布机拉取入库（本机不建作品）",
+      "  vk work push <清单.json> [--group <组名>] [--dry-run]   制作机：校验预览或把成片交给发布机",
+      "  vk delivery list | show <投递号>                       查看交付进度和发布机回报",
       "  vk relay serve [--port 8790] [--data <目录>]            云端中转（只存文件和投递清单；只监听 127.0.0.1，HTTPS 由反代提供）",
-      "  vk relay connect <地址> --token <token> [--push]        写中转配置：发布机用拉取 token，制作机加 --push 用推送 token",
+      "  vk relay connect <地址> --token <token> [--push] [--group <默认组名>]   连接中转并记住默认账号组",
       "  vk relay status | pull | token push|pull                中转连接状态 / 立刻拉一轮 / 在云端取 token",
       ...COMMANDS.filter(({ name }) => name.startsWith("cloud.")).map(({ cli }) => `  ${cli.usage}`),
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
@@ -2256,6 +2296,7 @@ try {
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
+  else if (cmd === "delivery") await cmdDelivery();
   else if (cmd === "plan") await cmdPlan();
   else if (cmd === "relay") await cmdRelay();
   else if (cmd === "cloud") await cmdCloud();
