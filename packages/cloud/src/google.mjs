@@ -72,7 +72,7 @@ export function createGoogleOAuth(config, callbackUrl, { fetch = globalThis.fetc
   return {
     authorizationOrigin: authorization.origin,
 
-    authorizationUrl({ state, verifier, nonce }) {
+    authorizationUrl({ state, verifier, nonce, selectAccount = false }) {
       const url = new URL(authorization);
       for (const [key, value] of Object.entries({
         client_id: clientId,
@@ -84,6 +84,7 @@ export function createGoogleOAuth(config, callbackUrl, { fetch = globalThis.fetc
         code_challenge: tokenHash(verifier),
         code_challenge_method: "S256",
       })) url.searchParams.set(key, value);
+      if (selectAccount) url.searchParams.set("prompt", "select_account");
       return url.href;
     },
 
