@@ -7,14 +7,15 @@
 //   · 发布机回报「已入库」满 7 天后清理文件；磁盘剩余不足 2GB 拒收，并说人话。
 //
 // 协议（都在 /v1 下）：
-//   GET  /v1/ping                         任一 token → { ok, role }
+//   GET  /v1/ping?details=1               任一 token → { ok, role }，可附磁盘与实测速度
 //   GET  /v1/blobs/:sha/status            推送 → { complete, received }
 //   PUT  /v1/blobs/:sha?offset=N&total=T  推送：从 offset 续传；传满自动核对 sha256
 //   GET  /v1/blobs/:sha                   拉取：支持 Range: bytes=N-（断点续传）
 //   POST /v1/deliveries                   推送：{ id, group, manifest, blobs:[{sha256,size,name}] }，幂等
 //   GET  /v1/deliveries?state=a,b         拉取：默认 pending,downloaded
+//   GET  /v1/deliveries?view=maker        推送：查看投递（不领取）
 //   GET  /v1/deliveries/:id               任一 token
-//   POST /v1/deliveries/:id/state         拉取：{ state: downloaded|ingested|failed, reason? }
+//   POST /v1/deliveries/:id/state         拉取：下载进度、已下载、入库摘要或失败原因
 
 import { createServer } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -54,15 +55,27 @@ export function createRelayServer({
   const partialDir = join(dataDir, "partial");
   const deliveriesDir = join(dataDir, "deliveries");
   for (const dir of [blobsDir, partialDir, deliveriesDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const activityPath = join(dataDir, "activity.json");
+  let activity = {};
+  if (existsSync(activityPath)) activity = JSON.parse(readFileSync(activityPath, "utf8"));
+  const saveActivity = (patch) => {
+    const next = { ...activity, ...patch };
+    const tmp = `${activityPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
+    renameSync(tmp, activityPath);
+    activity = next;
+  };
 
   const free = () => {
     if (freeBytes) return freeBytes();
     const s = statfsSync(dataDir);
     return Number(s.bavail) * Number(s.bsize);
   };
-  const lowDisk = () => {
+  const lowDisk = (incoming = 0) => {
     const left = free();
-    return left < minFreeBytes ? `云端磁盘剩余 ${gb(left)}，不足 ${gb(minFreeBytes)}，暂时不收新文件：先清理云端磁盘，或等发布机把已投递的拉走（已入库的文件 7 天后自动清理）` : null;
+    return left - incoming < minFreeBytes
+      ? `中转空间不够：云端磁盘剩余 ${gb(left)}，${left < minFreeBytes ? "不足" : "上传后会不足"} ${gb(minFreeBytes)}。先清理云端磁盘，或等已入库的文件满 7 天自动清理`
+      : null;
   };
 
   const blobPath = (sha) => join(blobsDir, sha);
@@ -97,6 +110,10 @@ export function createRelayServer({
     created_at: d.created_at,
     updated_at: d.updated_at,
     ...(d.reason ? { reason: d.reason } : {}),
+    ...(d.error_code ? { error_code: d.error_code } : {}),
+    ...(d.next_step ? { next_step: d.next_step } : {}),
+    ...(d.summary ? { summary: d.summary } : {}),
+    ...(d.progress ? { progress: d.progress } : {}),
     ...(d.ingested_at ? { ingested_at: d.ingested_at } : {}),
     ...(d.files_purged ? { files_purged: true } : {}),
   });
@@ -175,23 +192,25 @@ export function createRelayServer({
       drain(req);
       return send(res, 200, { complete: true, received: sizeOf(blobPath(sha)) });
     }
-    const low = lowDisk();
+    const part = partPath(sha);
+    const have = sizeOf(part) ?? 0;
+    const low = lowDisk(total - have);
     if (low) {
       drain(req);
       log("[relay] 磁盘不足，拒收");
       return send(res, 507, { error: "disk_low", message: low });
     }
-    const part = partPath(sha);
-    const have = sizeOf(part) ?? 0;
     if (offset !== have) {
       drain(req);
       return send(res, 409, { error: "offset_mismatch", received: have, message: `续传位置不对：云端已收到 ${have} 字节` });
     }
+    const started = performance.now();
     try {
       await pipeline(req, createWriteStream(part, { flags: offset ? "a" : "w", mode: 0o600 }));
     } catch {
       return; // 连接断了：半截留着，下次从云端收到的位置续传
     }
+    const elapsed = performance.now() - started;
     const got = sizeOf(part) ?? 0;
     if (got < total) return send(res, 202, { complete: false, received: got });
     const h = createHash("sha256");
@@ -201,6 +220,7 @@ export function createRelayServer({
       return send(res, 422, { error: "hash_mismatch", message: "上传的文件和声明的 sha256 对不上，已丢弃，请重新上传" });
     }
     renameSync(part, blobPath(sha));
+    if (elapsed >= 100 && got > have) saveActivity({ uploadBytesPerSecond: Math.round((got - have) * 1000 / elapsed) });
     return send(res, 201, { complete: true, received: got });
   }
 
@@ -247,20 +267,37 @@ export function createRelayServer({
   }
 
   async function postState(req, res, id) {
+    const { state, reason, summary, progress, errorCode, nextStep, downloadBytesPerSecond } = await readJson(req);
     const d = readDelivery(id);
     if (!d) return send(res, 404, { error: "not_found", message: "没有这个投递" });
-    const { state, reason } = await readJson(req);
-    if (!["downloaded", "ingested", "failed"].includes(state)) return send(res, 400, { error: "bad_request", message: "state 只能是 downloaded / ingested / failed" });
+    if (!["downloading", "downloaded", "ingested", "failed"].includes(state)) return send(res, 400, { error: "bad_request", message: "投递回报状态不合法" });
     // 已入库的不再倒退：重复回报是幂等的。
-    if (d.state === "ingested" || (d.state === "failed" && state === "downloaded")) return send(res, 200, view(d));
+    if (d.state === "ingested" || (d.state === "failed" && ["downloading", "downloaded"].includes(state))) return send(res, 200, view(d));
     const at = now();
-    const next = { ...d, state, updated_at: at };
+    const next = { ...d, state: state === "downloading" ? d.state : state, updated_at: at };
+    delete next.progress;
+    if (state === "downloading" && progress != null) {
+      const total = d.blobs.reduce((n, b) => n + b.size, 0);
+      const { received, bytesPerSecond } = progress;
+      if (!Number.isSafeInteger(received) || received < 0 || received > total) return send(res, 400, { error: "bad_request", message: "下载进度字节数不合法" });
+      next.progress = { received, total, ...(bytesPerSecond > 0 && Number.isFinite(bytesPerSecond) ? { bytesPerSecond } : {}), at };
+    }
+    if (state === "downloaded" && downloadBytesPerSecond > 0 && Number.isFinite(downloadBytesPerSecond)) {
+      saveActivity({ downloadBytesPerSecond });
+    }
     if (state === "ingested") {
       next.ingested_at = at;
       if (typeof reason === "string" && reason) next.reason = reason.slice(0, 500);
       else delete next.reason;
+      delete next.error_code;
+      delete next.next_step;
+      if (summary && typeof summary === "object" && !Array.isArray(summary)) next.summary = summary;
     }
-    if (state === "failed") next.reason = String(reason ?? "").slice(0, 500) || "发布机没说原因";
+    if (state === "failed") {
+      next.reason = String(reason ?? "").slice(0, 500) || "发布机没说原因";
+      if (typeof errorCode === "string") next.error_code = errorCode.slice(0, 80);
+      if (typeof nextStep === "string") next.next_step = nextStep.slice(0, 500);
+    }
     writeDelivery(next);
     log(`[relay] 投递 ${id} → ${state}`);
     return send(res, 200, view(next));
@@ -288,7 +325,10 @@ export function createRelayServer({
     };
     const m = req.method;
 
-    if (kind === "ping" && m === "GET") return send(res, 200, { ok: true, role });
+    if (kind === "ping" && m === "GET") {
+      const details = url.searchParams.get("details") === "1";
+      return send(res, 200, { ok: true, role, ...(details ? { ...activity, freeBytes: free(), minFreeBytes } : {}) });
+    }
     if (kind === "blobs" && SHA.test(key ?? "")) {
       if (tail === "status" && m === "GET") {
         if (!need("push")) return;
@@ -301,7 +341,13 @@ export function createRelayServer({
     if (kind === "deliveries") {
       if (!key && m === "POST") return need("push") && postDelivery(req, res);
       if (!key && m === "GET") {
+        if (url.searchParams.get("view") === "maker") {
+          if (!need("push")) return;
+          const rows = allDeliveries().sort((a, b) => b.created_at - a.created_at);
+          return send(res, 200, { deliveries: rows.map(view), lastPullAt: activity.lastPullAt ?? null, downloadBytesPerSecond: activity.downloadBytesPerSecond ?? null });
+        }
         if (!need("pull")) return;
+        saveActivity({ lastPullAt: now() });
         const want = (url.searchParams.get("state") ?? "pending,downloaded").split(",").filter((s) => STATES.includes(s));
         const rows = allDeliveries().filter((d) => want.includes(d.state)).sort((a, b) => a.created_at - b.created_at);
         return send(res, 200, { deliveries: rows.map(view) });
@@ -309,7 +355,9 @@ export function createRelayServer({
       if (DELIVERY_ID.test(key ?? "")) {
         if (!tail && m === "GET") {
           const d = readDelivery(key);
-          return d ? send(res, 200, view(d)) : send(res, 404, { error: "not_found", message: "没有这个投递" });
+          return d
+            ? send(res, 200, { ...view(d), lastPullAt: activity.lastPullAt ?? null, downloadBytesPerSecond: activity.downloadBytesPerSecond ?? null })
+            : send(res, 404, { error: "not_found", message: "没有这个投递" });
         }
         if (tail === "state" && m === "POST") return need("pull") && postState(req, res, key);
       }

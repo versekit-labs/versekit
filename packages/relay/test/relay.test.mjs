@@ -6,7 +6,8 @@ import { mkdtempSync, writeFileSync, readdirSync, existsSync, readFileSync, rmSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { createRelayServer, hashFile, pushBlob, pushDelivery, downloadBlob, listDeliveries, reportState, pullOnce, ping, RETENTION_MS } from "../src/index.mjs";
+import { createRelayServer, hashFile, pushBlob, pushDelivery, downloadBlob, listDeliveries, listDeliveryStatus, getDeliveryStatus, reportState, pullOnce, ping, RETENTION_MS } from "../src/index.mjs";
+import { deliveryStatusView } from "../src/status.mjs";
 
 const ROOT = mkdtempSync(join(tmpdir(), "vk-relay-"));
 const PUSH = "push-token-for-test";
@@ -165,6 +166,21 @@ test("ACC-relay-02 传完核对 sha256：对不上就丢掉，不留坏文件", 
   assert.ok(!existsSync(join(dataDir, "partial", `${fake}.part`)));
 });
 
+test("ACC-deliver-04 多文件上传进度按整个投递统计，同内容只计一次", async () => {
+  const video = fileOf("delivery-progress.mp4", Buffer.from("delivery-progress-video"));
+  const cover = fileOf("delivery-progress.png", Buffer.from("delivery-progress-cover"));
+  const samples = [];
+  const total = video.size + cover.size;
+  await pushDelivery({
+    url, token: PUSH, group: "组", manifest: manifest(video),
+    files: [video, cover, video], onProgress: (sample) => samples.push(sample),
+  });
+  const startCover = samples.find((sample) => sample.name === cover.name);
+  assert.equal(startCover.deliverySent, video.size);
+  assert.equal(samples.at(-1).deliverySent, total);
+  assert.ok(samples.every((sample) => sample.deliveryTotal === total));
+});
+
 test("ACC-relay-02 失败自动重试：服务暂时 503 / 断线之后能传完", async () => {
   const f = fileOf("flaky.mp4", Buffer.from("flaky-network-bytes"));
   let hits = 0;
@@ -228,4 +244,60 @@ test("ACC-relay-06 拉取一轮会逐个报进展：先说共几个，每个开�
   const again = [];
   await pullOnce({ url, token: PULL, inboxDir: join(ROOT, "inbox-prog"), getRecord: (id) => records.get(id) ?? null, record: () => {}, ingest: async () => ({}), onEvent: (e) => again.push(e) });
   assert.deepEqual(again, [{ type: "round", total: 0 }]);
+});
+
+test("ACC-deliver-04 发布机下载进度与六小时离线文案，记住最后来取的时间与最近测速", async () => {
+  const config = { dataDir: join(ROOT, "activity-test"), pushToken: PUSH, pullToken: PULL, now: () => clock, freeBytes: () => free };
+  let cloud = createRelayServer(config);
+  let baseUrl = `http://127.0.0.1:${await cloud.listen()}`;
+  const maker = () => ({ url: baseUrl, token: PUSH });
+  const publisher = () => ({ url: baseUrl, token: PULL });
+  try {
+    const file = fileOf("download-progress.mp4", Buffer.alloc(1000, 4));
+    const sent = await pushDelivery({ ...maker(), group: "组", manifest: manifest(file), files: [file] });
+    const id = sent.id;
+    const show = async () => {
+      const row = await getDeliveryStatus({ ...maker(), id });
+      return deliveryStatusView(row, { ...row, now: clock });
+    };
+    const waiting = await show();
+    assert.equal(waiting.state, "waiting");
+    assert.equal(waiting.lastPullAt, null);
+    assert.match(waiting.message, /还没来取/);
+    await assert.rejects(listDeliveryStatus(publisher()), { status: 401 });
+
+    clock += 3000;
+    await listDeliveries(publisher());
+    const lastPullAt = clock;
+    clock += 3 * 60_000;
+    assert.match((await show()).message, /上次来取是 3 分钟前/);
+    clock = lastPullAt + 6 * 3600e3;
+    const offline = await show();
+    assert.equal(offline.lastPullAt, lastPullAt, "制作机多次看状态也不算发布机来取");
+    assert.equal(offline.offline, true);
+    assert.match(offline.message, /已到中转，但发布机 6 小时没来取。打开那台电脑上的 versekit 就会自动下载/);
+
+    await listDeliveries(publisher());
+    await reportState({ ...publisher(), id, state: "downloading", progress: { received: 400, bytesPerSecond: 12 } });
+    const downloading = await show();
+    assert.equal(downloading.state, "downloading");
+    assert.equal(downloading.progress.percent, 40);
+    assert.equal(downloading.progress.etaSeconds, 50);
+    assert.match(downloading.message, /发布机在下载：40%，还要约 50 秒/);
+    assert.equal((await listDeliveries(publisher())).find((d) => d.id === id).state, "pending", "旧发布机仍能从原有状态拉取");
+    await reportState({ ...publisher(), id, state: "downloaded", downloadBytesPerSecond: 245_000 });
+    const summary = { workId: "work_local", drafts: [{ platform: "bilibili", account: "@b", suggestedAt: clock + 60_000 }], rejected: [{ platform: "xiaohongshu", reason: "文案超限" }] };
+    await reportState({ ...publisher(), id, state: "ingested", summary });
+    await cloud.close();
+    cloud = createRelayServer(config);
+    baseUrl = `http://127.0.0.1:${await cloud.listen()}`;
+    assert.equal((await ping({ ...maker(), details: true })).downloadBytesPerSecond, 245_000);
+    assert.equal((await ping({ ...maker(), details: true })).freeBytes, free);
+    const list = await listDeliveryStatus(maker());
+    assert.equal(list.lastPullAt, clock);
+    assert.deepEqual((await show()).summary, summary);
+    assert.deepEqual(list.deliveries.find((d) => d.id === id).summary, summary);
+  } finally {
+    await cloud.close();
+  }
 });
