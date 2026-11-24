@@ -25,6 +25,7 @@ import { browserReady, openAccount, closeAccount, logoutAccount, closeAllAccount
 import { send, ensureDaemon } from "./client.mjs";
 import { createRelayServer } from "../../relay/src/index.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
+import { finishWindowLogin, fallbackLoginStatus } from "./login-web.mjs";
 import * as service from "./service.mjs";
 import * as updates from "../../core/src/update.mjs";
 
@@ -628,8 +629,22 @@ function daemonHandlers(adapters, log) {
         if (result?.state === "ok" && result.credentialRef && result.credentialRef !== account.credential_ref) {
           open().prepare("UPDATE account SET credential_ref=? WHERE id=?").run(result.credentialRef, accountId);
         }
-        return result;
+        return finishWindowLogin({
+          accountId,
+          account,
+          result,
+          deps: {
+            clearSession: (id) => loginSessions.delete(id),
+            setAccountState,
+            notifyLogin,
+            closeWindow: (id) => closeLoginWindow(id),
+          },
+        });
       }
+
+      // 下面的页面检测是小红书专用的（creator.xiaohongshu.com）。别的平台没有 loginStatus 就只报状态，
+      // 不能落进来：creatorLoggedIn 会 newTab 开一个空白页，2 秒一次永远关不掉（#386）。
+      if (account.platform !== "xiaohongshu") return fallbackLoginStatus({ hasSession: loginSessions.has(accountId) });
 
       // 扫码会话：读无头页面的状态；过期就地换新码，成功后确认持久 cookie 再收尾。
       const qrSession = loginSessions.get(accountId);

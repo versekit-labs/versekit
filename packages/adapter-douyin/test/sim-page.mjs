@@ -168,8 +168,8 @@ export function createSim({ clockStart = Date.now(), evidenceDir, faults = {} } 
     },
   };
 
-  function makeTab() {
-    site.opened += 1;
+  function makeTab({ count = true } = {}) {
+    if (count) site.opened += 1;
     const tab = {
       send: async (method) => {
         log(`cdp ${method}`);
@@ -257,6 +257,8 @@ export function createSim({ clockStart = Date.now(), evidenceDir, faults = {} } 
       log(`openAccount ${accountId}`);
       return makeTab();
     },
+    /** 只查找、不新建：模拟「用户已经打开的登录窗口」。windowOpen=false 就是窗口不在。不计入 site.opened。 */
+    findOpenTab: async () => (site.windowOpen === false ? null : makeTab({ count: false })),
     evidencePath: (accountId, tag) => {
       const dir = join(evidenceDir, accountId);
       mkdirSync(dir, { recursive: true });

@@ -584,3 +584,52 @@ test("isLocalBase / baseUrl：只有回环地址和 file:// 算本机模拟页",
   assert.equal(page.isLocalBase("https://127.0.0.1.evil.example"), false);
   assert.equal(page.isLocalBase("not a url"), false);
 });
+
+// ------------------------------------------------------------------ ACC-acct-iso-08 登录态轮询不开新标签页
+
+test("ACC-acct-iso-08：抖音登录态轮询 30 次，标签页不增加、不导航；窗口不在返回 idle", async () => {
+  const { sim, adapter } = setup();
+  assert.equal(typeof adapter.loginStatus, "function");
+  sim.goto("https://sim.local/login");
+  const before = sim.site.log.length;
+  for (let i = 0; i < 30; i++) {
+    const r = await adapter.loginStatus({ accountId: "acc_poll" });
+    assert.equal(r.state, "pending");
+  }
+  assert.equal(sim.site.opened, 0, "轮询不得新开标签页");
+  assert.equal(sim.site.closed, 0, "不得关用户的窗口");
+  assert.deepEqual(sim.site.log.slice(before).filter((l) => l.startsWith("goto")), [], "不得导航");
+
+  sim.site.windowOpen = false;
+  assert.equal((await adapter.loginStatus({ accountId: "acc_poll" })).state, "idle");
+  assert.equal(sim.site.opened, 0);
+});
+
+test("ACC-acct-iso-08：抖音页面切到创作者中心首页后 loginStatus 返回 ok，经 finishWindowLogin 账号变「正常」", async () => {
+  const { acc, sim, adapter } = setup();
+  db.prepare("UPDATE account SET state='expired' WHERE id=?").run(acc);
+  sim.goto("https://sim.local/login");
+  assert.equal((await adapter.loginStatus({ accountId: acc })).state, "pending");
+  sim.goto("https://sim.local/creator-micro/home");
+  const r = await adapter.loginStatus({ accountId: acc });
+  assert.equal(r.state, "ok");
+
+  const { finishWindowLogin } = await import("../../cli/src/login-web.mjs");
+  let closed = 0;
+  const out = await finishWindowLogin({
+    accountId: acc,
+    account: { state: "expired" },
+    result: r,
+    deps: {
+      clearSession: () => {},
+      setAccountState: (id, st) => core.setAccountState?.(id, st) ?? db.prepare("UPDATE account SET state=? WHERE id=?").run(st, id),
+      notifyLogin: async () => {},
+      closeWindow: async () => { closed += 1; },
+    },
+  });
+  assert.equal(out.state, "ok");
+  assert.equal(out.finish, undefined);
+  assert.equal(db.prepare("SELECT state FROM account WHERE id=?").get(acc).state, "ok");
+  assert.equal(closed, 1);
+  assert.equal(sim.site.opened, 0);
+});

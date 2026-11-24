@@ -1403,6 +1403,24 @@ function nextStamp() {
  * tag 会被清洗成安全文件名，适配器可以传平台/步骤名，不用关心文件系统。
  */
 /**
+ * 只查找、不新建：在这个账号**已经打开**的浏览器里，找一个地址匹配 match 的标签页（#386）。
+ * 没有活着的实例、或没有匹配的标签页就返回 null——绝不起实例、不开标签页、不导航、不关。
+ * 登录态轮询每 2 秒来一次，靠它读用户正在操作的登录窗口，而不是每次都另开一个空白页。
+ */
+export async function findOpenTab(accountId, { match } = {}) {
+  const id = requireAccountId(accountId);
+  const live = instances.get(id);
+  if (!live?.tabs?.size) return null;
+  const re = match instanceof RegExp ? match : null;
+  for (const t of live.tabs) {
+    const here = await t.url().catch(() => "");
+    if (!here || /^(about:|chrome:|devtools:)/.test(here)) continue;
+    if (!re || re.test(here)) return t;
+  }
+  return null;
+}
+
+/**
  * 这个账号是不是已经有一个活着的浏览器（通常是用户正开着的登录窗口）。
  *
  * 适配器的 check() 以前一律 closeAccount()，遇到「用户正在登录」就会把人家的窗口关掉；
