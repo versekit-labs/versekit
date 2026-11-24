@@ -2,19 +2,26 @@
 # 选 worker 的通道与模型（issue #87 / ACC-harness-claude-01..05）。
 #
 # 口径：
-#   - 实现 / 返工 worker 默认 claude 通道（Sonnet）。
+#   - 2026-11-24 起：实现 / 返工 worker **默认先走 Codex**（没有 model label 也一样，ACC-harness-route-01）；
+#     Codex 不可用（没装 / 未登录 / 冷却期内）→ 改派 Sonnet；返工 round >= 2 升 Sonnet。
+#     额度用完由 bin/orca-flow.mjs 每轮从在跑的 Codex worker 屏幕认出、自动写 codex-exhausted、同一轮改派 Sonnet。
+#   - model:sonnet label：强制 Sonnet（claude 通道），不碰 Codex。
+#   - model:neon label（设计稿、页面视觉、出图）：实现与返工 round 1 走 antigravity 通道
+#     （Orca 原生 --agent antigravity --model ${NEON_MODEL}，默认 gemini-4-neon-high）；返工 round >= 2 升 Sonnet。
+#     agy 不可用 → 改派 Sonnet。探测只看 `command -v agy`，不发请求。
 #   - Opus **只认显式 model:opus label**（额度原因，2026-11-14）；返工轮次不再自动升 Opus。
 #   - issue 带 model:deepseek label（简单活）：实现与返工 round 1 直接走 DeepSeek 通道
 #     （bin/dsh-model.sh：volc 优先、qwen 兜底），**不探测、不调用 claude**；
 #     返工 round >= 2 仍未过 → 单升 Sonnet（claude 通道）；仍不自动升 Opus。
 #     DeepSeek 两个通道都不可用时退出码 1、本轮不派，**绝不自动改用 claude**。
 #   - 同时带 model:opus 与 model:deepseek 时，显式 Opus 优先。
-#   - issue 带 model:codex label（2026-11-21 所有者加了 Codex 账号，ACC-harness-codex-01/03/04）：
+#   - model:codex label 仍然认，效果和默认一样（旧写法）。
+#     Codex 通道（ACC-harness-codex-01/03/04）：
 #     实现与返工 round 1 走 codex 通道（Orca 原生 --agent codex --model ${CODEX_MODEL}，默认 gpt-6.2-sol）；
 #     返工 round >= 2 升 Sonnet；同时带 model:opus 时 Opus 优先；优先于 model:deepseek。
 #     Codex 不可用（没有 codex 命令 / codex login status 显示未登录 / 冷却期内额度用完）→ 本单改派 Sonnet。
 #     探测只看 `command -v codex` 与 `codex login status`，**不跑 codex exec**（一次最小请求就约 1.2 万 token）。
-#     额度用完由协调器从 worker 屏幕确认后手动写 $STATE_DIR/codex-exhausted（docs/COORDINATOR.md §3）。
+#     额度用完由 orca-flow 写 $STATE_DIR/codex-exhausted（到期 epoch 秒<TAB>到期时间文本），到点自动恢复。
 #   - 验收 worker **始终**走 DeepSeek 通道（bin/dsh-model.sh：volc 优先、qwen 兜底），
 #     绝不选 claude。实现与验收用不同模型，彼此独立，验收不看实现方的思考过程。
 #   - claude 不可用（命令不存在 / 额度用尽 / 限流 / 网络不通）时，实现 worker 自动降级到
@@ -22,8 +29,8 @@
 #   - IMPL_CHANNEL / IMPL_MODEL 显式覆盖照旧生效（优先于 label），便于演练与紧急回退。
 #
 # 输出（stdout，单行）：<通道>|<模型>|<原因>
-#   通道：claude / volc / qwen / codex
-#   模型：sonnet / opus / deepseek-v4.1-flash / deepseek-v4.1-flash-1017 / gpt-6.2-sol（CODEX_MODEL）
+#   通道：claude / volc / qwen / codex / antigravity
+#   模型：sonnet / opus / deepseek-v4.1-flash / deepseek-v4.1-flash-1017 / gpt-6.2-sol（CODEX_MODEL）/ gemini-4-neon-high（NEON_MODEL）
 #   原因：给日志用的人话，不含 `|`
 # 退出码：0 选中；1 没有任何可用通道（stderr 说清原因）。
 #
@@ -36,6 +43,8 @@
 #   IMPL_MODEL=sonnet|opus    强制实现 worker 的模型
 #   CLAUDE_BIN                默认 claude
 #   CODEX_BIN                 默认 codex
+#   AGY_BIN                   默认 agy
+#   NEON_MODEL                Neon 通道的模型（默认 gemini-4-neon-high）
 #   CODEX_MODEL               Codex 通道的模型（默认 gpt-6.2-sol；不要用本机默认的 gpt-6.2-astra，最费额度）
 #   CLAUDE_PROBE=0            跳过 claude 探测（假定可用；仅演练/离线用）
 #   CLAUDE_PROBE_TTL_S        探测结果缓存秒数（默认 300）
@@ -95,6 +104,33 @@ labels_has_codex() {
     *",model:codex,"*) return 0 ;;
   esac
   return 1
+}
+
+labels_has_sonnet() {
+  case ",${LABELS}," in
+    *",model:sonnet,"*) return 0 ;;
+  esac
+  return 1
+}
+
+labels_has_neon() {
+  case ",${LABELS}," in
+    *",model:neon,"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Neon（agy）探测：只看 command -v，不发请求。0 = 可用；1 = 不可用（原因在 NEON_REASON）。
+AGY_BIN="${AGY_BIN:-agy}"
+NEON_MODEL="${NEON_MODEL:-gemini-4-neon-high}"
+NEON_REASON=""
+probe_neon() {
+  NEON_REASON=""
+  if ! command -v "$AGY_BIN" >/dev/null 2>&1; then
+    NEON_REASON="找不到 ${AGY_BIN} 命令"
+    return 1
+  fi
+  return 0
 }
 
 # Codex 探测：0 = 可用；1 = 不可用（原因在 CODEX_REASON）。不花 token：不跑 codex exec。
@@ -319,7 +355,9 @@ esac
 MODEL="sonnet"
 MODEL_REASON="默认 Sonnet"
 DEEPSEEK_LABEL=0   # 1 = 按 model:deepseek label 走 DeepSeek 通道（不碰 claude）
-CODEX_LABEL=0      # 1 = 按 model:codex label 先试 Codex 通道（不可用则改派 Sonnet）
+CODEX_LABEL=0      # 1 = 先试 Codex 通道（默认；model:codex 同义；不可用则改派 Sonnet）
+NEON_LABEL=0       # 1 = 按 model:neon label 先试 antigravity 通道（不可用则改派 Sonnet）
+CODEX_DEFAULT=0    # 1 = 没有任何 model label，走的是默认 Codex
 local_round=0
 case "$ROUND" in
   ''|*[!0-9]*) ;;
@@ -334,12 +372,15 @@ else
   if labels_has_opus; then
     MODEL="opus"
     MODEL_REASON="issue 带 model:opus label"
-  elif labels_has_codex; then
+  elif labels_has_sonnet; then
+    MODEL="sonnet"
+    MODEL_REASON="issue 带 model:sonnet label"
+  elif labels_has_neon; then
     if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
       MODEL="sonnet"
-      MODEL_REASON="Codex 第 ${local_round} 轮仍未过 → 升 Sonnet"
+      MODEL_REASON="Neon 第 ${local_round} 轮仍未过 → 升 Sonnet"
     else
-      CODEX_LABEL=1
+      NEON_LABEL=1
     fi
   elif labels_has_deepseek; then
     if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
@@ -347,6 +388,15 @@ else
       MODEL_REASON="DeepSeek 第 ${local_round} 轮仍未过 → 升 Sonnet"
     else
       DEEPSEEK_LABEL=1
+    fi
+  else
+    # 没有 model label，或带旧写法 model:codex：默认 Codex。
+    if [ "$ROLE" = "rework" ] && [ "$local_round" -ge 2 ]; then
+      MODEL="sonnet"
+      MODEL_REASON="Codex 第 ${local_round} 轮仍未过 → 升 Sonnet"
+    else
+      CODEX_LABEL=1
+      labels_has_codex || CODEX_DEFAULT=1
     fi
   fi
 fi
@@ -361,9 +411,20 @@ if [ -n "${IMPL_CHANNEL:-}" ]; then
     dsh|deepseek) CHANNEL="dsh"; CHANNEL_FORCED=1; FORCE_REASON="IMPL_CHANNEL=${IMPL_CHANNEL} 强制" ;;
     *) printf 'worker-channel: IMPL_CHANNEL 只支持 claude|dsh\n' >&2; exit 1 ;;
   esac
+elif [ "$NEON_LABEL" = "1" ]; then
+  if probe_neon; then
+    printf 'antigravity|%s|%s\n' "$NEON_MODEL" "issue 带 model:neon label → Neon（agy）"
+    exit 0
+  fi
+  MODEL="sonnet"
+  MODEL_REASON="Neon 不可用（${NEON_REASON}）→ 改派 Sonnet"
 elif [ "$CODEX_LABEL" = "1" ]; then
   if probe_codex; then
-    printf 'codex|%s|%s\n' "$CODEX_MODEL" "issue 带 model:codex label → Codex"
+    if [ "$CODEX_DEFAULT" = "1" ]; then
+      printf 'codex|%s|%s\n' "$CODEX_MODEL" "默认先用 Codex"
+    else
+      printf 'codex|%s|%s\n' "$CODEX_MODEL" "issue 带 model:codex label → Codex"
+    fi
     exit 0
   fi
   # Codex 不可用：本单改派 Sonnet，走下面 claude 通道的常规探测与降级。

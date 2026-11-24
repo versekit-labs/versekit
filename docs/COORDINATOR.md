@@ -74,7 +74,7 @@ Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca �
 | `worker_done` outcome=failed | 同 escalation | 告诉人 worker 报告了什么 |
 | 验收 FAIL，但原因与代码无关 | `agentctl void --issue N --reason "…"` | 先把环境修好再重验 |
 | 验收 worker 跑在火山上，屏幕末尾是额度用尽（如 `You have exceeded the 5-hour usage quota. It will reset at …`） | 写火山冷却、停掉它，下一轮自动用千问重派 | 见下面「额度用尽（手动）」 |
-| Codex 实现 worker 停在用量上限（`You've hit your usage limit … try again at <时间>`） | 写 Codex 冷却、停掉它、issue 退回 `s:ready` | 见下面「额度用尽（手动）」 |
+| Codex 实现 worker 停在用量上限（`You've hit your usage limit … try again at <时间>`） | **orca-flow 自动处理**：写 `codex-exhausted`、停掉它、同一轮在原 worktree 改派 Sonnet | 不用动手；日志有「Codex 额度用完，到 <时间> 为止 → #N 改派 Sonnet」 |
 | `orca-flow status` 里某行 `requiresAction` | 按它给的 `nextAction` argv 处理 | 只认 `exited` 等正证据；`unverifiable` 是「不知道」，不是「死了」 |
 
 **额度用尽（手动，ACC-harness-orca-07）**：旧 `coordinator-loop.sh` 会从 worker 屏幕自动识别并冷却，这部分随它删掉了，现在由你处理。发现途径：`orca-flow status` 里它 `requiresAction`，或 `orca orchestration worker-read --dispatch <id> --source auto` 末尾是额度报错。1 token 探测在火山额度用尽时仍返回 200，所以**不写冷却文件，下一轮还会选火山**。
@@ -83,13 +83,12 @@ Task 标题 `vk#<issue> <实现|返工 r<k>|验收 <head7>>` 是脚本与 Orca �
 S=~/.orca/versekit-state
 # 火山（验收）：到期时间取报错里的 reset at；解析不出按 5 小时
 printf '%s\t%s\n' "$(date -v+5H +%s)" "$(date -v+5H '+%F %T')" > $S/volc-exhausted
-# Codex（实现 / 返工）：到期时间取报错里的 try again at；解析不出按 5 小时
-printf '%s\t%s\n' "$(date -v+5H +%s)" "$(date -v+5H '+%F %T')" > $S/codex-exhausted
 orca orchestration worker-stop --dispatch <id> --json      # 有额度报错这个正证据才 stop
-node bin/agentctl.mjs set --issue <N> --to ready --force   # 只有 Codex 实现单需要；验收不用改 label
 ```
 
-文件格式都是「到期 epoch 秒<TAB>到期时间文本」：`bin/dsh-model.sh` 到期前不探测火山、直接选千问；`bin/worker-channel.sh` 冷却期内 `model:codex` 改派 Sonnet。到期自动恢复。被停掉的验收 Task 在 Orca 里是 `blocked`，下一轮 `orca-flow` 会为同一 head 重建一个、用千问派出。
+（Codex 不在这里：orca-flow 每轮自己读在跑的 Codex worker 屏幕末尾，认出用量上限就写 `codex-exhausted`、停掉、同一轮改派 Sonnet，不再要协调器手写。Codex 自带的 `Tip: … /usage … usage limit resets` 提示行不算用完。）
+
+文件格式都是「到期 epoch 秒<TAB>到期时间文本」：`bin/dsh-model.sh` 到期前不探测火山、直接选千问；`bin/worker-channel.sh` 冷却期内默认（Codex）单改派 Sonnet。到期自动恢复。被停掉的验收 Task 在 Orca 里是 `blocked`，下一轮 `orca-flow` 会为同一 head 重建一个、用千问派出。
 
 人做的决定必须落成 issue 评论或口径修改——worker 重新派工时只看得到 issue，看不到聊天。
 铁律：空等和超时是 checkpoint，不是失败；只有正证据（`exited`）才能 stop / abandon。
@@ -138,26 +137,30 @@ node bin/agentctl.mjs set --issue <N> --to ready --force   # 只有 Codex 实现
 
 | 档 | label | 通道 | 适合 | 例子 |
 |---|---|---|---|---|
+| 默认 | （无 label） | **Codex**（Orca 原生 `--agent codex --model gpt-6.2-sol`）；额度用完 orca-flow 自动切 Sonnet | 绝大多数后端 / 脚本 / 测试 / 文档单；口径写得死、不靠看图判断 | 核心逻辑、CLI、适配器内部、不稳定测试排查 |
+| Sonnet | `model:sonnet` | Claude Sonnet | 要读懂跨模块逻辑、改适配器、新功能，Codex 做不好或不该占 Codex 额度的单 | 手机交接页的交互逻辑；新适配器能力；账号登录流程 |
+| 设计 / 出图 | `model:neon` | agy 的 Neon（Orca agent `antigravity`，`--model gemini-4-neon-high`，`NEON_MODEL` 可改） | 设计稿、页面视觉、出图、截图对照这类设计活 | 页面还原；封面图；设计稿落成页面 |
 | 简单活 | `model:deepseek` | opencode + DeepSeek（火山优先，千问兜底） | 口径写得很死、改动小、模式固定、有现成测试可对照 | 改文档与验收口径；补测试；改脚本里的一个分支；按已有模式加一条命令或字段；改文案 |
-| Codex | `model:codex` | Codex（Orca 原生 `--agent codex --model gpt-6.2-sol`） | 口径写得死、不靠看图判断的后端 / 脚本 / 测试单：核心逻辑、CLI、适配器内部、不稳定测试排查 | 修不稳定测试；CLI 命令内部逻辑；适配器的解析与重试 |
-| 默认 | （无） | Claude Sonnet | 要读懂跨模块逻辑、改适配器或页面、新功能 | 手机交接页；新适配器能力；账号登录流程 |
 | 难单 | `model:opus` | Claude Opus | **须人点头**；只在 Sonnet 反复做不过且原因是推理难度时用 | 状态机重构；并发与时序类缺陷 |
 
 规则：
 - 验收 worker 始终是 DeepSeek，与实现分开。
-- `model:codex`（2026-11-21 所有者买了 Codex 20 美元档，额度有限，目的是省 Claude 额度）：
-  - **不适合**：界面还原、要看设计稿的单、对外文案、须人拍板的单；这些别打。
-  - 协调器打这个 label 要在 issue「涉及」下一行写理由（为什么口径够死、不靠看图）；同一时间最多 1 个 Codex worker。
+- **默认 Codex**（2026-11-24 所有者：「worker 可以先让codex去做，额度用完了再切换成sonnet，设计方面的活、出图啊之类的可以让agy的neon模型去做」）：
+  - 没有 model label 的实现 / 返工单都先走 Codex；`model:codex` 只是旧写法，效果和默认一样。「同一时间最多 1 个 Codex worker」已取消，并行上限仍是实现 2 个（`FLOW_LANES`）。
+  - **不适合 Codex、要打 `model:sonnet` 或 `model:neon`**：界面还原、要看设计稿的单 → `model:neon`；对外文案、跨模块推理重的单 → `model:sonnet`。须人拍板的单照旧由人定。
   - 返工 round 1 仍走 Codex，round ≥ 2 自动升 Sonnet；同时带 `model:opus` 时 Opus 优先。
-  - Codex 没装、`codex login status` 显示未登录、或冷却期内（额度用完）→ 该单自动改派 Sonnet，日志写原因。探测只看 `command -v codex` 与 `codex login status`，**不跑 `codex exec`**（一次最小请求约 1.2 万 token）。
-  - 额度用完：协调器手动写 `codex-exhausted`、stop、退回 `s:ready`（§3「额度用尽（手动）」）；冷却期内 `model:codex` 自动改派 Sonnet，到点自动恢复。
+  - Codex 没装、`codex login status` 显示未登录、或冷却期内 → 该单自动改派 Sonnet，日志写原因。探测只看 `command -v codex` 与 `codex login status`，**不跑 `codex exec`**（一次最小请求约 1.2 万 token）。
+  - **额度用完由 orca-flow 自动处理，不再要协调器手写 `codex-exhausted`**：每轮读在跑的 Codex worker 屏幕末尾，认出用量上限提示就写冷却（解析不出时间按 5 小时）、停掉它、同一轮在原 worktree 改派 Sonnet 接着做（新 Task 标题带 `sonnet` 后缀），冷却期内新派的单直接走 Sonnet，到点自动恢复 Codex。
   - 模型用 `CODEX_MODEL`（默认 `gpt-6.2-sol`）；本机 Codex 默认是最费额度的 gpt-6.2-astra，别用默认。不要改 `~/.codex/config.toml`（用户全局配置）；若真机发现停在信任目录或权限确认，要改配置前先问所有者。
+- `model:sonnet`：强制 Sonnet，不碰 Codex。
+- `model:neon`：实现与返工 round 1 走 `--agent antigravity --model gemini-4-neon-high`；返工 round ≥ 2 升 Sonnet；`agy` 不可用（探测只看 `command -v agy`，不发请求）改派 Sonnet；界面单的任务书同样带 ACC-v3-fid-08 证据包要求。
+- `model:opus` 仍须人点头，只靠显式 label。
 - `model:deepseek` 的返工第 2 轮起自动升到 Sonnet；Opus 只靠显式 label，返工轮次不再自动升。
 - 不要为了省事把"改页面""动适配器"这类放 DeepSeek；DeepSeek 做砸的成本（返工、真机重试）比省下的额度高。
 
 ## 6. 模型与通道（供你解释给人听）
 
-- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认 Claude Sonnet，带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道，带 `model:codex` 的走 Codex 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude；Codex 不可用时该单改派 Sonnet。
+- 验收 worker 始终走 DeepSeek：火山 `deepseek-v4.1-flash`，火山不可用自动切千问 `deepseek-v4.1-flash-1017`（`bin/dsh-model.sh`）。实现 / 返工 worker 默认先走 Codex，额度用完（或没装、未登录）由 orca-flow 自动切 Claude Sonnet；`model:sonnet` 强制 Sonnet，`model:neon` 的设计和出图单走 agy 的 Neon（Orca agent `antigravity`，`gemini-4-neon-high`），带 `model:deepseek` label 的简单活走同一条 DeepSeek 通道（选路见 §5.1，逻辑在 `bin/worker-channel.sh`）；两个 DeepSeek 通道都不可用时本轮不派，不会自动改用 Claude；Codex / agy 不可用时该单改派 Sonnet。
 - 你自己（协调器）用 Claude。验收是否也换 Claude 由人决定，目前未换。
 
 ## 7. 汇报格式

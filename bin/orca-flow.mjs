@@ -43,7 +43,7 @@ export function projectName(env = process.env, originUrl = null, rootDir = ROOT)
   return m?.[1] || rootDir.split("/").pop();
 }
 const PROJECT = projectName();
-const STATE_DIR = join(HOME, `.orca/${PROJECT}-state`);
+const STATE_DIR = process.env.FLOW_STATE_DIR ?? join(HOME, `.orca/${PROJECT}-state`);
 /** Task 前缀：versekit 沿用 vk，其余用项目名。 */
 const PREFIX = process.env.FLOW_TASK_PREFIX ?? (PROJECT === "versekit" ? "vk" : PROJECT);
 
@@ -416,8 +416,8 @@ failed:
 
 // ------------------------------------------------------------------ 外部命令
 
-function run(cmd, args, { input, cwd = ROOT } = {}) {
-  const r = spawnSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 64 << 20 });
+function run(cmd, args, { input, cwd = ROOT, env } = {}) {
+  const r = spawnSync(cmd, args, { cwd, input, env, encoding: "utf8", maxBuffer: 64 << 20 });
   return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: (r.stderr ?? "") + (r.error ? String(r.error.message) : "") };
 }
 
@@ -663,16 +663,138 @@ function startWorker(ctx, { taskId, placement, channel, label, dryRun }) {
   return { dispatchId: r.dispatchId, worktreeId: created ?? placement.worktreeId ?? null };
 }
 
-/** 选通道：沿用 bin/worker-channel.sh 的规则（Sonnet 默认、model:opus/codex/deepseek label、验收固定 DeepSeek）。 */
-function chooseChannel(role, labels = [], round = "", { dryRun = false } = {}) {
+// ------------------------------------------------------------------ Codex 额度（ACC-harness-route-02）
+
+/** Codex 额度用完后的冷却文件：「到期 epoch 秒<TAB>到期时间文本」，bin/worker-channel.sh 读同一个文件。 */
+export function codexCooldown(stateDir = STATE_DIR, now = Date.now()) {
+  try {
+    const [ts, ...rest] = readFileSync(join(stateDir, "codex-exhausted"), "utf8").trim().split("\t");
+    const until = Number(ts);
+    if (!Number.isFinite(until) || until * 1000 <= now) return null;
+    return { until, text: rest.join("\t") };
+  } catch {
+    return null;
+  }
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const fmtLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+
+/** 解析「try again at …」里的时间，返回毫秒时间戳；解析不出返回 null。 */
+function parseResetTime(text, now) {
+  const t = text.trim().replace(/[.。]+$/, "");
+  const rel = /^in\s+(?:(\d+)\s*(?:days?|d)\s*)?(?:(\d+)\s*(?:hours?|hrs?|h)\s*)?(?:(\d+)\s*(?:minutes?|mins?|m)\s*)?$/i.exec(t);
+  if (rel && (rel[1] || rel[2] || rel[3])) return now + (((Number(rel[1] ?? 0) * 24 + Number(rel[2] ?? 0)) * 60) + Number(rel[3] ?? 0)) * 60000;
+  const full = Date.parse(t.replace(/(\d)(st|nd|rd|th)\b/gi, "$1"));
+  if (Number.isFinite(full) && full > now) return full;
+  const clock = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(t);
+  if (clock) {
+    let h = Number(clock[1]);
+    if (clock[4]) h = (h % 12) + (/pm/i.test(clock[4]) ? 12 : 0);
+    const d = new Date(now);
+    d.setHours(h, Number(clock[2]), Number(clock[3] ?? 0), 0);
+    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+  return null;
+}
+
+/**
+ * 从 Codex worker 的屏幕文本认「用量上限」。只看末尾 40 行；Codex 自带的 `Tip:` 提示行
+ * （含 "usage limit" 字样）不算用完（ACC-harness-codex-07）。认到返回 { until(epoch 秒), text }，
+ * 解析不出重置时间按 5 小时算；否则 null。
+ */
+export function codexExhaustion(text, now = Date.now()) {
+  const lines = String(text ?? "").split("\n").map((l) => l.trim()).filter(Boolean).slice(-40);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (/^(?:[•>■⚠*-]\s*)?Tip:/i.test(l)) continue;
+    if (!/(hit|reached|exceeded)\s+(?:your|the)\s+(?:\w+\s+)?usage limit|usage limit\s+(?:reached|exceeded)/i.test(l)) continue;
+    // 重置时间可能折到下一行
+    const near = /try again/i.test(l) ? l : [l, lines[i + 1] ?? ""].join(" ");
+    const m = /try again\s+(at|in)\s+(.+?)\s*$/i.exec(near);
+    const ms = m ? parseResetTime(m[1].toLowerCase() === "in" ? `in ${m[2]}` : m[2], now) : null;
+    const until = ms ?? now + 5 * 3600 * 1000;
+    return { until: Math.floor(until / 1000), text: fmtLocal(new Date(until)) };
+  }
+  return null;
+}
+
+/** 读 worker 屏幕末尾；读不到返回空串（不影响本轮别的事）。 */
+function readWorkerTail(dispatchId) {
+  try {
+    const r = orca(["orchestration", "worker-read", "--dispatch", dispatchId, "--source", "terminal", "--limit", "60"]);
+    const tail = r.terminal?.tail;
+    return Array.isArray(tail) ? tail.join("\n") : JSON.stringify(r);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 每轮读在跑的 Codex 实现 / 返工 worker 的屏幕：认出用量上限就写 codex-exhausted、停掉它，
+ * 同一轮在原 worktree 里改派 Sonnet 接着做（不丢已有提交与改动）。返回改派清单。
+ * io 可注入（测试用）：{ read, stop, choose, createTask, start, link }。
+ */
+export function rerouteExhaustedCodex(state, ctx, { dryRun = false, now = Date.now(), stateDir = STATE_DIR, io = {} } = {}) {
+  const f = {
+    read: readWorkerTail,
+    stop: (id) => orca(["orchestration", "worker-stop", "--dispatch", id]),
+    choose: chooseChannel,
+    createTask,
+    start: startWorker,
+    link: linkWorktree,
+    ...io,
+  };
+  const byTask = new Map(state.tasks.map((t) => [t.id, t]));
+  const out = [];
+  for (const w of state.workers) {
+    const task = byTask.get(w.taskId);
+    const meta = parseTaskTitle(task?.task_title);
+    if (!meta || meta.kind === "accept" || !isActive(w) || w.projection?.provider?.id !== "codex") continue;
+    const ex = codexExhaustion(f.read(w.dispatchId), now);
+    if (!ex) continue;
+    const n = meta.issue;
+    if (dryRun) {
+      log(`  [dry-run] Codex 额度用完，到 ${ex.text} 为止 → #${n} 改派 Sonnet`);
+      continue;
+    }
+    try {
+      const keep = codexCooldown(stateDir, now);
+      if (!keep || keep.until < ex.until) {
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, "codex-exhausted"), `${ex.until}\t${ex.text}\n`);
+      }
+      f.stop(w.dispatchId);
+      let channel = f.choose(meta.kind === "rework" ? "rework" : "engineer", (state.board?.rows ?? []).find((i) => i.number === n)?.labels ?? [], meta.kind === "rework" ? String(parseInt(meta.extra.replace(/^r/, ""), 10) || 1) : "");
+      if (channel.agent !== "claude") channel = { agent: "claude", model: "sonnet", reason: "Codex 额度用完，强制 Sonnet", channel: "claude" };
+      log(`  ⚠ Codex 额度用完，到 ${ex.text} 为止 → #${n} 改派 Sonnet（${channel.channel}/${channel.model}），原 worktree 接着做`);
+      const spec = `${task.spec ?? ""}\n\n【改派说明】上一个 worker（Codex）因额度用完被停掉。本 worktree 里已有它的提交与未提交改动：先 git status / git log 看进度，接着做，不要重做、不要丢弃。`;
+      const title = taskTitle(meta.kind, n, meta.kind === "rework" ? `${meta.extra || "r1"}-sonnet` : "sonnet");
+      const taskId = f.createTask(ctx, { title, display: `#${n} ${KINDS[meta.kind]}（改派 Sonnet）`, spec, dryRun });
+      const worktreeId = w.resource?.worktreeId ?? null;
+      const started = f.start(ctx, { taskId, placement: worktreeId ? { worktreeId } : { name: `issue-${n}` }, channel, label: `改派 #${n}`, dryRun });
+      f.link(started.worktreeId, { issue: n, status: "in-progress", comment: "Codex 额度用完，改派 Sonnet" }, dryRun);
+      out.push({ issue: n, kind: meta.kind, dispatchId: started.dispatchId, from: w.dispatchId });
+    } catch (err) {
+      log(`  ✗ #${n} Codex 额度用完后的改派失败：${err.message.slice(0, 300)}（下一轮再试）`);
+    }
+  }
+  return out;
+}
+
+/** 选通道：沿用 bin/worker-channel.sh 的规则（默认 Codex、额度用完 Sonnet；model:sonnet/neon/opus/deepseek label；验收固定 DeepSeek）。 */
+export function chooseChannel(role, labels = [], round = "", { dryRun = false } = {}) {
   const args = ["--role", role];
   if (labels.length) args.push("--labels", labels.join(","));
   if (round !== "") args.push("--round", String(round));
-  const r = run(join(ROOT, "bin/worker-channel.sh"), args);
+  // 冷却文件与 orca-flow 写的是同一个目录（别的项目各用自己的 <项目>-state）。
+  const r = run(join(ROOT, "bin/worker-channel.sh"), args, { env: { ...process.env, STATE_DIR: process.env.STATE_DIR ?? STATE_DIR } });
   if (r.code !== 0) throw new Error(`没有可用通道（${role}）：${r.stderr.trim().slice(0, 300)}`);
   const [ch, model, reason] = r.stdout.trim().split("|");
   if (ch === "claude") return { agent: "claude", model, reason, channel: ch };
   if (ch === "codex") return { agent: "codex", model, reason, channel: ch };
+  if (ch === "antigravity") return { agent: "antigravity", model, reason, channel: ch };
   if (ch === "volc" || ch === "qwen") {
     if (dryRun) return { agent: "opencode", model, reason, channel: ch }; // 空跑不改 opencode 配置
     const set = run(join(ROOT, "bin/opencode-model.sh"), [ch, model]);
@@ -772,6 +894,12 @@ export async function tick({ dryRun = false } = {}) {
   if (cfg.settle) settleTerminals(state, dryRun);
   if (!dryRun) state = snapshot(ctx);
   reworkCheck(state, dryRun);
+  // Codex 额度用完：写冷却、停掉、同一轮改派 Sonnet（ACC-harness-route-02）。改派的 worker 占原来的名额。
+  {
+    const rerouted = rerouteExhaustedCodex(state, ctx, { dryRun });
+    report.dispatched.push(...rerouted.map((r) => ({ issue: r.issue, kind: r.kind, dispatchId: r.dispatchId, rerouted: true })));
+    if (rerouted.length) state = snapshot(ctx);
+  }
   if (flowConfig().cleanup) cleanupWorktrees(state, dryRun);
 
   let free = countActive(state);
@@ -832,7 +960,12 @@ export async function tick({ dryRun = false } = {}) {
     try {
       const spec = reworkSpec({ number: c.number, title: c.title, pull: c.pull, branch: c.branch, round: c.round, commentUrl: c.commentUrl, commentBody: c.commentBody, body: c.body ?? "", notes: c.reasonComments ? "" : fetchNotes(c.number, c.commentCreatedAt), reason: reasonText(c.reasonComments), lastVerdict: c.lastVerdict ?? "" });
       const taskId = createTask(ctx, { title: taskTitle("rework", c.number, `r${c.round}`), display: `#${c.number} 返工 r${c.round}`, spec, dryRun });
-      const reuse = reusableTerminal(state, c.number);
+      let reuse = reusableTerminal(state, c.number);
+      // 原终端是 Codex、而 Codex 正在冷却：复用只会立刻再撞上限，直接起新 agent（走 Sonnet）。
+      if (reuse?.projection?.provider?.id === "codex" && codexCooldown()) {
+        log(`  · #${c.number} 原终端是 Codex，额度冷却中，不复用`);
+        reuse = null;
+      }
       const wt = worktreeFor(c.number, c.branch);
       let started = null;
       if (reuse) {
