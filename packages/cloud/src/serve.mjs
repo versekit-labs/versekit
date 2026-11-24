@@ -9,6 +9,8 @@ try {
     origin: env.HIFABU_ORIGIN,
     dataDir: env.HIFABU_DATA_DIR,
     logRetentionDays: Number(env.HIFABU_LOG_RETENTION_DAYS ?? 30),
+    signingKeyFile: env.HIFABU_SIGNING_KEY_FILE,
+    relayUrl: env.HIFABU_RELAY_URL,
     google: {
       clientId: env.HIFABU_GOOGLE_CLIENT_ID,
       clientSecret: env.HIFABU_GOOGLE_CLIENT_SECRET,
@@ -23,7 +25,7 @@ try {
     console.log(`Hifabu 账号服务监听 127.0.0.1:${server.address().port}`);
   });
 } catch {
-  console.error("Hifabu 无法启动，请检查服务地址、端口、数据目录、日志保留期和 Google 配置。");
+  console.error("Hifabu 无法启动，请检查服务地址、端口、数据目录、日志保留期、Google 配置和签名私钥权限。");
   process.exitCode = 1;
 }
 

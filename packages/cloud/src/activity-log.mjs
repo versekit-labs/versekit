@@ -14,8 +14,21 @@ const entries = Object.freeze({
   google_identity_invalid: ["login.failed", "无法确认 Google 登录身份，请重新登录。"],
   google_email_unverified: ["login.failed", "这个 Google 邮箱还没有验证。请验证邮箱后再登录。"],
   google_unavailable: ["login.failed", "暂时无法完成 Google 登录，请重试。"],
+  device_link_started: ["device.link.started", "机器正在等待允许接入。"],
+  device_linked: ["device.link.allowed", "机器已接入。"],
+  device_link_denied: ["device.link.denied", "这次机器接入已被拒绝。"],
+  device_link_expired: ["device.link.expired", "这次接入过期了。请在那台电脑上重新登录 Hifabu。"],
+  device_link_invalid: ["device.link.failed", "机器接入请求格式有误，请重试。"],
+  device_link_busy: ["device.link.failed", "当前接入请求过多，请稍后重试。"],
+  device_inactive: ["device.refresh.failed", "这台机器已经退出或接入已失效，请重新登录 Hifabu。"],
+  device_not_found: ["device.revoke.failed", "找不到这台机器。"],
+  device_revoked: ["device.revoked", "机器已退出。"],
+  device_signing_unavailable: ["device.request.failed", "Hifabu 暂时无法接入机器，请稍后重试。"],
   internal_error: ["request.failed", "Hifabu 账号服务暂时无法处理请求，请重试。"],
 });
+const successfulEvents = new Set([
+  "login.started", "login.succeeded", "logout.succeeded", "device.link.started", "device.link.allowed", "device.revoked",
+]);
 
 const dateStamp = (timestamp) => new Date(timestamp).toISOString().slice(0, 10);
 
@@ -69,9 +82,7 @@ export function createActivityLog({ directory, retentionDays = 30, clock = Date.
       try {
         if (date !== prunedOn) pruneToday(now);
         const entry = { at: new Date(now).toISOString(), event, message };
-        if (event !== "login.started" && event !== "login.succeeded" && event !== "logout.succeeded") {
-          entry.error_code = key;
-        }
+        if (!successfulEvents.has(event)) entry.error_code = key;
         appendFileSync(join(directory, `activity-${date}.ndjson`), `${JSON.stringify(entry)}\n`, { mode: 0o600 });
       } catch {
         console.error("Hifabu 日志写入失败，请检查日志目录。");

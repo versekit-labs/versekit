@@ -10,8 +10,9 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { paths, migrate, open, getMeta, isInitialised, emit } from "../../core/src/index.mjs";
-import { COMMANDS } from "../../core/src/commands.mjs";
+import { COMMANDS, findCommand } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount, notifyLogin } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
@@ -22,7 +23,8 @@ import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe
 import { doctorReport as buildDoctorReport } from "../../core/src/doctor.mjs";
 import channelFeishu from "../../channel-feishu/src/index.mjs";
 import { browserReady, openAccount, closeAccount, logoutAccount, closeAllAccounts, adoptOrphanAccounts, closeLoginWindow, cookiePersistenceCheck, hasLiveBrowser, PROFILE, PORT } from "../../driver-browser/src/index.mjs";
-import { send, ensureDaemon } from "./client.mjs";
+import { call, send, ensureDaemon } from "./client.mjs";
+import { createCloudHandlers } from "./cloud.mjs";
 import { createRelayServer } from "../../relay/src/index.mjs";
 import { formatBytes, formatDuration } from "../../relay/src/status.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
@@ -442,7 +444,7 @@ async function qrStatus(accountId, account, session, log = () => {}) {
   return { mode: "qr", state: "waiting", qr: session.qr, ...(refreshed ? { refreshed: true } : {}), note: "等待用手机小红书扫码…" };
 }
 
-function daemonHandlers(adapters, log, uploadQueue) {
+function daemonHandlers(adapters, log, { offline, uploadQueue }) {
   const core = createCoreHandlers({
     adapters,
     log,
@@ -479,6 +481,7 @@ function daemonHandlers(adapters, log, uploadQueue) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
+    ...createCloudHandlers({ offline, openBrowser, log }),
     // 只读：控制台自检页看后台服务的状态；启停卸载只在本机 CLI 做。
     service: async () => service.status(),
     "account.check": async ({ accountId }) => {
@@ -888,7 +891,7 @@ function openBrowser(url) {
   try {
     const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
     const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-    spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+    spawn(cmd, args, { detached: true, stdio: "ignore" }).on("error", () => {}).unref();
   } catch {
     /* 没有图形界面也能用：URL 在输出里 */
   }
@@ -924,7 +927,7 @@ async function cmdServe() {
   const { adapters, errors } = offline ? { adapters: [], errors: [] } : await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
   const uploadQueue = createRelayUploadQueue({ log });
-  const handlers = daemonHandlers(adapters, log, uploadQueue);
+  const handlers = daemonHandlers(adapters, log, { offline, uploadQueue });
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
@@ -1438,6 +1441,38 @@ async function cmdWork() {
     return data;
   }
   throw new Error(usage);
+}
+
+async function cmdCloud() {
+  const name = `cloud.${pos[1] ?? ""}`;
+  const command = findCommand(name);
+  const usages = COMMANDS.filter(({ name }) => name.startsWith("cloud.")).map(({ cli }) => cli.usage);
+  if (!command || pos.length > 2) throw new Error(usages.join("\n"));
+  const args = {};
+  for (const field of ["name", "role"]) {
+    const flag = `--${field}`;
+    if (!Object.hasOwn(flags, flag)) continue;
+    const value = val(flag);
+    if (!value || !Object.hasOwn(command.args, field)) throw new Error(command.cli.usage);
+    args[field] = value;
+  }
+  let data = await send(name, args);
+  if (name === "cloud.login" && data.state === "waiting") {
+    console.error(`请在浏览器核对 ${data.code} 后点「允许」。接入地址：${data.url}`);
+    const deadline = data.expiresAt + 2_000;
+    while (data.state === "waiting" && Date.now() < deadline) {
+      await wait(700);
+      data = await call("cloud.status");
+    }
+    if (data.state !== "linked") {
+      const code = data.error_code ?? (data.state === "waiting" ? "device_link_expired" : "device_link_cancelled");
+      throw Object.assign(new Error(data.message ?? "这次接入没有完成，请重新登录 Hifabu。"), { code });
+    }
+  }
+  if (!human) out(data);
+  else if (data.loggedIn) console.log(`${data.email} · ${data.role === "maker" ? "制作机" : "发布机"} · 传片${data.relayEnabled ? "已开通" : "未开通"}`);
+  else if (data.state === "waiting") console.log(`等待在浏览器里允许。核对码 ${data.code}：${data.url}`);
+  else console.log(data.message ?? "这台机器未登录 Hifabu。");
 }
 
 function printDelivery(row) {
@@ -2217,6 +2252,7 @@ function usage() {
       "  vk relay serve [--port 8790] [--data <目录>]            云端中转（只存文件和投递清单；只监听 127.0.0.1，HTTPS 由反代提供）",
       "  vk relay connect <地址> --token <token> [--push] [--group <默认组名>]   连接中转并记住默认账号组",
       "  vk relay status | pull | token push|pull                中转连接状态 / 立刻拉一轮 / 在云端取 token",
+      ...COMMANDS.filter(({ name }) => name.startsWith("cloud.")).map(({ cli }) => `  ${cli.usage}`),
       "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
       "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
       "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
@@ -2267,6 +2303,7 @@ try {
   else if (cmd === "delivery") await cmdDelivery();
   else if (cmd === "plan") await cmdPlan();
   else if (cmd === "relay") await cmdRelay();
+  else if (cmd === "cloud") await cmdCloud();
   else if (cmd === "account") await cmdAccount();
   else if (cmd === "publish") await cmdPublish();
   else if (cmd === "cut") await cmdCut();

@@ -85,6 +85,28 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
       WHERE s.token_hash = ? AND s.expires_at > ?
     `);
     const deleteSession = db.prepare("DELETE FROM session WHERE token_hash = ?");
+    const ensureGrant = db.prepare("INSERT INTO relay_grant (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING");
+    const addDevice = db.prepare(`
+      INSERT INTO device (id, user_id, role, name, refresh_token_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const touchDevice = db.prepare(`
+      UPDATE device SET last_seen_at = ?
+      WHERE refresh_token_hash = ? AND revoked_at IS NULL
+      RETURNING id, user_id, role
+    `);
+    const machineAccount = db.prepare(`
+      SELECT u.email, g.enabled, g.capacity_bytes FROM user u JOIN relay_grant g ON g.user_id = u.id
+      WHERE u.id = ?
+    `);
+    const revokeDevice = db.prepare(`
+      UPDATE device SET revoked_at = coalesce(revoked_at, ?)
+      WHERE user_id = ? AND id = ? RETURNING id
+    `);
+    const listDevices = db.prepare(`
+      SELECT id, name, role, created_at AS createdAt, last_seen_at AS lastSeenAt
+      FROM device WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC, id
+    `);
     deleteExpiredAttempts.run(clock());
     deleteExpiredSessions.run(clock());
 
@@ -131,6 +153,36 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
 
       revokeSession(token) {
         if (token) deleteSession.run(tokenHash(token));
+      },
+
+      addMachine(userId, { name, role, refreshTokenHash }) {
+        return transaction(db, () => {
+          const now = clock();
+          const deviceId = ulid(now);
+          ensureGrant.run(userId);
+          addDevice.run(deviceId, userId, role, name, refreshTokenHash, now);
+          return deviceId;
+        });
+      },
+
+      refreshMachine(refreshToken) {
+        return transaction(db, () => {
+          const device = touchDevice.get(clock(), tokenHash(refreshToken));
+          if (!device) return null;
+          const account = machineAccount.get(device.user_id);
+          return {
+            userId: device.user_id, deviceId: device.id, role: device.role,
+            email: account.email, relayEnabled: account.enabled === 1, capacityBytes: account.capacity_bytes,
+          };
+        });
+      },
+
+      revokeMachine(userId, deviceId) {
+        return Boolean(revokeDevice.get(clock(), userId, deviceId));
+      },
+
+      listMachines(userId) {
+        return listDevices.all(userId);
       },
 
       close() {
