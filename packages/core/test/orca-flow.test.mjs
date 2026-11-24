@@ -16,7 +16,7 @@ process.env.FLOW_LOG = join(testState, "flow.log");
 const {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
+  transcribeAgentctl, projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
   linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
   codexExhaustion, codexCooldown, rerouteExhaustedCodex, chooseChannel,
 } = await import("../../../bin/orca-flow.mjs");
@@ -609,4 +609,15 @@ test("route-06：已结算且无 PR、无 worker_done 的 doing 工单每轮只�
     assert.deepEqual(starts, []);
   }
   assert.deepEqual(runner.labelChanges, []);
+});
+
+test("不合并的原因并进同一行写进流程日志（ACC-harness-orca-16）", () => {
+  const out = "✓ 合并 #1（PR #2 → abc1234）\n✗ 不合并 #395：\n    - CI 还没跑完：test\n    - verdict 的 head_sha 与 PR head 不一致\n↩ #7 已打回 s:changes\n· 无关的行";
+  assert.deepEqual(transcribeAgentctl(out), [
+    "✓ 合并 #1（PR #2 → abc1234）",
+    "✗ 不合并 #395：CI 还没跑完：test；verdict 的 head_sha 与 PR head 不一致",
+    "↩ #7 已打回 s:changes",
+  ]);
+  assert.deepEqual(transcribeAgentctl("✗ 不合并 #9："), ["✗ 不合并 #9："]);
+  assert.deepEqual(transcribeAgentctl(""), []);
 });
