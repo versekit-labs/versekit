@@ -1120,6 +1120,46 @@ export const CLOUD_COMMANDS = [
     http: { method: "POST", path: "/api/devices/:deviceId/revoke" },
     cli: { usage: "vk-cloud device revoke <机器 id>" },
   },
+  {
+    name: "relay.grant.status",
+    summary: "查看当前 Hifabu 账号的传片状态和用量",
+    permission: "session",
+    args: {},
+    http: { method: "GET", path: "/api/relay/grant" },
+    cli: { usage: "vk-cloud relay grant status" },
+  },
+  {
+    name: "relay.grant.request",
+    summary: "为当前 Hifabu 账号申请开通传片",
+    permission: "session",
+    args: {},
+    http: { method: "POST", path: "/api/relay/grant/request" },
+    cli: { usage: "vk-cloud relay grant request" },
+  },
+  {
+    name: "relay.grant.set",
+    summary: "开通、关闭或调整指定 Hifabu 账号的传片容量",
+    permission: "owner",
+    args: { accountId: "string", state: "string?", capacityGb: "number?" },
+    http: { method: "POST", path: "/api/admin/users/:accountId/relay-grant" },
+    cli: { usage: "vk-cloud relay grant set <账号 id> [on|off|keep] [容量 GB]" },
+  },
+  {
+    name: "user.list",
+    summary: "列出 Hifabu 账号、传片申请和用量",
+    permission: "owner",
+    args: {},
+    http: { method: "GET", path: "/api/admin/users" },
+    cli: { usage: "vk-cloud user list" },
+  },
+  {
+    name: "user.delete",
+    summary: "以邮箱确认删除一个 Hifabu 账号及其中转文件",
+    permission: "owner",
+    args: { accountId: "string", confirmEmail: "string" },
+    http: { method: "POST", path: "/api/admin/users/:accountId/delete" },
+    cli: { usage: "vk-cloud user delete <账号 id> <确认删除的完整邮箱>" },
+  },
 ];
 
 /**

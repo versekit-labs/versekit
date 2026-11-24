@@ -68,6 +68,36 @@ test("ACC-cloud-01: an existing non-Hifabu database is rejected without changes"
   assert.deepEqual(readFileSync(path), before);
 });
 
+test("ACC-cloud-06: upgrading a control database preserves existing grants and adds a nullable closure timestamp", (t) => {
+  const path = join(temp(t), "control.db");
+  const schema = readFileSync(new URL("../src/schema.sql", import.meta.url), "utf8");
+  const oldSchema = schema.replace(",\n  closed_at INTEGER\n", "\n");
+  assert.notEqual(oldSchema, schema);
+  const old = new DatabaseSync(path);
+  old.exec(`${oldSchema}
+    PRAGMA application_id = 0x48494641;
+    PRAGMA user_version = 1;
+    INSERT INTO user VALUES ('a', 'a@example.test', 100), ('b', 'b@example.test', 100);
+    INSERT INTO relay_grant VALUES ('a', NULL, 1, 500), ('b', 120, 0, 10000000000);
+  `);
+  old.close();
+
+  const first = openControlStore(path, { clock: () => 200 });
+  try {
+    assert.deepEqual(first.relayGrant("a"), { enabled: true, capacityBytes: 500, requestedAt: null, closedAt: null });
+    assert.deepEqual(first.relayGrant("b"), { enabled: false, capacityBytes: 10_000_000_000, requestedAt: 120, closedAt: null });
+    assert.equal(first.setRelayGrant("a", { enabled: false }).closedAt, 200);
+  } finally {
+    first.close();
+  }
+  const reopened = openControlStore(path);
+  try {
+    assert.equal(reopened.relayGrant("a").closedAt, 200);
+  } finally {
+    reopened.close();
+  }
+});
+
 test("Activity log retention is configurable up to 30 UTC days and can be turned off", (t) => {
   const directory = temp(t);
   let now = Date.UTC(2026, 10, 24, 10);
