@@ -9,6 +9,7 @@ const applicationId = 0x48494641; // HIFA
 const schemaVersion = 1;
 const loginTtlMs = 10 * 60_000;
 export const sessionTtlMs = 30 * 86_400_000;
+const defaultCapacityBytes = 10_000_000_000;
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function base32(value, length) {
@@ -56,7 +57,12 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
     transaction(db, () => {
       const { application_id: id } = db.prepare("PRAGMA application_id").get();
       const { user_version: version } = db.prepare("PRAGMA user_version").get();
-      if (id === applicationId && version === schemaVersion) return;
+      if (id === applicationId && version === schemaVersion) {
+        const columns = db.prepare("PRAGMA table_info(relay_grant)").all();
+        // The nullable column is additive. Older cloud binaries can still open this database.
+        if (!columns.some(({ name }) => name === "closed_at")) db.exec("ALTER TABLE relay_grant ADD COLUMN closed_at INTEGER");
+        return;
+      }
       const hasObjects = db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
       if (id !== 0 || version !== 0 || hasObjects) throw new Error("文件不是受支持的 Hifabu 控制库。");
       db.exec(`${schema}\nPRAGMA application_id = ${applicationId}; PRAGMA user_version = ${schemaVersion};`);
@@ -67,6 +73,7 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
       INSERT INTO login_code (state_hash, verifier_hash, nonce, link_code, expires_at) VALUES (?, ?, ?, ?, ?)
     `);
     const deleteExpiredAttempts = db.prepare("DELETE FROM login_code WHERE expires_at <= ?");
+    const deleteAttemptsForLink = db.prepare("DELETE FROM login_code WHERE link_code = ?");
     const consumeAttempt = db.prepare(`
       DELETE FROM login_code WHERE state_hash = ? AND verifier_hash = ? AND expires_at > ?
       RETURNING nonce, link_code
@@ -86,6 +93,33 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
     `);
     const deleteSession = db.prepare("DELETE FROM session WHERE token_hash = ?");
     const ensureGrant = db.prepare("INSERT INTO relay_grant (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING");
+    const findGrant = db.prepare(`
+      SELECT requested_at AS requestedAt, closed_at AS closedAt, coalesce(enabled, 0) AS enabled,
+        coalesce(capacity_bytes, ?) AS capacityBytes
+      FROM user LEFT JOIN relay_grant ON relay_grant.user_id = user.id WHERE user.id = ?
+    `);
+    const requestGrant = db.prepare(`
+      UPDATE relay_grant SET requested_at = ? WHERE user_id = ? AND enabled = 0 AND requested_at IS NULL
+    `);
+    const updateGrant = db.prepare(`
+      UPDATE relay_grant SET enabled = coalesce($enabled, enabled), capacity_bytes = coalesce($capacity, capacity_bytes),
+        requested_at = CASE WHEN $enabled IS NULL THEN requested_at ELSE NULL END,
+        closed_at = CASE WHEN $enabled = 0 AND enabled = 1 THEN $now WHEN $enabled = 1 THEN NULL ELSE closed_at END
+      WHERE user_id = $userId
+    `);
+    const findUser = db.prepare("SELECT id, email FROM user WHERE id = ?");
+    const listUsers = db.prepare(`
+      SELECT u.id, u.email, g.requested_at AS requestedAt, g.closed_at AS closedAt, coalesce(g.enabled, 0) AS enabled,
+        coalesce(g.capacity_bytes, ?) AS capacityBytes,
+        (SELECT group_concat(DISTINCT provider) FROM identity WHERE user_id = u.id) AS providers,
+        (SELECT count(*) FROM device WHERE user_id = u.id AND revoked_at IS NULL) AS machines,
+        max(u.created_at,
+            coalesce((SELECT max(last_seen_at) FROM device WHERE user_id = u.id), 0),
+            coalesce((SELECT max(created_at) FROM session WHERE user_id = u.id), 0)) AS lastActivityAt
+      FROM user u LEFT JOIN relay_grant g ON g.user_id = u.id
+      ORDER BY (g.requested_at IS NULL), g.requested_at, u.email
+    `);
+    const deleteUser = db.prepare("DELETE FROM user WHERE id = ?");
     const addDevice = db.prepare(`
       INSERT INTO device (id, user_id, role, name, refresh_token_hash, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -107,6 +141,10 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
       SELECT id, name, role, created_at AS createdAt, last_seen_at AS lastSeenAt
       FROM device WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC, id
     `);
+    const relayGrant = (userId) => {
+      const row = findGrant.get(defaultCapacityBytes, userId);
+      return row ? { ...row, enabled: Boolean(row.enabled) } : null;
+    };
     deleteExpiredAttempts.run(clock());
     deleteExpiredSessions.run(clock());
 
@@ -183,6 +221,44 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
 
       listMachines(userId) {
         return listDevices.all(userId);
+      },
+
+      relayGrant,
+
+      requestRelay(userId) {
+        return transaction(db, () => {
+          if (!findUser.get(userId)) return null;
+          ensureGrant.run(userId);
+          const { changes } = requestGrant.run(clock(), userId);
+          return { grant: relayGrant(userId), changed: changes > 0 };
+        });
+      },
+
+      setRelayGrant(userId, { enabled, capacityBytes }) {
+        return transaction(db, () => {
+          if (!findUser.get(userId)) return null;
+          ensureGrant.run(userId);
+          const flag = enabled == null ? null : Number(enabled);
+          updateGrant.run({ $enabled: flag, $capacity: capacityBytes ?? null, $now: clock(), $userId: userId });
+          return relayGrant(userId);
+        });
+      },
+
+      findUser(userId) {
+        return findUser.get(userId) ?? null;
+      },
+
+      listUsers() {
+        return listUsers.all(defaultCapacityBytes).map(({ providers, enabled, ...row }) => ({
+          ...row, enabled: Boolean(enabled), providers: providers ? providers.split(",") : [],
+        }));
+      },
+
+      deleteUser(userId, linkIds) {
+        transaction(db, () => {
+          for (const id of linkIds) deleteAttemptsForLink.run(id);
+          deleteUser.run(userId);
+        });
       },
 
       close() {

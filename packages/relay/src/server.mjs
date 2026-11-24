@@ -16,6 +16,7 @@
 //   GET  /v1/deliveries?view=maker        推送：查看投递（不领取）
 //   GET  /v1/deliveries/:id               任一 token
 //   POST /v1/deliveries/:id/state         拉取：下载进度、已下载、入库摘要或失败原因
+//   GET, DELETE /v1/control/accounts/:id  账号服务控制凭据 → 读取用量或删除账号目录
 
 import { createServer } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -23,14 +24,14 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSyn
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { createMachineTokenVerifier } from "../../cloud/src/machine-token.mjs";
+import { createMachineTokenVerifier, machineTokenTtlMs } from "../../cloud/src/machine-token.mjs";
+import { createRelayControlVerifier, relayAccountId as ACCOUNT_ID } from "../../cloud/src/relay-control.mjs";
 
 export const MIN_FREE_BYTES = 2 * 1024 ** 3;
 export const RETENTION_MS = 7 * 864e5;
 const STALE_PARTIAL_MS = 7 * 864e5;
 const SHA = /^[0-9a-f]{64}$/;
 const DELIVERY_ID = /^dl_[0-9a-f]{12,32}$/;
-const ACCOUNT_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const STATES = ["pending", "downloaded", "ingested", "failed"];
 const MAX_JSON = 5 * 1024 * 1024;
 
@@ -77,7 +78,7 @@ function storageAt(root) {
       .map((f) => readDelivery(f.slice(0, -5)))
       .filter(Boolean);
   const usedBytes = (uploading) => {
-    const filesBytes = (dir) => readdirSync(dir, { withFileTypes: true }).reduce((sum, entry) => {
+    const filesBytes = (dir) => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []).reduce((sum, entry) => {
       const path = join(dir, entry.name);
       return entry.isFile() && !uploading.has(path) ? sum + (sizeOf(path) ?? 0) : sum;
     }, 0);
@@ -108,11 +109,17 @@ export function createRelayServer({
   if (allowLegacyTokens && pushToken === pullToken) throw new Error("relay：推送 token 和拉取 token 不能相同");
   if (!allowLegacyTokens && machinePublicKey == null) throw new Error("relay：关闭固定令牌后必须配置 Hifabu 验签公钥");
   const verifyMachine = machinePublicKey == null ? null : createMachineTokenVerifier(machinePublicKey, { clock: now });
+  const verifyControl = machinePublicKey == null ? null : createRelayControlVerifier(machinePublicKey, now);
 
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const legacy = storageAt(dataDir);
   if (allowLegacyTokens) legacy.ensure();
   const uploading = new Map();
+  const activeAccounts = new Map();
+  // Store only hashed IDs, outside the deleted directory, until all outstanding machine tokens expire.
+  const revocationsDir = join(dataDir, ".revoked-accounts");
+  const revocationPath = (accountId) => join(revocationsDir, digest(accountId).toString("hex"));
+  const revoked = (path, at) => existsSync(path) && Number(readFileSync(path, "utf8")) > at;
   const reservedBytes = () => {
     let bytes = 0;
     for (const [part, upload] of uploading) {
@@ -193,6 +200,13 @@ export function createRelayServer({
   }
 
   function sweep({ at = now() } = {}) {
+    if (existsSync(revocationsDir)) {
+      for (const name of readdirSync(revocationsDir)) {
+        const path = join(revocationsDir, name);
+        if (SHA.test(name.slice(0, -4)) && name.endsWith(".tmp")) rmSync(path, { force: true });
+        else if (SHA.test(name) && !revoked(path, at)) rmSync(path, { force: true });
+      }
+    }
     let removed = 0;
     let partials = 0;
     if (allowLegacyTokens || existsSync(legacy.blobsDir)) {
@@ -235,16 +249,18 @@ export function createRelayServer({
     }
   }
 
+  const bearerOf = (req) => /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
   const authOf = (req) => {
-    const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? "");
-    if (!m) return null;
+    const token = bearerOf(req);
+    if (!token) return null;
     if (allowLegacyTokens) {
-      if (sameToken(m[1], pushToken)) return { role: "push", storage: legacy };
-      if (sameToken(m[1], pullToken)) return { role: "pull", storage: legacy };
+      if (sameToken(token, pushToken)) return { role: "push", storage: legacy };
+      if (sameToken(token, pullToken)) return { role: "pull", storage: legacy };
     }
-    const claims = verifyMachine?.(m[1]);
-    if (!claims) return null;
+    const claims = verifyMachine?.(token);
+    if (!claims || revoked(revocationPath(claims.sub), now())) return null;
     return {
+      accountId: claims.sub,
       role: claims.role === "maker" ? "push" : "pull",
       relayEnabled: claims.relayEnabled,
       capacityBytes: claims.capacityBytes,
@@ -342,7 +358,7 @@ export function createRelayServer({
       "accept-ranges": "bytes",
       ...(range ? { "content-range": `bytes ${start}-${size - 1}/${size}` } : {}),
     });
-    pipeline(createReadStream(p, { start }), res).catch(() => {});
+    return pipeline(createReadStream(p, { start }), res).catch(() => {});
   }
 
   async function postDelivery(req, res, { readDelivery, writeDelivery, blobPath }) {
@@ -404,7 +420,39 @@ export function createRelayServer({
     return send(res, 200, view(next));
   }
 
+  function controlAccount(req, res, accountId) {
+    drain(req);
+    if (!verifyControl?.(bearerOf(req), req.method, accountId)) {
+      log("[relay] account.control_denied 传片管理凭据无效");
+      return send(res, 401, { error: "unauthorized", message: "传片管理凭据无效。" });
+    }
+    const root = join(dataDir, accountId);
+    if (req.method === "GET") {
+      return send(res, 200, { usedBytes: storageAt(root).usedBytes(uploading), freeBytes: free() });
+    }
+    if (activeAccounts.has(accountId)) {
+      log("[relay] account.delete_busy 账号还有传片请求正在处理");
+      return send(res, 409, { error: "account_busy", message: "这个账号正在传片，请稍后重试删除。" });
+    }
+    try {
+      mkdirSync(revocationsDir, { recursive: true, mode: 0o700 });
+      const marker = revocationPath(accountId);
+      const pending = `${marker}.tmp`;
+      writeFileSync(pending, String(now() + machineTokenTtlMs), { mode: 0o600 });
+      renameSync(pending, marker);
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      log("[relay] account.delete_failed 无法删除账号的传片目录");
+      return send(res, 500, { error: "account_delete_failed", message: "无法删除账号的传片目录，请稍后重试。" });
+    }
+    log("[relay] account.deleted 已删除账号的传片目录");
+    return send(res, 200, { deleted: true });
+  }
+
   async function handle(req, res) {
+    const url = new URL(req.url, "http://relay.local");
+    const controlId = /^\/v1\/control\/accounts\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (controlId) return controlAccount(req, res, controlId);
     const auth = authOf(req);
     const deny = () => send(res, 401, { error: "unauthorized", message: "中转不认这个 token。请核对这台机器的 Hifabu 登录、机器角色和中转连接。" });
     if (!auth) {
@@ -416,9 +464,21 @@ export function createRelayServer({
       log("[relay] relay_disabled Hifabu 账号未开通传片");
       return send(res, 403, { error: "relay_disabled", message: "你的 Hifabu 账号还没开通两台电脑之间传片。请到我的 Hifabu 申请开通。" });
     }
+    const { accountId } = auth;
+    if (!accountId) return handleDelivery(req, res, url, auth, deny);
+    activeAccounts.set(accountId, (activeAccounts.get(accountId) ?? 0) + 1);
+    try {
+      return await handleDelivery(req, res, url, auth, deny);
+    } finally {
+      const active = activeAccounts.get(accountId) - 1;
+      if (active) activeAccounts.set(accountId, active);
+      else activeAccounts.delete(accountId);
+    }
+  }
+
+  function handleDelivery(req, res, url, auth, deny) {
     const { role, storage } = auth;
     const { blobPath, partPath, allDeliveries, readDelivery, readActivity, saveActivity } = storage;
-    const url = new URL(req.url, "http://relay.local");
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts[0] !== "v1") {
       drain(req);

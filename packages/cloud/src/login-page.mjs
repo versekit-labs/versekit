@@ -80,7 +80,7 @@ button {
 .link-facts dd { margin: 0; overflow-wrap: anywhere; }
 .link-code { font: 13px "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
 .link-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-.link-actions form, .machine-list form { display: contents; }
+.link-actions form { display: contents; }
 .link-secondary, .link-text {
   display: inline-flex; align-items: center; justify-content: center; font: inherit;
   font-size: 14px; cursor: pointer; min-height: 36px;
@@ -88,17 +88,14 @@ button {
 .link-secondary { padding: 7px 14px; border: 1px solid var(--control); border-radius: 8px; background: var(--paper); color: var(--ink); text-decoration: none; }
 .link-text { background: none; border: 0; border-radius: 0; padding: 0; color: var(--ink-muted); text-decoration: underline; }
 .link-success { background: var(--success-bg); border-color: var(--success-line); color: var(--success); }
-.machine-list { margin: 0; padding: 0; list-style: none; }
-.machine-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 8px 0; }
-.machine-list li + li { border-top: 1px solid var(--line); }
 `;
 
 export const loginStyleHash = createHash("sha256").update(style).digest("base64");
 
 const htmlEntities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-const escapeHtml = (value) => value.replace(/[&<>"']/g, (character) => htmlEntities[character]);
+export const escapeHtml = (value) => value.replace(/[&<>"']/g, (character) => htmlEntities[character]);
 
-function page(title, content) {
+export function page(title, content, { extraStyle, script, header = '<div class="brand">Hifabu</div>', mainClass } = {}) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -106,12 +103,14 @@ function page(title, content) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title} · Hifabu</title>
   <style>${style}</style>
+  ${extraStyle ? `<style>${extraStyle}</style>` : ""}
 </head>
 <body>
-  <main>
-    <div class="brand">Hifabu</div>
+  <main${mainClass ? ` class="${mainClass}"` : ""}>
+    ${header}
     ${content}
   </main>
+  ${script ? `<script>${script}</script>` : ""}
 </body>
 </html>`;
 }
@@ -127,26 +126,12 @@ export function loginPage({ machine, message, googlePath }) {
         用 Google 继续
       </button>
     </form>
+    <div><a class="link-text" href="/account">下载发布机</a></div>
     <p class="sub">登录即表示同意<a href="/privacy/">隐私政策</a>。我们只存你的邮箱和接入的机器，不存你的平台登录。</p>`);
 }
 
-export function signedInPage(user, revokePath, machines = "") {
-  return page("已登录", `<h1>已登录</h1>
-    <p class="sub">${escapeHtml(user.email)}</p>
-    ${machines}
-    <form method="post" action="${escapeHtml(revokePath)}"><button type="submit">退出</button></form>`);
-}
-
 const accountLink = '<div class="link-actions"><a href="/account" class="link-secondary">看我的机器</a></div>';
-const roleLabel = (role) => role === "maker" ? "制作机" : "发布机";
-
-export function accountMachines(machines, revokePath) {
-  if (!machines.length) return "";
-  return `<section class="link-panel" aria-label="我的机器"><ul class="machine-list">
-    ${machines.map((machine) => `<li><p>${escapeHtml(machine.name)} <span class="sub">${roleLabel(machine.role)}</span></p>
-      <form method="post" action="${escapeHtml(revokePath(machine.id))}"><button class="link-secondary" type="submit">退出这台</button></form></li>`).join("")}
-  </ul></section>`;
-}
+export const roleLabel = (role) => role === "maker" ? "制作机" : "发布机";
 
 export function linkPage({ link, email, login, decisionPath } = {}) {
   if (!link) {

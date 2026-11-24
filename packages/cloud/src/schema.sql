@@ -48,5 +48,6 @@ CREATE TABLE relay_grant (
   user_id TEXT PRIMARY KEY REFERENCES user(id) ON DELETE CASCADE,
   requested_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
-  capacity_bytes INTEGER NOT NULL DEFAULT 10000000000 CHECK (capacity_bytes >= 0)
+  capacity_bytes INTEGER NOT NULL DEFAULT 10000000000 CHECK (capacity_bytes >= 0),
+  closed_at INTEGER
 ) STRICT;

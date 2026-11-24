@@ -2,7 +2,7 @@
 
 import { CLOUD_COMMANDS } from "../../core/src/commands.mjs";
 import { sessionCookieName } from "./server.mjs";
-import { callCloud, publicOrigin } from "./transport.mjs";
+import { callCloud, cloudTextArgs, publicOrigin } from "./transport.mjs";
 
 const args = process.argv.slice(2);
 try {
@@ -26,7 +26,7 @@ try {
       const machineRequest = command.permission === "link" || command.permission === "device";
       if (machineRequest && !/^[A-Za-z0-9_-]{43}$/.test(credential ?? "")) throw new Error("请提供有效的 Hifabu 机器凭据。");
       const headers = machineRequest ? { Authorization: `Bearer ${credential}` } : token ? { Cookie: `${sessionCookieName}=${token}` } : {};
-      const params = Object.fromEntries(values.map((value, index) => [keys[index], value]));
+      const params = cloudTextArgs(command, Object.fromEntries(values.map((value, index) => [keys[index], value])));
       try {
         console.log(JSON.stringify(await callCloud(origin, command.name, params, headers)));
       } catch (error) {

@@ -1,7 +1,9 @@
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { signRelayControl } from "./relay-control.mjs";
 
 const ttlSeconds = 3600;
+export const machineTokenTtlMs = ttlSeconds * 1000;
 const audience = "versekit-relay";
 const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -36,6 +38,7 @@ export function createMachineSigner(privatePem, { clock = Date.now } = {}) {
 
   return {
     publicPem,
+    relayControl: (method, accountId) => signRelayControl(privateKey, method, accountId, clock()),
     issue({ userId, deviceId, role, relayEnabled, capacityBytes }) {
       const iat = Math.floor(clock() / 1000);
       const exp = iat + ttlSeconds;

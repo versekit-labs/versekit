@@ -24,7 +24,7 @@ export function linkPath(id, pathname = "/link") {
   return `${pathname}?${new URLSearchParams({ code: id })}`;
 }
 
-export function createDeviceFlow({ store, signer, relayUrl, origin, clock = Date.now }) {
+export function createDeviceFlow({ store, signer, relayUrl, origin, clock = Date.now, isDeleting = () => false }) {
   const byId = new Map();
   const byPollHash = new Map();
 
@@ -35,7 +35,7 @@ export function createDeviceFlow({ store, signer, relayUrl, origin, clock = Date
 
   function refresh(refreshToken) {
     const machine = store.refreshMachine(refreshToken);
-    if (!machine) throw new DeviceFlowError("device_inactive", 401);
+    if (!machine || isDeleting(machine.userId)) throw new DeviceFlowError("device_inactive", 401);
     const { email, role, relayEnabled } = machine;
     return { email, role, relayEnabled, relayUrl, ...signer.issue(machine) };
   }
@@ -43,6 +43,17 @@ export function createDeviceFlow({ store, signer, relayUrl, origin, clock = Date
   return {
     find,
     refresh,
+
+    linksFor(userId) {
+      return [...byId].filter(([, link]) => link.userId === userId).map(([id]) => id);
+    },
+
+    forget(ids) {
+      for (const id of ids) {
+        byPollHash.delete(byId.get(id)?.pollHash);
+        byId.delete(id);
+      }
+    },
 
     start({ name, role, os = "" }) {
       if (!cleanLabel(name) || !name.trim() || name.length > 100 ||

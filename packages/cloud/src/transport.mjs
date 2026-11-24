@@ -7,6 +7,15 @@ const routesByName = new Map(cloudRoutes.map((route) => [route.command, route]))
 
 export const isLoopback = (url) => ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
 
+export function cloudTextArgs(command, fields) {
+  return Object.fromEntries(Object.entries(fields).map(([key, value]) => {
+    const type = command.args[key];
+    if ((type !== "number" && type !== "number?") || !value.trim()) return [key, value];
+    const number = Number(value);
+    return [key, Number.isFinite(number) ? number : value];
+  }));
+}
+
 export function publicOrigin(value) {
   const url = new URL(value);
   if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback(url))) ||

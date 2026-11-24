@@ -2,16 +2,17 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { parseArgs } from "../../core/src/commands.mjs";
 import { matchRoute } from "../../core/src/routes.mjs";
+import { accountErrorPage, accountPage, accountScriptHash, accountStyleHash, adminPage, deleteAccountPage } from "./account-page.mjs";
 import { activityMessage, createActivityLog } from "./activity-log.mjs";
 import { openControlStore, sessionTtlMs } from "./control-store.mjs";
 import { createDeviceFlow, DeviceFlowError, linkPath } from "./device-flow.mjs";
 import { createGoogleOAuth, GoogleLoginError } from "./google.mjs";
-import { accountMachines, linkPage, loginPage, loginStyleHash, signedInPage } from "./login-page.mjs";
+import { linkPage, loginPage, loginStyleHash } from "./login-page.mjs";
 import { loadMachineSigner } from "./machine-token.mjs";
-import { cloudCommands, cloudRoute, cloudRoutes, publicOrigin } from "./transport.mjs";
+import { createRelayControl } from "./relay-control.mjs";
+import { cloudCommands, cloudRoute, cloudRoutes, cloudTextArgs, isLoopback, publicOrigin } from "./transport.mjs";
 
 const googlePath = cloudRoute("session.create").path;
-const revokePath = cloudRoute("session.revoke").path;
 const callbackPath = "/login/google/callback";
 export const sessionCookieName = "__Host-hifabu-session";
 const loginCookieName = "__Host-hifabu-login";
@@ -65,8 +66,9 @@ async function readLoginForm(req) {
   return new URLSearchParams(await readSmallBody(req, invalid));
 }
 
-async function readDeviceArgs(req, route) {
-  const invalid = () => new DeviceFlowError("device_link_invalid", 400);
+async function readCommandArgs(req, route, errorCode) {
+  const invalid = () => new DeviceFlowError(errorCode, 400);
+  const command = cloudCommands.get(route.command);
   try {
     const raw = req.method === "POST" ? await readSmallBody(req, invalid) : "";
     const type = req.headers["content-type"]?.split(";")[0].trim();
@@ -78,11 +80,12 @@ async function readDeviceArgs(req, route) {
       const params = [...new URLSearchParams(raw)];
       fields = Object.fromEntries(params);
       if (Object.keys(fields).length !== params.length) throw invalid();
+      fields = cloudTextArgs(command, fields);
     } else if (raw) {
       throw invalid();
     }
     if (Object.keys(route.params).some((key) => Object.hasOwn(fields, key))) throw invalid();
-    return parseArgs(cloudCommands.get(route.command), { ...fields, ...route.params });
+    return parseArgs(command, { ...fields, ...route.params });
   } catch {
     throw invalid();
   }
@@ -99,6 +102,15 @@ function onlyParam(params, name) {
   return values.length === 1 ? values[0] : null;
 }
 
+function macDownloadUrl(value) {
+  if (!value) return null;
+  const url = new URL(value);
+  if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback(url))) || url.username || url.password) {
+    throw new Error("Mac 安装包地址必须是 HTTPS 或本地回环地址。");
+  }
+  return url.href;
+}
+
 export function createCloudServer({
   origin: configuredOrigin,
   dataDir,
@@ -107,6 +119,8 @@ export function createCloudServer({
   resolveLink = () => null,
   signingKeyFile,
   relayUrl: configuredRelayUrl,
+  ownerEmail: configuredOwnerEmail,
+  downloadUrl: configuredDownloadUrl,
   clock = Date.now,
 }) {
   const origin = publicOrigin(configuredOrigin);
@@ -114,6 +128,9 @@ export function createCloudServer({
   const google = createGoogleOAuth(googleConfig, new URL(callbackPath, origin).href, { clock });
   const signer = signingKeyFile ? loadMachineSigner(signingKeyFile, { clock }) : null;
   const relayUrl = configuredRelayUrl ? publicOrigin(configuredRelayUrl) : null;
+  const ownerEmail = configuredOwnerEmail?.trim().toLowerCase() || null;
+  const downloadUrl = macDownloadUrl(configuredDownloadUrl);
+  const relayControl = createRelayControl(relayUrl, signer);
   const log = createActivityLog({ directory: join(dataDir, "logs"), retentionDays: logRetentionDays, clock });
   let store;
   try {
@@ -122,11 +139,13 @@ export function createCloudServer({
     log.close();
     throw error;
   }
-  const pairing = signer && createDeviceFlow({ store, signer, relayUrl, origin, clock });
+  const deleting = new Set();
+  const isDeleting = (id) => deleting.has(id);
+  const pairing = signer && createDeviceFlow({ store, signer, relayUrl, origin, clock, isDeleting });
 
   const headers = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; style-src 'sha256-${loginStyleHash}'; form-action 'self' ${google.authorizationOrigin}`,
+    "Content-Security-Policy": `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; style-src 'sha256-${loginStyleHash}' 'sha256-${accountStyleHash}'; script-src 'sha256-${accountScriptHash}'; form-action 'self' ${google.authorizationOrigin}`,
     // Chrome sends Origin: null on form submissions with no-referrer. Preserve the
     // same-origin Origin header without ever sending the callback URL or its query.
     "Referrer-Policy": "strict-origin",
@@ -141,6 +160,43 @@ export function createCloudServer({
   function fail(res, status, code) {
     log.record(code);
     json(res, status, { error_code: code, message: activityMessage(code) });
+  }
+
+  const isOwner = (session) => Boolean(session && session.email === ownerEmail);
+  const sessionFor = (req) => store.session(readCookie(req, sessionCookieName));
+  const wantsHtml = (req) => req.headers.accept?.includes("text/html");
+
+  function accountFailure(req, res, status, code, session, back, confirmUser) {
+    if (!wantsHtml(req)) return fail(res, status, code);
+    log.record(code);
+    const message = activityMessage(code);
+    const body = confirmUser ? deleteAccountPage(session, confirmUser, message) :
+      accountErrorPage(message, back, session, isOwner(session));
+    return html(res, status, body);
+  }
+
+  async function usage(accountId) {
+    try {
+      return await relayControl.usage(accountId);
+    } catch {
+      return { usedBytes: null, freeBytes: null };
+    }
+  }
+
+  async function grantFor(accountId) {
+    const grant = store.relayGrant(accountId);
+    const usedBytes = grant.enabled ? (await usage(accountId)).usedBytes : null;
+    if (grant.enabled && usedBytes == null) log.record("relay_usage_unavailable");
+    return { ...grant, usedBytes };
+  }
+
+  async function userOverview() {
+    const rows = await Promise.all(store.listUsers().map(async (user) => ({ user, ...(await usage(user.id)) })));
+    if (rows.some(({ usedBytes }) => usedBytes == null)) log.record("relay_usage_unavailable");
+    return {
+      users: rows.map(({ user, usedBytes }) => ({ ...user, usedBytes })),
+      freeBytes: rows.find(({ freeBytes }) => freeBytes != null)?.freeBytes ?? null,
+    };
   }
 
   async function machineFor(value) {
@@ -225,6 +281,7 @@ export function createCloudServer({
       json(res, 200, result);
     },
     "device.link.decide"(req, res, { code, decision }, session) {
+      if (isDeleting(session.id)) return fail(res, 409, "account_delete_in_progress");
       const link = requirePairing().find(code);
       const waiting = link?.state === "waiting";
       const state = pairing.decide(code, session.id, decision);
@@ -246,6 +303,59 @@ export function createCloudServer({
     },
   };
 
+  const accountActions = {
+    async "relay.grant.status"(req, res, args, session) {
+      json(res, 200, await grantFor(session.id));
+    },
+    "relay.grant.request"(req, res, args, session) {
+      if (isDeleting(session.id)) return accountFailure(req, res, 409, "account_delete_in_progress", session, "/account");
+      const { grant, changed } = store.requestRelay(session.id);
+      if (changed) log.record("relay_requested");
+      return wantsHtml(req) ? redirect(res, "/account") : json(res, 200, grant);
+    },
+    "relay.grant.set"(req, res, { accountId, state, capacityGb }, session) {
+      const flag = state === "on" || state === "off";
+      const capacityBytes = capacityGb == null ? undefined : Math.round(capacityGb * 1_000_000_000);
+      if ((!flag && state != null && state !== "keep") || (!flag && capacityBytes == null) ||
+          (capacityBytes != null && (capacityGb < 0 || !Number.isSafeInteger(capacityBytes)))) {
+        return accountFailure(req, res, 400, "account_request_invalid", session, "/admin");
+      }
+      if (isDeleting(accountId)) return accountFailure(req, res, 409, "account_delete_in_progress", session, "/admin");
+      const result = store.setRelayGrant(accountId, { enabled: flag ? state === "on" : undefined, capacityBytes });
+      if (!result) return accountFailure(req, res, 404, "account_not_found", session, "/admin");
+      log.record("relay_grant_updated");
+      return wantsHtml(req) ? redirect(res, "/admin") : json(res, 200, result);
+    },
+    async "user.list"(req, res) {
+      json(res, 200, await userOverview());
+    },
+    async "user.delete"(req, res, { accountId, confirmEmail }, session) {
+      const user = store.findUser(accountId);
+      if (!user) return accountFailure(req, res, 404, "account_not_found", session, "/admin");
+      if (confirmEmail.trim().toLowerCase() !== user.email) {
+        return accountFailure(req, res, 400, "delete_confirmation_invalid", session, "/admin", user);
+      }
+      if (isDeleting(accountId)) return accountFailure(req, res, 409, "account_delete_in_progress", session, "/admin", user);
+      deleting.add(accountId);
+      try {
+        try {
+          await relayControl.deleteAccount(accountId);
+        } catch (error) {
+          const busy = error.status === 409;
+          return accountFailure(req, res, busy ? 409 : 502, busy ? "account_relay_busy" : "account_relay_unavailable", session, "/admin", user);
+        }
+        const links = pairing?.linksFor(accountId) ?? [];
+        store.deleteUser(accountId, links);
+        pairing?.forget(links);
+        log.record("account_deleted");
+      } finally {
+        deleting.delete(accountId);
+      }
+      if (session.id === accountId) res.setHeader("Set-Cookie", cookie(sessionCookieName, "", 0));
+      return wantsHtml(req) ? redirect(res, session.id === accountId ? "/account" : "/admin") : json(res, 200, { deleted: true });
+    },
+  };
+
   const server = createServer({ requestTimeout: 15_000, headersTimeout: 10_000 }, async (req, res) => {
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     try {
@@ -256,10 +366,19 @@ export function createCloudServer({
       const route = matchRoute(req.method, url.pathname, cloudRoutes);
       if (route) {
         const { permission } = cloudCommands.get(route.command);
-        const session = permission === "session" ? store.session(readCookie(req, sessionCookieName)) : null;
-        if (permission === "session" && !session) return fail(res, 401, "session_required");
+        const sessionNeeded = permission === "session" || permission === "owner";
+        let session = sessionNeeded ? sessionFor(req) : null;
+        const denied = () => permission === "owner" && !isOwner(session) ? [403, "owner_required"] :
+          permission === "session" && !session ? [401, "session_required"] : null;
+        const rejection = denied();
+        if (rejection) return fail(res, ...rejection);
         if (actions[route.command]) return await actions[route.command](req, res);
-        const args = await readDeviceArgs(req, route);
+        const accountAction = accountActions[route.command];
+        const args = await readCommandArgs(req, route, accountAction ? "account_request_invalid" : "device_link_invalid");
+        if (sessionNeeded) session = sessionFor(req);
+        const recheck = denied();
+        if (recheck) return fail(res, ...recheck);
+        if (accountAction) return await accountAction(req, res, args, session);
         return deviceActions[route.command](req, res, args, session);
       }
       if (req.method === "GET" && url.pathname === callbackPath) return await finishLogin(req, res, url.searchParams);
@@ -284,10 +403,20 @@ export function createCloudServer({
         return res.end(signer.publicPem);
       }
       if (req.method === "GET" && url.pathname === "/account") {
-        const session = store.session(readCookie(req, sessionCookieName));
-        if (!session) return redirect(res, "/login");
-        const machines = pairing ? accountMachines(store.listMachines(session.id), (deviceId) => cloudRoute("device.revoke", { deviceId }).path) : "";
-        return html(res, 200, signedInPage(session, revokePath, machines));
+        const session = sessionFor(req);
+        const grant = session && await grantFor(session.id);
+        const machines = session ? store.listMachines(session.id) : [];
+        return html(res, 200, accountPage({ session, owner: isOwner(session), grant, machines, downloadUrl, now: clock() }));
+      }
+      if (req.method === "GET" && url.pathname === "/admin") {
+        const session = sessionFor(req);
+        if (!isOwner(session)) return accountFailure(req, res, 403, "owner_required", session, "/account");
+        if (url.searchParams.has("delete")) {
+          const user = store.findUser(onlyParam(url.searchParams, "delete"));
+          if (!user) return accountFailure(req, res, 404, "account_not_found", session, "/admin");
+          return html(res, 200, deleteAccountPage(session, user));
+        }
+        return html(res, 200, adminPage({ session, ...(await userOverview()), now: clock() }));
       }
       json(res, 404, { error_code: "not_found", message: "找不到这一页。" });
     } catch (error) {
