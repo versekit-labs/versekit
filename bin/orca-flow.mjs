@@ -122,6 +122,18 @@ export function countActive(state) {
   return { build, accept, freeBuild: Math.max(0, state.lanes - build), freeAccept: Math.max(0, state.acceptMax - accept) };
 }
 
+/** 实现 / 返工 worker 还在跑的 issue：这些单不派验收（ACC-harness-orca-18）。 */
+export function buildingIssues(state) {
+  const byTask = new Map(state.tasks.map((t) => [t.id, t]));
+  const busy = new Set();
+  for (const w of state.workers) {
+    if (!isActive(w)) continue;
+    const meta = parseTaskTitle(byTask.get(w.taskId)?.task_title);
+    if (meta && meta.kind !== "accept") busy.add(meta.issue);
+  }
+  return busy;
+}
+
 /** 某 issue 最近一个可复用的实现 / 返工终端：已保留、进程还活着。 */
 export function reusableTerminal(state, issue) {
   const byTask = new Map(state.tasks.map((t) => [t.id, t]));
@@ -1127,6 +1139,10 @@ export async function tick({ dryRun = false } = {}) {
       if (free.freeAccept <= 0) break;
       const head7 = String(q.head ?? "").slice(0, 7);
       if (!q.head || hasAcceptTask(state, q.number, head7)) continue;
+      if (buildingIssues(state).has(q.number)) {
+        log(`  · #${q.number} 跳过验收：实现 / 返工 worker 还在跑，等它交活`);
+        continue;
+      }
       try {
         const pr = lastJson(run(join(ROOT, "bin/ghx"), ["pr", "view", String(q.pull), "--json", "headRefName,comments"]).stdout) ?? {};
         const branch = pr.headRefName;
