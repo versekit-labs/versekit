@@ -28,9 +28,35 @@ deploy/volc1/deploy.sh          # 默认 ssh 别名 volc1
 - 服务 `versekit-relay.service`（`systemctl status versekit-relay`）
 - `/etc/caddy/Caddyfile` 末尾追加一个带标记的站点块。追加前备份为 `Caddyfile.bak-versekit-<时间>`，`caddy validate` 通过才 `reload`；不通过就还原并报错。块已存在时跳过，所以重复执行安全
 
-## token
+## Hifabu 机器令牌与迁移
 
-首次启动时服务自己在 volc1 生成推送、拉取两个 token，写进
+账号服务用 Ed25519 私钥签发有效期一小时的机器令牌。中转启动时从本地文件读取公钥，每个请求离线验签。账号开通状态和容量来自签好的令牌，开通、关停或调整容量会在续签后生效。制作机和发布机会在令牌到期前自动续签。
+
+账号投递存放在中转数据目录的 `<账号 id>/deliveries`，成片、封面和断点分别在同目录下的 `blobs` 和 `partial`。容量按账号计算，计入完整成片、半截文件和正在上传的预留空间。同账号下内容相同的文件只占用一份，入库后的保留期是七天。中转还会清理七天未续传的半截文件和七天未被投递引用的上传文件。云端磁盘仍须至少保留 2GB。
+
+由所有者在部署环境执行迁移：
+
+1. 从账号服务的 `/.well-known/hifabu-machine-key.pem` 取得公钥，确认来源后放在 volc1 的 `/var/lib/versekit-relay/hifabu-machine-key.pem`，让 `versekit` 用户可读。确保账号服务的 `HIFABU_RELAY_URL` 是公开的 HTTPS 中转地址，给所有者的 Hifabu 账号开通传片。
+2. 更新中转，合并以下字段到 `/var/lib/versekit-relay/.config/versekit/config.json` 的 `relay` 对象，保留原有配置。重启 `versekit-relay`。
+
+   ```json
+   {
+     "relay": {
+       "machine_public_key_file": "/var/lib/versekit-relay/hifabu-machine-key.pem",
+       "allow_legacy_tokens": true
+     }
+   }
+   ```
+
+3. 暂停旧制作机的新投递，用原固定令牌把旧队列传完、拉取完，并确认没有待拉取或已下载待入库的投递。旧固定令牌只访问原数据目录，账号令牌只访问自己的账号目录。需要继续处理的旧投递可在切换后从制作机重新送，已经入库的本地作品可照常使用。
+4. 两台机器都升级，然后用同一个 Hifabu 账号接入。制作机运行 `vk cloud login --role maker`，发布机运行 `vk cloud login --role executor`。用 `vk cloud status` 核对角色、邮箱和开通状态。中转地址随登录提供，制作机可以沿用原默认账号组，或在 `vk work push` 上指定 `--group`。先交付一个作品，确认在制作机上可查询、在发布机上成功拉取回报。
+5. 将中转的 `relay.allow_legacy_tokens` 改为 `false` 并重启。确认两个旧令牌均收到 401，再用两台已登录的机器复验。按需备份原数据目录下的 `blobs`、`partial`、`deliveries` 和 `activity.json`。确认切换正常后，从服务端和两台机器的配置删除旧固定令牌。迁移期间要恢复旧连接，可保留公钥，把开关改回 `true` 并重启，然后让旧客户端恢复固定令牌连接。
+
+配置公钥后默认关闭固定令牌。尚未配置公钥的旧部署默认维持固定令牌模式，显式关闭前须先配置公钥。
+
+## 旧固定令牌
+
+启用固定令牌时，服务在首次启动时生成缺少的推送、拉取令牌，写进
 `/var/lib/versekit-relay/.config/versekit/config.json`（权限 600）。token 不进仓库、不进日志、不进 PR。取法：
 
 ```bash
@@ -49,7 +75,9 @@ vk relay connect https://vk.fangyouxi.cn --token <拉取 token>          # 发�
 
 换 token：删掉 volc1 上 `config.json` 里对应字段，`systemctl restart versekit-relay` 会重新生成，再重新 connect。
 
-## 验证与端到端
+## 真机验证（待人工）
+
+以下检查由所有者执行。固定令牌兼容模式可用 `e2e.sh` 验证。迁移后用已接入同一账号的制作机和发布机验证，并在发布机记录成片大小、下载耗时和平均速度。
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://vk.fangyouxi.cn/v1/ping   # 无 token → 401

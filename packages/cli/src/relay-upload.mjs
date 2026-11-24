@@ -1,14 +1,14 @@
 // 制作机的投递队列。登记和重试时间写进本机状态，实际传输由 vk serve 串行处理。
-import { createHash } from "node:crypto";
 import { readConfig } from "../../core/src/config.mjs";
 import { emit } from "../../core/src/index.mjs";
 import { getRelayState, patchRelayState } from "../../core/src/store.mjs";
-import { pushDelivery, RETENTION_MS } from "../../relay/src/index.mjs";
+import { pushDelivery, relayConnectionKey, RETENTION_MS } from "../../relay/src/index.mjs";
 
-const keyOf = (token) => createHash("sha256").update(token).digest("hex");
 const jobs = () => getRelayState().push_jobs ?? [];
 
-function connection() {
+function connection(machineRelay) {
+  const machine = machineRelay();
+  if (machine) return machine.role === "maker" && machine.url ? machine : null;
   const relay = readConfig().relay;
   if (typeof relay?.url === "string" && relay.url && typeof relay.push_token === "string" && relay.push_token) {
     return { url: relay.url.replace(/\/+$/, ""), token: relay.push_token };
@@ -18,11 +18,11 @@ function connection() {
 
 function forConnection(rows, cfg) {
   if (!cfg) return [];
-  const key = keyOf(cfg.token);
+  const key = relayConnectionKey(cfg);
   return rows.filter((row) => row.url === cfg.url && row.connectionKey === key);
 }
 
-export function createRelayUploadQueue({ log = () => {} } = {}) {
+export function createRelayUploadQueue({ log = () => {}, machineRelay = () => null } = {}) {
   let running = false;
   let timer = null;
   let active = null;
@@ -42,12 +42,12 @@ export function createRelayUploadQueue({ log = () => {} } = {}) {
 
   async function tick() {
     const rows = jobs();
-    const cfg = connection();
+    if (!rows.length) return;
+    const cfg = connection(machineRelay);
     const matching = forConnection(rows, cfg);
     const now = Date.now();
     const job = matching.find((row) => row.retryAt <= now);
     if (!job) {
-      if (!rows.length) return;
       // 另一个中转连接的任务等原连接恢复；同一连接的任务等退避到期。
       const delay = matching.length === rows.length ? Math.min(...matching.map((row) => row.retryAt - now)) : 1000;
       wake(delay);
@@ -81,14 +81,15 @@ export function createRelayUploadQueue({ log = () => {} } = {}) {
       } else {
         const patch = { push_jobs: pending.filter((row) => row.id !== job.id) };
         if (failure) {
-          const { id, url, title, group, totalBytes, createdAt, uploadBytesPerSecond } = job;
+          const { id, url, connectionKey, title, group, totalBytes, createdAt, uploadBytesPerSecond } = job;
           const errorCode = failure.code ?? "upload_failed";
           const reason = failure.message;
-          const nextStep = errorCode === "disk_low" ? "清出中转空间后，再从制作机重新交付。"
+          const nextStep = errorCode === "disk_low" || errorCode === "quota_exceeded" ? "清出中转空间后，再从制作机重新交付。"
+            : errorCode === "relay_disabled" ? "到我的 Hifabu 申请开通传片，再从制作机重新交付。"
             : errorCode === "source_unavailable" || errorCode === "hash_mismatch" ? "检查制作机上的素材，选好文件后重新交付。"
             : "检查中转连接后，从制作机重新交付。";
           const history = (getRelayState().push_failures ?? []).filter((row) => row.updatedAt >= updatedAt - RETENTION_MS);
-          const failed = { id, url, title, group, totalBytes, createdAt, updatedAt, uploadBytesPerSecond, sent: progress.sent, errorCode, reason, nextStep };
+          const failed = { id, url, connectionKey, title, group, totalBytes, createdAt, updatedAt, uploadBytesPerSecond, sent: progress.sent, errorCode, reason, nextStep };
           patch.push_failures = [failed, ...history].slice(0, 20);
           emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${id}:failed` });
           log(`[relay] 投递 ${id} 没交成（${errorCode}）：${reason}`);
@@ -104,8 +105,8 @@ export function createRelayUploadQueue({ log = () => {} } = {}) {
   }
 
   return {
-    register(job, token) {
-      patchRelayState({ push_jobs: [...jobs(), { ...job, connectionKey: keyOf(token), attempts: 0, retryAt: 0 }] });
+    register(job) {
+      patchRelayState({ push_jobs: [...jobs(), { ...job, attempts: 0, retryAt: 0 }] });
       wake();
     },
     list(cfg) {

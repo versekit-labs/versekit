@@ -444,7 +444,7 @@ async function qrStatus(accountId, account, session, log = () => {}) {
   return { mode: "qr", state: "waiting", qr: session.qr, ...(refreshed ? { refreshed: true } : {}), note: "等待用手机小红书扫码…" };
 }
 
-function daemonHandlers(adapters, log, { offline, uploadQueue }) {
+function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
   const core = createCoreHandlers({
     adapters,
     log,
@@ -453,6 +453,7 @@ function daemonHandlers(adapters, log, { offline, uploadQueue }) {
     updater: { apply: async () => service.startDetachedUpdate() },
     loginsOpen: activeLogins,
     uploadQueue,
+    machineRelay,
   });
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
   // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
@@ -481,7 +482,7 @@ function daemonHandlers(adapters, log, { offline, uploadQueue }) {
   return {
     ...buildHandlers(adapters, { log }),
     ...core,
-    ...createCloudHandlers({ offline, openBrowser, log }),
+    ...cloud,
     // 只读：控制台自检页看后台服务的状态；启停卸载只在本机 CLI 做。
     service: async () => service.status(),
     "account.check": async ({ accountId }) => {
@@ -926,8 +927,9 @@ async function cmdServe() {
   // 离线模式连适配器都不加载：不会有任何东西能走到真实平台。
   const { adapters, errors } = offline ? { adapters: [], errors: [] } : await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
-  const uploadQueue = createRelayUploadQueue({ log });
-  const handlers = daemonHandlers(adapters, log, { offline, uploadQueue });
+  const { relayConnection: machineRelay, ...cloud } = createCloudHandlers({ offline, openBrowser, log });
+  const uploadQueue = createRelayUploadQueue({ log, machineRelay });
+  const handlers = daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue });
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
@@ -1514,17 +1516,24 @@ async function cmdRelay() {
     const p = paths();
     mkdirSync(p.config, { recursive: true, mode: 0o700 });
     const cfg = readConfig().relay ?? {};
+    const { machine_public_key_file: keyFile, allow_legacy_tokens: legacy = keyFile == null } = cfg;
+    if (typeof legacy !== "boolean") throw new Error("relay.allow_legacy_tokens 必须为 true 或 false");
+    const machinePublicKey = keyFile == null ? undefined : readFileSync(keyFile, "utf8");
+    if (machinePublicKey != null && !machinePublicKey.startsWith("-----BEGIN PUBLIC KEY-----")) {
+      throw new Error("relay.machine_public_key_file 必须指向 Hifabu 的 PEM 公钥文件");
+    }
     const fresh = {};
-    for (const k of ["push_token", "pull_token"]) if (!cfg[k]) fresh[k] = randomBytes(24).toString("base64url");
+    if (legacy) {
+      for (const k of ["push_token", "pull_token"]) if (!cfg[k]) fresh[k] = randomBytes(24).toString("base64url");
+    }
     if (Object.keys(fresh).length) {
       updateConfig({ relay: fresh });
       chmod(p.configFile, 0o600);
       console.error("[relay] 已生成缺少的 token，写入 config.json（权限 600）；用 vk relay token push|pull 取出");
     }
-    const conf = readConfig().relay;
-    const dataDir = val("--data") ?? conf.data_dir ?? join(p.state, "relay");
-    const port = Number(val("--port") ?? conf.port ?? 8790);
-    const relay = createRelayServer({ dataDir, pushToken: conf.push_token, pullToken: conf.pull_token, log: (m) => console.error(m) });
+    const dataDir = val("--data") ?? cfg.data_dir ?? join(p.state, "relay");
+    const port = Number(val("--port") ?? cfg.port ?? 8790);
+    const relay = createRelayServer({ dataDir, pushToken: fresh.push_token ?? cfg.push_token, pullToken: fresh.pull_token ?? cfg.pull_token, machinePublicKey, allowLegacyTokens: legacy, log: (m) => console.error(m) });
     const bound = await relay.listen({ port });
     console.error(`[relay] 监听 127.0.0.1:${bound}（数据目录 ${dataDir}）；HTTPS 由反向代理提供`);
     for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => relay.close().then(() => process.exit(0)));
