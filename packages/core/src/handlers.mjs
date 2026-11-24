@@ -9,7 +9,7 @@ import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit, paths, DEFAULT_LANGUAGE } from "./index.mjs";
-import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES } from "../../relay/src/index.mjs";
+import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES, relayConnectionKey } from "../../relay/src/index.mjs";
 import { BASELINE_TRANSFER, deliveryProgress, deliveryStatusView, formatBytes, formatDuration, transferSeconds } from "../../relay/src/status.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
@@ -178,7 +178,7 @@ export function loginHint(platform, accountId) {
  * `updater`：{ apply({ now }) } 由 CLI 那一层给（更新要动服务和程序目录，不在内核里）；
  * `loginsOpen()`：守护进程里还开着的登录窗口数。
  */
-export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0, uploadQueue = null } = {}) {
+export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0, uploadQueue = null, machineRelay = () => null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   /** 方案里能选的平台：已安装的适配器；离线模式不装适配器，退回矩阵里的平台名，方案照样能看能改。 */
   const knownPlatforms = () => (byPlatform.size ? [...byPlatform.keys()] : overview.MATRIX_COLUMNS.map((c) => c.platform));
@@ -384,10 +384,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   const relayConfig = () => {
     const r = readConfig().relay ?? {};
     const mins = Number(r.interval_minutes);
+    const machine = machineRelay();
     return {
-      url: typeof r.url === "string" && r.url ? r.url.replace(/\/+$/, "") : null,
-      pushToken: r.push_token || null,
-      pullToken: r.pull_token || null,
+      url: machine ? machine.url : typeof r.url === "string" && r.url ? r.url.replace(/\/+$/, "") : null,
+      pushToken: machine ? (machine.role === "maker" ? machine.token : null) : r.push_token || null,
+      pullToken: machine ? (machine.role === "executor" ? machine.token : null) : r.pull_token || null,
+      accountId: machine?.accountId,
       defaultGroup: r.default_group || null,
       intervalMinutes: Number.isFinite(mins) && mins > 0 ? mins : 5,
     };
@@ -396,13 +398,18 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   let relayPulling = null;
   // 这一轮（或刚结束的一轮）的逐个投递进展，给 vk relay pull 和 relay.status 看（ACC-relay-06）
   let relayRound = null;
+  let relayRoundAccount;
   const uploading = new Map();
   const makerConnection = () => {
     const cfg = relayConfig();
-    if (!cfg.url || !cfg.pushToken) fail("还没有配置中转：先到系统页的设备里接入", "vk relay connect <地址> --token <推送 token> --push");
+    if (!cfg.url || !cfg.pushToken) {
+      if (cfg.accountId) fail("这台机器没有制作机的传片连接。请核对 Hifabu 机器角色和中转地址。");
+      fail("还没有配置中转：先到系统页的设备里接入", "vk relay connect <地址> --token <推送 token> --push");
+    }
     return { ...cfg, token: cfg.pushToken };
   };
-  const makerFailures = (url) => (store.getRelayState().push_failures ?? []).filter((row) => row.url === url && Date.now() - row.updatedAt < RELAY_WEEK_MS);
+  const sameMaker = (row, cfg) => row.url === cfg.url && (row.connectionKey ? row.connectionKey === relayConnectionKey(cfg) : !cfg.accountId);
+  const makerFailures = (cfg) => (store.getRelayState().push_failures ?? []).filter((row) => sameMaker(row, cfg) && Date.now() - row.updatedAt < RELAY_WEEK_MS);
   const localStatus = (row, lastPullAt = null) => {
     const elapsed = (Date.now() - row.createdAt) / 1000;
     const speed = elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
@@ -473,24 +480,44 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     return { workId: work.id, drafts: created.length, summary: { workId: work.id, drafts, rejected }, ...(reason ? { reason } : {}) };
   }
 
-  function emitDeliveryFailure(id, { errorCode, reason, nextStep }) {
-    emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${id}:failed` });
+  function emitDeliveryFailure(id, { errorCode, reason, nextStep }, key = id) {
+    emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${key}:failed` });
   }
 
-  function recordRelay(id, rec) {
-    store.setRelayDelivery(id, rec);
-    if (rec.state === "failed") emitDeliveryFailure(id, rec);
+  const deliveryKey = (accountId, id) => accountId ? `${accountId}.${id}` : id;
+  const pullState = (accountId) => {
     const st = store.getRelayState();
+    return accountId ? st.pull_accounts?.[accountId] ?? {} : st;
+  };
+  const patchPullState = (accountId, patch) => {
+    if (!accountId) return store.patchRelayState(patch);
+    const accounts = store.getRelayState().pull_accounts ?? {};
+    return store.patchRelayState({ pull_accounts: { ...accounts, [accountId]: { ...accounts[accountId], ...patch } } });
+  };
+
+  function recordRelay(id, rec, accountId) {
+    const key = deliveryKey(accountId, id);
+    store.setRelayDelivery(key, rec);
+    if (rec.state === "failed") emitDeliveryFailure(id, rec, key);
+    const st = pullState(accountId);
     const recent = [{ id, state: rec.state, title: rec.title ?? null, at: rec.at }, ...(st.recent ?? []).filter((r) => r.id !== id)].slice(0, 5);
     const failures = rec.state === "failed" ? [{ id, at: rec.at, title: rec.title ?? null, message: rec.reason }, ...(st.failures ?? []).filter((f) => f.id !== id)].slice(0, 20) : st.failures ?? [];
-    store.patchRelayState({ recent, failures });
+    patchPullState(accountId, { recent, failures });
   }
 
   async function pullRound() {
-    if (relayPulling) return relayPulling;
     const cfg = relayConfig();
-    if (!cfg.url || !cfg.pullToken) fail("还没有连中转：先到系统页的设备里接入", "vk relay connect <地址> --token <拉取 token>");
-    const inboxDir = joinPath(paths().state, "relay-inbox");
+    const { accountId } = cfg;
+    if (!cfg.url || !cfg.pullToken) {
+      if (accountId) fail("这台机器没有发布机的传片连接。请核对 Hifabu 机器角色和中转地址。");
+      fail("还没有连中转：先到系统页的设备里接入", "vk relay connect <地址> --token <拉取 token>");
+    }
+    if (relayPulling) {
+      if (relayRoundAccount === accountId) return relayPulling;
+      fail("上一轮拉取正在结束，请稍后重试。");
+    }
+    const inboxDir = joinPath(paths().state, "relay-inbox", accountId ?? "");
+    relayRoundAccount = accountId;
     relayRound = { startedAt: Date.now(), finishedAt: null, total: 0, items: [] };
     relayPulling = (async () => {
       try {
@@ -499,8 +526,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           token: cfg.pullToken,
           inboxDir,
           log,
-          getRecord: store.getRelayDelivery,
-          record: recordRelay,
+          getRecord: (id) => store.getRelayDelivery(deliveryKey(accountId, id)),
+          record: (id, rec) => recordRelay(id, rec, accountId),
           ingest: (d, filePaths) => ingestDelivery(d, filePaths, inboxDir),
           onEvent: (e) => {
             const rd = relayRound;
@@ -520,12 +547,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           },
         });
         const at = Date.now();
-        store.patchRelayState({ last_ok_at: at, last_error: null, pending: r.pending.length });
+        patchPullState(accountId, { last_ok_at: at, last_error: null, pending: r.pending.length });
         if (r.ingested.length || r.failed.length) log(`[relay] 本轮：入库 ${r.ingested.length}，失败 ${r.failed.length}，没下完 ${r.pending.length}`);
         return { ...r, at };
       } catch (err) {
-        store.patchRelayState({ last_error: { at: Date.now(), message: err.message } });
-        log(`[relay] 拉取没成功：${err.message}`);
+        const errorCode = err.code ?? "pull_failed";
+        patchPullState(accountId, { last_error: { at: Date.now(), message: err.message, errorCode } });
+        log(`[relay] 拉取没成功（${errorCode}）：${err.message}`);
         throw err;
       } finally {
         relayDownloading = null;
@@ -538,11 +566,12 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
   function relayStatusView({ now = Date.now() } = {}) {
     const cfg = relayConfig();
-    const st = store.getRelayState();
+    const st = pullState(cfg.accountId);
     const configured = Boolean(cfg.url && cfg.pullToken);
     const errAt = st.last_error?.at ?? 0;
     const connection = !configured ? "not_configured" : st.last_error && errAt >= (st.last_ok_at ?? 0) ? "error" : st.last_ok_at ? "ok" : "never";
-    const d = relayDownloading;
+    const ownRound = cfg.accountId === relayRoundAccount;
+    const d = ownRound ? relayDownloading : null;
     return {
       configured,
       pushConfigured: Boolean(cfg.url && cfg.pushToken),
@@ -552,8 +581,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       lastPullAt: st.last_ok_at ?? null,
       lastPullAgeMs: st.last_ok_at ? Math.max(0, now - st.last_ok_at) : null,
       lastError: st.last_error ?? null,
-      pulling: Boolean(relayPulling),
-      round: relayRound,
+      pulling: ownRound && Boolean(relayPulling),
+      round: ownRound ? relayRound : null,
       downloading: d ? [{ id: d.id, name: d.name, title: d.title ?? null, received: d.received, total: d.total, percent: d.total ? Math.floor((d.received / d.total) * 100) : 0 }] : [],
       pending: st.pending ?? 0,
       recent: st.recent ?? [],
@@ -654,10 +683,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       };
       const id = newDeliveryId();
       const createdAt = Date.now();
-      const upload = { id, url: cfg.url, title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
+      const upload = { id, url: cfg.url, connectionKey: relayConnectionKey(cfg), title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
         uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
       if (uploadQueue) {
-        uploadQueue.register({ ...upload, manifest: wire, files: unique }, cfg.token);
+        uploadQueue.register({ ...upload, manifest: wire, files: unique });
         return { id, state: "pending", group: groupName, files: unique.length, bytes, message: `已登记，投递 ${id}，后台会上传。` };
       }
       log(`[relay] 上传 ${files.length} 个文件到中转…`);
@@ -670,7 +699,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         return { id: delivery.id, state: delivery.state, group: groupName, files: unique.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
       } catch (err) {
         const errorCode = err.code ?? "upload_failed";
-        const nextStep = errorCode === "disk_low" ? "清出中转空间后，再从制作机重新交付。" : "检查中转连接后，从制作机重新交付。";
+        const nextStep = errorCode === "disk_low" || errorCode === "quota_exceeded" ? "清出中转空间后，再从制作机重新交付。"
+          : errorCode === "relay_disabled" ? "到我的 Hifabu 申请开通传片，再从制作机重新交付。"
+          : "检查中转连接后，从制作机重新交付。";
         const failed = { ...upload, updatedAt: Date.now(), errorCode, reason: err.message, nextStep };
         const history = (store.getRelayState().push_failures ?? []).filter((r) => r.updatedAt >= Date.now() - RELAY_WEEK_MS);
         store.patchRelayState({ push_failures: [failed, ...history].slice(0, 20) });
@@ -683,10 +714,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "delivery.list": async () => {
       const cfg = makerConnection();
-      const active = uploadQueue ? uploadQueue.list(cfg) : [...uploading.values()].filter((row) => row.url === cfg.url);
-      const local = active.concat(makerFailures(cfg.url));
+      const active = uploadQueue ? uploadQueue.list(cfg) : [...uploading.values()].filter((row) => sameMaker(row, cfg));
+      const local = active.concat(makerFailures(cfg));
       const result = await listDeliveryStatus(cfg).catch((err) => {
-        if (!local.length || !err.retryable) throw err;
+        if (!local.length || (!err.retryable && err.code !== "relay_disabled")) throw err;
         return { deliveries: [], warning: err.message };
       });
       const { lastPullAt = null, downloadBytesPerSecond, warning } = result;
@@ -701,13 +732,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       if (!/^dl_[0-9a-f]{12,32}$/.test(id)) fail("投递号不合法：请核对投递列表里的编号", "vk delivery list");
       const cfg = makerConnection();
       const active = uploadQueue ? uploadQueue.list(cfg).find((row) => row.id === id) : uploading.get(id);
-      if (active?.url === cfg.url) return localStatus(active);
+      if (active && sameMaker(active, cfg)) return localStatus(active);
       try {
         const cloud = await getDeliveryStatus({ ...cfg, id });
         return deliveryStatusView(cloud, cloud);
       } catch (err) {
-        const failed = makerFailures(cfg.url).find((row) => row.id === id);
-        if (failed && (err.status === 404 || err.retryable)) return localStatus(failed);
+        const failed = makerFailures(cfg).find((row) => row.id === id);
+        if (failed && (err.status === 404 || err.retryable || err.code === "relay_disabled")) return localStatus(failed);
         throw err;
       }
     },

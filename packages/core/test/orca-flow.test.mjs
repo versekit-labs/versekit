@@ -16,7 +16,7 @@ process.env.FLOW_LOG = join(testState, "flow.log");
 const {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  transcribeAgentctl, projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
+  buildingIssues, transcribeAgentctl, projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
   linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
   codexExhaustion, codexCooldown, rerouteExhaustedCodex, chooseChannel,
 } = await import("../../../bin/orca-flow.mjs");
@@ -628,4 +628,24 @@ test("通用约束只禁改已有的 API、schema、命令，口径要的新增�
   assert.ok(line.includes("不改已有的 API 形状、数据库 schema 和 commands.mjs 里已有的命令定义"));
   assert.ok(line.includes("口径要求新增的命令、字段、表，可以向后兼容地加"));
   assert.ok(!line.includes("不改 api 形状"));
+});
+
+test("实现 / 返工 worker 还在跑的单不派验收（ACC-harness-orca-18）", () => {
+  const state = {
+    tasks: [
+      { id: "t1", task_title: taskTitle("impl", 398) },
+      { id: "t2", task_title: taskTitle("rework", 401, "r1") },
+      { id: "t3", task_title: taskTitle("accept", 402, "abc1234") },
+      { id: "t4", task_title: taskTitle("impl", 403) },
+    ],
+    workers: [
+      { dispatchId: "d1", taskId: "t1", dispatchStatus: "dispatched", projection: { liveness: { verdict: "live" } } },
+      { dispatchId: "d2", taskId: "t2", dispatchStatus: "dispatched", projection: { liveness: { verdict: "live" } } },
+      { dispatchId: "d3", taskId: "t3", dispatchStatus: "dispatched", projection: { liveness: { verdict: "live" } } },
+      { dispatchId: "d4", taskId: "t4", dispatchStatus: "completed", projection: { liveness: { verdict: "live" } } },
+    ],
+  };
+  assert.deepEqual([...buildingIssues(state)].sort(), [398, 401]);
+  const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
+  assert.match(src, /buildingIssues\(state\)\.has\(q\.number\)/);
 });

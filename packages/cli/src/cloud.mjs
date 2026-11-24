@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ensureDirs, paths } from "../../core/src/index.mjs";
 import { isMachineRole } from "../../cloud/src/machine-token.mjs";
 import { callCloud, isLoopback, publicOrigin } from "../../cloud/src/transport.mjs";
+import { RelayError } from "../../relay/src/index.mjs";
 
 const pollIntervalMs = 1500;
 const refreshAheadMs = 60_000;
@@ -163,6 +164,42 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     }
   }
 
+  function relayConnection() {
+    const saved = currentCredential();
+    if (!saved) return null;
+    let url;
+    let accountId;
+    try {
+      url = saved.relayUrl == null ? null : publicOrigin(saved.relayUrl);
+      // 这里只为本机续传和队列取稳定的账号标识，服务端始终独立验签。
+      accountId = JSON.parse(Buffer.from(saved.machineToken.split(".")[1], "base64url")).sub;
+      if (typeof accountId !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(accountId)) throw new Error();
+    } catch {
+      throw error("cloud_credential_unreadable", "Hifabu 登录资料里的传片配置有误，请退出后重新接入。");
+    }
+    const token = async () => {
+      if (offline && (!url || !isLoopback(new URL(url)))) {
+        throw new RelayError("离线模式只能连接本机中转。", { code: "offline_mode" });
+      }
+      const stillConnected = () => credential?.refreshToken === saved.refreshToken && credential.relayUrl === saved.relayUrl;
+      if (stillConnected()) {
+        if (refreshRequest) await refreshRequest;
+        else if (!refreshTimer) {
+          if (credential.expiresAt - Date.now() <= refreshAheadMs) await refresh();
+          else scheduleRefresh(credential);
+        }
+      }
+      if (!stillConnected()) {
+        throw new RelayError("Hifabu 登录或中转地址已变更，恢复此连接后会继续传片。", { code: "cloud_connection_changed", retryable: true });
+      }
+      if (credential.expiresAt <= Date.now()) {
+        throw new RelayError("Hifabu 机器令牌已过期，连上账号服务后会自动更新。", { code: "cloud_token_expired", retryable: true });
+      }
+      return credential.machineToken;
+    };
+    return { role: saved.role, url, accountId, token };
+  }
+
   function schedulePoll(attempt) {
     pollTimer = setTimeout(() => void poll(attempt), Math.max(0, Math.min(pollIntervalMs, attempt.expiresAt - Date.now()))).unref();
   }
@@ -219,6 +256,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
   }
 
   return {
+    relayConnection,
     async "cloud.login"(args) {
       const saved = currentCredential();
       if (saved) return signedIn(saved, reachable);

@@ -20,6 +20,7 @@ export class RelayError extends Error {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const base = (url) => String(url).replace(/\/+$/, "");
+export const relayConnectionKey = ({ accountId, token }) => accountId ?? createHash("sha256").update(token).digest("hex");
 
 export async function hashFile(path) {
   const h = createHash("sha256");
@@ -45,11 +46,14 @@ export async function withRetry(fn, { retries = 5, backoffMs = 1000, sleepImpl =
 }
 
 async function request({ url, token, method = "GET", path, body, headers = {}, duplex, signal }) {
+  const rotating = typeof token === "function";
+  const bearer = rotating ? await token() : token;
   let res;
   try {
     res = await fetch(`${base(url)}${path}`, {
       method,
-      headers: { authorization: `Bearer ${token}`, ...(body && typeof body === "string" ? { "content-type": "application/json" } : {}), ...headers },
+      headers: { authorization: `Bearer ${bearer}`, ...(body && typeof body === "string" ? { "content-type": "application/json" } : {}), ...headers },
+      ...(rotating && { redirect: "error" }),
       body,
       duplex,
       signal,
@@ -67,7 +71,7 @@ async function failOf(res, fallback) {
   } catch {
     /* 没有 JSON 正文 */
   }
-  if (res.status === 401) return new RelayError("中转不认这个 token：核对地址和 token 是否配对（推送用推送 token，拉取用拉取 token）", { status: 401, code: "unauthorized", data });
+  if (res.status === 401) return new RelayError(data?.message ?? "中转不认这个令牌，请核对地址和机器角色", { status: 401, code: "unauthorized", data });
   return new RelayError(data?.message ?? `${fallback}（中转返回 ${res.status}）`, {
     status: res.status,
     code: data?.error ?? "relay_error",
