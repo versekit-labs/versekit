@@ -27,6 +27,7 @@ import { createRelayServer } from "../../relay/src/index.mjs";
 import { formatBytes, formatDuration } from "../../relay/src/status.mjs";
 import { parseArgv, loginCommandOf } from "./argv.mjs";
 import { finishWindowLogin, fallbackLoginStatus } from "./login-web.mjs";
+import { createRelayUploadQueue } from "./relay-upload.mjs";
 import * as service from "./service.mjs";
 import * as updates from "../../core/src/update.mjs";
 
@@ -441,7 +442,7 @@ async function qrStatus(accountId, account, session, log = () => {}) {
   return { mode: "qr", state: "waiting", qr: session.qr, ...(refreshed ? { refreshed: true } : {}), note: "等待用手机小红书扫码…" };
 }
 
-function daemonHandlers(adapters, log) {
+function daemonHandlers(adapters, log, uploadQueue) {
   const core = createCoreHandlers({
     adapters,
     log,
@@ -449,6 +450,7 @@ function daemonHandlers(adapters, log) {
     // 更新要停掉守护进程本身，所以交给脱离它的 `vk update --now`（#217）。
     updater: { apply: async () => service.startDetachedUpdate() },
     loginsOpen: activeLogins,
+    uploadQueue,
   });
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
   // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
@@ -921,13 +923,15 @@ async function cmdServe() {
   // 离线模式连适配器都不加载：不会有任何东西能走到真实平台。
   const { adapters, errors } = offline ? { adapters: [], errors: [] } : await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
-  const handlers = daemonHandlers(adapters, log);
+  const uploadQueue = createRelayUploadQueue({ log });
+  const handlers = daemonHandlers(adapters, log, uploadQueue);
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
   // 后台自动更新只在「用安装命令装出来的」程序上有意义；源码目录里（开发）不启动。
   const autoUpdate = service.installLayout().installed ? { apply: async () => service.startDetachedUpdate(), busy: activeLogins } : null;
   const daemon = await startDaemon({ handlers, log, port, host, channels: offline ? [] : [channelFeishu], doctor: doctorReport, offline, autoUpdate });
+  uploadQueue.start();
   if (offline) log("离线模式：不会访问任何平台");
 
   const web = `http://127.0.0.1:${daemon.port}`;
@@ -946,6 +950,7 @@ async function cmdServe() {
     process.on(sig, async () => {
       if (stopping) return;
       stopping = true;
+      uploadQueue.stop();
       log(`\n收到 ${sig}，正在停止`);
       // Chrome 是 detached 起的，不在这里关就会变成孤儿（#91）。先关浏览器：daemon.close() 可能被未断开的连接拖住，
       // 拖住时进程被强杀，Chrome 就留下了（#339）。
@@ -1347,7 +1352,7 @@ async function cmdWork() {
   if (sub === "push") {
     const target = pos[2];
     if (!target || (Object.hasOwn(flags, "--group") && !val("--group"))) throw new Error(usage);
-    // 上传可能很久（出口带宽窄）：守护进程那一头不设上限，这里也放宽到 3 小时。
+    // 登记前要读本地文件算哈希，给慢磁盘留足时间。上传自己在后台跑。
     const data = await send("work.push", { manifest: resolve(target), group: val("--group"), dryRun: has("--dry-run") }, { log, timeout: 3 * 3600e3 });
     if (human) {
       if (data.dryRun) {
@@ -1356,9 +1361,8 @@ async function cmdWork() {
         for (const row of data.rejected) console.log(`  ${row.cut}：${row.reason}`);
         for (const warning of data.warnings) console.log(warning.message);
       } else {
-        console.log(`已上传：${data.files} 个文件，${formatBytes(data.bytes)}`);
-        console.log(`投递 ${data.id} → 账号组「${data.group}」`);
-        console.log("等发布机拉取（发布机上入库后一律待确认，不会自动发）");
+        console.log(data.message);
+        console.log(`${data.files} 个文件，${formatBytes(data.bytes)} → 账号组「${data.group}」`);
       }
     } else out(data);
     return data;

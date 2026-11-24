@@ -178,7 +178,7 @@ export function loginHint(platform, accountId) {
  * `updater`：{ apply({ now }) } 由 CLI 那一层给（更新要动服务和程序目录，不在内核里）；
  * `loginsOpen()`：守护进程里还开着的登录窗口数。
  */
-export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0 } = {}) {
+export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0, uploadQueue = null } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
   /** 方案里能选的平台：已安装的适配器；离线模式不装适配器，退回矩阵里的平台名，方案照样能看能改。 */
   const knownPlatforms = () => (byPlatform.size ? [...byPlatform.keys()] : overview.MATRIX_COLUMNS.map((c) => c.platform));
@@ -407,9 +407,16 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     const elapsed = (Date.now() - row.createdAt) / 1000;
     const speed = elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
     const progress = deliveryProgress(row.sent, row.totalBytes, speed);
-    const state = row.errorCode ? "failed" : "uploading";
+    const state = row.queued ? "queued" : row.errorCode ? "failed" : "uploading";
     const { id, title, group, totalBytes, createdAt, updatedAt } = row;
     const view = { id, title, group, totalBytes, createdAt, updatedAt, lastPullAt, state, progress };
+    if (state === "queued") {
+      const { errorCode, reason, retryAt } = row;
+      const message = errorCode === "unreachable"
+        ? "中转连不上，已经排队。网通了会自动接着传，不用再说一遍。"
+        : errorCode ? "上传中断，已经排队。后台会自动接着传。" : "已登记，等后台上传。";
+      return { ...view, label: "排队中", message, ...(errorCode ? { errorCode, reason, retryAt } : {}) };
+    }
     if (state === "failed") {
       const { errorCode, reason, nextStep } = row;
       return { ...view, label: "没交成", errorCode, reason, nextStep, message: `没交成：${reason}` };
@@ -645,11 +652,15 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         ...(raw.source == null ? {} : { source: rel(raw.source.trim()) }),
         cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: `blob:${bySha.get(v.asset)}` })) })),
       };
-      log(`[relay] 上传 ${files.length} 个文件到中转…`);
       const id = newDeliveryId();
       const createdAt = Date.now();
       const upload = { id, url: cfg.url, title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
         uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
+      if (uploadQueue) {
+        uploadQueue.register({ ...upload, manifest: wire, files: unique }, cfg.token);
+        return { id, state: "pending", group: groupName, files: unique.length, bytes, message: `已登记，投递 ${id}，后台会上传。` };
+      }
+      log(`[relay] 上传 ${files.length} 个文件到中转…`);
       uploading.set(id, upload);
       try {
         const delivery = await pushDelivery({
@@ -672,7 +683,8 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "delivery.list": async () => {
       const cfg = makerConnection();
-      const local = [...uploading.values()].filter((row) => row.url === cfg.url).concat(makerFailures(cfg.url));
+      const active = uploadQueue ? uploadQueue.list(cfg) : [...uploading.values()].filter((row) => row.url === cfg.url);
+      const local = active.concat(makerFailures(cfg.url));
       const result = await listDeliveryStatus(cfg).catch((err) => {
         if (!local.length || !err.retryable) throw err;
         return { deliveries: [], warning: err.message };
@@ -688,7 +700,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "delivery.show": async ({ id }) => {
       if (!/^dl_[0-9a-f]{12,32}$/.test(id)) fail("投递号不合法：请核对投递列表里的编号", "vk delivery list");
       const cfg = makerConnection();
-      const active = uploading.get(id);
+      const active = uploadQueue ? uploadQueue.list(cfg).find((row) => row.id === id) : uploading.get(id);
       if (active?.url === cfg.url) return localStatus(active);
       try {
         const cloud = await getDeliveryStatus({ ...cfg, id });
