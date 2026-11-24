@@ -192,7 +192,7 @@ export function settledReworks(records, workers) {
   });
 }
 
-function reworkCheck(state, dryRun) {
+function reworkCheck(state, dryRun, requeue) {
   if (!existsSync(REWORK_DIR)) return;
   const records = [];
   for (const f of readdirSync(REWORK_DIR)) {
@@ -205,6 +205,7 @@ function reworkCheck(state, dryRun) {
     }
   }
   for (const r of settledReworks(records, state.workers ?? [])) {
+    if (requeue?.has(r.issue)) continue;
     if (dryRun) {
       log(`  [dry-run] 返工 #${r.issue} 已结束，会 rework-check（派工时 head ${String(r.head).slice(0, 7)}）`);
       continue;
@@ -445,7 +446,7 @@ export function lastJson(text) {
 function orca(args) {
   const r = run("orca", [...args, "--json"]);
   const j = lastJson(r.stdout);
-  if (!j || j.ok === false) {
+  if (!j || j.ok === false || (args[1] === "worker-start" && r.code !== 0)) {
     const why = j?.error ? JSON.stringify(j.error).slice(0, 600) : (r.stderr || r.stdout).slice(0, 600);
     const err = new Error(`orca ${args.slice(0, 2).join(" ")} 失败：${why}`);
     err.receipt = j;
@@ -644,7 +645,7 @@ function worktreeFor(issue, branch) {
 
 // ------------------------------------------------------------------ 动作
 
-function startWorker(ctx, { taskId, placement, channel, label, dryRun }) {
+function startWorker(ctx, { taskId, placement, channel, label, dryRun, retryOf }) {
   const target = [];
   if (placement.terminal) target.push("--terminal", placement.terminal);
   else if (channel.agent === "opencode") target.push("--agent", "opencode");
@@ -652,11 +653,17 @@ function startWorker(ctx, { taskId, placement, channel, label, dryRun }) {
   if (placement.worktreeId) target.push("--worktree", `id:${placement.worktreeId}`);
   else if (!placement.terminal) target.push("--worktree", "new-top-level", "--name", placement.name, "--repo", `id:${ctx.repoId}`, "--setup", "run");
   const args = ["orchestration", "worker-start", "--run", ctx.runId, "--from", ctx.from, "--task", taskId, ...target];
+  if (retryOf) args.push("--retry-of", retryOf);
   if (dryRun) {
     log(`  [dry-run] orca ${args.join(" ")}`);
     return { dispatchId: "dry-run", worktreeId: placement.worktreeId ?? null };
   }
   const r = orca(args);
+  if (["failed", "outcome_unknown"].includes(r.status)) {
+    const err = new Error(r.lastFailure ?? r.error?.message ?? `worker-start: ${r.status}（${r.failedStage ?? r.stage ?? "?"}）`);
+    err.receipt = r;
+    throw err;
+  }
   const created = (r.effects ?? []).find((e) => e.kind === "worktree")?.id ?? null;
   const eff = r.launch?.effective;
   log(`  ✓ ${label}：dispatch=${r.dispatchId}${eff ? `（${eff.agent}${eff.model ? `/${eff.model}` : ""}）` : ""}${created ? ` worktree=${created.split("::")[1] ?? created}` : ""}`);
@@ -830,17 +837,190 @@ function linkWorktree(worktreeId, fields, dryRun) {
 /** 官方 Completion accounting：交活终端 retain 或 release。只做这一件事，不派工，可以和 watch 并行跑。 */
 function settleTerminals(state, dryRun) {
   for (const a of planCompletion(state)) {
-    if (dryRun) {
-      log(`  [dry-run] ${a.op} ${a.dispatchId}（#${a.issue} ${a.kind ?? ""}）`);
-      continue;
+    settleTerminal(a, dryRun);
+  }
+}
+
+function settleTerminal({ op, dispatchId, issue, kind }, dryRun) {
+  if (dryRun) {
+    log(`  [dry-run] ${op} ${dispatchId}（#${issue} ${kind ?? ""}）`);
+    return;
+  }
+  try {
+    orca(["orchestration", `worker-${op}`, "--dispatch", dispatchId]);
+    log(`  · ${op === "retain" ? "保留" : "回收"} #${issue ?? "?"} ${kind ? KINDS[kind] : ""} 终端（${dispatchId}）`);
+  } catch (err) {
+    log(`  ✗ ${op} ${dispatchId}：${err.message.slice(0, 200)}`);
+  }
+}
+
+const SONNET = { agent: "claude", model: "sonnet", channel: "claude" };
+const STARTUP_CHANNEL = { codex: "Codex", antigravity: "Neon", claude: "Sonnet" };
+
+function isStartupFailure(w) {
+  return w?.dispatchStatus === "failed" && w.projection?.stage?.detail === "agent_readiness";
+}
+
+function inspectStartupFailure(w, channel) {
+  const { dispatch, worker, projection } = orca(["orchestration", "worker-show", "--dispatch", w.dispatchId]);
+  if (dispatch.status !== "failed" || worker.stage !== "agent_readiness") return null;
+  const launch = worker.startOptions?.launch?.effective ?? worker.startOptions?.launch?.requested ?? channel ?? projection?.provider;
+  const agent = launch?.agent ?? worker.startOptions?.agent ?? launch?.id;
+  if (!Object.hasOwn(STARTUP_CHANNEL, agent) || (agent === "claude" && launch?.model !== "sonnet")) return null;
+  return { agent, reason: dispatch.lastFailure ?? worker.lastError ?? "agent_readiness", worktreeId: worker.worktreeId ?? w.resource?.worktreeId };
+}
+
+function coordinatorNotice(report, issue, body) {
+  log(`  ⚠ 需要协调器：${body}`);
+  report.needsCoordinator.push({ type: "escalation", issue, subject: body, body });
+}
+
+// 同一轮共享失败计数和待回滚的 issue。回滚留到派工之后，避免本轮 claim 又拿到同一张单。
+function startupRecovery(ctx, report, { dryRun, settle }) {
+  const previous = new Map();
+  const failures = new Map();
+  const avoid = new Set();
+  const requeue = new Map();
+
+  function record(issue, w, failure) {
+    const key = `${issue}:${failure.agent}`;
+    if (avoid.has(failure.agent)) return;
+    const earlier = failures.get(key);
+    failures.set(key, w.dispatchId);
+    const repeated = earlier && earlier !== w.dispatchId;
+    if (repeated || (previous.get(issue) ?? []).some((row) => {
+      if (row.dispatchId === w.dispatchId) return false;
+      try {
+        return inspectStartupFailure(row)?.agent === failure.agent;
+      } catch (err) {
+        log(`  · 检查 #${issue} 更早的失败 ${row.dispatchId}：${err.message.slice(0, 160)}`);
+        return false;
+      }
+    })) {
+      avoid.add(failure.agent);
+      log(`  · #${issue} 的 ${STARTUP_CHANNEL[failure.agent]} 已启动失败两次，本轮新单停用该通道`);
     }
+  }
+
+  function recover(n, w, failure) {
+    const detail = `#${n} ${STARTUP_CHANNEL[failure.agent]} 启动失败（${failure.reason}）`;
+    if (failure.agent === "claude") {
+      coordinatorNotice(report, n, `${detail}→ ${dryRun ? "将退回" : "退回"} s:ready`);
+      requeue.set(n, "ready");
+      return null;
+    }
+    if (!failure.worktreeId) {
+      coordinatorNotice(report, n, `${detail}，找不到原 worktree，无法改派 Sonnet`);
+      return null;
+    }
+    log(`  ${dryRun ? "[dry-run] " : ""}${detail}→ 改派 Sonnet`);
     try {
-      if (a.op === "retain") orca(["orchestration", "worker-retain", "--dispatch", a.dispatchId]);
-      else orca(["orchestration", "worker-release", "--dispatch", a.dispatchId]);
-      log(`  · ${a.op === "retain" ? "保留" : "回收"} #${a.issue ?? "?"} ${a.kind ? KINDS[a.kind] : ""} 终端（${a.dispatchId}）`);
+      const started = start(n, {
+        taskId: w.taskId, retryOf: w.dispatchId, placement: { worktreeId: failure.worktreeId },
+        channel: SONNET, label: `改派 #${n}`, dryRun,
+      });
+      return started && { ...started, rerouted: true };
     } catch (err) {
-      log(`  ✗ ${a.op} ${a.dispatchId}：${err.message.slice(0, 200)}`);
+      report.errors.push(err.message);
+      coordinatorNotice(report, n, `${detail} → 改派 Sonnet 未成功（${err.message.slice(0, 300)}）`);
+      return null;
     }
+  }
+
+  function recoverExisting(state) {
+    const byTask = new Map(state.tasks.map((t) => [t.id, parseTaskTitle(t.task_title)]));
+    const busy = new Set(state.workers.filter(isActive).map((w) => byTask.get(w.taskId)?.issue));
+    for (const w of state.workers.filter(isStartupFailure)) {
+      const meta = byTask.get(w.taskId);
+      if (!meta || meta.kind === "accept") continue;
+      if (!previous.has(meta.issue)) previous.set(meta.issue, []);
+      previous.get(meta.issue).push(w);
+    }
+    const seen = new Set();
+    let startedAny = false;
+    for (const w of state.workers) { // worker-list 按新到旧排列。
+      const meta = byTask.get(w.taskId);
+      if (!meta || meta.kind === "accept" || state.issues[meta.issue] !== "doing" || busy.has(meta.issue) || seen.has(meta.issue)) continue;
+      seen.add(meta.issue);
+      if (!isStartupFailure(w) || hasLabel(state, meta.issue, "hold:human")) continue;
+      try {
+        const failure = inspectStartupFailure(w);
+        if (!failure) continue;
+        record(meta.issue, w, failure);
+        const started = recover(meta.issue, w, failure);
+        if (!started) continue;
+        report.dispatched.push({ issue: meta.issue, kind: meta.kind, dispatchId: started.dispatchId, rerouted: true });
+        startedAny = true;
+        linkWorktree(started.worktreeId, { issue: meta.issue, status: "in-progress", comment: "启动失败，改派 Sonnet" }, dryRun);
+        if (!dryRun && meta.kind === "rework") {
+          const file = join(REWORK_DIR, `${meta.issue}.json`);
+          if (existsSync(file)) {
+            const rec = JSON.parse(readFileSync(file, "utf8"));
+            if (rec.dispatch === w.dispatchId) writeFileSync(file, JSON.stringify({ ...rec, dispatch: started.dispatchId }) + "\n");
+          }
+        }
+      } catch (err) {
+        report.errors.push(err.message);
+        coordinatorNotice(report, meta.issue, `#${meta.issue} 核查或处理启动失败时出错（${err.message.slice(0, 300)}）`);
+      }
+    }
+    return startedAny;
+  }
+
+  function start(issue, options) {
+    try {
+      return startWorker(ctx, options);
+    } catch (err) {
+      const w = listWorkers(ctx.runId).find((row) => row.taskId === options.taskId);
+      if (!isStartupFailure(w) || w.dispatchId === options.retryOf) throw err;
+      const failure = inspectStartupFailure(w, options.channel);
+      if (!failure || (options.retryOf && failure.agent !== "claude")) throw err;
+      if (settle && isReclaimable(w)) settleTerminal({ op: "release", dispatchId: w.dispatchId, issue }, dryRun);
+      record(issue, w, failure);
+      return recover(issue, w, failure);
+    }
+  }
+
+  function routeNew(issue, channel, originalState) {
+    if (!avoid.has(channel.agent) || (channel.agent === "claude" && channel.model !== "sonnet")) return channel;
+    if (channel.agent !== "claude" && !avoid.has("claude")) {
+      log(`  · #${issue} 本轮停用 ${STARTUP_CHANNEL[channel.agent]} → 改派 Sonnet`);
+      return SONNET;
+    }
+    log(`  · #${issue} 本轮停用 ${STARTUP_CHANNEL[channel.agent]}，退回 s:${originalState}`);
+    requeue.set(issue, originalState);
+    return null;
+  }
+
+  return { recoverExisting, start, routeNew, requeue };
+}
+
+function reportOrphanedIssues(state, report, startup) {
+  const activeTasks = new Set(state.workers.filter(isActive).map((w) => w.taskId));
+  const activeIssues = new Set(state.tasks.filter((t) => activeTasks.has(t.id)).map((t) => parseTaskTitle(t.task_title)?.issue));
+  for (const d of report.dispatched) activeIssues.add(d.issue);
+  const waiting = (state.board.rows ?? []).filter((r) => r.state === "doing" && !activeIssues.has(r.number) && !startup.requeue.has(r.number));
+  // 常规行已经由 agentctl 对过 PR。hold:human 等提前返回的行没有这个信息。
+  const unknown = waiting.filter((r) => !["确认在跑", "查停滞", "转 review", "返工中"].includes(r.action));
+  let pulls = [];
+  if (unknown.length) {
+    const response = run(join(ROOT, "bin/ghx"), ["api", "--paginate", "--slurp", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]);
+    const pages = lastJson(response.stdout);
+    if (response.code === 0 && Array.isArray(pages)) pulls = pages.flat();
+    else {
+      const error = `查询待巡检单的 PR 失败：${response.stderr.trim().slice(0, 300)}`;
+      report.errors.push(error);
+      log(`  ✗ ${error}`);
+      pulls = null;
+    }
+  }
+  for (const row of waiting) {
+    const n = row.number;
+    if (row.action === "转 review" || row.action === "返工中") continue;
+    if (unknown.includes(row) && (!pulls || pulls.some((pr) =>
+      new RegExp(`(close[sd]?|fix(es|ed)?|resolve[sd]?)\\s+#${n}\\b`, "i").test(pr.body ?? "") ||
+      new RegExp(`(^|[/_-])issue-${n}([/_-]|$)`, "i").test(pr.head?.ref ?? "")))) continue;
+    coordinatorNotice(report, n, `#${n} 在 s:doing 但没人在做`);
   }
 }
 
@@ -849,6 +1029,7 @@ export async function tick({ dryRun = false } = {}) {
   const report = { needsCoordinator: [], dispatched: [], merged: [], errors: [] };
   log(`== tick（Run ${ctx.runId}${dryRun ? "，dry-run" : ""}）==`);
   const cfg = flowConfig();
+  const startup = startupRecovery(ctx, report, { dryRun, settle: cfg.settle });
   if (cfg.error) log(`  ✗ ${cfg.error}（按默认配置跑）`);
   for (const cmd of cfg.hooks.beforeTick) if (!runHook("beforeTick", cmd, dryRun)) report.errors.push(`beforeTick: ${cmd}`);
 
@@ -893,13 +1074,15 @@ export async function tick({ dryRun = false } = {}) {
   // 2. 交活后的终端：保留（等验收结论，FAIL 时复用）或回收。settle:false 的项目由 Run 所有者跑 `orca-flow settle`。
   if (cfg.settle) settleTerminals(state, dryRun);
   if (!dryRun) state = snapshot(ctx);
-  reworkCheck(state, dryRun);
+  if (startup.recoverExisting(state) && !dryRun) state = snapshot(ctx);
+  reworkCheck(state, dryRun, startup.requeue);
   // Codex 额度用完：写冷却、停掉、同一轮改派 Sonnet（ACC-harness-route-02）。改派的 worker 占原来的名额。
   {
     const rerouted = rerouteExhaustedCodex(state, ctx, { dryRun });
     report.dispatched.push(...rerouted.map((r) => ({ issue: r.issue, kind: r.kind, dispatchId: r.dispatchId, rerouted: true })));
     if (rerouted.length) state = snapshot(ctx);
   }
+  reportOrphanedIssues(state, report, startup);
   if (flowConfig().cleanup) cleanupWorktrees(state, dryRun);
 
   let free = countActive(state);
@@ -967,11 +1150,11 @@ export async function tick({ dryRun = false } = {}) {
         reuse = null;
       }
       const wt = worktreeFor(c.number, c.branch);
-      let started = null;
+      let started;
       if (reuse) {
         log(`  → 返工 #${c.number} round ${c.round}：复用原 agent 终端（${reuse.dispatchId}）`);
         try {
-          started = startWorker(ctx, { taskId, placement: reworkPlacement(reuse, wt, c.number), channel: {}, label: `返工 #${c.number}`, dryRun });
+          started = startup.start(c.number, { taskId, placement: reworkPlacement(reuse, wt, c.number), channel: reuse.projection?.provider ?? {}, label: `返工 #${c.number}`, dryRun });
         } catch (err) {
           // 复用不成（终端已不在本单目录、已退出等）：回收它，同一轮改派新 agent，不把单子来回迁移（ACC-harness-orca-13）。
           log(`  ⚠ 复用 #${c.number} 原终端失败（${err.message.slice(0, 200)}），回收它，改派新 agent`);
@@ -984,14 +1167,19 @@ export async function tick({ dryRun = false } = {}) {
           }
         }
       }
-      if (!started) {
-        const channel = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round, { dryRun });
-        log(`  → 返工 #${c.number} round ${c.round}：新 agent（${channel.channel}/${channel.model}）`);
-        started = startWorker(ctx, { taskId, placement: reworkPlacement(null, wt, c.number), channel, label: `返工 #${c.number}`, dryRun });
+      if (started === undefined) {
+        const selected = chooseChannel("rework", (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [], c.round, { dryRun });
+        const channel = startup.routeNew(c.number, selected, "changes");
+        if (channel) {
+          log(`  → 返工 #${c.number} round ${c.round}：新 agent（${channel.channel}/${channel.model}）`);
+          started = startup.start(c.number, { taskId, placement: reworkPlacement(null, wt, c.number), channel, label: `返工 #${c.number}`, dryRun });
+        }
       }
-      linkWorktree(started.worktreeId, { issue: c.number, pr: c.pull, status: "in-progress", comment: `返工 round ${c.round}` }, dryRun);
-      report.dispatched.push({ issue: c.number, kind: "rework", dispatchId: started.dispatchId });
-      if (c.bodyHash && !dryRun) writeReworkRecord(c, started.dispatchId);
+      if (started) {
+        linkWorktree(started.worktreeId, { issue: c.number, pr: c.pull, status: "in-progress", comment: `返工 round ${c.round}` }, dryRun);
+        report.dispatched.push({ issue: c.number, kind: "rework", dispatchId: started.dispatchId, ...(started.rerouted && { rerouted: true }) });
+        if (c.bodyHash && !dryRun) writeReworkRecord(c, started.dispatchId);
+      }
     } catch (err) {
       report.errors.push(err.message);
       log(`  ✗ 返工 #${c.number}：${err.message.slice(0, 400)}，退回 s:changes`);
@@ -1009,14 +1197,19 @@ export async function tick({ dryRun = false } = {}) {
     if (!c) break;
     try {
       const labels = (state.board.rows ?? []).find((i) => i.number === c.number)?.labels ?? [];
-      const channel = chooseChannel("engineer", labels, "", { dryRun });
-      const branch = `issue-${c.number}`;
-      log(`  → 实现 #${c.number} ${c.title}（${channel.channel}/${channel.model}，口径 ${(c.acc ?? c.ids ?? []).join(", ")}）`);
-      const taskId = createTask(ctx, { title: taskTitle("impl", c.number), display: `#${c.number} 实现`, spec: implSpec({ number: c.number, title: c.title, body: c.body ?? "", branch }), dryRun });
-      const wt = worktreeFor(c.number, branch);
-      const started = startWorker(ctx, { taskId, placement: wt ? { worktreeId: wt.id } : { name: branch }, channel, label: `实现 #${c.number}`, dryRun });
-      linkWorktree(started.worktreeId, { issue: c.number, status: "in-progress", comment: "实现中" }, dryRun);
-      report.dispatched.push({ issue: c.number, kind: "impl", dispatchId: started.dispatchId });
+      const selected = chooseChannel("engineer", labels, "", { dryRun });
+      const channel = startup.routeNew(c.number, selected, "ready");
+      if (channel) {
+        const branch = `issue-${c.number}`;
+        log(`  → 实现 #${c.number} ${c.title}（${channel.channel}/${channel.model}，口径 ${(c.acc ?? c.ids ?? []).join(", ")}）`);
+        const taskId = createTask(ctx, { title: taskTitle("impl", c.number), display: `#${c.number} 实现`, spec: implSpec({ number: c.number, title: c.title, body: c.body ?? "", branch }), dryRun });
+        const wt = worktreeFor(c.number, branch);
+        const started = startup.start(c.number, { taskId, placement: wt ? { worktreeId: wt.id } : { name: branch }, channel, label: `实现 #${c.number}`, dryRun });
+        if (started) {
+          linkWorktree(started.worktreeId, { issue: c.number, status: "in-progress", comment: "实现中" }, dryRun);
+          report.dispatched.push({ issue: c.number, kind: "impl", dispatchId: started.dispatchId, ...(started.rerouted && { rerouted: true }) });
+        }
+      }
     } catch (err) {
       report.errors.push(err.message);
       log(`  ✗ 实现 #${c.number}：${err.message.slice(0, 400)}，退回 s:ready`);
@@ -1024,6 +1217,16 @@ export async function tick({ dryRun = false } = {}) {
     }
     free = { ...free, freeBuild: free.freeBuild - 1 };
     if (dryRun) break;
+  }
+
+  if (!dryRun) for (const [issue, to] of startup.requeue) {
+    try {
+      // doing → ready 是派工失败的正常迁移。仅通道本轮停用而未启动的返工退回 changes。
+      agentctl(["set", "--issue", String(issue), "--to", to, ...(to === "changes" ? ["--force"] : [])]);
+    } catch (err) {
+      report.errors.push(err.message);
+      coordinatorNotice(report, issue, `#${issue} 退回 s:${to} 失败（${err.message.slice(0, 300)}）`);
+    }
   }
 
   if (!report.dispatched.length && !report.needsCoordinator.length) {

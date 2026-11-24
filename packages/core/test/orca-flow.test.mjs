@@ -1,16 +1,27 @@
-// bin/orca-flow.mjs 的纯逻辑（ACC-harness-orca-03..07）：不碰 orca / GitHub。
-import { test } from "node:test";
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, chmodSync, existsSync } from "node:fs";
+// bin/orca-flow.mjs 的纯逻辑与离线派工测试。
+import { after, test } from "node:test";
+import { execFile } from "node:child_process";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, chmodSync, existsSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
-import {
+
+const testState = mkdtempSync(join(tmpdir(), "orca-flow-state-"));
+after(() => rmSync(testState, { recursive: true, force: true }));
+const originalLog = process.env.FLOW_LOG;
+process.env.FLOW_LOG = join(testState, "flow.log");
+const {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
   projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
   linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
   codexExhaustion, codexCooldown, rerouteExhaustedCodex, chooseChannel,
-} from "../../../bin/orca-flow.mjs";
+} = await import("../../../bin/orca-flow.mjs");
+if (originalLog === undefined) delete process.env.FLOW_LOG;
+else process.env.FLOW_LOG = originalLog;
 
 const task = (id, title, status = "dispatched") => ({ id, task_title: title, status });
 const worker = (dispatchId, taskId, { dispatchStatus = "dispatched", terminalState = "owned", liveness = "live", handle = `term_${dispatchId}` } = {}) => ({
@@ -249,7 +260,7 @@ test("返工放置：复用原终端时带上本单 worktree（否则 Orca 按 R
 test("返工：复用原终端失败就回收它、同一轮改派新 agent，不退回 s:changes", () => {
   const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
   const block = src.slice(src.indexOf("let reuse = reusableTerminal(state, c.number);"), src.indexOf("// 6. 实现"));
-  assert.match(block, /catch \(err\) \{[\s\S]*?worker-release[\s\S]*?\}\s*\}\s*\}\s*if \(!started\)/);
+  assert.match(block, /catch \(err\) \{[\s\S]*?worker-release[\s\S]*?\}\s*\}\s*\}\s*if \(started === undefined\)/);
   assert.match(block, /reworkPlacement\(reuse, wt, c\.number\)/);
 });
 
@@ -367,4 +378,235 @@ test("route-02：冷却期内派新单直接走 Sonnet，到点恢复 Codex（ch
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
   }
+});
+
+const REASON = "Agent startup blocked: agent-update-prompt";
+const testHead = "a".repeat(40);
+const flowScript = fileURLToPath(new URL("../../../bin/orca-flow.mjs", import.meta.url));
+
+function boardIssue(number, state, file = null) {
+  const scope = file ? `\n## 涉及\n- 改：\`${file}\`\n` : "";
+  return {
+    number, title: `工单 ${number}`, updated_at: new Date().toISOString(),
+    body: `## 验收口径\n- [ACC-harness-route-06]\n${scope}`,
+    labels: [{ name: `s:${state}` }],
+  };
+}
+
+function startupAttempt(dispatchId, taskId, issue, agent) {
+  return {
+    dispatchId, taskId, terminalState: "reclaimable", dispatchStatus: "failed",
+    projection: { provider: null, stage: { detail: "agent_readiness" } },
+    resource: { worktreeId: `repo::/wt/issue-${issue}` },
+    agent, model: { codex: "gpt-6.2-sol", antigravity: "gemini-4-neon-high", claude: "sonnet" }[agent],
+  };
+}
+
+function fakeOrca() {
+  const fs = require("node:fs");
+  const path = process.env.FAKE_ORCA_STATE;
+  const state = JSON.parse(fs.readFileSync(path, "utf8"));
+  const [, , object, command, ...args] = process.argv;
+  const arg = (name) => args[args.indexOf(name) + 1];
+  const save = () => fs.writeFileSync(path, JSON.stringify(state));
+  let result;
+  switch (`${object} ${command}`) {
+    case "orchestration run-show": result = { run: { coordinator_handle: "term_coordinator" } }; break;
+    case "orchestration check": result = { messages: [] }; break;
+    case "orchestration task-list": result = { tasks: state.tasks }; break;
+    case "orchestration worker-list": result = { workers: state.workers }; break;
+    case "orchestration worker-show": {
+      const w = state.workers.find((row) => row.dispatchId === arg("--dispatch"));
+      result = {
+        dispatch: { id: w.dispatchId, status: w.dispatchStatus, lastFailure: state.reason },
+        worker: { stage: w.projection.stage.detail, worktreeId: w.resource.worktreeId, startOptions: { launch: { effective: { agent: w.agent, model: w.model } } } },
+      };
+      break;
+    }
+    case "orchestration worker-release":
+      state.workers.find((row) => row.dispatchId === arg("--dispatch")).terminalState = "released";
+      save();
+      result = {};
+      break;
+    case "orchestration task-create": {
+      const task = { id: `new-task-${state.tasks.length}`, task_title: arg("--task-title"), spec: arg("--spec") };
+      state.tasks.unshift(task);
+      save();
+      result = { task };
+      break;
+    }
+    case "orchestration worker-start": {
+      const taskId = arg("--task");
+      const issue = Number(/#(\d+)/.exec(state.tasks.find((row) => row.id === taskId).task_title)[1]);
+      const agent = arg("--agent");
+      const model = arg("--model");
+      const retryOf = args.includes("--retry-of") ? arg("--retry-of") : null;
+      const dispatchId = `start-${state.starts.length + 1}`;
+      const worktree = arg("--worktree");
+      const worktreeId = worktree === "new-top-level" ? `repo::/wt/issue-${issue}` : worktree.slice(3);
+      const fail = state.fail[issue]?.includes(agent);
+      state.starts.push({ issue, taskId, agent, model, retryOf, dispatchId, worktree });
+      state.workers.unshift({
+        dispatchId, taskId, agent, model,
+        dispatchStatus: fail ? "failed" : "dispatched", terminalState: fail ? "reclaimable" : "active",
+        resource: { worktreeId }, projection: { stage: { detail: fail ? "agent_readiness" : "ready" }, provider: null },
+      });
+      save();
+      if (fail) {
+        process.stdout.write(JSON.stringify({ ok: false, error: { message: state.reason, data: { dispatchId, failedStage: "agent_readiness" } } }));
+        process.exit(1);
+      }
+      result = { status: "ready", dispatchId, effects: [{ kind: "worktree", id: worktreeId }] };
+      break;
+    }
+    case "worktree list": result = { worktrees: [] }; break;
+    case "worktree set": result = {}; break;
+    default: throw new Error(`unexpected orca command: ${object} ${command}`);
+  }
+  process.stdout.write(JSON.stringify({ ok: true, result }));
+}
+
+async function offlineTick(t, { issues, pulls = [], tasks = [], workers = [], fail = {}, lanes = 2 }) {
+  const dir = mkdtempSync(join(testState, "tick-"));
+  const fixture = join(dir, "orca.json");
+  const flowLog = join(dir, "orca-flow.log");
+  writeFileSync(fixture, JSON.stringify({ tasks, workers, fail, reason: REASON, starts: [] }));
+  writeFileSync(join(dir, "run"), "offline-run");
+  writeFileSync(join(dir, "orca"), `#!/usr/bin/env node\n(${fakeOrca})();\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "codex"), "#!/bin/sh\necho 'Logged in'\n", { mode: 0o755 });
+  // CI 的 HEAD 可能是 detached。测试让协调器钩子看到分支，并拦住任何真实 fetch / checkout。
+  writeFileSync(join(dir, "git"), `#!/bin/sh
+case "$1" in
+  symbolic-ref) echo refs/heads/offline; exit 0 ;;
+  fetch|checkout) exit 87 ;;
+esac
+PATH="$FIXTURE_PATH" exec git "$@"
+`, { mode: 0o755 });
+  writeFileSync(join(dir, "gh"), `#!/bin/sh
+case "$1 $2" in
+  "auth token") echo fixture ;;
+  "api --paginate") printf '%s\\n' "$FIXTURE_PULLS" ;;
+  *) exit 87 ;;
+esac
+`, { mode: 0o755 });
+  const labelChanges = [];
+  const server = createServer(async (req, res) => {
+    const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/repos\/example\/versekit\//, "");
+    const [, number, label] = /^issues\/(\d+)(?:\/labels(?:\/(.*))?)?$/.exec(path) ?? [];
+    const issue = issues.find((row) => row.number === Number(number));
+    let data;
+    if (req.method === "GET") {
+      if (path === "issues") data = issues;
+      else if (path === "pulls") data = pulls;
+      else if (/^issues\/\d+\/comments$/.test(path)) data = [{ body: `verdict: FAIL\nhead_sha: ${testHead}\n` }];
+      else data = issue;
+    } else if (req.method === "DELETE" && issue?.labels.some((l) => l.name === label)) {
+      issue.labels = issue.labels.filter((l) => l.name !== label);
+      data = issue.labels;
+    } else if (req.method === "POST" && issue && path.endsWith("/labels")) {
+      let input = "";
+      for await (const chunk of req) input += chunk;
+      for (const name of JSON.parse(input).labels) {
+        issue.labels.push({ name });
+        labelChanges.push([issue.number, name]);
+      }
+      data = issue.labels;
+    }
+    res.writeHead(data === undefined ? 404 : 200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(data ?? path));
+  });
+  await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const env = {
+    ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_ORCA_STATE: fixture,
+    FIXTURE_PATH: process.env.PATH, FIXTURE_PULLS: JSON.stringify([pulls]),
+    FLOW_REPO_ID: "repo", FLOW_PROJECT: "versekit", FLOW_TASK_PREFIX: "vk", FLOW_LANES: String(lanes), FLOW_ACCEPT_MAX: "0",
+    FLOW_STATE_DIR: dir, FLOW_LOG: flowLog, STATE_DIR: dir, RUN_FILE: join(dir, "run"),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "remote.origin.url", GIT_CONFIG_VALUE_0: "https://github.com/example/versekit.git",
+    GIT_ALLOW_PROTOCOL: "file", GH_TOKEN: "fixture", AGENTCTL_API_BASE: `http://127.0.0.1:${server.address().port}`,
+    CLAUDE_PROBE: "0", CODEX_BIN: "codex", IMPL_CHANNEL: "", IMPL_MODEL: "",
+  };
+  return {
+    labelChanges,
+    async tick() {
+      let code = 0;
+      const { stdout, stderr } = await promisify(execFile)(process.execPath, [flowScript, "tick", "--json"], { env, timeout: 20_000 }).catch((err) => {
+        code = err.code;
+        return err;
+      });
+      assert.ok(code === 0 || code === 10, stderr);
+      const report = JSON.parse(stdout);
+      assert.deepEqual(report.errors, []);
+      return { report, code, log: readFileSync(flowLog, "utf8"), ...JSON.parse(readFileSync(fixture, "utf8")) };
+    },
+  };
+}
+
+test("route-06：已结算的 Codex 实现和 Neon 返工同轮复用原 worktree，Codex 两次失败后本轮新单走 Sonnet", async (t) => {
+  const runner = await offlineTick(t, {
+    issues: [boardIssue(406, "doing", "bin/orca-flow.mjs"), boardIssue(407, "doing", "bin/worker-channel.sh"), boardIssue(408, "ready", "README.md")],
+    pulls: [{ number: 500, body: "Closes #407", head: { sha: testHead, ref: "issue-407" } }],
+    tasks: [task("impl", "vk#406 实现", "failed"), task("rework", "vk#407 返工 r1", "failed")],
+    workers: [
+      startupAttempt("d2", "impl", 406, "codex"),
+      startupAttempt("r1", "rework", 407, "antigravity"),
+      { ...startupAttempt("d1", "impl", 406, "codex"), terminalState: "released" },
+    ],
+    lanes: 3,
+  });
+  const result = await runner.tick();
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.starts.map(({ issue, taskId, agent, model, retryOf, worktree }) => [issue, taskId, agent, model, retryOf, worktree]), [
+    [406, "impl", "claude", "sonnet", "d2", "id:repo::/wt/issue-406"],
+    [407, "rework", "claude", "sonnet", "r1", "id:repo::/wt/issue-407"],
+    [408, "new-task-2", "claude", "sonnet", null, "new-top-level"],
+  ]);
+  assert.deepEqual(result.report.dispatched.map(({ issue, kind, rerouted }) => [issue, kind, rerouted]), [
+    [406, "impl", true], [407, "rework", true], [408, "impl", undefined],
+  ]);
+  assert.match(result.log, /#406 Codex 启动失败（Agent startup blocked: agent-update-prompt）→ 改派 Sonnet/);
+  assert.match(result.log, /#407 Neon 启动失败（Agent startup blocked: agent-update-prompt）→ 改派 Sonnet/);
+  assert.ok(result.workers.filter((w) => ["d2", "r1"].includes(w.dispatchId)).every((w) => w.terminalState === "released"));
+  assert.deepEqual(runner.labelChanges, [[408, "s:doing"]]);
+  assert.equal((await runner.tick()).starts.length, 3, "下一轮不会重试已有新 worker 的旧 Dispatch");
+});
+
+test("route-06：worker-start 当场失败便原地改派，Sonnet 也失败则本轮退回 ready 并告警", async (t) => {
+  const runner = await offlineTick(t, {
+    issues: [boardIssue(406, "ready", "bin/orca-flow.mjs"), boardIssue(407, "ready", "README.md")],
+    fail: { 406: ["codex", "claude"] },
+  });
+  const { starts, log, code, report } = await runner.tick();
+  assert.deepEqual(starts.map(({ issue, agent, retryOf, worktree }) => [issue, agent, retryOf, worktree]), [
+    [406, "codex", null, "new-top-level"],
+    [406, "claude", "start-1", "id:repo::/wt/issue-406"],
+    [407, "codex", null, "new-top-level"],
+  ]);
+  assert.deepEqual(runner.labelChanges, [[406, "s:doing"], [407, "s:doing"], [406, "s:ready"]]);
+  assert.equal(code, 10);
+  assert.deepEqual(report.needsCoordinator.map(({ issue }) => issue), [406]);
+  assert.match(log, /⚠ 需要协调器：#406 Sonnet 启动失败（Agent startup blocked: agent-update-prompt）→ 退回 s:ready/);
+});
+
+test("route-06：已结算且无 PR、无 worker_done 的 doing 工单每轮只报一次", async (t) => {
+  const frozen = boardIssue(409, "doing");
+  frozen.labels.push({ name: "hold:human" });
+  const runner = await offlineTick(t, {
+    issues: [boardIssue(406, "doing"), boardIssue(407, "doing"), boardIssue(408, "doing"), frozen],
+    pulls: [
+      { number: 500, body: "Closes #407", head: { sha: testHead, ref: "issue-407" } },
+      { number: 501, head: { sha: testHead, ref: "issue-409" } },
+    ],
+    tasks: [task("orphan", "vk#406 实现", "completed"), task("running", "vk#408 实现")],
+    workers: [worker("closed", "orphan", { dispatchStatus: "completed", terminalState: "released" }), worker("live", "running")],
+  });
+  for (let rounds = 1; rounds <= 2; rounds++) {
+    const { code, log, report, starts } = await runner.tick();
+    assert.equal(code, 10);
+    assert.deepEqual(report.needsCoordinator.map(({ body }) => body), ["#406 在 s:doing 但没人在做"]);
+    assert.equal(log.match(/⚠ 需要协调器：#406 在 s:doing 但没人在做/g).length, rounds);
+    assert.deepEqual(starts, []);
+  }
+  assert.deepEqual(runner.labelChanges, []);
 });
