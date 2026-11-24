@@ -166,6 +166,19 @@ test("ACC-relay-02 传完核对 sha256：对不上就丢掉，不留坏文件", 
   assert.ok(!existsSync(join(dataDir, "partial", `${fake}.part`)));
 });
 
+test("ACC-deliver-03 连接在最后一字节断开，重试后校验并提交完整的半截文件", async () => {
+  const bytes = Buffer.from("all bytes written before disconnect");
+  const sha256 = sha(bytes);
+  const part = join(dataDir, "partial", `${sha256}.part`);
+  writeFileSync(part, bytes);
+
+  const result = await pushBlob({ url, token: PUSH, sha256, size: bytes.length, retries: 0 });
+
+  assert.deepEqual(result, { complete: true, received: bytes.length });
+  assert.equal(await hashFile(join(dataDir, "blobs", sha256)), sha256);
+  assert.ok(!existsSync(part));
+});
+
 test("ACC-deliver-04 多文件上传进度按整个投递统计，同内容只计一次", async () => {
   const video = fileOf("delivery-progress.mp4", Buffer.from("delivery-progress-video"));
   const cover = fileOf("delivery-progress.png", Buffer.from("delivery-progress-cover"));
