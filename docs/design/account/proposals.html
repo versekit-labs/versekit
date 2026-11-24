@@ -1,0 +1,360 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}[hidden]{display:none!important}</style></head><body>
+<title>Hifabu 账号</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* 布局：顶部一排页面切换，下面是一个「浏览器窗口」样的画框，里面是当前页面的真实样子；画框下是这一页的状态切换。最后是要挑的三件事。颜色沿用 versekit DESIGN.md。 */
+:root{
+  --bg:#fafaf8;--paper:#fffffe;--side:#f1f1ee;--ink:#1a1c1f;--ink2:#5f656c;
+  --line:#e5e6e3;--ctl:#d3d5d1;
+  --mark:#ffd84a;--mark-bg:#fff8dc;--mark-line:#e6c84f;--mark-ink:#6b5d1c;
+  --bad:#c4321c;--bad-bg:#fdf3f0;--bad-line:#edc3b9;
+  --good:#0f7a4a;--good-bg:#edf7f1;--good-line:#bfdccb;
+  --term:#111214;--term-ink:#e6e7e9;--term-dim:#a3a8ae;--term-you:#ffd84a;--term-ok:#5fd39a;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141517;--paper:#1c1d20;--side:#222327;--ink:#ecedef;--ink2:#a8adb3;
+  --line:#2e3034;--ctl:#3d4045;
+  --mark-bg:#2e2a17;--mark-line:#6b5d1c;--mark-ink:#f3dd85;
+  --bad:#ff8a73;--bad-bg:#2d1c18;--bad-line:#6a3428;
+  --good:#5fd39a;--good-bg:#16271e;--good-line:#2d5a41;
+  --term:#0b0c0e;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141517;--paper:#1c1d20;--side:#222327;--ink:#ecedef;--ink2:#a8adb3;
+  --line:#2e3034;--ctl:#3d4045;
+  --mark-bg:#2e2a17;--mark-line:#6b5d1c;--mark-ink:#f3dd85;
+  --bad:#ff8a73;--bad-bg:#2d1c18;--bad-line:#6a3428;
+  --good:#5fd39a;--good-bg:#16271e;--good-line:#2d5a41;
+  --term:#0b0c0e;color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:15px/1.65 var(--sans)}
+.wrap{max-width:820px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 64px;display:grid;gap:36px}
+h1{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:0}
+h2{font-size:18px;font-weight:700;letter-spacing:-.01em;margin:0}
+h3{font-size:15px;font-weight:700;margin:0}
+p{margin:0}
+.lede{color:var(--ink2);max-width:62ch}
+.sub{color:var(--ink2);font-size:14px}
+section{display:grid;gap:14px}
+.tabs,.states{display:flex;gap:8px;flex-wrap:wrap}
+.tab,.chip{font:inherit;font-size:14px;border:1px solid var(--ctl);background:var(--paper);color:var(--ink);border-radius:999px;padding:6px 14px;min-height:36px;cursor:pointer}
+.chip{font-size:13px;padding:4px 12px;min-height:32px;color:var(--ink2)}
+.tab[aria-selected="true"],.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--mark-line);outline-offset:2px}
+.frame{border:1px solid var(--line);border-radius:12px;background:var(--bg);overflow:hidden}
+.bar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--side);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink2)}
+.bar .url{flex:1;min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:2px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stage{padding:28px 20px;min-height:340px}
+.lone{max-width:440px;margin:0 auto;display:grid;gap:14px}
+.wide{max-width:680px;margin:0 auto;display:grid;gap:22px}
+.brand{font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.brand i{width:14px;height:14px;border-radius:4px;background:var(--ink);display:inline-block}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:grid;gap:12px;min-width:0}
+.btn{font:inherit;font-size:14px;border:1px solid var(--ctl);background:var(--paper);color:var(--ink);border-radius:8px;padding:7px 14px;cursor:pointer;min-height:36px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.btn.pri{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn.lg{min-height:44px;font-size:15px}
+.btn.full{width:100%}
+.btn[disabled]{opacity:.5;cursor:default}
+.link{font:inherit;font-size:14px;background:none;border:0;color:var(--ink2);text-decoration:underline;cursor:pointer;padding:6px 0;min-height:32px}
+label.lab{font-size:13px;color:var(--ink2)}
+input[type=email],input[type=text]{font:inherit;width:100%;box-sizing:border-box;border:1px solid var(--ctl);border-radius:8px;padding:9px 12px;background:var(--paper);color:var(--ink);min-height:44px}
+input.code{font:20px/1 var(--mono);letter-spacing:.4em;text-align:center}
+.or{display:flex;align-items:center;gap:10px;color:var(--ink2);font-size:13px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.msg{font-size:14px;border-radius:8px;padding:8px 12px;border:1px solid var(--line)}
+.msg.bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+.msg.wait{background:var(--mark-bg);border-color:var(--mark-line);color:var(--mark-ink)}
+.msg.good{background:var(--good-bg);border-color:var(--good-line);color:var(--good)}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;font-size:14px}
+.facts dt{color:var(--ink2)}
+.facts dd{margin:0;min-width:0}
+.mono{font-family:var(--mono);font-size:13px}
+.go{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.who{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink2)}
+.av{width:26px;height:26px;border-radius:50%;background:var(--side);border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--ink)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.say{background:var(--side);border-radius:8px;padding:10px 12px;font-size:14px;word-break:break-word}
+.list{display:grid}
+.item{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.item:first-child{border-top:0}
+.item .meta{font-size:13px;color:var(--ink2)}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+.pill.wait{background:var(--mark-bg);border-color:var(--mark-line);color:var(--mark-ink)}
+.pill.good{background:var(--good-bg);border-color:var(--good-line);color:var(--good)}
+.pill.bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+.meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.meter span{display:block;height:100%;background:var(--ink2)}
+.meter.warn span{background:var(--mark-line)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font-size:14px;width:100%;min-width:560px}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--ink2);font-weight:600;font-size:12px}
+tr.ask td{background:var(--mark-bg)}
+.num{font-variant-numeric:tabular-nums}
+.term{background:var(--term);color:var(--term-ink);border-radius:var(--r);padding:14px 16px;font:13px/1.7 var(--mono);white-space:pre-wrap;word-break:break-word}
+.term .you{color:var(--term-you)}.term .dim{color:var(--term-dim)}.term .ok{color:var(--term-ok)}
+.note{font-size:14px;color:var(--ink2);border-left:3px solid var(--line);padding-left:12px}
+.q{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+fieldset{border:0;margin:0;padding:0;display:grid;gap:6px}
+legend{font-weight:700;padding:0;margin-bottom:6px}
+.opt{display:flex;gap:8px;align-items:flex-start;font-size:14px;cursor:pointer;min-height:32px}
+.opt input{margin-top:5px;accent-color:var(--ink)}
+.opt small{color:var(--ink2);display:block}
+.out pre{margin:0 0 8px;background:var(--side);border-radius:8px;padding:10px 12px;font:13px/1.6 var(--mono);white-space:pre-wrap}
+</style>
+
+<div class="wrap">
+<header style="display:grid;gap:8px">
+  <h1>Hifabu 账号</h1>
+  <p class="lede">在 hifabu.com 上登录，下载发布机，给 Claude 装插件。发布机和插件都用同一个 Hifabu 账号登录，两个人各用各的账号，送出去的成片只到自己的发布机。只在一台电脑上做片和发布的人，不登录也能用。</p>
+  <p class="sub">2026-11-24 · 设计稿，可点 · 任务书与结构见同目录 BRIEF.md · 示例里的人名和邮箱是假的</p>
+</header>
+
+<section>
+  <div class="tabs" role="tablist" aria-label="页面">
+    <button class="tab" role="tab" data-p="login" aria-selected="true">登录</button>
+    <button class="tab" role="tab" data-p="link" aria-selected="false">接入机器</button>
+    <button class="tab" role="tab" data-p="home" aria-selected="false">我的 Hifabu</button>
+    <button class="tab" role="tab" data-p="admin" aria-selected="false">管理</button>
+    <button class="tab" role="tab" data-p="local" aria-selected="false">发布机上</button>
+    <button class="tab" role="tab" data-p="claude" aria-selected="false">Claude 里</button>
+  </div>
+  <p class="sub" id="what"></p>
+  <div class="frame">
+    <div class="bar"><span aria-hidden="true">●&nbsp;●&nbsp;●</span><span class="url" id="url"></span></div>
+    <div class="stage" id="stage" aria-live="polite"></div>
+  </div>
+  <div class="states" id="states" role="group" aria-label="这一页的状态"></div>
+</section>
+
+<section>
+  <div><h2>要你挑的</h2><p class="sub">所有者 2026-11-24 已定：三项都按推荐（每题默认选中的那个）。</p></div>
+  <form id="picks" style="display:grid;gap:12px" novalidate>
+    <div class="q"><fieldset><legend>1. 下载要不要先登录</legend>
+      <label class="opt"><input type="radio" name="dl" id="dl-open" value="不用登录就能下载" checked><span>不用登录就能下载（推荐）<small>单机本来不需要账号，少一步就能试</small></span></label>
+      <label class="opt"><input type="radio" name="dl" id="dl-login" value="登录后才能下载"><span>登录后才能下载<small>能知道谁在用，多一步</small></span></label>
+    </fieldset></div>
+    <div class="q"><fieldset><legend>2. 每个账号的传片容量</legend>
+      <label class="opt"><input type="radio" name="cap" id="cap-10" value="每人 10GB" checked><span>每人 10GB（推荐）<small>服务器可用约 33GB；发完 7 天自动清，10GB 约够 50–100 期在途</small></span></label>
+      <label class="opt"><input type="radio" name="cap" id="cap-5" value="每人 5GB"><span>每人 5GB</span></label>
+      <label class="opt"><input type="radio" name="cap" id="cap-own" value="开通时逐个定"><span>开通时逐个定</span></label>
+    </fieldset></div>
+    <div class="q"><fieldset><legend>3. 有人申请开通传片，怎么告诉你</legend>
+      <label class="opt"><input type="radio" name="ntf" id="ntf-page" value="只在管理页上看" checked><span>只在管理页上看（推荐，现在只有两个人）</span></label>
+      <label class="opt"><input type="radio" name="ntf" id="ntf-feishu" value="同时发飞书"><span>同时发飞书</span></label>
+    </fieldset></div>
+    <button class="btn pri" type="submit" style="justify-self:start">生成回复</button>
+    <div class="out" id="out" hidden><pre id="outText"></pre><button class="btn" type="button" id="copy">复制</button></div>
+  </form>
+</section>
+</div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const stage = $('#stage'), statesBox = $('#states');
+  const S = { page: 'login', login: 'both', link: 'ask', linkRole: 'pub', home: 'new', local: 'out', claude: 'first', grants: { a: 'on', b: 'ask', c: 'off' } };
+
+  const G = `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 8h6.4" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>`;
+  const brand = `<div class="brand"><i></i>Hifabu</div>`;
+  const top = `<div class="top">${brand}<div class="who"><span class="av">默</span>chenmo@example.com<button class="link" data-go="login">退出</button></div></div>`;
+
+  const PAGES = {
+    login: {
+      what: '同一个入口，第一次来就是注册。不设密码。第一批只有 Google，第二批加邮箱验证码。',
+      url: () => 'hifabu.com/login',
+      states: [['g', '第一批：只有 Google'], ['both', '第二批：加邮箱'], ['code', '验证码已发'], ['wrong', '码不对'], ['old', '码过期'], ['many', '试太多次'], ['from', '从接入页带来']],
+      key: 'login',
+      draw: (s) => {
+        const codeStep = ['code', 'wrong', 'old', 'many'].includes(s);
+        const mail = s === 'g' ? '' : `
+          <div class="or">或者</div>
+          ${codeStep ? `
+            <p class="sub">验证码发到了 chenmo@example.com，10 分钟内有效。</p>
+            <label class="lab" for="code">6 位验证码</label>
+            <input class="code" id="code" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" value="${s === 'wrong' ? '418203' : ''}" ${s === 'many' ? 'disabled' : ''}>
+            ${s === 'wrong' ? '<div class="msg bad" role="alert">验证码不对，再看一眼邮件。还能试 4 次。</div>' : ''}
+            ${s === 'old' ? '<div class="msg bad" role="alert">这个验证码过期了。重新发一个。</div>' : ''}
+            ${s === 'many' ? '<div class="msg bad" role="alert">试的次数太多了，15 分钟后再试。</div>' : ''}
+            <div class="go"><button class="btn lg" data-go="home" ${s === 'many' ? 'disabled' : ''}>登录</button><button class="link" data-set="code">重新发</button><button class="link" data-set="both">换个邮箱</button></div>` : `
+            <label class="lab" for="mail">邮箱</label>
+            <input type="email" id="mail" autocomplete="email" placeholder="you@example.com">
+            <button class="btn lg full" data-set="code">发验证码</button>
+            <p class="sub">打不开 Google 就用邮箱。没有账号会自动建一个。</p>`}`;
+        return `<div class="lone">${brand}<h1>登录</h1>
+          ${s === 'from' ? '<p class="sub">登录后继续接入「书房的 Mac」。</p>' : ''}
+          <div class="panel">
+            <button class="btn pri lg full" data-go="${s === 'from' ? 'link' : 'home'}">${G}用 Google 继续</button>
+            ${mail}
+          </div>
+          <p class="sub">登录即表示同意<a href="https://hifabu.com" style="color:inherit">隐私政策</a>。我们只存你的邮箱和接入的机器，不存你的平台登录。</p></div>`;
+      },
+    },
+    link: {
+      what: '在发布机或 Claude 里点了「登录 Hifabu」，浏览器会打开这一页。不用填任何东西，只确认是不是自己。',
+      url: () => 'hifabu.com/link?code=KQ7M-2XPD',
+      states: [['ask', '等你允许'], ['ok', '接上了'], ['no', '已拒绝'], ['old', '过期'], ['role', '切换：发布机 / Claude']],
+      key: 'link',
+      draw: (s) => {
+        const maker = S.linkRole === 'maker';
+        const D = maker
+          ? { name: 'Mac mini 上的 Claude', os: 'Claude Code · macOS 15', as: '用来送作品', can: '把做好的成片、封面、文案送到你的发布机；看送到了没有', cant: '发布；登录或操作你的平台账号' }
+          : { name: '书房的 Mac', os: 'macOS 15', as: '作为发布机', can: '接收你的制作机送来的成片；按你确认过的时间发布', cant: '发布你没有确认过的内容；接收别人账号送来的东西' };
+        const body = {
+          ask: `<h1>「${D.name}」想接入你的 Hifabu 账号，${D.as}</h1>
+            <p class="sub">你现在登录的是 chenmo@example.com。<button class="link" data-go="login">换一个账号</button></p>
+            <div class="panel"><dl class="facts"><dt>机器</dt><dd>${D.name} <span class="sub">${D.os}</span></dd><dt>它能做</dt><dd>${D.can}</dd><dt>它不能做</dt><dd>${D.cant}</dd>${maker ? '' : '<dt>它现在在</dt><dd>美国 洛杉矶 <span class="mono">203.0.113.24</span></dd>'}<dt>核对码</dt><dd><span class="mono">KQ7M-2XPD</span> <span class="sub">和那台电脑上显示的一样才点允许</span></dd></dl>
+            <div class="go"><button class="btn pri lg" data-set="ok">允许</button><button class="link" data-set="no">不是我</button></div></div>`,
+          ok: `<h1>接上了</h1><div class="panel"><div class="msg good">「${D.name}」已经接入</div><p class="sub">可以关掉这一页，那台电脑会自己继续。${maker ? '回到 Claude，它会接着把刚才那一期交出去。' : ''}</p><div class="go"><button class="btn" data-go="home">看我的机器</button></div></div>`,
+          no: `<h1>已拒绝</h1><div class="panel"><p>「${D.name}」没有接进来。</p><p class="sub">如果你没有在装 Hifabu，说明有人在试着接入你的账号。到「我的 Hifabu」看一眼有没有不认识的机器。</p><div class="go"><button class="btn" data-go="home">看我的机器</button></div></div>`,
+          old: `<h1>这次接入过期了</h1><div class="panel"><p>接入要在 10 分钟内点允许。</p><p class="sub">回到那台电脑上重新点「登录 Hifabu」，它会再打开这一页。</p></div>`,
+        }[s];
+        return `<div class="lone">${brand}${body}</div>`;
+      },
+    },
+    home: {
+      what: '登录后的首页。只做三件事：拿程序和插件、看自己接了哪些机器、看传片开没开通。作品和数据在本机的工作台上，不在网站上。',
+      url: () => 'hifabu.com/account',
+      states: [['new', '新账号'], ['asked', '已申请开通'], ['on', '已开通'], ['near', '快满了']],
+      key: 'home',
+      draw: (s) => {
+        const hasDev = s !== 'new';
+        const relay = {
+          new: `<p>在同一台电脑上做片和发布，不需要这个。</p><p class="sub">分在两台电脑上时，成片要经过我们的服务器传过去。服务器空间有限，现在按人开通。</p><div class="go"><button class="btn" data-set="asked">申请开通</button></div>`,
+          asked: `<div class="msg wait">已经申请，等开通。开通后这里会变，机器不用重新登录。</div>`,
+          on: `<div class="row" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span><span class="pill good">已开通</span></span><span class="sub num">已用 1.3 / 10GB</span></div><div class="meter" role="img" aria-label="已用 13%"><span style="width:13%"></span></div><p class="sub">成片到了发布机并发完，7 天后自动清掉。</p>`,
+          near: `<div class="row" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span><span class="pill wait">快满了</span></span><span class="sub num">已用 9.1 / 10GB</span></div><div class="meter warn" role="img" aria-label="已用 91%"><span style="width:91%"></span></div><p class="sub">还能再送约 900MB。有 14 期已经到了发布机但还没发；发完 7 天后会自动清。满了以后新的送不出去，已经送到的不受影响。</p>`,
+        }[s];
+        return `<div class="wide">${top}
+          <div class="two">
+            <div class="panel"><h3>下载发布机</h3><p class="sub">装在和你手机同一个网络的那台电脑上。平台账号只在这台电脑上登录。</p><div class="go"><button class="btn pri" data-toast="开始下载 Hifabu-0.9.2.dmg（原型里不会真的下载）">下载 Mac 版</button><span class="sub">Windows 版还没有</span></div><p class="sub">第一次打开会被系统拦一下：到「系统设置 → 隐私与安全性」，点「仍要打开」。</p></div>
+            <div class="panel"><h3>给 Claude 装插件</h3><p class="sub">在做视频的那台电脑上，把这句话发给 Claude：</p><div class="say" id="sentence">帮我安装 Hifabu 插件，地址是 hifabu.com/plugin</div><div class="go"><button class="btn" data-copy="sentence">复制这句话</button></div><p class="sub">装好后说「交给发布机」，第一次会让你登录。</p></div>
+          </div>
+          <div class="panel"><h3>我的机器</h3>
+            ${hasDev ? `<div class="list">
+              <div class="item"><div><div>书房的 Mac <span class="pill">发布机</span></div><div class="meta">美国 洛杉矶 · 3 分钟前在线 · 11-24 接入</div></div><button class="btn" data-toast="「书房的 Mac」已退出。它上面的平台登录不受影响，但收不到新送来的成片了。">退出这台</button></div>
+              <div class="item"><div><div>Mac mini 上的 Claude <span class="pill">制作机</span></div><div class="meta">刚刚在线 · 11-24 接入</div></div><button class="btn" data-toast="「Mac mini 上的 Claude」已退出。">退出这台</button></div>
+            </div>` : `<p class="sub">还没有机器。装好发布机或插件后，在那边点「登录 Hifabu」，它就会出现在这里。</p>`}
+          </div>
+          <div class="panel"><h3>两台电脑之间传片</h3>${relay}</div>
+          <div id="toast" class="msg good" role="status" hidden></div>
+        </div>`;
+      },
+    },
+    admin: {
+      what: '只有你能进。决定谁能用传片、各用多少。看不到别人的作品和文案。点开关试试。',
+      url: () => 'hifabu.com/admin',
+      states: [],
+      key: null,
+      draw: () => {
+        const rows = [
+          ['a', 'chenmo@example.com', 'Google', 2, '1.3', '2 分钟前'],
+          ['b', 'linxi@example.com', 'Google', 1, '0', '1 小时前'],
+          ['c', 'zhouhang@example.net', '邮箱', 0, '0', '11-23'],
+        ];
+        const cell = (id) => {
+          const g = S.grants[id];
+          if (g === 'on') return `<span class="pill good">已开通</span> <button class="link" data-grant="${id}:off">关掉</button>`;
+          if (g === 'ask') return `<span class="pill wait">申请了</span> <button class="btn" data-grant="${id}:on">开通</button>`;
+          return `<span class="pill">没开</span> <button class="link" data-grant="${id}:on">开通</button>`;
+        };
+        const used = (33 - 1.3).toFixed(1);
+        return `<div class="wide">${top}
+          <div class="top"><h2>用户</h2><span class="sub num">服务器还剩 ${used}GB · 已开通 ${Object.values(S.grants).filter((g) => g === 'on').length} 人 × 10GB</span></div>
+          <div class="tw"><table><thead><tr><th>Hifabu 账号</th><th>登录方式</th><th>机器</th><th>传片</th><th>已用</th><th>最近活动</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr class="${S.grants[r[0]] === 'ask' ? 'ask' : ''}"><td>${r[1]}</td><td>${r[2]}</td><td class="num">${r[3]}</td><td>${cell(r[0])}</td><td class="num">${S.grants[r[0]] === 'on' ? r[4] + ' / 10GB' : '—'}</td><td class="num">${r[5]}</td></tr>`).join('')}
+          </tbody></table></div>
+          <p class="note">关掉传片：这个人已经送到的成片不受影响，新的送不出去，她会看到「传片已被关闭」。</p></div>`;
+      },
+    },
+    local: {
+      what: '发布机程序里「系统」页的一段。不登录也能用；登录是为了接收另一台电脑送来的成片。',
+      url: () => '书房的 Mac · Hifabu · 系统',
+      states: [['out', '没登录'], ['wait', '等浏览器里允许'], ['in', '已登录，传片没开通'], ['on', '已登录，传片已开通'], ['off', '连不上 hifabu.com']],
+      key: 'local',
+      draw: (s) => {
+        const body = {
+          out: `<p>没登录。</p><p class="sub">在这台电脑上做片、发布都不需要登录。登录后，这台电脑可以接收你另一台电脑送来的成片。</p><div class="go"><button class="btn pri" data-set="wait">登录 Hifabu</button></div>`,
+          wait: `<div class="msg wait">已经在浏览器里打开了登录页。核对码 <span class="mono">KQ7M-2XPD</span>，和网页上的一样就点「允许」。</div><div class="go"><button class="btn" data-set="in">（原型）我点了允许</button><button class="link" data-set="out">取消</button></div>`,
+          in: `<dl class="facts"><dt>Hifabu 账号</dt><dd>chenmo@example.com</dd><dt>这台机器</dt><dd>书房的 Mac <span class="pill">发布机</span></dd><dt>传片</dt><dd><span class="pill">没开通</span> <span class="sub">要从另一台电脑送成片过来，到 hifabu.com 申请开通</span></dd></dl><div class="go"><button class="btn" data-set="on">（原型）已开通</button><button class="link" data-set="out">退出登录</button></div>`,
+          on: `<dl class="facts"><dt>Hifabu 账号</dt><dd>chenmo@example.com</dd><dt>这台机器</dt><dd>书房的 Mac <span class="pill">发布机</span></dd><dt>传片</dt><dd><span class="pill good">已开通</span> <span class="sub">上次收到：01 赌徒谬误，今天 14:20</span></dd></dl><div class="go"><button class="link" data-set="out">退出登录</button></div><p class="sub">退出登录不会动这台电脑上的平台登录和已经收到的作品。</p>`,
+          off: `<dl class="facts"><dt>Hifabu 账号</dt><dd>chenmo@example.com</dd><dt>传片</dt><dd><span class="pill bad">连不上</span></dd></dl><div class="msg bad" role="alert">连不上 hifabu.com，上次连上是 40 分钟前。已经排好的发布照常进行；新送来的成片要等网络恢复后才收得到，不用重新登录。</div>`,
+        }[s];
+        return `<div class="wide"><h2>Hifabu 账号</h2><div class="panel">${body}</div></div>`;
+      },
+    },
+    claude: {
+      what: '制作机上，插件第一次用的时候。Claude 开一个浏览器页，你点允许，它接着做，不用重说。',
+      url: () => 'Mac mini · Claude Code',
+      states: [['first', '第一次：还没登录'], ['nogrant', '登录了，传片没开通'], ['ok', '平时']],
+      key: 'claude',
+      draw: (s) => {
+        const t = {
+          first: `<span class="you">❯ 交给发布机</span>
+
+<span class="dim">⏺ 这台电脑还没登录 Hifabu。我打开了浏览器，核对码是</span> KQ7M-2XPD<span class="dim">，
+  和网页上的一样就点「允许」。我在这里等。</span>
+
+<span class="ok">  ✓ 已登录：chenmo@example.com</span>
+
+<span class="dim">⏺ 接着交：01 赌徒谬误，52MB，送到你的发布机「书房的 Mac」。</span>
+<span class="ok">  ✓ 已登记，后台在传。预计 8 分钟后发布机上能看到。</span>`,
+          nogrant: `<span class="you">❯ 交给发布机</span>
+
+<span class="dim">⏺ 你的 Hifabu 账号还没开通「两台电脑之间传片」，所以送不出去。
+  到 hifabu.com 的「我的 Hifabu」点「申请开通」。开通后再说一次就行，
+  这一期我先记着：01 赌徒谬误。</span>`,
+          ok: `<span class="you">❯ 交给发布机</span>
+
+<span class="dim">⏺ 01 赌徒谬误，素材齐，直接交了。</span>
+<span class="ok">  ✓ 已登记，后台在传。预计 8 分钟后「书房的 Mac」上能看到。</span>`,
+        }[s];
+        return `<div class="wide"><div class="term">${t}</div><p class="note">成片只会到同一个 Hifabu 账号的发布机。你和你爱人各登各的账号，互相收不到对方的。</p></div>`;
+      },
+    },
+  };
+
+  function render() {
+    const P = PAGES[S.page];
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', t.dataset.p === S.page));
+    $('#what').textContent = P.what;
+    $('#url').textContent = P.url();
+    stage.innerHTML = P.draw(P.key ? S[P.key] : null);
+    statesBox.innerHTML = P.states.map(([k, label]) => `<button class="chip" data-st="${k}" aria-pressed="${k === 'role' ? 'false' : S[P.key] === k}">${label}</button>`).join('');
+  }
+  function setState(k) {
+    const P = PAGES[S.page];
+    if (S.page === 'link' && k === 'role') { S.linkRole = S.linkRole === 'pub' ? 'maker' : 'pub'; S.link = 'ask'; }
+    else if (P.key) S[P.key] = k;
+    render();
+  }
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => { S.page = t.dataset.p; render(); }));
+  statesBox.addEventListener('click', (e) => { const b = e.target.closest('[data-st]'); if (b) setState(b.dataset.st); });
+  stage.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-go],[data-set],[data-grant],[data-toast],[data-copy]');
+    if (!t) return;
+    if (t.dataset.go) { S.page = t.dataset.go; if (S.page === 'home' && S.home === 'new' && S.link === 'ok') S.home = 'asked'; render(); }
+    else if (t.dataset.set) setState(t.dataset.set);
+    else if (t.dataset.grant) { const [id, v] = t.dataset.grant.split(':'); S.grants[id] = v; render(); }
+    else if (t.dataset.toast) { const x = $('#toast'); if (x) { x.textContent = t.dataset.toast; x.hidden = false; } }
+    else if (t.dataset.copy) copyFrom($('#' + t.dataset.copy), t);
+  });
+  function copyFrom(el, btn) {
+    const done = () => { btn.textContent = '已复制'; };
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = '已选中，按 ⌘C 复制'; };
+    try { navigator.clipboard.writeText(el.textContent).then(done, fallback); } catch { fallback(); }
+  }
+  const form = $('#picks');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = (n) => form.querySelector(`input[name="${n}"]:checked`).value;
+    $('#outText').textContent = `Hifabu 账号，我挑：\n1. 下载：${v('dl')}\n2. 传片容量：${v('cap')}\n3. 申请通知：${v('ntf')}`;
+    $('#out').hidden = false;
+  });
+  $('#copy').addEventListener('click', (e) => copyFrom($('#outText'), e.target));
+  render();
+})();
+</script>
+</body></html>

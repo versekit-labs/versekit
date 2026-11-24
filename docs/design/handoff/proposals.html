@@ -1,0 +1,314 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}[hidden]{display:none!important}</style></head><body>
+<title>交给发布机</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* 布局：单栏工作台，宽 760。顶部三个方案切换，下面依次是：交付后状态、出错时、要你挑的。沿用 versekit DESIGN.md 的颜色。 */
+:root{
+  --bg:#fafaf8;--paper:#fffffe;--side:#f1f1ee;--ink:#1a1c1f;--ink2:#5f656c;--ink3:#8d9399;
+  --line:#e5e6e3;--ctl:#d3d5d1;
+  --mark:#ffd84a;--mark-bg:#fff8dc;--mark-line:#e6c84f;--mark-ink:#6b5d1c;
+  --bad:#c4321c;--bad-bg:#fdf3f0;--bad-line:#edc3b9;
+  --good:#0f7a4a;--good-bg:#edf7f1;--good-line:#bfdccb;
+  --term:#111214;--term-ink:#e6e7e9;--term-dim:#8d9399;--term-you:#ffd84a;--term-ok:#5fd39a;--term-bad:#ff8a73;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141517;--paper:#1c1d20;--side:#222327;--ink:#ecedef;--ink2:#a8adb3;--ink3:#7b8187;
+  --line:#2e3034;--ctl:#3d4045;
+  --mark:#ffd84a;--mark-bg:#2e2a17;--mark-line:#6b5d1c;--mark-ink:#f3dd85;
+  --bad:#ff8a73;--bad-bg:#2d1c18;--bad-line:#6a3428;
+  --good:#5fd39a;--good-bg:#16271e;--good-line:#2d5a41;
+  --term:#0b0c0e;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141517;--paper:#1c1d20;--side:#222327;--ink:#ecedef;--ink2:#a8adb3;--ink3:#7b8187;
+  --line:#2e3034;--ctl:#3d4045;
+  --mark:#ffd84a;--mark-bg:#2e2a17;--mark-line:#6b5d1c;--mark-ink:#f3dd85;
+  --bad:#ff8a73;--bad-bg:#2d1c18;--bad-line:#6a3428;
+  --good:#5fd39a;--good-bg:#16271e;--good-line:#2d5a41;
+  --term:#0b0c0e;color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:15px/1.65 var(--sans)}
+.wrap{max-width:760px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 64px;display:grid;gap:40px}
+h1{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:0;text-wrap:balance}
+h2{font-size:18px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px;text-wrap:balance}
+p{margin:0}
+.lede{color:var(--ink2);max-width:62ch}
+.sub{color:var(--ink2);font-size:14px}
+section{display:grid;gap:14px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap}
+.tab{font:inherit;font-size:14px;border:1px solid var(--ctl);background:var(--paper);color:var(--ink);border-radius:999px;padding:6px 14px;min-height:36px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.tab:focus-visible,.step:focus-visible,.opt input:focus-visible+span,button:focus-visible{outline:2px solid var(--mark-line);outline-offset:2px}
+.rec{font-size:12px;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--mark);color:#1a1c1f}
+.panel{display:grid;gap:12px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.fact{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;font-size:14px;min-width:0}
+.fact b{display:block;font-size:12px;color:var(--ink2);font-weight:600;letter-spacing:.04em;margin-bottom:2px}
+.term{background:var(--term);color:var(--term-ink);border-radius:var(--r);padding:14px 16px;font:13px/1.7 var(--mono);overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.term .you{color:var(--term-you)}
+.term .dim{color:var(--term-dim)}
+.term .ok{color:var(--term-ok)}
+.term .bad{color:var(--term-bad)}
+.note{font-size:14px;color:var(--ink2);border-left:3px solid var(--line);padding-left:12px}
+.steps{display:flex;gap:6px;flex-wrap:wrap}
+.step{font:inherit;font-size:13px;flex:1 1 120px;text-align:left;border:1px solid var(--line);background:var(--paper);color:var(--ink2);border-radius:var(--r);padding:8px 10px;cursor:pointer;min-height:44px}
+.step[aria-pressed="true"]{border-color:var(--ink);color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.step i{display:block;font-style:normal;font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:grid;gap:8px}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+.pill.wait{background:var(--mark-bg);border-color:var(--mark-line);color:var(--mark-ink)}
+.pill.bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
+.pill.good{background:var(--good-bg);border-color:var(--good-line);color:var(--good)}
+.rows{display:grid;gap:6px;font-size:14px}
+.row{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.row .k{color:var(--ink2);min-width:4.5em}
+.num{font-variant-numeric:tabular-nums}
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.bar span{display:block;height:100%;background:var(--ink2)}
+.errs{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}
+.err{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:grid;gap:6px;min-width:0;font-size:14px}
+.err h3{margin:0;font-size:15px;font-weight:700}
+.err .say{background:var(--side);border-radius:8px;padding:8px 10px;font-size:13.5px}
+.err .when{font-size:12px;color:var(--ink2)}
+.q{display:grid;gap:8px;background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.q legend{font-weight:700;padding:0;margin-bottom:6px}
+fieldset{border:0;margin:0;padding:0;display:grid;gap:6px}
+.opt{display:flex;gap:8px;align-items:flex-start;font-size:14px;cursor:pointer;min-height:32px}
+.opt input{margin-top:5px;accent-color:var(--ink)}
+.opt small{color:var(--ink2);display:block}
+.out{display:grid;gap:8px}
+.out pre{margin:0;background:var(--side);border-radius:8px;padding:10px 12px;font:13px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word}
+.btn{font:inherit;font-size:14px;border:1px solid var(--ink);background:var(--ink);color:var(--bg);border-radius:8px;padding:7px 14px;cursor:pointer;justify-self:start;min-height:36px}
+table{border-collapse:collapse;font-size:14px;width:100%}
+.tw{overflow-x:auto}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--ink2);font-weight:600;font-size:12px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header style="display:grid;gap:8px">
+  <h1>交给发布机</h1>
+  <p class="lede">在制作会话里做完一期，说一句「交给发布机」，成片、封面、文案就送到发布机，变成每个平台一条「等你确认」。制作机这边不发布，也不碰平台账号；发不发，仍然在发布机网页和飞书上由你点。</p>
+  <p class="sub">2026-11-24 · 设计稿，供挑选 · 任务书与结构见同目录 BRIEF.md</p>
+</header>
+
+<section>
+  <div>
+    <h2>三个方案</h2>
+    <p class="sub">点切换。示例都用真实目录里的 01 赌徒谬误、21 李白的一生。</p>
+  </div>
+  <div class="tabs" role="tablist" aria-label="方案">
+    <button class="tab" role="tab" id="t-a" aria-selected="true" aria-controls="p-a">A 插件里一个技能<span class="rec">推荐</span></button>
+    <button class="tab" role="tab" id="t-b" aria-selected="false" aria-controls="p-b">B 插件带 MCP 服务</button>
+    <button class="tab" role="tab" id="t-c" aria-selected="false" aria-controls="p-c">C 盯目录自动交</button>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-a" aria-labelledby="t-a">
+    <div class="facts">
+      <div class="fact"><b>怎么叫它</b>说「交给发布机」「把 21 交了」，或 <span class="num">/versekit:handoff 21</span></div>
+      <div class="fact"><b>新做的</b>一个技能，加上 <span class="num">vk</span> 的预览、后台上传、查投递</div>
+      <div class="fact"><b>代价</b>靠 Claude 读技能、跑命令；会话要有执行命令的权限</div>
+    </div>
+    <div class="term" aria-label="方案 A 对话示例"><span class="you">❯ 交给发布机</span>
+
+<span class="dim">⏺ 读了 vibe-video 的交付约定，最新做完的是 01 赌徒谬误。</span>
+
+  成片   01_赌徒谬误_v2.mp4（52MB，带水印，最新版本）
+  封面   封面/01_赌徒谬误_封面.png
+  文案   发布文案.md「01 赌徒谬误」：通用正文 + 5 个话题
+  去哪   发布机 · 账号组「南竹」· 小红书、抖音、B站
+
+  素材齐，没有要猜的地方，直接交了。
+
+<span class="ok">  ✓ 已登记，投递 dl_7f3a…，后台在传。预计 8 分钟后发布机上能看到。</span>
+<span class="dim">    关掉这个会话也会接着传。想看进度就问「到了吗」。</span>
+
+<span class="you">❯ 到了吗</span>
+
+<span class="ok">⏺ 到了。3 条等你确认：</span>
+    小红书  11-25 周二 20:00
+    抖音    11-25 周二 21:00
+    B站     11-26 周三 12:00
+<span class="dim">  确认在发布机的「今天」页或飞书上点。</span></div>
+    <div class="term" aria-label="方案 A 有要猜的地方时"><span class="you">❯ 把 21 交了</span>
+
+<span class="dim">⏺ 21 李白的一生，有两处我拿不准，先给你看一眼：</span>
+
+  文案   发布文案.md 里还没有 21。我按选题起草了一份：
+         标题  李白：一生都在出发
+         正文  他 25 岁仗剑出蜀，此后再没回过故乡……（共 186 字）
+         话题  #李白 #唐诗 #古诗词 #人生 #知识科普
+  大小   162MB，到发布机约 25 分钟（后台传，不用等）
+
+  这样交吗？可以直接说要改哪句。
+
+<span class="you">❯ 交</span>
+
+<span class="ok">⏺ ✓ 已登记，投递 dl_91c0…。起草的文案也写回了 发布文案.md 的「21 李白的一生」。</span></div>
+    <p class="note">素材齐全就直接交；只有 Claude 猜过的地方（起草的文案、选了哪个版本、文件特别大）才停下来问一句。这一步只是「送过去」，发布前的确认仍然在发布机上。</p>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-b" aria-labelledby="t-b" hidden>
+    <div class="facts">
+      <div class="fact"><b>怎么叫它</b>同 A。Claude 调工具，不拼命令</div>
+      <div class="fact"><b>新做的</b>A 的全部，加一个本机 MCP 服务，工具由命令注册表派生</div>
+      <div class="fact"><b>代价</b>多一轮：MCP 服务、安装、版本兼容。只有你一个人用时收益小</div>
+    </div>
+    <div class="term" aria-label="方案 B 对话示例"><span class="you">❯ 交给发布机</span>
+
+<span class="dim">⏺ versekit · handoff_preview (episode: "01")</span>
+<span class="dim">  ⎿  成片 52MB · 封面 1 · 文案齐 · 小红书 / 抖音 / B站 都能建 · 预计 8 分钟</span>
+<span class="dim">⏺ versekit · handoff_send (episode: "01")</span>
+<span class="ok">  ⎿  投递 dl_7f3a… 已登记，后台上传中</span>
+
+<span class="you">❯ 到了吗</span>
+
+<span class="dim">⏺ versekit · handoff_status (delivery: "dl_7f3a…")</span>
+<span class="ok">  ⎿  等你确认 · 小红书 11-25 20:00 · 抖音 11-25 21:00 · B站 11-26 12:00</span></div>
+    <p class="note">对你来说和 A 看起来几乎一样，区别在里面：参数是结构化的，不需要会话有执行命令的权限，以后给 SaaS 用户、给只有桌面版 Claude 的人也能用（ADR-0005 §9）。现在只有你一个人用，建议先 A，等要给别人用时把同一组命令再派生成 MCP 工具，技能不用重写。</p>
+  </div>
+
+  <div class="panel" role="tabpanel" id="p-c" aria-labelledby="t-c" hidden>
+    <div class="facts">
+      <div class="fact"><b>怎么叫它</b>不用叫。渲染完把成片放进「成片/待交付/」</div>
+      <div class="fact"><b>新做的</b>制作机后台服务盯一个目录，文件稳定 1 分钟后自动交</div>
+      <div class="fact"><b>代价</b>没人看一眼：版本错、文案没写、封面缺都不会拦</div>
+    </div>
+    <div class="term" aria-label="方案 C 示例"><span class="dim">成片/待交付/</span>
+  21_李白的一生.mp4    <span class="dim">← 拖进来</span>
+
+<span class="dim">发布机「今天」页，25 分钟后：</span>
+  新到 1 期：21 李白的一生
+<span class="bad">  小红书  没建：没有文案</span>
+<span class="bad">  抖音    没建：没有文案</span>
+<span class="bad">  B站     建了，标题用的是文件名「21_李白的一生」</span></div>
+    <p class="note">最省事，但出错要等到发布机上才发现，还是得回制作机补文案、重交。你现在 18–23 期都还没写发布文案，这个方案现在会频繁出这种情况。不推荐作为主路径，可以以后给「素材每次都齐」的项目当选项。</p>
+  </div>
+</section>
+
+<section>
+  <div>
+    <h2>交出去以后，制作机这边看得到什么</h2>
+    <p class="sub">问「到了吗」时的回答，按阶段点开看。制作机这边到「等你确认」为止；发没发由发布机和飞书说。</p>
+  </div>
+  <div class="steps" role="group" aria-label="阶段">
+    <button class="step" aria-pressed="false" data-s="0">正在传<i>制作机 → 中转</i></button>
+    <button class="step" aria-pressed="false" data-s="1">等发布机来取<i>在中转上</i></button>
+    <button class="step" aria-pressed="false" data-s="2">发布机在下载<i>中转 → 发布机</i></button>
+    <button class="step" aria-pressed="true" data-s="3">等你确认<i>已入库</i></button>
+  </div>
+  <div class="card" id="stage" aria-live="polite"></div>
+</section>
+
+<section>
+  <div>
+    <h2>出错时怎么说</h2>
+    <p class="sub">每条都说清是哪一步、要不要你动手。不丢任务，也不默默截断。</p>
+  </div>
+  <div class="errs">
+    <div class="err"><h3>中转连不上</h3><p class="when">上传时</p><p class="say">中转连不上，已经排队。网通了会自动接着传，不用再说一遍。</p><span class="pill wait">排队中</span></div>
+    <div class="err"><h3>发布机离线</h3><p class="when">在中转上等太久</p><p class="say">已到中转，但发布机 6 小时没来取。打开那台电脑上的 versekit 就会自动下载。</p><span class="pill wait">等发布机</span></div>
+    <div class="err"><h3>文件大</h3><p class="when">交之前预览时</p><p class="say">188MB，到发布机约 28 分钟。后台传，不用等。</p><span class="pill">只提示，不拦</span></div>
+    <div class="err"><h3>中转空间不够</h3><p class="when">上传时</p><p class="say">中转只剩 1.6GB，放不下这一期（188MB 之外还要留 2GB）。等已入库的旧期满 7 天自动清掉，或者先清理中转。</p><span class="pill bad">没交成</span></div>
+    <div class="err"><h3>文案超限</h3><p class="when">交之前预览时</p><p class="say">小红书标题 24 字，限 20 字。改成「李白：一生都在出发」（9 字）？</p><span class="pill wait">问你一句</span></div>
+    <div class="err"><h3>没有发布文案</h3><p class="when">读目录时</p><p class="say">发布文案.md 里还没有 21。我起草了一份，你看一眼再交。</p><span class="pill wait">问你一句</span></div>
+    <div class="err"><h3>版本拿不准</h3><p class="when">读目录时</p><p class="say">17 有「AI算法简史」和「AI算法简史_灵动版」两个，交哪个？</p><span class="pill wait">问你一句</span></div>
+    <div class="err"><h3>发布机上没有这个账号组</h3><p class="when">发布机入库时</p><p class="say">没交成：发布机上没有账号组「南竹」。在发布机的系统页建同名的组，再说一次「交给发布机」。</p><span class="pill bad">没交成</span></div>
+  </div>
+</section>
+
+<section>
+  <div>
+    <h2>交付会带什么</h2>
+    <p class="sub">按 vibe-video 现在的目录读。中医系列的目录不一样，所以每个项目写一份「交付约定」，技能照约定读，不写死在产品里。</p>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>东西</th><th>从哪读</th><th>多个或缺了怎么办</th></tr></thead>
+    <tbody>
+      <tr><td>成片</td><td>成片/编号_选题[_vN].mp4</td><td>取最大的 vN。「灵动版」这类不是版本号的，问</td></tr>
+      <tr><td>水印</td><td>默认带水印；无水印版在 成片/无水印/</td><td>等你在下面挑</td></tr>
+      <tr><td>封面</td><td>成片/封面/编号_选题_封面.png</td><td>没有就不带，平台用视频首帧，并提一句</td></tr>
+      <tr><td>文案</td><td>文案/发布文案.md 里「## 编号 选题」那一节：标题取节名，正文取段落，话题取最后一行 #</td><td>没有就由 Claude 起草，给你看一眼，交完写回文件。<br>「_文案.txt」是字幕时间轴，不用</td></tr>
+      <tr><td>平台</td><td>发布机上账号组里的所有账号</td><td>按平台单独写只用在真不一样的字段，例如小红书标题限 20 字</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div>
+    <h2>要你挑的</h2>
+    <p class="sub">所有者 2026-11-24 已定：四项都按每题默认选中的那个。</p>
+  </div>
+  <form id="picks" class="panel" novalidate>
+    <div class="q"><fieldset><legend>1. 用哪个方案</legend>
+      <label class="opt"><input type="radio" name="form" id="f-a" value="A 插件里一个技能" checked><span>A 插件里一个技能（推荐）<small>新东西最少，先给你自己用</small></span></label>
+      <label class="opt"><input type="radio" name="form" id="f-b" value="B 插件带 MCP 服务"><span>B 插件带 MCP 服务<small>多一轮工作，以后给别人用的形状</small></span></label>
+      <label class="opt"><input type="radio" name="form" id="f-c" value="C 盯目录自动交"><span>C 盯目录自动交<small>不经过 Claude，出错晚发现</small></span></label>
+    </fieldset></div>
+    <div class="q"><fieldset><legend>2. 制作机这边要不要先确认</legend>
+      <label class="opt"><input type="radio" name="confirm" id="c-auto" value="素材齐就直接交，猜过的地方才问" checked><span>素材齐就直接交，猜过的地方才问（推荐）</span></label>
+      <label class="opt"><input type="radio" name="confirm" id="c-always" value="每次都先给我看交付单"><span>每次都先给我看交付单</span></label>
+    </fieldset></div>
+    <div class="q"><fieldset><legend>3. 交哪个水印版本</legend>
+      <label class="opt"><input type="radio" name="wm" id="w-on" value="带水印" checked><span>带水印（成片/ 里的）</span></label>
+      <label class="opt"><input type="radio" name="wm" id="w-off" value="无水印"><span>无水印（成片/无水印/，现在只有 14–17 期有）</span></label>
+      <label class="opt"><input type="radio" name="wm" id="w-mix" value="按平台分：先问我哪个平台用哪个"><span>按平台分</span></label>
+    </fieldset></div>
+    <div class="q"><fieldset><legend>4. 「灵动版」这类变体</legend>
+      <label class="opt"><input type="radio" name="variant" id="v-ask" value="每次问我" checked><span>每次问我</span></label>
+      <label class="opt"><input type="radio" name="variant" id="v-cut" value="当作另一个成片，一起交"><span>当作另一个成片，一起交</span></label>
+    </fieldset></div>
+    <button class="btn" type="submit">生成回复</button>
+    <div class="out" id="out" hidden>
+      <pre id="outText"></pre>
+      <button class="btn" type="button" id="copy">复制</button>
+    </div>
+  </form>
+</section>
+</div>
+
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll('.tab')];
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => { const on = x === t; x.setAttribute('aria-selected', on); document.getElementById(x.getAttribute('aria-controls')).hidden = !on; });
+  }));
+
+  const stages = [
+    { pill: ['wait', '正在传'], line: '正在传 01 赌徒谬误：31 / 52MB，还要约 20 秒。', pct: 60, rows: [['成片', '01_赌徒谬误_v2.mp4 · 52MB'], ['投递', 'dl_7f3a…']], note: '断网会自动续传；关掉会话也接着传。' },
+    { pill: ['wait', '等发布机来取'], line: '已到中转。发布机上次来取是 3 分钟前，一般 1 分钟内会开始下载。', rows: [['中转', 'vk.fangyouxi.cn'], ['投递', 'dl_7f3a…']], note: '超过 1 小时没来取，会说「发布机 X 小时没来取」。' },
+    { pill: ['wait', '发布机在下载'], line: '发布机在下载：40%，还要约 5 分钟。', pct: 40, rows: [['速度', '约 0.11MB/s（按 ADR-0003 的实测估）']], note: '下载完会核对哈希，不对就重下。' },
+    { pill: ['good', '等你确认'], line: '到了。3 条等你确认：', rows: [['小红书', '11-25 周二 20:00'], ['抖音', '11-25 周二 21:00'], ['B站', '11-26 周三 12:00']], note: '确认在发布机的「今天」页或飞书上点。时间是发布机按平台规则排的建议时间，确认前可以改。' },
+  ];
+  const box = document.getElementById('stage');
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function show(i) {
+    const s = stages[i];
+    document.querySelectorAll('.step').forEach(b => b.setAttribute('aria-pressed', b.dataset.s == i));
+    box.innerHTML = `<div class="row"><span class="pill ${s.pill[0]}">${s.pill[1]}</span><span>${esc(s.line)}</span></div>`
+      + (s.pct != null ? `<div class="bar" role="img" aria-label="${s.pct}%"><span style="width:${s.pct}%"></span></div>` : '')
+      + `<div class="rows">${s.rows.map(r => `<div class="row"><span class="k">${esc(r[0])}</span><span class="num">${esc(r[1])}</span></div>`).join('')}</div>`
+      + `<p class="note">${esc(s.note)}</p>`;
+  }
+  document.querySelectorAll('.step').forEach(b => b.addEventListener('click', () => show(+b.dataset.s)));
+  show(3);
+
+  const form = document.getElementById('picks');
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const v = n => form.querySelector(`input[name="${n}"]:checked`).value;
+    const text = `交给发布机，我挑：\n1. 方案：${v('form')}\n2. 制作机确认：${v('confirm')}\n3. 水印：${v('wm')}\n4. 变体：${v('variant')}`;
+    document.getElementById('outText').textContent = text;
+    document.getElementById('out').hidden = false;
+  });
+  document.getElementById('copy').addEventListener('click', e => {
+    const pre = document.getElementById('outText');
+    const done = () => { e.target.textContent = '已复制'; };
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); e.target.textContent = '已选中，按 ⌘C 复制'; };
+    try { navigator.clipboard.writeText(pre.textContent).then(done, fallback); } catch { fallback(); }
+  });
+})();
+</script>
+</body></html>
