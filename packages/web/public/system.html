@@ -218,7 +218,8 @@
   function cloudContent() {
     const s = ui.cloud;
     const busy = ui.cloudAction ? ' aria-disabled="true"' : "";
-    const action = (key, label, cls) => B(`data-cloud-action="${key}"`, label, cls, busy);
+    const platformAction = ui.credOpen || Object.values(ui.login).some(({ step }) => ["sms1", "sms2", "win"].includes(step));
+    const action = (key, label, cls) => B(`data-cloud-action="${key}"`, label, platformAction && cls === "btn pri" ? "btn" : cls, busy);
     const unreadable = ui.cloudError?.code === "cloud_credential_unreadable";
     const note = ui.cloudNote || (unreadable ? ui.cloudError.message : ui.cloudError && "读不到 Hifabu 账号状态，稍后会再试。") || s?.message;
     const alert = note ? `<p class="note bad" role="alert">${esc(note)}</p>` : "";

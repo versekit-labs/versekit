@@ -71,7 +71,9 @@ test("③ 系统页：待处理数和列出的条数同源（今天页的出问�
 
 test("fid-11/13/14 页面里的文案与细节", () => {
   const sys = PUB("system.html");
-  assert.doesNotMatch(sys, /这台电脑/, "发布机文案写设备名");
+  const cloudCopy = sys.match(/function cloudContent\(\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.match(cloudCopy, /在这台电脑上做片、发布都不需要登录/, "Hifabu 未登录状态沿用定稿文案");
+  assert.doesNotMatch(sys.replace(cloudCopy, ""), /这台电脑/, "发布机文案写设备名");
   assert.doesNotMatch(sys, /这台发布机现在/);
   assert.doesNotMatch(PUB("today.html"), /小红书每条单独确认。<\/div>/);
   assert.doesNotMatch(PUB("works.html"), /日历只看不改/);
