@@ -870,6 +870,28 @@ function inspectStartupFailure(w, channel) {
   return { agent, reason: dispatch.lastFailure ?? worker.lastError ?? "agent_readiness", worktreeId: worker.worktreeId ?? w.resource?.worktreeId };
 }
 
+/**
+ * 纯函数：从 agentctl 输出里挑要写进流程日志的行。「✗ 不合并 #N：」后面以 `- ` 开头的原因行
+ * 并进同一行（用「；」隔开），日志里看得到为什么不合并（ACC-harness-orca-16）。
+ */
+export function transcribeAgentctl(out) {
+  const rows = [];
+  let open = null;
+  for (const raw of String(out ?? "").split("\n")) {
+    const line = raw.trim();
+    if (open && /^- /.test(line)) {
+      open.reasons.push(line.slice(2).trim());
+      continue;
+    }
+    open = null;
+    if (!/✓|↩|✗ 不合并|已迁移|→/.test(line)) continue;
+    const row = { line, reasons: [] };
+    rows.push(row);
+    if (/✗ 不合并/.test(line)) open = row;
+  }
+  return rows.map((r) => (r.reasons.length ? `${r.line.replace(/[：:]\s*$/, "：")}${r.reasons.join("；")}` : r.line));
+}
+
 function coordinatorNotice(report, issue, body) {
   log(`  ⚠ 需要协调器：${body}`);
   report.needsCoordinator.push({ type: "escalation", issue, subject: body, body });
@@ -1059,7 +1081,7 @@ export async function tick({ dryRun = false } = {}) {
     if (what === "合并") for (const cmd of cfg.hooks.beforeMerge) if (!runHook("beforeMerge", cmd, dryRun)) report.errors.push(`beforeMerge: ${cmd}`);
     try {
       const out = agentctl(args).trim();
-      for (const line of out.split("\n").filter((l) => /✓|↩|✗ 不合并|已迁移|→/.test(l))) {
+      for (const line of transcribeAgentctl(out)) {
         log(`  ${what}：${line.trim()}`);
         if (/✓ 合并/.test(line)) report.merged.push(line.trim());
       }
