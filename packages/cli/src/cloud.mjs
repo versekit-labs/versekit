@@ -10,6 +10,7 @@ import { RelayError } from "../../relay/src/index.mjs";
 const pollIntervalMs = 1500;
 const refreshAheadMs = 60_000;
 const refreshRetryMs = 30_000;
+const statusCheckMs = 60_000;
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
 const credentialName = "hifabu-machine.json";
 const defaultOrigin = "https://hifabu.com";
@@ -93,6 +94,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
   let refreshRequest;
   let terminal;
   let reachable = true;
+  let nextStatusCheckAt = 0;
 
   function request(origin, command, args, token) {
     if (offline && !isLoopback(new URL(origin))) {
@@ -126,6 +128,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     writeCredential(data);
     credential = data;
     reachable = true;
+    nextStatusCheckAt = data.checkedAt + statusCheckMs;
     scheduleRefresh(data);
   }
 
@@ -145,6 +148,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
         log("[cloud] device_inactive 这台机器已退出 Hifabu。");
       } else {
         reachable = false;
+        nextStatusCheckAt = Date.now() + refreshRetryMs;
         scheduleRefresh(data, refreshRetryMs);
         log("[cloud] cloud_refresh_failed 暂时无法核对 Hifabu 登录，会自动重试。");
       }
@@ -283,10 +287,8 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
       const saved = currentCredential();
       if (!saved) return pending ? browserChallenge(pending) : terminal ?? signedOut;
       if (offline && !isLoopback(new URL(saved.origin))) return signedIn(saved, false);
-      if (!refreshTimer) {
-        if (saved.expiresAt - Date.now() <= refreshAheadMs) await refresh();
-        else scheduleRefresh(saved);
-      }
+      // 状态核对也更新传片开通状态，不必等机器令牌临近到期。
+      if (Date.now() >= nextStatusCheckAt) await refresh();
       return credential ? signedIn(credential, reachable) : signedOut;
     },
   };
