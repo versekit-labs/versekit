@@ -287,7 +287,7 @@ export function projectRules(section, text = null) {
   return m[1].split("\n").filter((l) => /^- /.test(l)).map((l) => l + "\n").join("");
 }
 
-const commonConstraints = () => `- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径；不改 api 形状、数据库 schema、commands.mjs 的命令定义
+const commonConstraints = () => `- 只改本 worktree 内、工单「涉及」列出的文件；不碰 worktree 以外的任何路径；不改已有的 API 形状、数据库 schema 和 commands.mjs 里已有的命令定义；口径要求新增的命令、字段、表，可以向后兼容地加（只加不改不删）
 - 不改用户全局配置（~/.claude、~/.codex 等）；临时文件放本 worktree 或 TMPDIR
 - 不改 issue 的 s:* label（状态由协调器迁移）；不合并 PR、不给自己发通行证
 - 完成后必须能通过 ${flowConfig().ci}
