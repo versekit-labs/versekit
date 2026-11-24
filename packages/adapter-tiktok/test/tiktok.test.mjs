@@ -217,3 +217,24 @@ test("适配器源码不写库：没有状态迁移 / 事件 / 入队 / INSERT",
   assert.equal(/\bINSERT\s+INTO\b/i.test(source), false);
   assert.equal(/\.prepare\(\s*["'`]INSERT/i.test(source), false);
 });
+
+// ------------------------------------------------------------------ ACC-acct-iso-08 登录态轮询不开新标签页
+
+test("ACC-acct-iso-08：TikTok 登录态轮询 30 次不新开标签页；窗口不在 idle；登录后 ok", async () => {
+  const { createLoginStatus } = await import("../src/index.mjs");
+  const win = { href: "https://www.tiktok.com/login", cookies: [], opened: 0 };
+  const tab = { url: async () => win.href, cookies: async () => win.cookies };
+  let present = true;
+  const find = async () => (present ? tab : null);
+  const loginStatus = createLoginStatus({ find });
+  for (let i = 0; i < 30; i++) assert.equal((await loginStatus({ accountId: "acc_tt" })).state, "pending");
+  assert.equal(win.opened, 0);
+  present = false;
+  assert.equal((await loginStatus({ accountId: "acc_tt" })).state, "idle");
+  present = true;
+  win.href = "https://www.tiktok.com/foryou";
+  win.cookies = [{ name: "sessionid", value: "x" }];
+  const r = await loginStatus({ accountId: "acc_tt" });
+  assert.equal(r.state, "ok");
+  assert.equal(r.finish, "window");
+});

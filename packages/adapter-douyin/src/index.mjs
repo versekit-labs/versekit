@@ -27,6 +27,14 @@ import * as ledger from "./state.mjs";
 export { planDraft, MAX_TITLE_CHARS, MAX_TOPICS, normaliseTopics } from "./plan.mjs";
 
 const PLATFORM = "douyin";
+/** 登录窗口的地址要含这个站点的主机名（默认 creator.douyin.com；VK_DOUYIN_BASE 指向模拟页时跟着变）。 */
+const hostMatcher = (base) => {
+  try {
+    return new RegExp(new URL(base).hostname.replace(/\./g, "\\."));
+  } catch {
+    return null;
+  }
+};
 const NOTE = "已送到抖音草稿箱，在手机上点发布";
 const LOGIN_DETAIL = "抖音登录过期：到系统页点「在发布机上打开登录窗口」，在窗口里登录一次后重试";
 
@@ -455,6 +463,21 @@ export function createAdapter({ driver = realDriver, sleep = driver.sleep, now =
     }
   }
 
+  /**
+   * 登录态轮询（ACC-acct-iso-08）：只读这个账号已经打开的登录窗口的当前页面，
+   * 不新开标签页、不导航、不关。窗口不在 → idle；创作者中心首页渲染出来才算登录成功。
+   */
+  async function loginStatus(ctx = {}) {
+    const accountId = ctx?.accountId;
+    if (typeof accountId !== "string" || !accountId.trim()) throw new AdapterError("unknown", "loginStatus 需要 accountId");
+    const tab = await driver.findOpenTab?.(accountId, { match: hostMatcher(page.baseUrl(env)) });
+    if (!tab) return { state: "idle", mode: "manual", note: "点「打开登录窗口」，在窗口里登录" };
+    const state = await tab.eval(page.homeState, page.T.login, page.LIMITED_PATTERNS, page.RISK_PATTERNS).catch(() => "");
+    if (state === "ready") return { state: "ok", mode: "manual", finish: "window" };
+    if (state === "risk") return { state: "pending", mode: "manual", note: "抖音要你在窗口里手动过一下验证，过完会自动识别" };
+    return { state: "pending", mode: "manual", note: "等你在浏览器里登录…" };
+  }
+
   return {
     platform: PLATFORM,
     capabilities: {
@@ -478,6 +501,7 @@ export function createAdapter({ driver = realDriver, sleep = driver.sleep, now =
       return reason ? `抖音未配置：${reason}` : null;
     },
     check,
+    loginStatus,
     publish,
   };
 }

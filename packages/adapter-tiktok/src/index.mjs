@@ -17,7 +17,7 @@ import { isAbsolute, resolve } from "node:path";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError, toAdapterError } from "../../core/src/errors.mjs";
 import { resolvePublishAsset, resolvePublishCopy, copyRowFields } from "../../core/src/publish-flow.mjs";
-import { openAccount, browserReady, evidencePath, sleep } from "../../driver-browser/src/index.mjs";
+import { openAccount, browserReady, evidencePath, sleep, findOpenTab } from "../../driver-browser/src/index.mjs";
 
 const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?lang=en";
 const CONTENT_URL = "https://www.tiktok.com/tiktokstudio/content";
@@ -730,6 +730,30 @@ async function check(ctx = {}) {
   }
 }
 
+// ------------------------------------------------------------------ 登录态轮询（ACC-acct-iso-08）
+
+const SESSION_COOKIES = ["sessionid", "sid_tt", "sessionid_ss"];
+
+/**
+ * 只读这个账号已经打开的 TikTok 登录窗口：不新开标签页、不导航、不关。
+ * 窗口不在 → idle；窗口已离开 /login 且 tiktok.com 上有会话 cookie 才算登录成功（只看有没有，不读值）。
+ * finder 可注入（测试用 stub driver）。
+ */
+export function createLoginStatus({ find = findOpenTab } = {}) {
+  return async function loginStatus(ctx = {}) {
+    const accountId = ctx?.accountId;
+    if (typeof accountId !== "string" || !accountId.trim()) throw new AdapterError("unknown", "loginStatus 需要 accountId");
+    const tab = await find(accountId, { match: /tiktok\.com/ });
+    if (!tab) return { state: "idle", mode: "manual", note: "点「打开登录窗口」，在窗口里登录" };
+    const here = await tab.url().catch(() => "");
+    if (here && !/\/login/.test(pathnameOf(here))) {
+      const cookies = await tab.cookies("https://www.tiktok.com").catch(() => []);
+      if (cookies.some((c) => SESSION_COOKIES.includes(c.name) && Boolean(c.value))) return { state: "ok", mode: "manual", finish: "window" };
+    }
+    return { state: "pending", mode: "manual", note: "等你在浏览器里登录…" };
+  };
+}
+
 // ------------------------------------------------------------------ 契约
 
 export default {
@@ -746,6 +770,7 @@ export default {
     return reason ? `TikTok 未配置：${reason}` : null;
   },
   check,
+  loginStatus: createLoginStatus(),
   publish,
   collect,
 };
