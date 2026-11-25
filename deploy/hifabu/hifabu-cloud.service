@@ -1,0 +1,25 @@
+[Unit]
+Description=Hifabu account service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hifabu-cloud
+Group=hifabu-cloud
+EnvironmentFile=/etc/hifabu-cloud/cloud.env
+WorkingDirectory=/opt/hifabu-cloud/current
+# serve.mjs binds 127.0.0.1 explicitly.
+ExecStart=/usr/local/bin/node /opt/hifabu-cloud/current/packages/cloud/src/serve.mjs
+StateDirectory=hifabu-cloud
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

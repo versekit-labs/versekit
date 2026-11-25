@@ -1,0 +1,6 @@
+    # Only paths owned by packages/cloud. Other requests use the site's static locations.
+    location ~ ^/(?:login(?:/google(?:/callback)?)?|account|admin|link|\.well-known/hifabu-machine-key\.pem|api/(?:session(?:/revoke)?|devices(?:/link(?:/poll|/[^/]+/decision)?|/refresh|/[^/]+/revoke)?|relay/grant(?:/request)?|admin/users(?:/[^/]+/(?:relay-grant|delete))?))$ {
+        proxy_pass http://127.0.0.1:8791;
+        proxy_set_header Host $host;
+        access_log off;
+    }
