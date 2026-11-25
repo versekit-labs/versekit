@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -100,6 +100,16 @@ test("ACC-deliver-05: 多版本选最大编号，带封面和对应一节的发�
   const next = inspectEpisode(project, "02");
   assert.equal(next.video.name, "02_习得性无助_v10.mp4");
   assert.equal(next.manifest.source, source);
+});
+
+test("ACC-plugin-dist-02: 从符号链接下的插件目录运行检查脚本会输出清单", async (t) => {
+  const { temp, project, put } = fixture(t);
+  put("成片/02_习得性无助_v3.mp4");
+  const cachedSkill = join(temp, "plugin-skill");
+  symlinkSync(dirname(inspector), cachedSkill, "junction");
+
+  const { stdout } = await exec(process.execPath, [join(cachedSkill, "inspect.mjs"), project, "02"]);
+  assert.equal(JSON.parse(stdout).state, "ready");
 });
 
 test("ACC-deliver-05: 17 两版各用对应封面和文案，灵动版每次需确认", (t) => {

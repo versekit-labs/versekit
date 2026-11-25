@@ -276,7 +276,7 @@ ADR-0003 §2.5 定的是「文件存 volc1」，实测 volc1 出口只有 0.11MB
 **形状**
 
 ```
-versekit-plugin/
+plugins/hifabu/
   .claude-plugin/plugin.json
   skills/versekit-ingest/SKILL.md      现有入库技能，改成调用工具而不是命令
   .mcp.json                            本机 stdio 服务：node ${CLAUDE_PLUGIN_ROOT}/server.mjs
