@@ -3,56 +3,90 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>versekit Privacy Policy</title>
-<link rel="icon" href="../icon.png">
+<title>Privacy Policy · Hi 发布 (Hifabu)</title>
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../favicon-16.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <main>
-<header><img src="../icon.png" alt=""><a href="../">versekit</a></header>
+<header><img src="../icon.png" alt=""><a href="../">Hi 发布 · Hifabu</a></header>
 <h1>Privacy Policy</h1>
-<p class="meta">Effective November 15, 2026</p>
+<p class="meta">Effective November 25, 2026</p>
 
-<p>versekit is open-source software that runs on your own computer, or on a server you control. This policy explains what data versekit handles and where it goes.</p>
+<p>Hifabu (Hi 发布) is a desktop app that runs on your own computer. A Hifabu account (hifabu.com) is an optional online service for it. This policy explains what data the app and the account service handle, and where it goes.</p>
 
 <h2>1. The short version</h2>
-<p>The versekit project does not run a server that receives your data. Everything versekit stores is stored on machines you control. Data leaves those machines only to go to the platforms you connect, and to any optional services you configure yourself.</p>
+<ul>
+<li>You can use Hifabu on one computer without a Hifabu account. In that case nothing is sent to us.</li>
+<li>If you sign in to a Hifabu account, we store your email address and a list of the computers you connected.</li>
+<li>If you turn on transfer between two computers, your finished videos pass through our relay server and are deleted after delivery.</li>
+<li>Your logins to TikTok, YouTube and other platforms always stay on your own computer. We never receive them.</li>
+</ul>
 
-<h2>2. Data versekit handles</h2>
+<h2>2. Data that stays on your computer</h2>
+<p>The Hifabu app stores the following only on computers you control. We do not receive any of it, with the one exception described in section 4.</p>
 <ul>
 <li><strong>Your content</strong>: videos, images, titles, captions and other files you add to your library.</li>
-<li><strong>Platform authorization</strong>: when you connect an account (for example through TikTok Login Kit or Google OAuth), versekit receives access and refresh tokens from that platform.</li>
-<li><strong>Basic account information</strong>: with the TikTok <code>user.info.basic</code> permission, versekit reads your account's display name and avatar, and shows them so you can confirm which account you are posting to.</li>
+<li><strong>Platform authorization</strong>: when you connect a platform account (for example through TikTok Login Kit or Google OAuth for YouTube), Hifabu receives access and refresh tokens from that platform. They are stored only on the computer that publishes for that account, and are sent only back to the platform that issued them.</li>
+<li><strong>Basic platform account information</strong>: with the TikTok <code>user.info.basic</code> permission, Hifabu reads your account's display name and avatar, and shows them so you can confirm which account you are posting to.</li>
 <li><strong>Publishing results and performance data</strong>: post IDs, publish status, and metrics such as views and likes that the platform returns for your own posts.</li>
 </ul>
 
-<h2>3. How it is used</h2>
-<p>versekit uses this data only to do what you ask: show your library, publish your content to the accounts you connected, and show you how your posts perform. It does not sell, rent or share your data, does not show ads, and does not include analytics or tracking that reports to us.</p>
-
-<h2>4. Where it is stored</h2>
-<p>Your library and history are stored in a local database on your computer, or on your own server if you set one up. Platform tokens are stored only on the computer that publishes for that account and are not sent anywhere except back to the platform that issued them.</p>
-
-<h2>5. Who receives your data</h2>
+<h2>3. Hifabu account data</h2>
+<p>If you sign in at hifabu.com, we store:</p>
 <ul>
-<li><strong>The platforms you connect</strong>: when you publish, your content and post settings are sent to that platform (for example TikTok or YouTube), under that platform's own privacy policy, such as the <a href="https://www.tiktok.com/legal/privacy-policy">TikTok Privacy Policy</a> and the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</li>
-<li><strong>Services you configure</strong>: if you choose to connect optional services, such as a chat app for notifications or an AI model provider for writing suggestions, versekit sends them only the data needed for that feature, using credentials you provide.</li>
+<li><strong>Your email address.</strong> It identifies your account.</li>
+<li><strong>Your Google account identifier</strong>, if you sign in with Google. We ask Google only for your identity and email address. We do not ask for your name or profile picture, and we do not access your contacts, files, or any other Google data.</li>
+<li><strong>Sign-in codes</strong>, if you sign in by email. We send a 6-digit code to your address and keep only a hashed copy of it for up to 10 minutes.</li>
+<li><strong>Session data</strong>: a sign-in cookie in your browser, and a hashed copy of it on our server. We use no advertising or analytics cookies.</li>
+<li><strong>Your connected computers</strong>: the name of each computer, whether it makes or publishes content, when it connected, and when it was last online. For a computer that publishes, we also store its public IP address and approximate location (country and city), so that you can check where it is.</li>
+<li><strong>Transfer status</strong>: whether transfer between two computers is turned on for your account, and how much storage you are using.</li>
+<li><strong>Server logs</strong>: IP address, time and request path, kept for up to 30 days, to keep the service running and to stop abuse.</li>
 </ul>
-<p>The versekit project and its contributors receive none of it.</p>
+<p>There are no passwords. We never store one.</p>
 
-<h2>6. Your control</h2>
+<h2>4. Transfer between two computers</h2>
+<p>Transfer is off by default. If it is turned on for your account and you send a finished piece from one computer to another, the following pass through our relay server:</p>
 <ul>
-<li>Disconnect an account in versekit at any time; its stored tokens are deleted.</li>
-<li>You can also revoke access from the platform itself, for example in TikTok's settings under Security and permissions, or at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
-<li>Deleting versekit's data directory removes everything it stored.</li>
+<li>the video file and its cover image;</li>
+<li>the title, caption and hashtags you wrote for each platform.</li>
+</ul>
+<p>Only computers signed in to your own account can download them. We keep these files until 7 days after the receiving computer confirms it has them, then delete them. Our staff do not open or review your files, except when needed to fix a fault you reported or when the law requires it.</p>
+
+<h2>5. How we use data</h2>
+<p>We use the data in sections 3 and 4 only to sign you in, to connect your computers to your account, to move your files between them, and to keep the service secure. We do not sell, rent or share your data, do not show ads, and do not use your data to train AI models.</p>
+<p>Our use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+<h2>6. Who receives your data</h2>
+<ul>
+<li><strong>The platforms you connect</strong>: when you publish, your content and post settings are sent from your own computer to that platform (for example TikTok or YouTube), under that platform's own privacy policy, such as the <a href="https://www.tiktok.com/legal/privacy-policy">TikTok Privacy Policy</a> and the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</li>
+<li><strong>Google</strong>, if you choose to sign in with Google. Google learns that you signed in to Hifabu.</li>
+<li><strong>Infrastructure providers</strong>: hifabu.com is served through Cloudflare, and our servers are rented from cloud hosting companies. If you sign in by email, an email delivery provider handles the message that carries your code. They process data only on our behalf.</li>
+<li><strong>Services you configure</strong>: if you connect optional services in Hifabu, such as a chat app for notifications, Hifabu sends them only the data needed for that feature, directly from your computer, using credentials you provide.</li>
 </ul>
 
-<h2>7. Children</h2>
-<p>versekit is not directed at children under 13, or the minimum age required by the platform you connect.</p>
+<h2>7. Where it is stored</h2>
+<p>Account data and relay files are stored on servers we operate in Asia. Everything described in section 2 is stored on your own computers.</p>
 
-<h2>8. Changes</h2>
+<h2>8. Your control</h2>
+<ul>
+<li><strong>Sign out a computer</strong>: on hifabu.com, under your connected computers. It loses access within one hour.</li>
+<li><strong>Delete your account</strong>: email us from the address of your account. We delete your account data and any relay files within 30 days.</li>
+<li><strong>Remove Google sign-in</strong>: at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+<li><strong>Disconnect a platform account</strong>: in Hifabu at any time; its stored tokens are deleted. You can also revoke access from the platform itself, for example in TikTok's settings under Security and permissions.</li>
+<li><strong>Remove local data</strong>: deleting Hifabu's data directory removes everything it stored on that computer.</li>
+<li>You may also ask us for a copy of your account data, or ask us to correct it.</li>
+</ul>
+
+<h2>9. Children</h2>
+<p>Hifabu is not directed at children under 13, or the minimum age required by the platform you connect.</p>
+
+<h2>10. Changes</h2>
 <p>We may update this policy. Changes are published on this page with a new effective date, and the history is kept in the public repository.</p>
 
-<h2>9. Contact</h2>
+<h2>11. Contact</h2>
 <p>Questions about privacy: <a href="mailto:creator.omnikit@gmail.com">creator.omnikit@gmail.com</a></p>
 
 <footer><a href="../">Home</a><a href="../terms/">Terms of Service</a></footer>
