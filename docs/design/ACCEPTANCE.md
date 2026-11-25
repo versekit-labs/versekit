@@ -655,6 +655,20 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-deliver-04] 状态回到制作机：`delivery.list` 和 `delivery.show <id>` 返回 BRIEF §3.3 的状态：正在传（已传多少、还要多久）、等发布机来取（附发布机上次来取的时间）、发布机在下载、等你确认、没交成（原因和下一步）。发布机回报「已入库」时，带上作品 id、每条平台稿的平台、账号和建议时间，以及被拒的平台和原因；中转原样存下，并记录发布机最后一次来取的时间。发布机 6 小时没来取时，状态文案按 BRIEF §5 写。入库后在飞书和「今天」页出一条「新到 1 期：<选题>，N 条等你确认」，已有这类通知就复用。
 - [ACC-deliver-05] 插件（方案 A）：一个 Claude Code 插件，里面一个技能，只调用 `vk`，不直接读写库，也不直接连中转。在制作机的会话里说「交给发布机」或 `/versekit:handoff <期号>` 就触发。技能按**项目交付约定**（每个项目一份文件，先写 vibe-video 的）认出这一期：成片取 `成片/` 里版本号最大的（带水印的那份）；「灵动版」这类不是版本号的变体每次都问；封面取 `封面/<编号>_<选题>_封面.png`；文案取 `文案/发布文案.md` 里对应的那一节，绝不把 `_文案.txt`（字幕时间轴）当正文；没有发布文案时按选题起草一份，给人看一眼再交。素材齐全就直接交，只在猜过的地方停下来问。还没登录 Hifabu 时先走登录，登录完接着交，不用重说。出错文案按 `docs/design/handoff/BRIEF.md` §5 写。用 vibe-video 的真实目录结构做离线测试（复制文件名，不复制视频内容），覆盖：多版本、灵动版、缺封面、缺文案。
 
+### 部署（2026-11-25）
+
+- [ACC-deploy-cloud-01] seoul-vps 上的账号服务部署材料放在 `deploy/hifabu/`：
+  - systemd 单元以非 root 用户运行 `packages/cloud`，只监听 `127.0.0.1`；
+  - nginx 片段加在现有的 `hifabu.conf` 里，把 `/login`、`/login/google/callback`、`/account`、`/admin`、`/link`、`/.well-known/hifabu-machine-key.pem` 和账号服务的接口转给它，其余路径照旧由 `/var/www/hifabu` 提供静态页；
+  - 不新增公网监听，不改 assurelane 的配置；
+  - 配置模板列出全部 `HIFABU_*` 配置项（`HIFABU_GOOGLE_CLIENT_ID` 预填 `877087769526-u44jrpc2fie2p3meh6s6b2oto8cuqrv0.apps.googleusercontent.com`），环境文件权限 600；
+  - 签名私钥第一次部署时在服务器上生成（权限 600），以后不重新生成。
+- [ACC-deploy-cloud-02] `deploy/hifabu/deploy.sh` 能重复执行：
+  - `--dry-run` 列出要写的文件和要执行的命令，不连网；
+  - Google 客户端密钥只能在服务器上交互输入（不回显），不能出现在命令行参数、仓库或日志里；已经存过的，再部署时不再询问；
+  - 部署后自检：`nginx -t` 通过，assurelane.ai 和 hifabu.com 首页都是 200，`/.well-known/hifabu-machine-key.pem` 能取到公钥，`/login` 能跳转到 accounts.google.com，并且回调地址是 `https://hifabu.com/login/google/callback`。
+- [ACC-deploy-cloud-03] volc1 上的中转配置加上 Hifabu 的机器公钥和控制端凭据（`deploy/volc1` 与 `docs/deploy-relay.md`），旧的固定令牌照常可用；`docs/deploy-cloud.md` 写明部署日顺序：账号服务 → 中转 → 所有者的制作机和发布机在系统页登录 → 核对传片 → 再决定什么时候关掉旧令牌。每一步都写明怎么回退。
+
 ### 第二批
 
 - [ACC-cloud-09] 邮箱验证码登录：验证码 6 位数字，10 分钟有效，输错 5 次作废；按邮箱和按 IP 分别限速；库里只存哈希。发信方式写在配置里（SMTP，或某家发信服务的 HTTP 接口），不引入任何 SDK。登录页的状态包括：验证码已发、码不对、码过期、试太多次。同一个邮箱，用 Google 登录和用验证码登录进的是同一个账号。测试用本地的假发信服务。QQ 邮箱、163 邮箱能不能收到信要实测，列为待人工。
