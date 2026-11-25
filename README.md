@@ -145,6 +145,21 @@ vk service uninstall --purge   # 连数据一起删（先列出要删的目录�
 
 第一次打开如果还没有账号，会自动落在「接入」页：四步走完即可发布，不需要先读文档。
 
+### Claude Code 插件 Hifabu
+
+在制作机的 Claude Code 会话里运行以下两条命令。发布机需安装 Hifabu，并用同一个 Hifabu 账号接入。
+
+```text
+/plugin marketplace add versekit-labs/versekit
+/plugin install hifabu@hifabu
+```
+
+打开制作项目后，说「交给发布机」或运行 `/hifabu:handoff 21`（把 21 换成你的期号）。插件目前提供 `vibe-video` 项目的交付约定。首次使用时，插件会引导你安装 `vk`、登录 Hifabu 和开通传片，再继续交付这一期。说「到了吗」可以查投递进度。
+
+更新插件时，在终端运行 `claude plugin marketplace update hifabu` 和 `claude plugin update hifabu@hifabu`，再重启 Claude Code。
+
+维护插件时，每次修改 `plugins/hifabu/` 的内容都要提高 `plugin.json` 中的版本号。运行 `node plugins/hifabu/test/version.test.mjs --print-hash`，把输出的新版本与 SHA-256 追加到 `plugins/hifabu/version-lock.json`，保留之前的记录。
+
 ### 开发者：从源码跑
 
 ```bash

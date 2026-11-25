@@ -1,0 +1,14 @@
+{
+  "name": "hifabu",
+  "owner": { "name": "Hifabu" },
+  "metadata": {
+    "description": "Hifabu 的 Claude Code 插件市场。"
+  },
+  "plugins": [
+    {
+      "name": "hifabu",
+      "source": "./plugins/hifabu",
+      "description": "从制作会话把成片、封面和发布文案交给发布机，并查看投递进度。"
+    }
+  ]
+}

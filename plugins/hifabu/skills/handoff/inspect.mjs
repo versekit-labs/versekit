@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function readProjectPath(root, filename) {
@@ -126,7 +126,17 @@ export function inspectEpisode(projectRoot, selector = "", selectedVideo = "") {
   };
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+function isMain() {
+  try {
+    // Node resolves symlinks when loading the script, but argv keeps the path
+    // used to invoke it. Claude's cache can be reached through a symlinked HOME.
+    return process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url;
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   try {
     const [root = process.cwd(), selector, selectedVideo] = process.argv.slice(2);
     console.log(JSON.stringify(inspectEpisode(root, selector, selectedVideo), null, 2));
