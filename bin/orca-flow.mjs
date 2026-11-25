@@ -657,6 +657,27 @@ function worktreeFor(issue, branch) {
 
 // ------------------------------------------------------------------ 动作
 
+/**
+ * worker-start 判为失败但回执里已有 dispatchId 时（例如 outcome_unknown：指令已写入、没看到这一轮开始），
+ * 那个 agent 可能已经在跑。先 worker-stop 掉它，再让调用方退回或改派，避免同一 worktree 里出现两个 worker
+ * （ACC-harness-orca-19；2026-11-25 #435）。
+ */
+export function orphanDispatch(receipt) {
+  const id = receipt?.dispatchId;
+  return typeof id === "string" && id && id !== "dry-run" ? id : null;
+}
+
+function fenceOrphan(receipt, label) {
+  const id = orphanDispatch(receipt);
+  if (!id) return;
+  try {
+    orca(["orchestration", "worker-stop", "--dispatch", id]);
+    log(`  · ${label}：启动结果不明，已停掉 dispatch ${id} 再退回，免得留下孤儿 worker`);
+  } catch (err) {
+    log(`  ⚠ ${label}：停掉 dispatch ${id} 失败（${err.message.slice(0, 200)}），可能留下孤儿 worker，请协调器检查`);
+  }
+}
+
 function startWorker(ctx, { taskId, placement, channel, label, dryRun, retryOf }) {
   const target = [];
   if (placement.terminal) target.push("--terminal", placement.terminal);
@@ -670,9 +691,16 @@ function startWorker(ctx, { taskId, placement, channel, label, dryRun, retryOf }
     log(`  [dry-run] orca ${args.join(" ")}`);
     return { dispatchId: "dry-run", worktreeId: placement.worktreeId ?? null };
   }
-  const r = orca(args);
-  if (["failed", "outcome_unknown"].includes(r.status)) {
-    const err = new Error(r.lastFailure ?? r.error?.message ?? `worker-start: ${r.status}（${r.failedStage ?? r.stage ?? "?"}）`);
+  let r;
+  try {
+    r = orca(args);
+  } catch (err) {
+    fenceOrphan(err.receipt?.result ?? err.receipt, label);
+    throw err;
+  }
+  if (["failed", "outcome_unknown"].includes(r.status) || ["failed", "outcome_unknown"].includes(r.state)) {
+    fenceOrphan(r, label);
+    const err = new Error(r.lastFailure ?? r.lastError ?? r.error?.message ?? `worker-start: ${r.status ?? r.state}（${r.failedStage ?? r.stage ?? "?"}）`);
     err.receipt = r;
     throw err;
   }
