@@ -653,7 +653,14 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-deliver-02] 预览：`work.push` 支持 `dryRun`，只校验、不传任何字节。返回会传哪些文件、各多大、按最近实测速度估多久到发布机、哪些平台的文案会被拒、拒的原因（比如「小红书标题 24 字，限 20 字」）。中转剩余空间不到 2GB 时提示空间不够和剩多少。`relay.connect` 或登录时可以记一个默认账号组，交付时不用每次给组名。CLI 和 HTTP 都走 `commands.mjs`。
 - [ACC-deliver-03] 上传不占着会话：`work.push` 登记任务后立刻返回投递号，由制作机的后台服务负责上传，支持断点续传和断网重试；关掉 Claude Code、重启后台服务，都会接着传。中转连不上时排队，网通了自动接着传。测试用本地假中转，在上传中途断开再恢复，最终文件 sha256 一致，不重复投递。
 - [ACC-deliver-04] 状态回到制作机：`delivery.list` 和 `delivery.show <id>` 返回 BRIEF §3.3 的状态：正在传（已传多少、还要多久）、等发布机来取（附发布机上次来取的时间）、发布机在下载、等你确认、没交成（原因和下一步）。发布机回报「已入库」时，带上作品 id、每条平台稿的平台、账号和建议时间，以及被拒的平台和原因；中转原样存下，并记录发布机最后一次来取的时间。发布机 6 小时没来取时，状态文案按 BRIEF §5 写。入库后在飞书和「今天」页出一条「新到 1 期：<选题>，N 条等你确认」，已有这类通知就复用。
-- [ACC-deliver-05] 插件（方案 A）：一个 Claude Code 插件，里面一个技能，只调用 `vk`，不直接读写库，也不直接连中转。在制作机的会话里说「交给发布机」或 `/versekit:handoff <期号>` 就触发。技能按**项目交付约定**（每个项目一份文件，先写 vibe-video 的）认出这一期：成片取 `成片/` 里版本号最大的（带水印的那份）；「灵动版」这类不是版本号的变体每次都问；封面取 `封面/<编号>_<选题>_封面.png`；文案取 `文案/发布文案.md` 里对应的那一节，绝不把 `_文案.txt`（字幕时间轴）当正文；没有发布文案时按选题起草一份，给人看一眼再交。素材齐全就直接交，只在猜过的地方停下来问。还没登录 Hifabu 时先走登录，登录完接着交，不用重说。出错文案按 `docs/design/handoff/BRIEF.md` §5 写。用 vibe-video 的真实目录结构做离线测试（复制文件名，不复制视频内容），覆盖：多版本、灵动版、缺封面、缺文案。
+- [ACC-deliver-05] 插件（方案 A）：一个 Claude Code 插件，里面一个技能，只调用 `vk`，不直接读写库，也不直接连中转。在制作机的会话里说「交给发布机」或 `/hifabu:handoff <期号>` 就触发。技能按**项目交付约定**（每个项目一份文件，先写 vibe-video 的）认出这一期：成片取 `成片/` 里版本号最大的（带水印的那份）；「灵动版」这类不是版本号的变体每次都问；封面取 `封面/<编号>_<选题>_封面.png`；文案取 `文案/发布文案.md` 里对应的那一节，绝不把 `_文案.txt`（字幕时间轴）当正文；没有发布文案时按选题起草一份，给人看一眼再交。素材齐全就直接交，只在猜过的地方停下来问。还没登录 Hifabu 时先走登录，登录完接着交，不用重说。出错文案按 `docs/design/handoff/BRIEF.md` §5 写。用 vibe-video 的真实目录结构做离线测试（复制文件名，不复制视频内容），覆盖：多版本、灵动版、缺封面、缺文案。
+
+### 插件对外分发（2026-11-25）
+
+- [ACC-plugin-dist-01] 插件名改为 `hifabu`，目录改为 `plugins/hifabu`，技能命令是 `/hifabu:handoff`；`plugin.json` 写明 description、author（Hifabu）、homepage（`https://hifabu.com/plugin/`）、license，并且不设 `version`，让版本跟随提交号，用户执行更新就能拿到新提交。仓库里任何地方都不再出现 `versekit` 插件名或 `/versekit:handoff`。
+- [ACC-plugin-dist-02] 仓库根目录有 `.claude-plugin/marketplace.json`，市场名为 `hifabu`，`owner` 为 Hifabu，只列 `hifabu` 一个插件，source 写 `./plugins/hifabu`。`claude plugin validate . --strict` 和 `claude plugin validate plugins/hifabu --strict` 都通过。新用户的安装命令是 `/plugin marketplace add versekit-labs/versekit` 和 `/plugin install hifabu@hifabu`。PR 里附上一份在临时 HOME 下用 `claude plugin marketplace add <本地仓库>` 加 `claude plugin install hifabu@hifabu` 装成功的记录（不改开发机自己的 Claude 配置）。
+- [ACC-plugin-dist-03] 第一次使用的引导：找不到 `vk` 时，技能给出一键安装命令（`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`）并说明会装什么，用户同意后才执行；装完用 `$HOME/.versekit` 下的 `vk` 继续这一期，不让用户重说。之后按已有规则走登录 Hifabu、开通传片、预览、登记。插件里不写死任何个人路径、账号或邮箱。
+- [ACC-plugin-dist-04] `https://hifabu.com/plugin/` 是公开页面，不用登录：写明前提（Claude Code、一台装了 Hifabu 的发布机、Hifabu 账号）、上面两行安装命令、第一次怎么用（举「把 17 期交给发布机」的例子）、怎么更新和卸载；页头、页脚和首页、隐私政策、服务条款保持一致，首页链到这一页。
 
 ### 部署（2026-11-25）
 
