@@ -3,20 +3,108 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>versekit</title>
-<meta name="description" content="Open-source tool to publish your own videos to several platforms from one place, then see how they perform.">
-<link rel="icon" href="icon.png">
+<title>Hi 发布 (Hifabu): publish your videos to every platform from your own computer</title>
+<meta name="description" content="Hifabu (Hi 发布) is a desktop app for individual creators. It keeps your finished videos on your own computer and publishes them to the platforms you connect, after you confirm.">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main>
-<header><img src="icon.png" alt=""><a href="./">versekit</a></header>
-<h1>Publish your own videos everywhere, from one place.</h1>
-<p class="meta">An open-source tool that runs on your own computer.</p>
-<p>versekit keeps a library of the videos and posts you make, publishes them to the platforms you connect (TikTok, YouTube and others), and collects their performance so you can see what worked.</p>
-<p>It is free software. You install it on your own computer and connect only your own accounts. Nobody else runs it for you, and your account credentials stay on your machine.</p>
-<p><a href="https://github.com/versekit-labs/versekit">Source code on GitHub</a></p>
-<footer><a href="terms/">Terms of Service</a><a href="privacy/">Privacy Policy</a>Contact: <a href="mailto:creator.omnikit@gmail.com">creator.omnikit@gmail.com</a></footer>
+<main class="home">
+
+<header>
+  <a class="brand" href="./" aria-label="Hi 发布 (Hifabu) home">
+    <picture>
+      <source srcset="logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <img src="logo-light.svg" width="140" height="51" alt="Hi 发布">
+    </picture>
+  </a>
+  <nav aria-label="Legal">
+    <a href="privacy/">Privacy Policy</a>
+    <a href="terms/">Terms of Service</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <p class="kicker">Hifabu · Hi 发布</p>
+  <h1>Publish your finished videos to every platform, from your own computer.</h1>
+  <p class="lead">Hifabu is a desktop app for individual creators. It keeps a library of the videos you have made on your own computer, publishes each one to the platform accounts you connect, and then shows you how it performed. Nothing is published until you confirm it.</p>
+  <p class="zh" lang="zh-CN">Hi 发布（Hifabu）是给个人创作者用的桌面工具。作品保存在你自己的电脑上，确认之后一次发到你接入的各个平台，再回来看每个平台的表现。没有你的确认，什么都不会发出去。</p>
+  <ul class="platforms" aria-label="Supported platforms">
+    <li>Xiaohongshu</li><li>Douyin</li><li>WeChat Channels</li><li>Bilibili</li><li>TikTok</li><li>YouTube</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Who it is for</h2>
+  <p>People who make their own videos and post them to their own accounts on several platforms. Hifabu is not a service that posts on your behalf: you install it, you connect only your own accounts, and you approve every post.</p>
+  <p class="zh" lang="zh-CN">给自己做视频、发到自己账号的人用。它不是代发服务：程序装在你的电脑上，只接你自己的账号，每一条都由你确认。</p>
+</section>
+
+<section>
+  <h2>How it works</h2>
+  <ol class="steps">
+    <li>
+      <h3>Install it on your computer</h3>
+      <p>Hifabu runs on your own computer. Using it on one computer does not need an account with us.</p>
+      <p class="zh" lang="zh-CN">装在自己的电脑上。只用一台电脑时，不需要注册任何账号。</p>
+    </li>
+    <li>
+      <h3>Connect your own platform accounts</h3>
+      <p>You sign in to each platform on that computer. Those logins stay on your computer and are never sent to us.</p>
+      <p class="zh" lang="zh-CN">在这台电脑上登录你自己的平台账号。这些登录信息只留在你的电脑上，不会发给我们。</p>
+    </li>
+    <li>
+      <h3>Add a video and confirm</h3>
+      <p>Add a finished video, write the title and caption for each platform, check them, and confirm. Hifabu then publishes to the platforms you chose.</p>
+      <p class="zh" lang="zh-CN">加入做好的视频，给每个平台写好标题和文案，核对后确认，程序再发到你选的平台。</p>
+    </li>
+    <li>
+      <h3>See how it performed</h3>
+      <p>Hifabu collects the views, likes and comments each platform reports for your own posts, so you can compare them in one place.</p>
+      <p class="zh" lang="zh-CN">程序把各平台返回的播放、点赞、评论数收回来，放在一处对比。</p>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <h2>The Hifabu account is optional</h2>
+  <p>You only need a Hifabu account if you work across two computers, for example one where you edit and another that publishes. Signing both computers in to the same Hifabu account connects them, so a finished video can be sent from one to the other.</p>
+  <ul>
+    <li>Transfer between computers is off by default and is turned on per account.</li>
+    <li>Only computers signed in to your own account can receive your files.</li>
+    <li>Transferred files are deleted from our server 7 days after the receiving computer confirms it has them.</li>
+  </ul>
+  <p class="zh" lang="zh-CN">Hifabu 账号是可选的。只有在两台电脑上分工时才需要，比如一台剪辑、一台发布：两台电脑登录同一个 Hifabu 账号后接在一起，成片可以从一台传到另一台。传片默认关闭，按账号开通；只有登录了你自己账号的电脑能收到你的文件；对方电脑确认收到 7 天后，文件从我们的服务器上删除。</p>
+</section>
+
+<section>
+  <h2>What "Sign in with Google" is used for</h2>
+  <p>You can sign in to a Hifabu account with Google. Hifabu uses Google sign-in only to identify your Hifabu account.</p>
+  <ul>
+    <li>We request only the basic sign-in scopes: <code>openid</code> and <code>email</code>.</li>
+    <li>We store your email address and your Google account identifier. We do not ask for your name or profile picture.</li>
+    <li>We do not access your contacts, files, or any other Google data.</li>
+    <li>We do not sell or share this data, show ads, or use it to train AI models.</li>
+  </ul>
+  <p>The full details are in the <a href="privacy/">Privacy Policy</a>.</p>
+  <p class="zh" lang="zh-CN">可以用 Google 登录 Hifabu 账号。Google 登录只用来确认「这是你的 Hifabu 账号」：我们只请求基本的登录权限，只保存你的邮箱和 Google 账号标识，不索取姓名和头像，不读取联系人、文件或其他 Google 数据，不出售、不共享、不用来训练 AI 模型。完整说明见<a href="privacy/">隐私政策</a>。</p>
+</section>
+
+<section>
+  <h2>Availability</h2>
+  <p>Hifabu is in private testing. The download will be published on this page when it opens to everyone. Questions: <a href="mailto:creator.omnikit@gmail.com">creator.omnikit@gmail.com</a></p>
+  <p class="zh" lang="zh-CN">Hi 发布目前在小范围测试，公开后安装包会放在这一页。有问题请写信到上面的邮箱。</p>
+</section>
+
+<footer>
+  <a href="privacy/">Privacy Policy</a>
+  <a href="terms/">Terms of Service</a>
+  <a href="mailto:creator.omnikit@gmail.com">Contact</a>
+  <span>© 2026 Hifabu</span>
+</footer>
+
 </main>
 </body>
 </html>
