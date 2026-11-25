@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hifabu plugin for Claude Code · Hi 发布</title>
+<meta name="description" content="Install the Hifabu plugin in Claude Code and hand a finished video to your publishing computer by asking for it.">
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../favicon-16.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main class="home">
+
+<header>
+  <a class="brand" href="../" aria-label="Hi 发布 (Hifabu) home">
+    <picture>
+      <source srcset="../logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <img src="../logo-light.svg" width="140" height="51" alt="Hifabu (Hi 发布)">
+    </picture>
+  </a>
+  <nav aria-label="Site">
+    <a href="./" aria-current="page">Claude Code plugin</a>
+    <a href="../privacy/">Privacy Policy</a>
+    <a href="../terms/">Terms of Service</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <p class="kicker">Hifabu plugin for Claude Code</p>
+  <h1>Hand a finished video to your publishing computer, from Claude Code.</h1>
+  <p class="lead">If you make your videos with Claude Code, the Hifabu plugin lets you send a finished one to the computer that publishes, by asking for it in the same session. Nothing is published until you confirm it on the publishing computer.</p>
+  <p class="zh" lang="zh-CN">如果你用 Claude Code 做视频，装上 Hifabu 插件后，在同一个会话里说一句话，就能把做好的一期交给负责发布的那台电脑。在发布机上确认之前，什么都不会发出去。</p>
+</section>
+
+<section>
+  <h2>Before you start</h2>
+  <ul>
+    <li><strong>Claude Code</strong> on the computer where you make your videos.</li>
+    <li><strong>A publishing computer</strong> with Hifabu installed. It can be a second computer.</li>
+    <li><strong>A Hifabu account.</strong> If you do not have one, the plugin walks you through signing in the first time you use it.</li>
+  </ul>
+  <p class="zh" lang="zh-CN">开始之前需要：做视频的电脑上有 Claude Code；有一台装了 Hifabu 的发布机，可以是另一台电脑；有 Hifabu 账号，没有的话第一次用时插件会带你登录。</p>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <p>Type these two lines in Claude Code, one after the other.</p>
+  <ol class="steps">
+    <li>
+      <h3>Add the Hifabu marketplace</h3>
+      <div class="cmd"><code>/plugin marketplace add versekit-labs/versekit</code><button type="button" data-copy="/plugin marketplace add versekit-labs/versekit">Copy</button></div>
+    </li>
+    <li>
+      <h3>Install the plugin</h3>
+      <div class="cmd"><code>/plugin install hifabu@hifabu</code><button type="button" data-copy="/plugin install hifabu@hifabu">Copy</button></div>
+    </li>
+  </ol>
+  <p class="zh" lang="zh-CN">在 Claude Code 里依次输入这两行：第一行添加 Hifabu 的插件来源，第二行安装插件。</p>
+</section>
+
+<section>
+  <h2>Your first handoff</h2>
+  <p>Open Claude Code in your video project and ask for the episode you want to hand over. For episode 17, either of these works:</p>
+  <div class="cmd"><code lang="zh-CN">把 17 期交给发布机</code><button type="button" data-copy="把 17 期交给发布机">Copy</button></div>
+  <div class="cmd"><code>/hifabu:handoff 17</code><button type="button" data-copy="/hifabu:handoff 17">Copy</button></div>
+  <p>The first line is Chinese for "hand episode 17 to the publishing computer". The first time, the plugin takes you through these steps:</p>
+  <ol class="steps">
+    <li>
+      <h3>Hifabu on this computer</h3>
+      <p>If Hifabu is not installed on this computer yet, the plugin shows a one-line install command, tells you what it installs, and runs it only after you agree.</p>
+      <p class="zh" lang="zh-CN">这台电脑还没装 Hifabu 时，插件会给出一行安装命令，说明会装什么，你同意后才执行。</p>
+    </li>
+    <li>
+      <h3>Sign in to Hifabu</h3>
+      <p>Your browser opens hifabu.com. Sign in, check that the 6-digit code matches the one shown in Claude Code, and allow this computer.</p>
+      <p class="zh" lang="zh-CN">浏览器打开 hifabu.com：登录，核对页面上的 6 位码和 Claude Code 里显示的一致，点允许。</p>
+    </li>
+    <li>
+      <h3>Turn on transfer between your computers</h3>
+      <p>After your first sign-in, open <a href="../account">My Hifabu</a> (<span lang="zh-CN">「我的 Hifabu」</span>) on hifabu.com and choose <span lang="zh-CN">「申请开通」</span> (request transfer). Videos can move between your two computers only after transfer is turned on for your account. We turn it on by hand after you ask, usually within one working day, and My Hifabu shows it once it is on. After that, the plugin carries on with the episode you asked for.</p>
+      <p class="zh" lang="zh-CN">第一次登录后，到 hifabu.com 的<a href="../account">「我的 Hifabu」</a>点「申请开通」，两台电脑之间才能传片。申请后由我们人工开通，通常一个工作日内，开通后会在「我的 Hifabu」里显示。开通后插件会接着交刚才那一期。</p>
+    </li>
+    <li>
+      <h3>The episode is handed over</h3>
+      <p>The plugin carries on with the episode you asked for. You do not need to ask again.</p>
+      <p class="zh" lang="zh-CN">插件接着交你刚才说的那一期，不用重说。</p>
+    </li>
+    <li>
+      <h3>Check on it</h3>
+      <p>Ask <span lang="zh-CN">「到了吗」</span> ("has it arrived?") in the same session to see whether the publishing computer has received it.</p>
+      <p class="zh" lang="zh-CN">之后在同一个会话里问一句「到了吗」，就能看到发布机收到没有。</p>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <h2>Update and uninstall</h2>
+  <p><strong>Update:</strong> in Claude Code, open <code>/plugin</code>, go to Installed, and choose Update now. Or run this in a terminal:</p>
+  <div class="cmd"><code>claude plugin update hifabu@hifabu</code><button type="button" data-copy="claude plugin update hifabu@hifabu">Copy</button></div>
+  <p><strong>Uninstall:</strong> run this in a terminal:</p>
+  <div class="cmd"><code>claude plugin uninstall hifabu@hifabu</code><button type="button" data-copy="claude plugin uninstall hifabu@hifabu">Copy</button></div>
+  <p class="zh" lang="zh-CN">更新：在 Claude Code 里打开 /plugin，进 Installed，点 Update now；或者在终端里运行上面第一行。卸载：在终端里运行上面第二行。</p>
+</section>
+
+<section>
+  <h2>Questions</h2>
+  <p>Write to <a href="mailto:creator.omnikit@gmail.com">creator.omnikit@gmail.com</a>. What Hifabu does with your data is in the <a href="../privacy/">Privacy Policy</a>.</p>
+  <p class="zh" lang="zh-CN">有问题请写信到上面的邮箱。Hifabu 怎么处理你的数据，见<a href="../privacy/">隐私政策</a>。</p>
+</section>
+
+<footer>
+  <a href="../">Home</a>
+  <a href="../privacy/">Privacy Policy</a>
+  <a href="../terms/">Terms of Service</a>
+  <a href="mailto:creator.omnikit@gmail.com">Contact</a>
+  <span>© 2026 Hifabu</span>
+</footer>
+
+</main>
+<script>
+document.addEventListener('click', function (e) {
+  var b = e.target.closest('button[data-copy]');
+  if (!b || !navigator.clipboard) return;
+  navigator.clipboard.writeText(b.dataset.copy).then(function () {
+    b.textContent = 'Copied';
+    setTimeout(function () { b.textContent = 'Copy'; }, 1600);
+  });
+});
+</script>
+</body>
+</html>
