@@ -698,7 +698,7 @@ function startWorker(ctx, { taskId, placement, channel, label, dryRun, retryOf }
     fenceOrphan(err.receipt?.result ?? err.receipt, label);
     throw err;
   }
-  if (["failed", "outcome_unknown"].includes(r.status) || r.state === "outcome_unknown") {
+  if (["failed", "outcome_unknown"].includes(r.status) || ["failed", "outcome_unknown"].includes(r.state)) {
     fenceOrphan(r, label);
     const err = new Error(r.lastFailure ?? r.lastError ?? r.error?.message ?? `worker-start: ${r.status ?? r.state}（${r.failedStage ?? r.stage ?? "?"}）`);
     err.receipt = r;

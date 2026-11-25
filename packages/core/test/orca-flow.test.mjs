@@ -658,5 +658,5 @@ test("worker-start 结果不明时先停掉回执里的 dispatch（ACC-harness-o
   const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
   const body = src.slice(src.indexOf("function startWorker("), src.indexOf("// ------------------------------------------------------------------ Codex 额度"));
   assert.match(body, /catch \(err\) \{\n    fenceOrphan\(/);
-  assert.match(body, /r\.state === "outcome_unknown"\) \{\n    fenceOrphan\(r, label\)/);
+  assert.match(body, /\["failed", "outcome_unknown"\]\.includes\(r\.state\)\) \{\n    fenceOrphan\(r, label\)/);
 });
