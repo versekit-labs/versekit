@@ -284,14 +284,20 @@ test("ACC-v3-time-04：预约的时间选到过去或碰到平台规则，说原
   assert.ok(o.id);
 });
 
-test("ACC-v3-time-09：现在发照样过每日上限；小红书当天已发 1 条时选现在发，这条不发并说明原因，留在待确认", () => {
-  updateConfig({ plan: { rules: { platforms: { xiaohongshu: { daily_cap: 1, min_gap_minutes: 10 } } } } });
+// 排期按本机自然日算。固定在 00:05，已发时间是同一天的 00:01，间隔已满才会检查每日上限。
+const midnightNow = new Date(2026, 10, 25, 0, 5).getTime();
+const publishedAt = midnightNow - 4 * 60e3;
+const dailyCapRules = { daily_cap: 1, min_gap_minutes: 3 };
+
+test("ACC-v3-time-09：现在发照样过每日上限；小红书当天已发 1 条时选现在发，这条不发并说明原因，留在待确认", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: midnightNow });
+  updateConfig({ plan: { rules: { platforms: { xiaohongshu: dailyCapRules } } } });
   try {
     const f = fixture();
     // 小红书这个号今天已经发了 1 条。
     const earlier = store.createWork({ title: `已发 ${seq}`, assetPath: "/tmp/z.mp4" });
     const done = store.createPublish({ workId: earlier.id, accountId: f.red.id });
-    core.open().prepare("UPDATE publish SET state = 'published', published_at = ? WHERE id = ?").run(Date.now() - 11 * 60e3, done.id);
+    core.open().prepare("UPDATE publish SET state = 'published', published_at = ? WHERE id = ?").run(publishedAt, done.id);
 
     // 逐条现在发：抛出带原因的错误，状态不变。
     assert.throws(
@@ -312,20 +318,21 @@ test("ACC-v3-time-09：现在发照样过每日上限；小红书当天已发 1 
   }
 });
 
-test("ACC-v3-time-09：整批现在发时，过不了的平台留在待确认并写原因和最近能发的时间；账号登录失效也不发", () => {
-  updateConfig({ plan: { rules: { platforms: { bilibili: { daily_cap: 1, min_gap_minutes: 10 } } } } });
+test("ACC-v3-time-09：整批现在发时，过不了的平台留在待确认并写原因和最近能发的时间；账号登录失效也不发", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: midnightNow });
+  updateConfig({ plan: { rules: { platforms: { bilibili: dailyCapRules } } } });
   try {
     const f = fixture();
     const earlier = store.createWork({ title: `B站已发 ${seq}`, assetPath: "/tmp/w.mp4" });
     const done = store.createPublish({ workId: earlier.id, accountId: f.bili.id });
-    core.open().prepare("UPDATE publish SET state = 'published', published_at = ? WHERE id = ?").run(Date.now() - 11 * 60e3, done.id);
+    core.open().prepare("UPDATE publish SET state = 'published', published_at = ? WHERE id = ?").run(publishedAt, done.id);
     const r = h["publish.approve"]({ cutId: f.cut().id, when: "now" });
     assert.equal(r.approved.length, 0);
     assert.equal(r.held.length, 1);
     assert.equal(r.held[0].platform, "bilibili");
     assert.equal(r.held[0].code, "plan_daily_cap");
     assert.match(r.held[0].reason, /每日上限 1 条.*最近能发：/);
-    assert.ok(r.held[0].nextAt > Date.now());
+    assert.ok(r.held[0].nextAt > midnightNow);
     assert.equal(store.getPublish(f.pub.bilibili).state, "pending_confirm");
     assert.equal(core.open().prepare("SELECT COUNT(*) n FROM run WHERE target_id = ?").get(f.pub.bilibili).n, 0, "没排队，没发");
   } finally {
