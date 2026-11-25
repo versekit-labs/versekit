@@ -16,7 +16,7 @@ process.env.FLOW_LOG = join(testState, "flow.log");
 const {
   taskTitle, parseTaskTitle, isActive, planCompletion, countActive, reusableTerminal,
   hasAcceptTask, inboxVerdict, lastJson, implSpec, reworkSpec, acceptSpec,
-  buildingIssues, transcribeAgentctl, projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
+  orphanDispatch, buildingIssues, transcribeAgentctl, projectName, projectRules, hasLabel, flowConfig, coordinatorNotes, reasonText, settledReworks,
   linkedIssueOf, cleanupCandidates, dirtyReason, isActiveIssue, reworkPlacement,
   codexExhaustion, codexCooldown, rerouteExhaustedCodex, chooseChannel,
 } = await import("../../../bin/orca-flow.mjs");
@@ -648,4 +648,15 @@ test("实现 / 返工 worker 还在跑的单不派验收（ACC-harness-orca-18�
   assert.deepEqual([...buildingIssues(state)].sort(), [398, 401]);
   const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
   assert.match(src, /buildingIssues\(state\)\.has\(q\.number\)/);
+});
+
+test("worker-start 结果不明时先停掉回执里的 dispatch（ACC-harness-orca-19）", () => {
+  assert.equal(orphanDispatch({ state: "outcome_unknown", stage: "turn_start_unobserved", dispatchId: "ctx_701ce25b6ed7" }), "ctx_701ce25b6ed7");
+  assert.equal(orphanDispatch({ status: "failed" }), null);
+  assert.equal(orphanDispatch(undefined), null);
+  assert.equal(orphanDispatch({ dispatchId: "dry-run" }), null);
+  const src = readFileSync(new URL("../../../bin/orca-flow.mjs", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("function startWorker("), src.indexOf("// ------------------------------------------------------------------ Codex 额度"));
+  assert.match(body, /catch \(err\) \{\n    fenceOrphan\(/);
+  assert.match(body, /r\.state === "outcome_unknown"\) \{\n    fenceOrphan\(r, label\)/);
 });
