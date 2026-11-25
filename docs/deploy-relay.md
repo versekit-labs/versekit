@@ -8,6 +8,7 @@
 | `deploy.sh` | 在制作机/Mac mini 上运行：rsync 代码到 volc1 的 `/opt/versekit`，再调用 `install-remote.sh`。可重复执行，升级也用它 |
 | `install-remote.sh` | 在 volc1 上以 root 运行：建 `versekit` 系统用户、数据目录、systemd 服务、Caddy 站点块 |
 | `versekit-relay.service` | systemd 单元，`versekit` 用户运行，只监听 `127.0.0.1:8790` |
+| `configure-hifabu.mjs` | 在 volc1 合并 Hifabu 验签配置，保留固定令牌和已有字段 |
 | `Caddyfile.vk.snippet` | `vk.fangyouxi.cn` 的 Caddy 站点块（反代 8790，HTTPS 由 Caddy 自动签） |
 | `e2e.sh` | 端到端：制作机 push → volc1 → 发布机拉取入库，测完自动清理 |
 
@@ -34,10 +35,24 @@ deploy/volc1/deploy.sh          # 默认 ssh 别名 volc1
 
 账号投递存放在中转数据目录的 `<账号 id>/deliveries`，成片、封面和断点分别在同目录下的 `blobs` 和 `partial`。容量按账号计算，计入完整成片、半截文件和正在上传的预留空间。同账号下内容相同的文件只占用一份，入库后的保留期是七天。中转还会清理七天未续传的半截文件和七天未被投递引用的上传文件。云端磁盘仍须至少保留 2GB。
 
-由所有者在部署环境执行迁移：
+部署日顺序和每步回退见 [Hifabu 部署手册](deploy-cloud.md)。账号服务还用同一把 Ed25519 私钥为用量查询与账号清理签发 30 秒的控制端凭据。凭据绑定 HTTP 方法和账号，通过 `Authorization: Bearer` 发往 `/v1/control/accounts/<账号 id>`。中转用同一个 `machine_public_key_file` 验签，volc1 只安装公钥。保持两台服务器时钟同步，避免有效凭据被拒。
 
-1. 从账号服务的 `/.well-known/hifabu-machine-key.pem` 取得公钥，确认来源后放在 volc1 的 `/var/lib/versekit-relay/hifabu-machine-key.pem`，让 `versekit` 用户可读。确保账号服务的 `HIFABU_RELAY_URL` 是公开的 HTTPS 中转地址，给所有者的 Hifabu 账号开通传片。
-2. 更新中转，合并以下字段到 `/var/lib/versekit-relay/.config/versekit/config.json` 的 `relay` 对象，保留原有配置。重启 `versekit-relay`。
+1. 从 seoul-vps 的 `/.well-known/hifabu-machine-key.pem` 取得已自检的公钥，核对来源后放到 volc1 的 `/var/lib/versekit-relay/hifabu-machine-key.pem`，设为 `versekit:versekit` 持有、644。账号服务的 `HIFABU_RELAY_URL` 应为公开的 HTTPS 中转地址。
+2. 部署支持 Hifabu 验签的中转版本。已有中转启动后，在 volc1 的 root 终端备份配置，把公钥合并进去，再重启服务。
+
+   ```bash
+   config=/var/lib/versekit-relay/.config/versekit/config.json
+   key=/var/lib/versekit-relay/hifabu-machine-key.pem
+   backup="$(mktemp "$config.pre-hifabu.XXXXXX")"
+   cp -p "$config" "$backup"
+   chmod 600 "$backup"
+   printf '中转配置备份：%s\n' "$backup"
+   runuser -u versekit -- /usr/local/bin/node /opt/versekit/deploy/volc1/configure-hifabu.mjs "$config" "$key"
+   systemctl restart versekit-relay
+   systemctl is-active versekit-relay
+   ```
+
+   首次从旧固定令牌模式迁移时写入以下字段，原有推送和拉取令牌仍可用。已有显式设置时沿用原开关。切换前先确认开关为 `true`。
 
    ```json
    {
@@ -48,9 +63,9 @@ deploy/volc1/deploy.sh          # 默认 ssh 别名 volc1
    }
    ```
 
-3. 暂停旧制作机的新投递，用原固定令牌把旧队列传完、拉取完，并确认没有待拉取或已下载待入库的投递。旧固定令牌只访问原数据目录，账号令牌只访问自己的账号目录。需要继续处理的旧投递可在切换后从制作机重新送，已经入库的本地作品可照常使用。
-4. 两台机器都升级，然后用同一个 Hifabu 账号接入。制作机运行 `vk cloud login --role maker`，发布机运行 `vk cloud login --role executor`。用 `vk cloud status` 核对角色、邮箱和开通状态。中转地址随登录提供，制作机可以沿用原默认账号组，或在 `vk work push` 上指定 `--group`。先交付一个作品，确认在制作机上可查询、在发布机上成功拉取回报。
-5. 将中转的 `relay.allow_legacy_tokens` 改为 `false` 并重启。确认两个旧令牌均收到 401，再用两台已登录的机器复验。按需备份原数据目录下的 `blobs`、`partial`、`deliveries` 和 `activity.json`。确认切换正常后，从服务端和两台机器的配置删除旧固定令牌。迁移期间要恢复旧连接，可保留公钥，把开关改回 `true` 并重启，然后让旧客户端恢复固定令牌连接。
+   回退时用 `cp -p "$backup" "$config"` 恢复原配置，再运行 `systemctl restart versekit-relay`。
+3. 按部署手册排空旧队列，让所有者的两台机器通过系统页接入并验证传片。固定令牌访问原数据目录，账号令牌访问自己的账号目录。跨切换仍需投递的作品可以从制作机重新发送。
+4. 所有者择日把 `relay.allow_legacy_tokens` 改为 `false` 并重启，分别验证旧令牌 401 和新连接正常。回退时将开关改回 `true` 并重启。确认切换稳定后再清理旧令牌，按需备份原数据目录下的 `blobs`、`partial`、`deliveries` 和 `activity.json`。
 
 配置公钥后默认关闭固定令牌。尚未配置公钥的旧部署默认维持固定令牌模式，显式关闭前须先配置公钥。
 
