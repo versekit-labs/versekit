@@ -668,6 +668,18 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
   - Claude Code 里一句话：用户说「帮我安装 hifabu.com/plugin 的插件」，Claude 打开这个页面后，能照页面上写给 AI 助手的说明执行上面那行命令。说明写成纯文本，放在页面上，并另存一份 `https://hifabu.com/plugin/install.txt`。装好后提醒用户运行 `/reload-plugins` 或重开会话。
   - 升级插件：升 `version`，然后重跑发布脚本。用户执行 `claude plugin update hifabu@hifabu` 就能拿到新版本。发布脚本支持 `--dry-run`，只列出要上传的文件，不连网。
 
+### 插件重设计：交付接口 v1（2026-11-26）
+
+设计依据：`docs/design/plugin/DESIGN.md` §A.4（所有者 2026-11-26 定稿）。交付接口是制作机插件和发布机之间唯一的约定。下面的口径取代 ACC-deliver-01 里用 `source`（本机路径）认作品的做法，改用 `work.key`；旧投递照旧可用。
+
+- [ACC-iface-01] 接口单独成文：`docs/delivery-interface.md` 写明清单格式、文件身份、更新规则、版本兼容和账号组快照，配 JSON Schema `schemas/delivery-v1.json`（`schema: "hifabu.delivery/1"`，`work.key`、`work.title`、`cuts[].video{name,sha256,size}`、可选的 `cover`、`copy.default` 和平台键、必填的 `target.group`、`from.client`）。测试用 schema 校验文中每个示例，全部通过；再各改坏一处（缺 `target.group`、`sha256` 不是 64 位十六进制、多出未知的主版本号），确认会被拒。
+- [ACC-iface-02] 同一期再交就是更新：中转按原样接收并保存 v1 清单；发布机入库时按 `work.key` 找作品，找到就更新成片、封面和文案；还没发出去的平台稿按新内容更新，已经发出去的不动，并在回报里写明哪些没动。测试：同一个 `work.key` 连交两次，库里只有一个作品，已发平台稿的内容和状态都不变。v1 清单和现有的 `work.push` / `work.add` 在接口层做字段映射（`video` ↔ `versions[].asset`），发布机的入库逻辑不重写。
+- [ACC-iface-03] 清单里不放本机路径：`work.key`、`name` 或任何字段里出现绝对路径（以 `/`、`~`、盘符开头，或者含 `..`）时，中转和发布机都拒收，错误码 `local_path_in_manifest`，并写人话原因。测试覆盖 macOS、Linux、Windows 三种路径写法。
+- [ACC-iface-04] 版本兼容：只做加字段的改动不升主版本，读的一方忽略不认识的字段（测试：v1 清单多出一个未知字段，照常入库）。发布机每次来取时声明 `accepts: ["hifabu.delivery/1"]`，中转的 `ping` 回报这台发布机最近一次声明的 `accepts`。发布机遇到不认识的主版本（比如 `hifabu.delivery/2`）不入库，回报 `failed` 和 `errorCode: schema_unsupported`，原因和下一步在制作机的 `delivery.show` 里看得到。
+- [ACC-iface-05] 旧投递照旧：0.1.0 插件发出的旧清单（没有 `schema`，用 `source` 当本机路径）仍然能入库，照旧按 `source` 匹配，不做迁移。测试用一份真实格式的旧清单。
+- [ACC-iface-06] 账号组快照：发布机每次来取时，顺带把账号组快照报给中转（`device{id,name}`、`reportedAt`、`groups[{name, default?, accounts[{platform, name}]}]`），中转按账号只存最新一份。快照里只能有这些字段，**不能有**凭据、cookie、token、账号 id 或本机路径：测试用字段白名单断言，并故意让本地账号带上 cookie 和 id，确认它们不会出现在上报里。中转提供只读接口给制作机读这份快照（带 `reportedAt`，按账号隔离，A 账号读不到 B 账号的）。
+- [ACC-iface-07] 隐私政策（`site/privacy/index.html`）补一句：发布机会把账号组名和账号显示名同步到你的 Hifabu 账号，用于在 Claude 里选择交到哪个组；不同步登录凭据。中英文都补。
+
 ### 改名 Hifabu（2026-11-26）
 
 所有者定：产品名改为 Hifabu，遗留的 versekit、vk 命令都改成 hifabu 体系。GitHub 仓库 `versekit-labs/versekit` 和 Orca 流程（orca-flow、worktree 路径、协调器脚本）这次不改。计划见 `docs/design/RENAME-HIFABU.md`，分 R1–R8 八步串行做。
