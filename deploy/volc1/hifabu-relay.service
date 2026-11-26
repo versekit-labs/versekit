@@ -1,0 +1,26 @@
+[Unit]
+Description=Hifabu relay (hifabu relay serve) — 制作机 → 发布机的投递中转
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 沿用旧安装的服务 UID，保留现有数据的文件所有权。
+User=versekit
+Group=versekit
+# HIFABU_HOME 下放 config.json（里面有 push/pull token，权限 600）和中转数据目录
+Environment=HIFABU_HOME=/var/lib/hifabu-relay
+# R7 切换先迁移现有版本，仍可启动只识别旧变量的版本。
+Environment=VK_HOME=/var/lib/hifabu-relay
+ExecStart=/usr/local/bin/node /opt/hifabu/packages/cli/src/vk.mjs relay serve --port 8790
+Restart=on-failure
+RestartSec=5
+# 只监听 127.0.0.1:8790，HTTPS 由 Caddy 提供
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/hifabu-relay
+
+[Install]
+WantedBy=multi-user.target

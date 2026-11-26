@@ -5,7 +5,10 @@
   "type": "module",
   "description": "Hifabu 账号服务",
   "exports": "./src/server.mjs",
-  "bin": { "vk-cloud": "./src/cli.mjs" },
+  "bin": {
+    "hifabu-cloud": "./src/cli.mjs",
+    "vk-cloud": "./src/cli-alias.mjs"
+  },
   "scripts": {
     "start": "node src/serve.mjs"
   }

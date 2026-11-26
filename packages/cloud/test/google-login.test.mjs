@@ -17,6 +17,8 @@ const fetchOptions = { redirect: "manual" };
 const machineName = '书房的 Mac <示例 onclick="x">';
 const exec = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+const { bin } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const aliasPath = fileURLToPath(new URL(bin["vk-cloud"], new URL("../package.json", import.meta.url)));
 
 function getCookie(response, name) {
   const header = response.headers.getSetCookie().find((value) => value.startsWith(`${name}=`));
@@ -82,14 +84,31 @@ test("ACC-cloud-02: Google login over local HTTP with PKCE, verified identity, s
   let authorizationCode;
   let state;
   let email;
-  await t.test("projects cloud commands into vk-cloud without adding local vk commands", async () => {
+  await t.test("projects cloud commands into hifabu-cloud without adding local commands", async () => {
+    assert.equal(bin["hifabu-cloud"], "./src/cli.mjs");
     const help = await cli(["--help"]);
     for (const command of CLOUD_COMMANDS) {
-      assert.ok(help.includes(command.cli.usage));
+      assert.ok(help.includes(command.cli.usage.replace(/^vk-cloud\b/, "hifabu-cloud")));
       assert.ok(!COMMANDS.some(({ name }) => name === command.name));
     }
     assert.deepEqual(JSON.parse(await cli(["session", "create"])), { loginUrl: `${base}/login` });
     assert.deepEqual(JSON.parse(await cli(["session", "get"])), { user: null });
+  });
+
+  await t.test("vk-cloud alias adds one stderr line and preserves stdout and exit code", async () => {
+    const env = { ...process.env, NODE_NO_WARNINGS: "1", HIFABU_ORIGIN: base, HIFABU_SESSION_TOKEN: "" };
+    const result = async (path, args) => {
+      try {
+        return { ...await exec(process.execPath, [path, ...args], { env }), code: 0 };
+      } catch ({ code, stdout, stderr }) {
+        return { code, stdout, stderr };
+      }
+    };
+    for (const [args, code] of [[["--help"], 0], [["session", "get"], 0], [["invalid"], 1], [["session", "create", "extra"], 1]]) {
+      const current = await result(cliPath, args);
+      assert.equal(current.code, code);
+      assert.deepEqual(await result(aliasPath, args), { ...current, stderr: "vk-cloud 已改名为 hifabu-cloud\n" + current.stderr });
+    }
   });
 
   await t.test("opens registration on the first Google login and rotates a signed-in browser session", async () => {
