@@ -44,11 +44,10 @@ function link(entryFile) {
       throw new Error(`制作机模块路径无效：${file}`);
     }
     visiting.add(file);
-    const bytes = readFileSync(join(root, file));
-    let source = bytes.toString("utf8");
-    if (file === registry) source = projectRegistry(source);
+    const source = readFileSync(join(root, file), "utf8");
+    const input = (file === registry ? projectRegistry(source) : source).trimEnd();
     const exports = [];
-    const body = source.trimEnd().split("\n").map((line) => {
+    const body = input.split("\n").map((line) => {
       const imported = namedImport.exec(line);
       if (imported) {
         const [, bindings, specifier] = imported;
@@ -76,7 +75,7 @@ function link(entryFile) {
     const declaration = isEntry ? "await (async () => {" : `modules[${JSON.stringify(file)}] = (() => {`;
     const content = body.join("\n");
     const output = `// ${file}\n${declaration}\n${content}\n${isEntry ? "" : `  return { ${exports.join(", ")} };\n`}})();`;
-    modules.set(file, { output, digest: sha256(bytes) });
+    modules.set(file, { output, digest: sha256(input) });
   }
   visit(entryFile);
   const imports = [...builtins].map(([name, binding]) => `import * as ${binding} from ${JSON.stringify(name)};`);

@@ -38,4 +38,6 @@ node scripts/build-maker-client.mjs --out-dir "$out"
 shasum -a 256 plugins/hifabu/lib/hifabu.mjs "$out/lib/hifabu.mjs"
 ```
 
-文件头的 `Source version` 取自仓库根目录 `package.json` 的 `version`。`SHA-256 (inputs)` 对按仓库相对路径排序的 `[路径, 文件 SHA-256]` 数组的 JSON 编码计算，覆盖制作机模块、构建脚本和两个启动脚本。`SHA-256 (body)` 校验文件头后空行之后的 ESM 正文。相同的源码版本和构建输入在完整克隆、浅克隆和 squash 合并后会生成逐字相同的文件。
+文件头的 `Source version` 取自仓库根目录 `package.json` 的 `version`。`SHA-256 (inputs)` 对按仓库相对路径排序的 `[路径, 内容 SHA-256]` 数组的 JSON 编码计算，覆盖实际打包的模块、构建脚本和两个启动脚本。模块源码去掉末尾空白后再计算。命令注册表只使用打包时生成的内容，包含以固定格式序列化的 `maker` 命令、制作机调用的云端命令，以及共用的参数校验源码。新增或修改完整版专用命令时，制作机产物逐字相同。
+
+`SHA-256 (body)` 校验文件头后空行之后的 ESM 正文。相同的源码版本和构建输入在完整克隆、浅克隆和 squash 合并后会生成逐字相同的文件。CI 报制作机产物过期时，在仓库根目录运行 `node scripts/build-maker-client.mjs`，再提交重新生成的产物。
