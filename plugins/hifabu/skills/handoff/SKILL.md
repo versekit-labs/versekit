@@ -12,6 +12,8 @@ allowed-tools: Bash(hifabu *) Read Glob Grep
 
 每次运行小程序都用 `hifabu --data "${CLAUDE_PLUGIN_DATA}" … --json`，按实际工具结果继续。对路径和文件名安全传参，避免把用户或项目文本拼进 shell 代码。配置写入用 Claude 的权限确认。
 
+任一步返回 `update` 时，记住 `current` 和 `latest`，完成当前请求后，在最终回复末尾提醒一次，并把 `command` 逐字作为供用户复制的命令。照常预览、交付或查询。只有收到该字段的这次回复才提醒。
+
 以下参考文件都在 `${CLAUDE_PLUGIN_ROOT}/skills/handoff/references/`。用这个绝对目录读取链接指向的文件。参考里写的插件数据目录沿用此处的实际路径。Bash、Edit 和 Write 的权限通过工具提示确认。
 
 1. **分流。** 在本会话交过作品后追问进度，或明确查询 Hifabu 投递时，读 [status.md](references/status.md)，只查进度。退出 Hifabu 时按 [setup.md](references/setup.md) 登出。普通会话里只有「到了吗」不触发。

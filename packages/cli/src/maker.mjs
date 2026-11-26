@@ -15,9 +15,11 @@ import { formatBytes, formatDuration, RETENTION_MS } from "../../relay/src/statu
 import { parseArgv } from "./argv.mjs";
 import { createCloudHandlers } from "./cloud.mjs";
 import { scanProject } from "./maker-scan.mjs";
+import { checkPluginUpdate } from "./maker-update.mjs";
 
 const options = new Map([["--name", "name"], ["--role", "role"], ["--group", "group"], ["--dry-run", "dryRun"]]);
 const globalOptions = new Set(["--data", "--json", "--human", "--offline", "--help"]);
+const updateCheckCommands = new Set(["cloud.status", "work.push", "delivery.list", "delivery.show"]);
 const queueFilename = /^dl_[0-9a-f]{12,32}\.json$/;
 const heartbeatMs = 2000;
 const leaseMs = 60_000;
@@ -469,8 +471,13 @@ try {
         }
       }
       if ((command.name === "work.push" && !data.dryRun) || command.name === "cloud.login") await kickUploader();
-      if (human) printHuman(command.name, data);
-      else out({ ...data, ok: true });
+      const update = updateCheckCommands.has(command.name) && !data.dryRun
+        ? await checkPluginUpdate({ dataDir, offline })
+        : undefined;
+      if (human) {
+        printHuman(command.name, data);
+        if (update) console.log(`Hifabu 插件 ${update.latest} 已发布（当前 ${update.current}）。更新命令：${update.command}`);
+      } else out({ ...data, ok: true, ...(update && { update }) });
     }
   }
 } catch (error) {

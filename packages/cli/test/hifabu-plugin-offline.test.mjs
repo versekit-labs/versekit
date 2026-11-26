@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -105,6 +107,81 @@ test("ACC-plugin-v2-03: committed project identity is carried by Git worktrees a
   assert.deepEqual(readFileSync(join(original, convention)), readFileSync(join(moved, convention)));
   renameSync(original, join(work, "renamed-original"));
   assert.equal(JSON.parse(readFileSync(join(work, "renamed-original", convention))).id, "p_stable");
+});
+
+test("ACC-plugin-v2-10: only newer versions are reported, failed checks leave delivery working", {
+  skip: process.platform === "win32", timeout: 30_000,
+}, async (t) => {
+  const page = readFileSync(join(root, "site/plugin/index.html"), "utf8");
+  const command = "claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu";
+  assert.ok(page.replaceAll("&amp;", "&").includes(command));
+
+  const scenarios = [
+    { label: "newer", latest: "0.10.0", notify: true },
+    { label: "current", latest: version },
+    { label: "unreachable", failed: true },
+  ];
+  for (const { label, latest, notify, failed } of scenarios) {
+    await t.test(label, async (t) => {
+      const dir = temp(t);
+      const transport = await localFixture(dir, { maker });
+      t.after(() => transport.close());
+      const requests = [];
+      const market = createServer((req, res) => {
+        requests.push({ method: req.method, url: req.url, headers: req.headers });
+        if (failed) return req.socket.destroy();
+        res.writeHead(200, { "content-type": "application/json" })
+          .end(pretty({ name: "hifabu", plugins: [{ name: "hifabu", version: latest }] }));
+      });
+      market.listen(0, "127.0.0.1");
+      await once(market, "listening");
+      t.after(() => {
+        market.closeAllConnections();
+        return new Promise((resolve) => market.close(resolve));
+      });
+      const env = {
+        ...process.env,
+        HOME: dir,
+        HIFABU_PLUGIN_MARKETPLACE_URL: `http://127.0.0.1:${market.address().port}/plugin/marketplace.json`,
+      };
+      const run = async (...args) => {
+        const { stdout, stderr } = await exec(maker, [...transport.args, ...args], { env, timeout: 10_000 });
+        assert.equal(stderr, "");
+        return JSON.parse(stdout);
+      };
+      const manifest = join(dir, "delivery.json");
+      writeFileSync(join(dir, "video.mp4"), "video fixture");
+      writeFileSync(manifest, pretty({ title: "版本检查时仍可交付", cuts: [{
+        title: "成片", versions: [{ asset: "video.mp4", language: "zh" }],
+      }] }));
+
+      const preview = await run("work", "push", manifest, "--dry-run", "--group", "测试组");
+      assert.equal(preview.dryRun, true);
+      assert.equal(requests.length, 0);
+      const submit = run("work", "push", manifest, "--group", "测试组");
+      const [delivery, ...other] = await Promise.all(notify
+        ? [submit, run("cloud", "status"), run("cloud", "status")]
+        : [submit]);
+      assert.equal(delivery.state, "pending");
+      assert.equal((await until(() => transport.deliveries.get(delivery.id))).state, "pending");
+      const notices = [delivery, ...other].flatMap(({ update }) => update ? [update] : []);
+      assert.deepEqual(notices, notify ? [{ current: version, latest, command }] : []);
+      assert.ok(!Object.hasOwn(await run("delivery", "list"), "update"));
+      assert.equal(requests.length, 1);
+      const [{ method, url, headers }] = requests;
+      assert.equal(method, "GET");
+      assert.equal(url, "/plugin/marketplace.json");
+      for (const header of ["cookie", "authorization", "referer"]) assert.ok(!Object.hasOwn(headers, header));
+      assert.doesNotMatch(JSON.stringify(headers), /maker@example\.test|r{43}/);
+
+      const logDir = join(transport.dataDir, "plugin-updates");
+      const [log] = readdirSync(logDir);
+      const record = JSON.parse(readFileSync(join(logDir, log), "utf8"));
+      assert.equal(record.error_code, failed ? "plugin_update_check_failed" : undefined);
+      if (failed) assert.equal(record.event, "plugin.update_check_failed");
+      t.diagnostic(`marketplace requests=${requests.length}, notices=${notices.length}, delivery=${delivery.state}`);
+    });
+  }
 });
 
 test("ACC-plugin-v2-04/06/07/08: installed plugin, permissions, delivery resumption and logout on loopback", {
