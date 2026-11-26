@@ -235,7 +235,9 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   const jobFile = join(dataDir, "queue", queued.id + ".json");
   assert.equal(statSync(jobFile).mode & 0o777, 0o600);
   assert.equal(JSON.parse(readFileSync(jobFile, "utf8")).job.errorCode, "unreachable");
-  assert.equal(JSON.parse((await runMaker("delivery", "show", queued.id)).stdout).state, "queued");
+  const queuedView = JSON.parse((await runMaker("delivery", "show", queued.id)).stdout);
+  assert.equal(queuedView.state, "queued");
+  assert.match(queuedView.message, /下次交付时会接着传/);
   await startRelay();
   const sent = JSON.parse((await runMaker("work", "push", manifest)).stdout);
   assert.equal(sent.id, queued.id);

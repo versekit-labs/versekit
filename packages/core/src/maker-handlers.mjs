@@ -36,9 +36,10 @@ export function createDeliveryHandlers({ makerConnection, state, uploadQueue, de
     const view = { id, title, group, totalBytes, createdAt, updatedAt, lastPullAt, state, progress };
     if (state === "queued") {
       const { errorCode, reason, retryAt } = row;
-      const message = errorCode === "unreachable"
-        ? "中转连不上，已经排队。网通了会自动接着传，不用再说一遍。"
-        : errorCode ? "上传中断，已经排队。后台会自动接着传。" : "已登记，等后台上传。";
+      let message = "已登记，等后台上传。";
+      if (uploadQueue?.flush) message = "已排队，下次交付时会接着传。";
+      else if (errorCode === "unreachable") message = "中转连不上，已经排队。网通了会自动接着传，不用再说一遍。";
+      else if (errorCode) message = "上传中断，已经排队。后台会自动接着传。";
       return { ...view, label: "排队中", message, ...(errorCode ? { errorCode, reason, retryAt } : {}) };
     }
     if (state === "failed") {
