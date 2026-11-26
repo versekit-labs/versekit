@@ -690,6 +690,17 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-maker-04] 输出一致：同一份清单，`hifabu work push <清单> --dry-run --json` 用完整版跑和用小程序跑，输出逐字相同（时间戳一类的易变字段除外，测试里列出这些字段）。小程序接受 `--data <目录>` 参数，把凭据、队列、项目选择存到这个目录；不给 `--data` 时，用一个写在文档里的默认目录。
 - [ACC-maker-05] 登出：`hifabu cloud logout` 先调 `device.revoke.self`，在服务端作废这台设备，再删除本地凭据。之后用旧的刷新凭据去刷新，服务端拒绝（测试用本地假云端）。服务端不可达时，本地凭据照样删除，并说明「服务端没能注销这台设备，到 hifabu.com 的『我的 Hifabu』里手动移除」。
 
+### 插件重设计：后台上传与运行时凭据（2026-11-26）
+
+设计依据：`docs/design/plugin/DESIGN.md` §A.3、§A.5、§A.7。所有者 11-26 定：不加 SessionStart hook。
+
+- [ACC-maker-06] 上传不占用会话：`hifabu work push` 先校验、算 sha256，再把投递写进 `<数据目录>/queue/<投递号>.json`，然后起一个分离子进程 `hifabu _uploader`（`detached` + `unref`，stdio 全部忽略），立刻返回 `{id, state: "pending"}`。测试要求：100MB 以内的清单从调用到返回不超过 1 秒（不含算 sha256 的时间）；杀掉父进程（模拟关闭 Claude）后，上传照样完成，最终在中转上的 sha256 一致。不写任何 launchd、systemd 文件，也不用 Claude Code 的后台任务。
+- [ACC-maker-07] 上传进程只有一个，会续传，会自己退出：用 `<数据目录>/uploader.lock` 做单例（`O_EXCL` 加 pid 加心跳）；pid 不存在或心跳超过 60 秒没更新，就视为已死，由下一个进程接管。上传按分块续传，失败自动重试。测试用本地假中转：中途断开再恢复，最终只产生一个投递，已经传完的分块不重传。队列清空后进程自己退出，`ps` 里看不到残留。macOS 上传期间用 `caffeinate -i -w <pid>` 防止空闲睡眠，上传结束自动解除。
+- [ACC-maker-08] 重启后接着传：只要有任何一次 `hifabu` 调用（包括 `delivery list`、`delivery show`、`work push`、`cloud status`），都先检查队列；有没传完的、又没有活着的上传进程，就把它拉起来。测试：杀掉上传进程，再调一次 `hifabu delivery list`，上传恢复并完成。`delivery.show` 在本地还在传的阶段，显示已传多少、预计还要多久；传完以后显示中转上的状态。
+- [ACC-maker-09] 交互式会话真机验收：在一个真实的交互式 Claude Code 会话里交付一个超过 200MB 的测试文件（只用测试数据，传到本地假中转或测试中转，不碰真实平台账号），交付后立刻退出 Claude Code 并关掉终端窗口，上传照样完成。PR 里附上这次的记录。如果实测上传被连带清理掉，停下来报告给协调器，不要自己改方案。
+- [ACC-maker-10] 运行时：`bin/hifabu` 先找系统 `node`（版本 ≥ 22.13），再找 `<数据目录>/runtime/` 里的 Node。两处都没有时，不运行，以非 0 退出，并输出一段机器可读的说明，包括需要什么、下载多大、放在哪、需要用户同意。`hifabu-runtime install` 在用户同意后，从 nodejs.org 下载一个锁定版本，用插件里写死的 sha256 校验，然后解压到 `<数据目录>/runtime/`，不改系统，也不进 PATH。测试要求：同意之前不下载任何东西；sha256 对不上时，停下并写明原因，不留下半解压的文件。下载地址可以用环境变量覆盖，方便测试和以后接镜像。
+- [ACC-maker-11] 凭据：刷新凭据在 macOS 上放钥匙串（`security`，服务名 `hifabu`）；Linux 上有 `secret-tool` 就放 Secret Service；都没有时放 `<数据目录>/device.json`，权限 600。`hifabu cloud status` 里写明凭据存在哪。1 小时有效的机器令牌只放在内存里。测试抓取 `ps`、标准输出、错误输出和日志，断言凭据不出现在任何命令行参数、输出或日志里。另外写一份文档，说明凭据放在哪、卸载插件后钥匙串里会残留什么、怎么清理。
+
 ### 改名 Hifabu（2026-11-26）
 
 所有者定：产品名改为 Hifabu，遗留的 versekit、vk 命令都改成 hifabu 体系。GitHub 仓库 `versekit-labs/versekit` 和 Orca 流程（orca-flow、worktree 路径、协调器脚本）这次不改。计划见 `docs/design/RENAME-HIFABU.md`，分 R1–R8 八步串行做。
