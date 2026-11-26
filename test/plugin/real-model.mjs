@@ -47,6 +47,25 @@ const scenarios = [
     groupCount: 2,
   },
   {
+    label: "grow",
+    files: {
+      "输出/07_草本故事/final/07_草本故事.mp4": "video",
+      "输出/07_草本故事/封面/07_草本故事_封面.jpg": "cover",
+      "发布用/07_草本故事.md": "# 草本故事\n标题：草本故事\n正文：观察一种草本。\n话题：植物",
+    },
+    prompt: "把第 07 期交给发布机。",
+    groupCount: 2,
+    // The project grows: 第 08 期 arrives after 第 07 期 was delivered twice.
+    later: {
+      files: {
+        "输出/08_花木故事/final/08_花木故事.mp4": "video",
+        "输出/08_花木故事/封面/08_花木故事_封面.jpg": "cover",
+        "发布用/08_花木故事.md": "# 花木故事\n标题：花木故事\n正文：观察一种花木。\n话题：植物",
+      },
+      prompt: "把第 08 期交给发布机。",
+    },
+  },
+  {
     label: "single",
     files: { "纸飞机.mp4": "one video" },
     prompt: "把《纸飞机》交给发布机。发布文案用标题「纸飞机」、正文「折一架纸飞机。」和话题「手工」。",
@@ -76,7 +95,7 @@ async function evaluateProject(scenario) {
   // data directory to this fixture, as a Claude install in a temp HOME would.
   const skill = join(fixturePlugin, "skills/handoff/SKILL.md");
   writeFileSync(skill, readFileSync(skill, "utf8").replaceAll("${CLAUDE_PLUGIN_DATA}", data));
-  for (const [name, text] of Object.entries(scenario.files)) {
+  const writeFixtureFiles = (files) => { for (const [name, text] of Object.entries(files)) {
     const file = join(project, name);
     mkdirSync(resolve(file, ".."), { recursive: true });
     const ffmpeg = (args) => execFileSync("ffmpeg", ["-loglevel", "error", "-y", ...args], { stdio: "ignore" });
@@ -86,7 +105,8 @@ async function evaluateProject(scenario) {
     } else if (/\.(png|jpg)$/.test(name)) {
       ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=160x90", "-frames:v", "1", file]);
     } else writeFileSync(file, text);
-  }
+  } };
+  writeFixtureFiles(scenario.files);
   const git = (args) => execFileSync("git", args, { cwd: project, stdio: "ignore" });
   git(["init", "-q"]);
   const fixture = await localFixture(root, { dataDir: data });
@@ -105,7 +125,7 @@ async function evaluateProject(scenario) {
     const args = [...common, "--plugin-dir", fixturePlugin, "--add-dir", root, "--tools", "Skill,Read,Glob,Grep,Bash,Write,Edit,AskUserQuestion",
       "--allowedTools", "Skill", "--max-turns", "20", "--append-system-prompt",
       `This is a loopback Hifabu evaluation. Auto-update was already handled. Do not read or alter user Claude settings. Keep all temporary files in ${root}.`];
-    const run = async (first) => {
+    const run = async (first, promptText = scenario.prompt, growing = false) => {
       let questions = 0;
       let scanned = false;
       let confirmed = false;
@@ -114,7 +134,7 @@ async function evaluateProject(scenario) {
       const scans = new Set();
       const questionReply = (question, options = []) => {
         questions++;
-        if (!first) return null;
+        if (!first && !growing) return null;
         const text = [question, ...options.flatMap(({ label, description }) => [label, description])].join("\n");
         if (/常用组/.test(text) && /短片组/.test(text)) {
           assert.ok(confirmed && convention(), "ask for the default group after saving the confirmed project");
@@ -124,6 +144,10 @@ async function evaluateProject(scenario) {
           groupQuestions++;
           return options.find(({ label }) => label.includes("常用组"))?.label ?? "常用组。";
         }
+        if (growing) {
+          assert.doesNotMatch(question, /哪一期|第几期|是第.*期吗/, "the episode number comes from the path, never ask which episode");
+          return options.length ? options[0].label : "确认，按期号交付。";
+        }
         assert.match(question, /约定|规则|项目.*配置/, "with supplied copy, the other first-run question must confirm the project convention");
         assert.ok(scanned, "scan must succeed before asking for project confirmation");
         assert.equal(existsSync(conventionPath), false, "the project convention must not be written before the user confirms");
@@ -131,7 +155,7 @@ async function evaluateProject(scenario) {
         return options.find(({ label }) => /^(?:确认|同意|是|对|保存|正确|可以|按此|接受)/.test(label))?.label ??
           (options.length ? options[0].label : "我确认这份项目约定。");
       };
-      const prompt = modes.includes("direct") ? "/hifabu:handoff " + scenario.prompt : scenario.prompt;
+      const prompt = modes.includes("direct") ? "/hifabu:handoff " + promptText : promptText;
       const observed = await claudeConversation({ cwd: project, env: childEnv, args, prompt,
         observe: (event) => {
           if (event.type === "assistant") {
@@ -166,7 +190,7 @@ async function evaluateProject(scenario) {
           }
           if (["Write", "Edit"].includes(tool_name)) {
             if (resolve(input.file_path) === conventionPath) {
-              assert.ok(first && confirmed && tool_name === "Write", "first convention write must request permission after confirmation");
+              if (!growing) assert.ok(first && confirmed && tool_name === "Write", "first convention write must request permission after confirmation");
               conventionWrites++;
             }
             return under(input.file_path, root) ? allow(input) : deny;
@@ -194,11 +218,21 @@ async function evaluateProject(scenario) {
     const beforeSecond = fixture.deliveries.size;
     const second = await run(false);
     const secondDelivery = await monitorDelivery(fixture, beforeSecond);
+    let thirdDelivery = null;
+    let third = null;
+    let keysAfter = null;
+    if (scenario.later) {
+      writeFixtureFiles(scenario.later.files);
+      const beforeThird = fixture.deliveries.size;
+      third = await run(false, scenario.later.prompt, true);
+      thirdDelivery = await monitorDelivery(fixture, beforeThird);
+      keysAfter = { seven: firstDelivery?.manifest.work.key, eight: thirdDelivery?.manifest.work.key };
+    }
     const row = { project: scenario.label, questions: [first.questions, second.questions],
       modelCalls: [first.calls, second.calls], delivered: [Boolean(firstDelivery), Boolean(secondDelivery)], identity,
       confirmedBeforeWrite: first.confirmed && first.conventionWrites === 1, conventionWrites: first.conventionWrites,
       projectJson, episodes: savedProject?.episodes, groupQuestions: first.groupQuestions, savedGroup,
-      final: [first.turns, second.turns] };
+      final: [first.turns, second.turns], ...(scenario.later ? { growth: { questions: third.questions, delivered: Boolean(thirdDelivery), keys: keysAfter } } : {}) };
     console.log(JSON.stringify(row));
     assert.ok(first.questions <= 2 && second.questions === 0 && identity);
     assert.equal(row.confirmedBeforeWrite, true);
@@ -209,6 +243,19 @@ async function evaluateProject(scenario) {
       assert.deepEqual(savedProject.episodes, {});
       assert.equal(typeof savedProject.works?.["纸飞机"], "string");
       assert.equal(firstDelivery?.manifest.work.key, identity + "/" + savedProject.works["纸飞机"]);
+    }
+    if (scenario.later) {
+      const key = (n) => identity + "/" + n;
+      assert.equal(firstDelivery?.manifest.work.key, key("07"), "a numbered single-video project keys by episode number");
+      assert.equal(secondDelivery?.manifest.work.key, key("07"));
+      assert.ok(thirdDelivery, "the 08 delivery must reach the fixture");
+      assert.equal(thirdDelivery.manifest.work.key, key("08"), "第 08 期 gets its own key");
+      assert.notEqual(thirdDelivery.manifest.work.key, firstDelivery.manifest.work.key);
+      // 第 07 期 redelivered after growth keeps its key.
+      const beforeFourth = fixture.deliveries.size;
+      await run(false, scenario.prompt, true);
+      const fourth = await monitorDelivery(fixture, beforeFourth);
+      assert.equal(fourth?.manifest.work.key, key("07"), "第 07 期 key unchanged after the project grew");
     }
     assert.ok(firstDelivery && secondDelivery);
     assert.equal(firstDelivery.group, savedGroup);
