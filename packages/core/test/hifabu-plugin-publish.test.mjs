@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,7 @@ const publisher = fileURLToPath(new URL("../../../deploy/hifabu/publish-plugin.m
 const pluginDir = fileURLToPath(new URL("../../../plugins/hifabu/", import.meta.url));
 const manifestPath = ".claude-plugin/plugin.json";
 const manifest = JSON.parse(readFileSync(join(pluginDir, manifestPath), "utf8"));
+const versionCheck = fileURLToPath(new URL("../../../plugins/hifabu-src/version.mjs", import.meta.url));
 const archive = `hifabu-${manifest.version}.zip`;
 const publicUrl = "https://hifabu.com/plugin/";
 const siteDir = "/var/www/hifabu/plugin";
@@ -88,10 +89,11 @@ test("ACC-plugin-dist-05: dry-run 打包插件并打印三个 SHA-256，不运�
   }));
   const marketplace = JSON.parse(readFileSync(join(output, "marketplace.json"), "utf8"));
   assert.equal(marketplace.name, "hifabu");
-  assert.deepEqual(marketplace.owner, { name: "Hifabu" });
+  assert.deepEqual(marketplace.owner, manifest.author);
   assert.equal(marketplace.plugins.length, 1);
+  const { name, version, description, author, homepage, license } = manifest;
   assert.deepEqual(marketplace.plugins[0], {
-    ...manifest,
+    name, version, description, author, homepage, license,
     source: {
       source: "archive",
       url: `${publicUrl}${encodeURIComponent(archive)}`,
@@ -100,13 +102,17 @@ test("ACC-plugin-dist-05: dry-run 打包插件并打印三个 SHA-256，不运�
   });
   const archivePath = join(output, archive);
   const names = execFileSync("unzip", ["-Z1", archivePath], { encoding: "utf8" }).trim().split("\n");
-  const expected = readdirSync(pluginDir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(pluginDir, join(entry.parentPath, entry.name)))
-    .sort();
+  const expected = [
+    ".claude-plugin/plugin.json", "CHANGELOG.md", "LICENSE", "README.md",
+    "bin/hifabu", "bin/hifabu-runtime", "lib/hifabu.mjs", "skills/handoff/SKILL.md",
+    ...["copy", "errors", "project-setup", "setup", "status"].map((name) => `skills/handoff/references/${name}.md`),
+  ];
   assert.deepEqual(names, expected);
   for (const name of names) {
-    assert.deepEqual(execFileSync("unzip", ["-p", archivePath, name]), readFileSync(join(pluginDir, name)));
+    assert.doesNotMatch(name, /\.DS_Store|(?:^|\/)\.\.(?:\/|$)/);
+    const content = execFileSync("unzip", ["-p", archivePath, name]);
+    assert.deepEqual(content, readFileSync(join(pluginDir, name)));
+    assert.doesNotMatch(content.toString(), /vibe-video|tcm-video|\/Users\/|\/home\/|[\w.+-]+@[\w.-]+\.(?:com|net|org)\b/i);
   }
   const install = readFileSync(join(output, "install.txt"), "utf8");
   assert.ok(install.split("\n").includes(
@@ -122,20 +128,33 @@ test("ACC-plugin-dist-05: dry-run 打包插件并打印三个 SHA-256，不运�
   assert.throws(() => readFileSync(calls), { code: "ENOENT" });
 });
 
-test("ACC-plugin-dist-01: 发布脚本拒绝未经版本登记的插件内容", (t) => {
+test("ACC-plugin-dist-01: 散列所有插件内容，打包只用白名单", (t) => {
   const root = mkdtempSync(join(tmpdir(), "hifabu-plugin-version-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const release = join(root, "deploy", "hifabu");
   const plugin = join(root, "plugins", "hifabu");
+  const tooling = join(root, "plugins", "hifabu-src");
   mkdirSync(release, { recursive: true });
+  mkdirSync(tooling, { recursive: true });
   cpSync(pluginDir, plugin, { recursive: true });
-  writeFileSync(join(plugin, "LICENSE"), "changed content without a version bump");
+  const unlisted = join(plugin, ".DS_Store");
+  writeFileSync(unlisted, "unlisted content without a version bump");
+  const versionHelper = join(tooling, "version.mjs");
+  copyFileSync(versionCheck, versionHelper);
   const entry = join(release, "publish-plugin.mjs");
   copyFileSync(publisher, entry);
   const result = spawnSync(process.execPath, [entry, "--dry-run"], { encoding: "utf8", cwd: root });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /插件版本记录与内容不一致/);
   assert.equal(result.stdout, "");
+
+  // Even a recorded extra file is not part of the package allowlist.
+  const contentLock = JSON.parse(execFileSync(process.execPath, [versionHelper, "--print-hash"], { encoding: "utf8" }));
+  writeFileSync(join(plugin, "version-lock.json"), JSON.stringify(contentLock));
+  const output = join(root, "output");
+  execFileSync(process.execPath, [entry, "--dry-run", "--output-dir", output]);
+  const packageList = execFileSync("unzip", ["-Z1", join(output, archive)], { encoding: "utf8" });
+  assert.doesNotMatch(packageList, /\.DS_Store|version-lock/);
 });
 
 test("ACC-plugin-dist-05: 发布可重试，保留旧包和同名 zip，传输失败时不切换清单", (t) => {

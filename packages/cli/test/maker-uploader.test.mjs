@@ -1,111 +1,19 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { cloudRoute } from "../../cloud/src/transport.mjs";
 import { hashFile } from "../../relay/src/client.mjs";
+import { localFixture } from "../../../test/plugin/transport-fixture.mjs";
 
 const maker = fileURLToPath(new URL("../../../plugins/hifabu/bin/hifabu", import.meta.url));
 const exec = promisify(execFile);
-const refreshPath = cloudRoute("device.refresh", {}).path;
-const accountId = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const refreshToken = "r".repeat(43);
-const email = "maker@example.test";
 const mib = 1024 ** 2;
-
-function send(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-async function localFixture(directory, { interactive = false } = {}) {
-  const dataDir = join(directory, "maker");
-  const lock = join(dataDir, "uploader.lock");
-  const blobs = new Map();
-  const deliveries = new Map();
-  const log = (message) => { if (interactive) console.log(new Date().toISOString(), message); };
-  const server = createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url, "http://127.0.0.1");
-      if (url.pathname === refreshPath && req.headers.authorization === "Bearer " + refreshToken) {
-        const machineToken = "fake." + Buffer.from(JSON.stringify({ sub: accountId })).toString("base64url") + ".fake";
-        return send(res, 200, { email, role: "maker", relayEnabled: true, relayUrl: origin, machineToken, expiresAt: Date.now() + 3600_000 });
-      }
-      if (url.pathname === "/v1/group-snapshot" && fixture.groupSnapshot) {
-        return send(res, 200, { snapshot: fixture.groupSnapshot });
-      }
-      const match = /^\/v1\/blobs\/([0-9a-f]{64})(\/status)?$/.exec(url.pathname);
-      if (match) {
-        const [, sha, status] = match;
-        if (!blobs.has(sha)) blobs.set(sha, { received: 0, complete: false, digest: createHash("sha256"), offsets: [] });
-        const blob = blobs.get(sha);
-        const { received, complete } = blob;
-        if (status && req.method === "GET") return send(res, 200, { received, complete });
-        if (req.method === "PUT") {
-          const offset = Number(url.searchParams.get("offset"));
-          const total = Number(url.searchParams.get("total"));
-          blob.offsets.push(offset);
-          if (offset !== received) return send(res, 409, { error: "offset_mismatch" });
-          if (interactive) {
-            log(`PUT START offset=${offset} total=${total}`);
-            await wait(40_000);
-          }
-          for await (const chunk of req) {
-            blob.digest.update(chunk);
-            blob.received += chunk.length;
-            if (await fixture.interrupt?.(sha, blob, req)) return;
-          }
-          blob.sha = blob.digest.copy().digest("hex");
-          blob.complete = blob.received === total && sha === blob.sha;
-          log(`PUT END bytes=${blob.received} sha256=${blob.sha}`);
-          return send(res, 201, { complete: blob.complete, received: blob.received });
-        }
-      }
-      if (url.pathname === "/v1/deliveries") {
-        if (req.method === "GET") return send(res, 200, { deliveries: [...deliveries.values()] });
-        const chunks = [];
-        for await (const chunk of req) chunks.push(chunk);
-        const body = JSON.parse(Buffer.concat(chunks));
-        if (!body.blobs.every(({ sha256 }) => blobs.get(sha256)?.complete)) return send(res, 409, { error: "missing_blobs" });
-        if (!deliveries.has(body.id)) {
-          deliveries.set(body.id, { ...body, state: "pending", created_at: Date.now(), updated_at: Date.now() });
-          log(`DELIVERY ${body.id} state=pending count=${deliveries.size}`);
-        }
-        return send(res, 201, deliveries.get(body.id));
-      }
-      const delivery = deliveries.get(url.pathname.split("/").at(-1));
-      return delivery ? send(res, 200, delivery) : send(res, 404, { message: "找不到投递" });
-    } catch (err) {
-      if (!req.destroyed) send(res, 500, { message: err.message });
-    }
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  mkdirSync(dataDir, { mode: 0o700 });
-  writeFileSync(join(dataDir, "device.json"), JSON.stringify({ origin, refreshToken, checkedAt: Date.now(),
-    email, role: "maker", relayEnabled: true, relayUrl: origin, accountId }), { mode: 0o600 });
-  const args = ["--offline", "--data", dataDir, "--json"];
-  const fixture = {
-    lock, origin, blobs, deliveries, args,
-    async run(...words) {
-      return JSON.parse((await exec(maker, [...args, ...words], { timeout: 15_000 })).stdout);
-    },
-    close() {
-      server.closeAllConnections();
-      return new Promise((resolve) => server.close(resolve));
-    },
-  };
-  return fixture;
-}
 
 async function makeAssets(directory, size, { withSmallFile = false } = {}) {
   const names = withSmallFile ? ["first.mp4", "fixture.mp4"] : ["fixture.mp4"];
@@ -156,7 +64,7 @@ async function eventually(probe) {
 
 async function setup(t) {
   const directory = mkdtempSync(join(tmpdir(), "hf-uploader-"));
-  const fixture = await localFixture(directory);
+  const fixture = await localFixture(directory, { maker });
   t.after(async () => {
     const pid = pidOf(fixture.lock);
     if (pid && processLine(pid).includes(" _uploader ")) process.kill(pid, "SIGKILL");
@@ -168,7 +76,7 @@ async function setup(t) {
 
 if (process.argv[2] === "--interactive-fixture") {
   const directory = process.argv[3];
-  const fixture = await localFixture(directory, { interactive: true });
+  const fixture = await localFixture(directory, { maker, interactive: true });
   const size = 220 * mib;
   const { manifest, hashes: [sha] } = await makeAssets(directory, size);
   console.log(`FIXTURE ${fixture.origin} bytes=${size} sha256=${sha}`);
