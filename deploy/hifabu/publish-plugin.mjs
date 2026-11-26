@@ -13,6 +13,7 @@ import { checkVersion } from "../../plugins/hifabu-src/version.mjs";
 import { DEFAULT_REPO_URL, renderPluginArtifacts } from "../../site/plugin/render.mjs";
 
 const pluginDir = fileURLToPath(new URL("../../plugins/hifabu/", import.meta.url));
+const repoDir = fileURLToPath(new URL("../../", import.meta.url));
 const packageFiles = [
   ".claude-plugin/plugin.json",
   "CHANGELOG.md",
@@ -99,7 +100,53 @@ function build(root) {
   }
   writeFileSync(join(root, "index.html"), html);
   writeFileSync(join(root, "install.txt"), installTxt);
-  return [archive, "index.html", "install.txt", "marketplace.json"];
+  return { content, tag, files: [archive, "index.html", "install.txt", "marketplace.json"] };
+}
+
+function checkSourceTag(tag, content) {
+  const git = (...args) => execFileSync("git", args, {
+    cwd: repoDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+  });
+  const ref = `refs/tags/${tag}`;
+  const tagCommands = (releaseTag) =>
+    `  git tag "${releaseTag}" HEAD\n  git push origin "refs/tags/${releaseTag}"`;
+  let remoteRefs;
+  try {
+    remoteRefs = git("ls-remote", "--tags", "--refs", "origin", ref);
+  } catch (error) {
+    throw new Error(`无法查询 origin 上的源码 tag ${tag}。请检查远端配置和连接后重试。\n${error.stderr?.trim() || error.message}`);
+  }
+  const advertisedTag = remoteRefs.split("\n").map((line) => line.split("\t"))
+    .find(([, remoteRef]) => remoteRef === ref)?.[0];
+  if (!advertisedTag) {
+    throw new Error(`origin 缺少源码 tag ${tag}。确认 HEAD 包含本次打包的插件内容后运行：\n${tagCommands(tag)}\n` +
+      "若本地已建好 tag，核对其指向后执行推送命令即可。");
+  }
+
+  const commit = `${advertisedTag}^{commit}`;
+  try {
+    git("cat-file", "-e", commit);
+  } catch {
+    // Read remote-only tags without updating local refs or FETCH_HEAD.
+    git("fetch", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--refmap=", "origin", ref);
+  }
+  const tree = git("ls-tree", "-r", "-z", "--full-tree", commit, "--", "plugins/hifabu/");
+  const entries = new Map(tree.split("\0").filter(Boolean).map((entry) => {
+    const tab = entry.indexOf("\t");
+    return [entry.slice(tab + 1), entry.slice(0, tab)];
+  }));
+  const stagedFiles = packageFiles.map((name) => join(content, name));
+  const blobs = git("hash-object", "--no-filters", "--", ...stagedFiles).trim().split("\n");
+  for (const [index, name] of packageFiles.entries()) {
+    const mode = lstatSync(stagedFiles[index]).mode & 0o111 ? "100755" : "100644";
+    if (entries.get(`plugins/hifabu/${name}`) !== `${mode} blob ${blobs[index]}`) {
+      throw new Error(`origin 上的源码 tag ${tag} 与本次打包的文件不一致：plugins/hifabu/${name}。\n` +
+        `请检出该 tag 重新打包。若要发布当前内容，请提升版本并提交，再把 version 设为新版本并运行：\n${tagCommands("hifabu--v$version")}`);
+    }
+  }
 }
 
 function upload(host, root, files) {
@@ -162,7 +209,13 @@ function main() {
   }
   const root = mkdtempSync(join(tmpdir(), "hifabu-plugin-"));
   try {
-    const files = build(root);
+    const { content, tag, files } = build(root);
+    try {
+      checkSourceTag(tag, content);
+    } catch (error) {
+      if (!values["dry-run"]) throw error;
+      console.warn(`源码 tag 校验提醒：${error.message}`);
+    }
     if (values["output-dir"]) {
       const output = resolve(values["output-dir"]);
       mkdirSync(output, { recursive: true });

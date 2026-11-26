@@ -57,16 +57,24 @@ seoul-vps 的 `hifabu-cloud.service`、`/opt/hifabu-cloud`、`/var/lib/hifabu-cl
 
 ## 6. 发布插件
 
-插件源目录为 `plugins/hifabu`。插件内容变更后，先提升 `plugins/hifabu/.claude-plugin/plugin.json` 的语义化版本号，再运行 `node plugins/hifabu/test/version.test.mjs --print-hash`，把新版本和哈希追加到 `plugins/hifabu/version-lock.json`。发布脚本会对暂存的插件内容执行版本校验。
+插件源目录为 `plugins/hifabu`。插件内容变更后，先提升 `plugins/hifabu/.claude-plugin/plugin.json` 的语义化版本号，再运行 `node plugins/hifabu-src/version.mjs --print-hash`，把新版本和哈希追加到 `plugins/hifabu/version-lock.json`，然后提交插件变更。发布脚本会校验插件内容与版本记录是否一致。
 
-从仓库检出目录运行以下命令进行离线预览。需要 Node.js 22.13 或更高版本及 `zip`。省略 `--output-dir` 时，脚本打印三个文件的名称和 SHA-256，随后清理暂存文件。
+从仓库检出目录运行以下命令预览。需要 Node.js 22.13 或更高版本、Git 和 `zip`。脚本查询 `origin` 的源码 tag。若 tag 缺失、内容不一致或无法核验，`--dry-run` 会打印提醒并继续生成文件。省略 `--output-dir` 时，脚本打印四个文件的名称和 SHA-256，随后清理暂存文件。
 
 ```bash
 preview="$(mktemp -d)"
 node deploy/hifabu/publish-plugin.mjs --dry-run --output-dir "$preview"
 ```
 
-协调器发布时传入有写权限的 SSH 主机别名。服务器的 nginx 静态根目录为 `/var/www/hifabu`。
+第一次发布某个版本时，确认 `HEAD` 包含要打包的插件内容，再创建并推送源码 tag。
+
+```bash
+version="$(node -p "require('./plugins/hifabu/.claude-plugin/plugin.json').version")"
+git tag "hifabu--v$version" HEAD
+git push origin "refs/tags/hifabu--v$version"
+```
+
+协调器发布时传入有写权限的 SSH 主机别名。服务器的 nginx 静态根目录为 `/var/www/hifabu`。上传前，脚本确认 `origin` 上存在 `hifabu--v<版本>`，并逐个比对 tag 中的打包文件与 zip 暂存文件的内容和可执行权限。校验失败会终止发布。若已有 tag 的内容不同，可以检出该 tag 重新打包，或提升版本后发布当前内容。
 
 ```bash
 node deploy/hifabu/publish-plugin.mjs --host seoul-vps

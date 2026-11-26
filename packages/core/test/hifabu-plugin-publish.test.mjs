@@ -19,6 +19,7 @@ const manifestPath = ".claude-plugin/plugin.json";
 const manifest = JSON.parse(readFileSync(join(pluginDir, manifestPath), "utf8"));
 const versionCheck = fileURLToPath(new URL("../../../plugins/hifabu-src/version.mjs", import.meta.url));
 const archive = `hifabu-${manifest.version}.zip`;
+const tag = `hifabu--v${manifest.version}`;
 const publicUrl = "https://hifabu.com/plugin/";
 const siteDir = "/var/www/hifabu/plugin";
 const files = [archive, "index.html", "install.txt", "marketplace.json"].sort();
@@ -36,9 +37,37 @@ function stripTags(html) {
   return unescapeHtml(html.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
 }
 
-function fixture(t) {
+function fixture(t, { pushTag = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), "hifabu-plugin-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, "repo");
+  const release = join(repo, "deploy", "hifabu");
+  const plugin = join(repo, "plugins", "hifabu");
+  const tooling = join(repo, "plugins", "hifabu-src");
+  const sitePlugin = join(repo, "site", "plugin");
+  const entry = join(release, "publish-plugin.mjs");
+  const versionHelper = join(tooling, "version.mjs");
+  mkdirSync(release, { recursive: true });
+  mkdirSync(tooling, { recursive: true });
+  cpSync(pluginDir, plugin, { recursive: true });
+  cpSync(sitePluginDir, sitePlugin, { recursive: true });
+  copyFileSync(publisher, entry);
+  copyFileSync(versionCheck, versionHelper);
+
+  const origin = join(root, "origin.git");
+  const localGitEnv = { ...process.env, GIT_ALLOW_PROTOCOL: "file" };
+  const git = (...args) => execFileSync("git", [
+    "-c", "user.name=Publisher Test", "-c", "user.email=publisher@example.invalid",
+    "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args,
+  ], { cwd: repo, encoding: "utf8", env: localGitEnv });
+  git("init", "--quiet", "--initial-branch=main");
+  git("init", "--quiet", "--bare", origin);
+  git("add", "--", "plugins/hifabu");
+  git("commit", "--quiet", "-m", "Plugin release");
+  git("remote", "add", "origin", origin);
+  git("push", "--quiet", "origin", "main");
+  if (pushTag) git("--git-dir", origin, "tag", "-a", tag, "refs/heads/main", "-m", "Plugin release");
+
   const bin = join(root, "bin");
   const calls = join(root, "calls");
   const remote = join(root, "remote");
@@ -79,18 +108,23 @@ function fixture(t) {
     }
   `;
   for (const tool of ["ssh", "scp"]) writeFileSync(join(bin, tool), stub, { mode: 0o755 });
-  const run = (args, extraEnv, entry = publisher) => spawnSync(process.execPath, [entry, "--host", "fixture", ...args], {
+  const run = (args, extraEnv) => spawnSync(process.execPath, [entry, "--host", "fixture", ...args], {
     cwd: root,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...localGitEnv,
       PATH: [bin, process.env.PATH].join(delimiter),
       PUBLISH_CALLS: calls,
       PUBLISH_REMOTE: remote,
       ...extraEnv,
     },
   });
-  return { root, calls, remote, run };
+  return { root, repo, plugin, sitePlugin, versionHelper, calls, remote, git, run };
+}
+
+function refreshFixtureVersionLock(plugin, versionHelper) {
+  const contentLock = execFileSync(process.execPath, [versionHelper, "--print-hash"], { encoding: "utf8" });
+  writeFileSync(join(plugin, "version-lock.json"), contentLock);
 }
 
 test("ACC-plugin-dist-05: dry-run 打包插件并打印四个 SHA-256，不运行 SSH 或 SCP", (t) => {
@@ -154,34 +188,71 @@ test("ACC-plugin-dist-05: dry-run 打包插件并打印四个 SHA-256，不运�
 });
 
 test("ACC-plugin-dist-01: 散列所有插件内容，打包只用白名单", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "hifabu-plugin-version-test-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const release = join(root, "deploy", "hifabu");
-  const plugin = join(root, "plugins", "hifabu");
-  const tooling = join(root, "plugins", "hifabu-src");
-  const sitePlugin = join(root, "site", "plugin");
-  mkdirSync(release, { recursive: true });
-  mkdirSync(tooling, { recursive: true });
-  cpSync(pluginDir, plugin, { recursive: true });
-  cpSync(sitePluginDir, sitePlugin, { recursive: true });
+  const { root, plugin, versionHelper, run } = fixture(t);
   const unlisted = join(plugin, ".DS_Store");
   writeFileSync(unlisted, "unlisted content without a version bump");
-  const versionHelper = join(tooling, "version.mjs");
-  copyFileSync(versionCheck, versionHelper);
-  const entry = join(release, "publish-plugin.mjs");
-  copyFileSync(publisher, entry);
-  const result = spawnSync(process.execPath, [entry, "--dry-run"], { encoding: "utf8", cwd: root });
+  const result = run(["--dry-run"], { PUBLISH_NO_UPLOAD: "1" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /插件版本记录与内容不一致/);
   assert.equal(result.stdout, "");
 
   // Even a recorded extra file is not part of the package allowlist.
-  const contentLock = JSON.parse(execFileSync(process.execPath, [versionHelper, "--print-hash"], { encoding: "utf8" }));
-  writeFileSync(join(plugin, "version-lock.json"), JSON.stringify(contentLock));
+  refreshFixtureVersionLock(plugin, versionHelper);
   const output = join(root, "output");
-  execFileSync(process.execPath, [entry, "--dry-run", "--output-dir", output]);
+  const preview = run(["--dry-run", "--output-dir", output], { PUBLISH_NO_UPLOAD: "1" });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.equal(preview.stderr, "");
   const packageList = execFileSync("unzip", ["-Z1", join(output, archive)], { encoding: "utf8" });
   assert.doesNotMatch(packageList, /\.DS_Store|version-lock/);
+});
+
+test("ACC-plugin-v2-11: 缺少远端源码 tag 时拒绝发布，dry-run 仍打包", (t) => {
+  const { root, calls, git, run } = fixture(t, { pushTag: false });
+  git("tag", tag);
+
+  const blocked = run([], { PUBLISH_NO_UPLOAD: "1" });
+  assert.equal(blocked.status, 1);
+  assert.ok(blocked.stderr.includes(`origin 缺少源码 tag ${tag}`));
+  assert.ok(blocked.stderr.includes(`git tag "${tag}" HEAD`));
+  assert.ok(blocked.stderr.includes(`git push origin "refs/tags/${tag}"`));
+
+  const output = join(root, "output");
+  const preview = run(["--dry-run", "--output-dir", output], { PUBLISH_NO_UPLOAD: "1" });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stderr, /源码 tag 校验提醒/);
+  assert.ok(preview.stderr.includes(`origin 缺少源码 tag ${tag}`));
+  assert.deepEqual(readdirSync(output).sort(), files);
+  assert.throws(() => readFileSync(calls), { code: "ENOENT" });
+});
+
+test("ACC-plugin-v2-11: 远端源码 tag 与实际打包文件不一致时拒绝发布", (t) => {
+  const { plugin, versionHelper, calls, run } = fixture(t);
+  writeFileSync(join(plugin, "README.md"), "\nUncommitted plugin change.\n", { flag: "a" });
+  refreshFixtureVersionLock(plugin, versionHelper);
+
+  const blocked = run([], { PUBLISH_NO_UPLOAD: "1" });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /与本次打包的文件不一致：plugins\/hifabu\/README\.md/);
+  assert.match(blocked.stderr, /提升版本/);
+
+  const preview = run(["--dry-run"], { PUBLISH_NO_UPLOAD: "1" });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stderr, /源码 tag 校验提醒/);
+  assert.match(preview.stderr, /与本次打包的文件不一致/);
+  assert.throws(() => readFileSync(calls), { code: "ENOENT" });
+});
+
+test("ACC-plugin-v2-11: 只有远端有附注 tag 且打包内容一致时允许发布", (t) => {
+  const { repo, calls, remote, git, run } = fixture(t);
+  assert.equal(git("tag", "--list"), "");
+
+  const published = run([]);
+  assert.equal(published.status, 0, published.stderr);
+  assert.equal(published.stderr, "");
+  assert.match(readFileSync(calls, "utf8"), /^ssh\nscp\n/);
+  assert.deepEqual(readdirSync(remote).sort(), files);
+  assert.equal(git("tag", "--list"), "");
+  assert.throws(() => readFileSync(join(repo, ".git", "FETCH_HEAD")), { code: "ENOENT" });
 });
 
 test("ACC-plugin-dist-05: 发布可重试，保留旧包和同名 zip，传输失败时不切换清单", (t) => {
@@ -333,22 +404,10 @@ test("ACC-plugin-v2-11: 生成结果若留有 {{ 占位符，渲染器与发布�
   );
 
   // 端到端测试：模板残留未填占位时，publish-plugin.mjs 退出非 0 且不调用 ssh/scp
-  const { root, calls, remote, run } = fixture(t);
-  const copyRoot = join(root, "repo");
-  const release = join(copyRoot, "deploy", "hifabu");
-  const plugin = join(copyRoot, "plugins", "hifabu");
-  const tooling = join(copyRoot, "plugins", "hifabu-src");
-  const sitePlugin = join(copyRoot, "site", "plugin");
-  mkdirSync(release, { recursive: true });
-  mkdirSync(tooling, { recursive: true });
-  cpSync(pluginDir, plugin, { recursive: true });
-  cpSync(sitePluginDir, sitePlugin, { recursive: true });
-  copyFileSync(versionCheck, join(tooling, "version.mjs"));
-  const entry = join(release, "publish-plugin.mjs");
-  copyFileSync(publisher, entry);
+  const { calls, remote, run, sitePlugin } = fixture(t);
   writeFileSync(join(sitePlugin, "index.html"), validTemplate.replace("</footer>", "{{leftover}}</footer>"));
 
-  const blocked = run([], { PUBLISH_NO_UPLOAD: "1" }, entry);
+  const blocked = run([], { PUBLISH_NO_UPLOAD: "1" });
   assert.equal(blocked.status, 1);
   assert.match(blocked.stderr, /占位符/);
   assert.throws(() => readFileSync(calls), { code: "ENOENT" });
