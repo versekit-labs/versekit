@@ -196,7 +196,7 @@ async function evaluateProject(scenario) {
     const secondDelivery = await monitorDelivery(fixture, beforeSecond);
     const row = { project: scenario.label, questions: [first.questions, second.questions],
       modelCalls: [first.calls, second.calls], delivered: [Boolean(firstDelivery), Boolean(secondDelivery)], identity,
-      confirmedBeforeWrite: first.confirmed && first.conventionWrites === 1,
+      confirmedBeforeWrite: first.confirmed && first.conventionWrites === 1, conventionWrites: first.conventionWrites,
       projectJson, episodes: savedProject?.episodes, groupQuestions: first.groupQuestions, savedGroup,
       final: [first.turns, second.turns] };
     console.log(JSON.stringify(row));
