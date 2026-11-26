@@ -5,17 +5,18 @@
 // cannot diverge. Adapter work is queued, never awaited here: an HTTP request that waits 20
 // minutes for an upload is a timeout, not a feature.
 
-import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
-import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
+import { chmodSync, existsSync, statSync } from "node:fs";
+import { resolve as resolvePath, join as joinPath } from "node:path";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit, paths, DEFAULT_LANGUAGE } from "./index.mjs";
-import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES, relayConnectionKey, assertPublisherAccepts, getGroupSnapshot } from "../../relay/src/index.mjs";
-import { BASELINE_TRANSFER, deliveryProgress, deliveryStatusView, formatBytes, formatDuration, transferSeconds } from "../../relay/src/status.mjs";
-import { deliveryCopy, deliveryFileKey, deliveryFiles, isVersionedDelivery, looksLikeLocalPath, validateDeliveryV1 } from "../../relay/src/delivery-v1.mjs";
+import { ping, pullOnce } from "../../relay/src/index.mjs";
+import { deliveryFileKey, isVersionedDelivery, looksLikeLocalPath } from "../../relay/src/delivery-v1.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
-import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules, dayUsage } from "./plan-rules.mjs";
+import { assertPlanSlot, planRules, takenTimes, nearestAvailable, describeRules, dayUsage } from "./schedule-rules.mjs";
+import { createDeliveryHandlers, deliveryWorkPlan } from "./maker-handlers.mjs";
+import { checkWorkPlan, copyFor, copyViolations } from "./plan-rules.mjs";
 import * as planModel from "./plan.mjs";
 import { nextCollectAt } from "./collect-plan.mjs";
 import { setupStatus } from "./setup.mjs";
@@ -41,18 +42,6 @@ const fail = (message, hint) => {
 const requireGroup = (ref) => store.findGroup(ref) ?? fail(`没有这个账号组：${ref}（在系统页的账号组里看有哪些）`, "vk group list");
 
 const titleOf = (asset) => basename(asset, extname(asset)) || "未命名";
-
-/** v1 uses file identities on the wire. The work pipeline still takes cuts with local asset paths. */
-function deliveryWorkPlan(manifest, pathOf) {
-  const { title, language = DEFAULT_LANGUAGE } = manifest.work;
-  const cuts = manifest.cuts.map(({ title: cutTitle, video, cover, copy }, i) => ({
-    title: cutTitle ?? (manifest.cuts.length === 1 ? title : "成片 " + (i + 1)),
-    ...(cover ? { cover: pathOf(cover) } : {}),
-    copy: deliveryCopy(copy),
-    versions: [{ language, asset: pathOf(video) }],
-  }));
-  return { title, cuts };
-}
 
 /** `--to tiktok,bilibili` arrives as an array; tolerate a comma string from a card button. */
 const platformList = (to) => {
@@ -412,7 +401,6 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   // 这一轮（或刚结束的一轮）的逐个投递进展，给 vk relay pull 和 relay.status 看（ACC-relay-06）
   let relayRound = null;
   let relayRoundAccount;
-  const uploading = new Map();
   const makerConnection = () => {
     const cfg = relayConfig();
     if (!cfg.url || !cfg.pushToken) {
@@ -421,30 +409,6 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     }
     return { ...cfg, token: cfg.pushToken };
   };
-  const sameMaker = (row, cfg) => row.url === cfg.url && (row.connectionKey ? row.connectionKey === relayConnectionKey(cfg) : !cfg.accountId);
-  const makerFailures = (cfg) => (store.getRelayState().push_failures ?? []).filter((row) => sameMaker(row, cfg) && Date.now() - row.updatedAt < RELAY_WEEK_MS);
-  const localStatus = (row, lastPullAt = null) => {
-    const elapsed = (Date.now() - row.createdAt) / 1000;
-    const speed = elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
-    const progress = deliveryProgress(row.sent, row.totalBytes, speed);
-    const state = row.queued ? "queued" : row.errorCode ? "failed" : "uploading";
-    const { id, title, group, totalBytes, createdAt, updatedAt } = row;
-    const view = { id, title, group, totalBytes, createdAt, updatedAt, lastPullAt, state, progress };
-    if (state === "queued") {
-      const { errorCode, reason, retryAt } = row;
-      const message = errorCode === "unreachable"
-        ? "中转连不上，已经排队。网通了会自动接着传，不用再说一遍。"
-        : errorCode ? "上传中断，已经排队。后台会自动接着传。" : "已登记，等后台上传。";
-      return { ...view, label: "排队中", message, ...(errorCode ? { errorCode, reason, retryAt } : {}) };
-    }
-    if (state === "failed") {
-      const { errorCode, reason, nextStep } = row;
-      return { ...view, label: "没交成", errorCode, reason, nextStep, message: `没交成：${reason}` };
-    }
-    return { ...view, label: "正在传",
-      message: `正在传 ${title}：${formatBytes(progress.bytes)} / ${formatBytes(totalBytes)}，还要约 ${formatDuration(progress.etaSeconds)}。` };
-  };
-
   /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
   function ingestDelivery(delivery, filePaths, inboxDir, accountId) {
     const m = delivery.manifest ?? {};
@@ -454,7 +418,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     if (!store.listAccounts({ groupId: g.id }).length) fail(`账号组「${g.name}」里还没有账号，平台稿没地方放：先接入账号，再让制作机重新 push`);
     let work;
     if (deliveryV1) {
-      const plan = deliveryWorkPlan(m, (file) => filePaths[deliveryFileKey(file)]);
+      const plan = deliveryWorkPlan(m, (file) => filePaths[deliveryFileKey(file)], DEFAULT_LANGUAGE);
       work = store.showWork(store.upsertWork(plan, { relay: true, deliveryKey: m.work.key, relayScope: accountId }).id);
     } else {
       const blobPath = (ref) => {
@@ -503,20 +467,23 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   }
 
   const deliveryKey = (accountId, id) => accountId ? `${accountId}.${id}` : id;
+  const safeLabel = (value) => typeof value === "string" && value.trim() && value.length <= 255 && !looksLikeLocalPath(value);
+  const groupAccounts = (groupId) => store.listAccounts({ groupId }).filter((account) => safeLabel(account.platform)).map((account) => ({
+    platform: store.copyPlatformOf(account.platform),
+    name: safeLabel(account.display_name) ? account.display_name : platformLabel(account.platform),
+  }));
+  const defaultGroupId = (ref) => ref ? store.findGroup(ref)?.id : null;
+
   function publisherGroupSnapshot(defaultGroup) {
-    const safeLabel = (value) => typeof value === "string" && value.trim() && value.length <= 255 && !looksLikeLocalPath(value);
     const name = deviceName();
-    const defaultId = defaultGroup ? store.findGroup(defaultGroup)?.id : null;
+    const defaultId = defaultGroupId(defaultGroup);
     return {
       device: { id: store.relayDeviceId(), name: safeLabel(name) ? name : "发布机" },
       reportedAt: Date.now(),
       groups: store.listGroups().filter((group) => safeLabel(group.name)).map((group) => ({
         name: group.name,
         ...(group.id === defaultId ? { default: true } : {}),
-        accounts: store.listAccounts({ groupId: group.id }).filter((account) => safeLabel(account.platform)).map((account) => ({
-          platform: store.copyPlatformOf(account.platform),
-          name: safeLabel(account.display_name) ? account.display_name : platformLabel(account.platform),
-        })),
+        accounts: groupAccounts(group.id),
       })),
     };
   }
@@ -633,180 +600,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "bootstrap": () => overview.buildBootstrap(),
 
     // 程序版本与后台自动更新（#217）。
-    // 云端中转（#226）。
-    "work.push": async ({ manifest, group, dryRun = false }) => {
-      const cfg = makerConnection();
-      if (!manifest || !existsSync(manifest)) fail(`找不到清单：${manifest ?? "（没给）"}`);
-      let raw;
-      try {
-        raw = JSON.parse(readFileSync(manifest, "utf8"));
-      } catch (err) {
-        fail(`清单不是合法的 JSON：${manifest}（${err.message}）`);
-      }
-      const deliveryV1 = isVersionedDelivery(raw);
-      if (deliveryV1) validateDeliveryV1(raw);
-      const groupName = String(deliveryV1 ? raw.target.group : group ?? cfg.defaultGroup ?? "").trim();
-      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>，或用 vk relay connect 记住默认组");
-      if (deliveryV1 && group != null && group.trim() !== groupName) fail("指定的账号组和清单里的目标组不一致。", "让 --group 和清单的 target.group 一致。");
-      const baseDir = dirname(resolvePath(manifest));
-      const rel = (p) => (typeof p === "string" && p ? resolvePath(baseDir, p) : p);
-      const legacyCuts = () => (Array.isArray(raw?.cuts) ? raw.cuts : []).map((c) => ({
-        ...c,
-        ...(c?.cover ? { cover: rel(c.cover) } : {}),
-        versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...(v?.cover ? { cover: rel(v.cover) } : {}), asset: rel(v?.asset) })),
-      }));
-      const plan = deliveryV1 ? deliveryWorkPlan(raw, (file) => rel(file.name)) : { title: raw?.title, source: raw?.source, cuts: legacyCuts() };
-      const { cuts } = plan;
-      // 规则和 work.add 同一套：不合格当场报错，一个字节都不上传。
-      const rejected = [];
-      const onCopyViolation = dryRun ? (violation) => {
-        if (!rejected.some((r) => r.platform === violation.platform && r.cut === violation.cut && r.reason === violation.reason)) rejected.push(violation);
-      } : undefined;
-      const checked = store.checkWorkPlan(plan, { onCopyViolation, deliveryV1 });
-      const covers = [...new Set(cuts.flatMap((c) => [c.cover, ...c.versions.map((v) => v.cover)]).filter(Boolean))];
-      const missingCovers = covers.filter((a) => !existsSync(a) || !statSync(a).isFile());
-      if (missingCovers.length) fail(`找不到封面图片：${missingCovers.join("、")}（路径相对清单所在目录）`);
-      const assets = [...new Set(cuts.flatMap((c) => c.versions.map((v) => v.asset)))];
-      const missing = assets.filter((a) => !existsSync(a));
-      if (missing.length) fail(`找不到成片：${missing.join("、")}（路径相对清单所在目录）`);
-      const nonFiles = assets.filter((a) => !statSync(a).isFile());
-      if (nonFiles.length) fail(`中转目前只支持视频文件，不支持图片目录：${nonFiles.join("、")}`);
-
-      const files = [];
-      const bySha = new Map();
-      for (const path of new Set([...assets, ...covers])) {
-        const size = statSync(path).size;
-        if (!size) fail(`文件是空的：${path}，补好后再交付`);
-        const sha256 = await hashFile(path);
-        files.push({ path, sha256, size, name: basename(path) });
-        bySha.set(path, { sha256, size });
-      }
-      if (deliveryV1) {
-        for (const file of deliveryFiles(raw)) {
-          const actual = bySha.get(rel(file.name));
-          if (actual.sha256 !== file.sha256.toLowerCase() || actual.size !== file.size) {
-            throw Object.assign(new Error("素材「" + file.name + "」和清单里的 SHA-256 或大小不一致，请重新生成清单。"), { code: "hash_mismatch" });
-          }
-        }
-      }
-      const unique = uniqueBlobs(files);
-      const bytes = unique.reduce((n, f) => n + f.size, 0);
-      let targetPlatforms;
-      if (deliveryV1) {
-        const snapshot = await getGroupSnapshot(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
-        if (snapshot) {
-          const target = snapshot.groups.find(({ name }) => name === groupName);
-          if (!target) fail("发布机上没有「" + groupName + "」组，现在有：" + (snapshot.groups.map(({ name }) => name).join("、") || "没有账号组") + "。");
-          targetPlatforms = [...new Set(target.accounts.map(({ platform }) => platform))];
-        }
-      }
-      if (dryRun) {
-        // 有快照时只报告目标组的平台；旧清单继续按全部平台预检。
-        const platforms = targetPlatforms ?? Object.keys(store.COPY_LIMITS);
-        for (const cut of checked.plan) {
-          const version = cut.versions.find((v) => v.language === "zh") ?? cut.versions[0];
-          for (const platform of platforms) {
-            const copy = store.copyFor(version.meta?.copy, platform);
-            const bad = store.copyViolations(platform, { ...copy, title: copy.title ?? cut.title });
-            if (bad.length) onCopyViolation({ platform, cut: cut.title, language: version.language, reason: bad.join("；") });
-          }
-        }
-        const warnings = [];
-        const details = await ping({ ...cfg, details: true }).catch((err) => {
-          if (!err.retryable) throw err;
-          warnings.push({ code: err.code, message: err.message });
-          return {};
-        });
-        if (deliveryV1 && !warnings.length) assertPublisherAccepts(details, raw.schema);
-        const { freeBytes = null, minFreeBytes = MIN_FREE_BYTES } = details;
-        const speeds = { ...BASELINE_TRANSFER };
-        for (const key of Object.keys(speeds)) {
-          if (Number.isFinite(details[key]) && details[key] > 0) speeds[key] = details[key];
-        }
-        if (freeBytes == null && !warnings.length) warnings.push({ code: "disk_unknown", message: "中转未回报剩余空间，请更新中转后再检查。" });
-        if (freeBytes != null && freeBytes - bytes < minFreeBytes) {
-          const gb = (n) => `${(n / 1024 ** 3).toFixed(1)}GB`;
-          warnings.push({ code: "disk_low", message: `中转空间不够：剩余 ${gb(freeBytes)}，交付后需保留 ${gb(minFreeBytes)}。先清理中转，或等已入库的旧期满 7 天自动清理。` });
-        }
-        const uploadSeconds = transferSeconds(bytes, speeds.uploadBytesPerSecond);
-        const downloadSeconds = transferSeconds(bytes, speeds.downloadBytesPerSecond);
-        return {
-          dryRun: true, group: groupName, title: checked.t, files: unique.map(({ name, size }) => ({ name, size })), bytes,
-          etaSeconds: uploadSeconds + downloadSeconds, transfer: { ...speeds, uploadSeconds, downloadSeconds },
-          freeBytes, minFreeBytes, rejected: targetPlatforms ? rejected.filter(({ platform }) => targetPlatforms.includes(platform)) : rejected, warnings,
-        };
-      }
-      const blobOf = (o) => (o?.cover ? { cover: "blob:" + bySha.get(o.cover).sha256 } : {});
-      const wire = deliveryV1 ? raw : {
-        title: raw.title,
-        ...(raw.source == null ? {} : { source: rel(raw.source.trim()) }),
-        cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: "blob:" + bySha.get(v.asset).sha256 })) })),
-      };
-      const id = newDeliveryId();
-      const createdAt = Date.now();
-      const upload = { id, url: cfg.url, connectionKey: relayConnectionKey(cfg), title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
-        uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
-      if (uploadQueue) {
-        if (deliveryV1) {
-          const info = await ping(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
-          if (info) assertPublisherAccepts(info, raw.schema);
-        }
-        uploadQueue.register({ ...upload, manifest: wire, files: unique });
-        return { id, state: "pending", group: groupName, files: unique.length, bytes, message: `已登记，投递 ${id}，后台会上传。` };
-      }
-      log(`[relay] 上传 ${files.length} 个文件到中转…`);
-      uploading.set(id, upload);
-      try {
-        const delivery = await pushDelivery({
-          ...cfg, id, group: groupName, manifest: wire, files: unique,
-          onProgress: ({ deliverySent }) => { upload.sent = deliverySent; upload.updatedAt = Date.now(); },
-        });
-        return { id: delivery.id, state: delivery.state, group: groupName, files: unique.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
-      } catch (err) {
-        const errorCode = err.code ?? "upload_failed";
-        const nextStep = err.hint ?? (errorCode === "disk_low" || errorCode === "quota_exceeded" ? "清出中转空间后，再从制作机重新交付。"
-          : errorCode === "relay_disabled" ? "到我的 Hifabu 申请开通传片，再从制作机重新交付。"
-          : "检查中转连接后，从制作机重新交付。");
-        const failed = { ...upload, updatedAt: Date.now(), errorCode, reason: err.message, nextStep };
-        const history = (store.getRelayState().push_failures ?? []).filter((r) => r.updatedAt >= Date.now() - RELAY_WEEK_MS);
-        store.patchRelayState({ push_failures: [failed, ...history].slice(0, 20) });
-        emitDeliveryFailure(id, failed);
-        throw Object.assign(err, { hint: `${nextStep} 投递号 ${id}` });
-      } finally {
-        uploading.delete(id);
-      }
-    },
-
-    "delivery.list": async () => {
-      const cfg = makerConnection();
-      const active = uploadQueue ? uploadQueue.list(cfg) : [...uploading.values()].filter((row) => sameMaker(row, cfg));
-      const local = active.concat(makerFailures(cfg));
-      const result = await listDeliveryStatus(cfg).catch((err) => {
-        if (!local.length || (!err.retryable && err.code !== "relay_disabled")) throw err;
-        return { deliveries: [], warning: err.message };
-      });
-      const { lastPullAt = null, downloadBytesPerSecond, warning } = result;
-      const deliveries = result.deliveries.map((row) => deliveryStatusView(row, { lastPullAt, downloadBytesPerSecond }));
-      const remoteIds = new Set(deliveries.map((row) => row.id));
-      for (const row of local) if (!remoteIds.has(row.id)) deliveries.push(localStatus(row, lastPullAt));
-      deliveries.sort((a, b) => b.createdAt - a.createdAt);
-      return { deliveries, lastPullAt, ...(warning ? { warning } : {}) };
-    },
-
-    "delivery.show": async ({ id }) => {
-      if (!/^dl_[0-9a-f]{12,32}$/.test(id)) fail("投递号不合法：请核对投递列表里的编号", "vk delivery list");
-      const cfg = makerConnection();
-      const active = uploadQueue ? uploadQueue.list(cfg).find((row) => row.id === id) : uploading.get(id);
-      if (active && sameMaker(active, cfg)) return localStatus(active);
-      try {
-        const cloud = await getDeliveryStatus({ ...cfg, id });
-        return deliveryStatusView(cloud, cloud);
-      } catch (err) {
-        const failed = makerFailures(cfg).find((row) => row.id === id);
-        if (failed && (err.status === 404 || err.retryable || err.code === "relay_disabled")) return localStatus(failed);
-        throw err;
-      }
-    },
+    ...createDeliveryHandlers({ makerConnection, state: store.uploadState, uploadQueue, onFailure: emitDeliveryFailure, log }),
 
     "relay.status": () => relayStatusView(),
 
@@ -928,7 +722,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       // 封面（ACC-v3-fid-10）：路径要在本机且是文件；先过清单规则（必须是图片）再查文件在不在。
       const absCover = (o) => (typeof o?.cover === "string" && o.cover ? { cover: resolvePath(o.cover) } : {});
       plan.cuts = plan.cuts.map((c) => ({ ...c, ...absCover(c), versions: (c?.versions ?? []).map((v) => ({ ...v, ...absCover(v), asset: resolvePath(v.asset) })) }));
-      store.checkWorkPlan({ title: plan.title, source: plan.source, cuts: plan.cuts });
+      checkWorkPlan({ title: plan.title, source: plan.source, cuts: plan.cuts });
       const noCover = [...new Set(plan.cuts.flatMap((c) => [c.cover, ...c.versions.map((v) => v.cover)]).filter(Boolean))].filter((a) => !existsSync(a) || !statSync(a).isFile());
       if (noCover.length) fail(`找不到封面图片：${noCover.join("、")}（路径要在本机）`);
       const result = store.upsertWork(plan);
@@ -950,7 +744,13 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
 
     "group.list": () => {
       const current = store.currentGroup();
-      return { groups: store.listGroups(), current: current ? { id: current.id, name: current.name } : null };
+      const defaultId = defaultGroupId(readConfig().relay?.default_group);
+      const groups = store.listGroups().map((group) => ({
+        ...group,
+        ...(group.id === defaultId ? { default: true } : {}),
+        accounts: groupAccounts(group.id),
+      }));
+      return { groups, current: current ? { id: current.id, name: current.name } : null, reportedAt: Date.now() };
     },
 
     "group.add": ({ name }) => {
@@ -1246,11 +1046,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         }
         // 通用文案留在语言版本上，平台稿只存入库时给这个平台「单独写的」字段（ACC-v3-edit-01）：
         // 之后改通用，跟通用的平台稿发出去的就是新的。限制按合并后的生效文案判。
-        const entry = store.copyFor(versionCopy, account.platform);
+        const entry = copyFor(versionCopy, account.platform);
         const own = versionCopy?.[store.copyPlatformOf(account.platform)] ?? {};
         const copy = { title: entry.title ?? cut.title, ...(entry.body ? { body: entry.body } : {}), ...(entry.tags?.length ? { tags: entry.tags } : {}) };
         const ownCopy = { ...(own.title ? { title: own.title } : {}), ...(own.body ? { body: own.body } : {}), ...(own.tags?.length ? { tags: own.tags } : {}) };
-        const bad = store.copyViolations(account.platform, copy);
+        const bad = copyViolations(account.platform, copy);
         if (bad.length) {
           reject(`文案超限：${bad.join("；")}。入库时给 ${platformLabel(account.platform)} 单独写一份更短的文案（超限不会自动截断）`);
           continue;

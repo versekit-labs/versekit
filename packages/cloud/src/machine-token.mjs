@@ -1,13 +1,15 @@
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { signRelayControl } from "./relay-control.mjs";
+import { isMachineRole } from "./transport.mjs";
+
+export { isMachineRole };
 
 const ttlSeconds = 3600;
 export const machineTokenTtlMs = ttlSeconds * 1000;
 const audience = "versekit-relay";
 const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-export const isMachineRole = (role) => role === "maker" || role === "executor";
 
 function validClaims(claims) {
   return claims && claims.aud === audience &&

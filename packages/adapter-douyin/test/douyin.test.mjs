@@ -24,7 +24,7 @@ const { validateAdapter } = await import("../../core/src/contract.mjs");
 const { AdapterError } = await import("../../core/src/errors.mjs");
 const { publishInputFor } = await import("../../core/src/publish-flow.mjs");
 const { buildHandlers, checkAccount } = await import("../../core/src/adapters.mjs");
-const { planRules, describeRules } = await import("../../core/src/plan-rules.mjs");
+const { planRules, describeRules } = await import("../../core/src/schedule-rules.mjs");
 const { createSim } = await import("./sim-page.mjs");
 
 core.migrate();

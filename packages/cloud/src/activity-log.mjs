@@ -22,6 +22,7 @@ const entries = Object.freeze({
   device_link_busy: ["device.link.failed", "当前接入请求过多，请稍后重试。"],
   device_inactive: ["device.refresh.failed", "这台机器已经退出或接入已失效，请重新登录 Hifabu。"],
   device_not_found: ["device.revoke.failed", "找不到这台机器。"],
+  device_revoke_credential_invalid: ["device.revoke.failed", "无法核对这台机器的刷新凭据。"],
   device_revoked: ["device.revoked", "机器已退出。"],
   device_signing_unavailable: ["device.request.failed", "Hifabu 暂时无法接入机器，请稍后重试。"],
   owner_required: ["account.admin.denied", "只有 Hifabu 所有者可以访问管理页。"],

@@ -13,7 +13,7 @@ const store = await import("../src/store.mjs");
 const overview = await import("../src/overview.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
 const { COMMANDS, parseArgs, findCommand } = await import("../src/commands.mjs");
-const { planRules, assertPlanSlot } = await import("../src/plan-rules.mjs");
+const { planRules, assertPlanSlot } = await import("../src/schedule-rules.mjs");
 const { updateConfig } = await import("../src/config.mjs");
 
 const h = createCoreHandlers({ adapters: [{ platform: "tiktok" }, { platform: "tiktok-api" }, { platform: "bilibili" }], log: () => {} });

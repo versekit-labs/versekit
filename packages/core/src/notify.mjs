@@ -28,7 +28,7 @@ import { getPublishRow } from "./publish-flow.mjs";
 import { approvalLink } from "./approval.mjs";
 import { getFeishuSettings, getFeishuDelivery, patchFeishuDelivery } from "./store.mjs";
 import { CONFIRMABLE_STATES, PER_ITEM_PLATFORMS, listGroups, effectiveCopy, effectiveTitle } from "./store.mjs";
-import { planRules, takenTimes } from "./plan-rules.mjs";
+import { planRules, takenTimes } from "./schedule-rules.mjs";
 import { basename } from "node:path";
 
 const RETRY_AFTER_MS = 60e3;

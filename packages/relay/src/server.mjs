@@ -30,9 +30,9 @@ import { createMachineTokenVerifier, machineTokenTtlMs } from "../../cloud/src/m
 import { createRelayControlVerifier, relayAccountId as ACCOUNT_ID } from "../../cloud/src/relay-control.mjs";
 import { isVersionedDelivery, validateDeliveryEnvelope } from "./delivery-v1.mjs";
 import { projectGroupSnapshot } from "./group-snapshot.mjs";
+import { MIN_FREE_BYTES, RETENTION_MS } from "./status.mjs";
 
-export const MIN_FREE_BYTES = 2 * 1024 ** 3;
-export const RETENTION_MS = 7 * 864e5;
+export { MIN_FREE_BYTES, RETENTION_MS };
 const STALE_PARTIAL_MS = 7 * 864e5;
 const SHA = /^[0-9a-f]{64}$/;
 const DELIVERY_ID = /^dl_[0-9a-f]{12,32}$/;

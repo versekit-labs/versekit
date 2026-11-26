@@ -10,7 +10,7 @@ process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-plan-rules-"));
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
-const { planRules, DEFAULT_PLAN_RULES, violationAt, nearestAvailable } = await import("../src/plan-rules.mjs");
+const { planRules, DEFAULT_PLAN_RULES, violationAt, nearestAvailable } = await import("../src/schedule-rules.mjs");
 const { updateConfig } = await import("../src/config.mjs");
 
 const h = createCoreHandlers({ adapters: [{ platform: "tiktok" }, { platform: "bilibili" }], log: () => {} });

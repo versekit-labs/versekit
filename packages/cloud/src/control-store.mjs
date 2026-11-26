@@ -137,6 +137,10 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
       UPDATE device SET revoked_at = coalesce(revoked_at, ?)
       WHERE user_id = ? AND id = ? RETURNING id
     `);
+    const revokeByRefreshHash = db.prepare(`
+      UPDATE device SET revoked_at = coalesce(revoked_at, ?)
+      WHERE refresh_token_hash = ? RETURNING id
+    `);
     const listDevices = db.prepare(`
       SELECT id, name, role, created_at AS createdAt, last_seen_at AS lastSeenAt
       FROM device WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC, id
@@ -217,6 +221,10 @@ export function openControlStore(filename, { clock = Date.now } = {}) {
 
       revokeMachine(userId, deviceId) {
         return Boolean(revokeDevice.get(clock(), userId, deviceId));
+      },
+
+      revokeOwnMachine(refreshToken) {
+        return Boolean(revokeByRefreshHash.get(clock(), tokenHash(refreshToken)));
       },
 
       listMachines(userId) {

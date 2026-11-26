@@ -91,9 +91,9 @@ async function readCommandArgs(req, route, errorCode) {
   }
 }
 
-function deviceCredential(req) {
+function deviceCredential(req, invalidCode = "device_inactive") {
   const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? "")?.[1];
-  if (!token) throw new DeviceFlowError("device_inactive", 401);
+  if (!token) throw new DeviceFlowError(invalidCode, 401);
   return token;
 }
 
@@ -300,6 +300,12 @@ export function createCloudServer({
       log.record("device_revoked");
       if (req.headers.accept?.includes("text/html")) redirect(res, "/account");
       else json(res, 200, { revoked: true });
+    },
+    "device.revoke.self"(req, res) {
+      const invalid = "device_revoke_credential_invalid";
+      if (!store.revokeOwnMachine(deviceCredential(req, invalid))) throw new DeviceFlowError(invalid, 401);
+      log.record("device_revoked");
+      json(res, 200, { revoked: true });
     },
   };
 

@@ -6,6 +6,7 @@ export const cloudCommands = new Map(CLOUD_COMMANDS.map((command) => [command.na
 const routesByName = new Map(cloudRoutes.map((route) => [route.command, route]));
 
 export const isLoopback = (url) => ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+export const isMachineRole = (role) => role === "maker" || role === "executor";
 
 export function cloudTextArgs(command, fields) {
   return Object.fromEntries(Object.entries(fields).map(([key, value]) => {

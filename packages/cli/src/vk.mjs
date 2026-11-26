@@ -16,7 +16,7 @@ import { COMMANDS, findCommand } from "../../core/src/commands.mjs";
 import { loadAdapters, buildHandlers, checkAccount, notifyLogin } from "../../core/src/adapters.mjs";
 import { createCoreHandlers } from "../../core/src/handlers.mjs";
 import { startDaemon } from "../../core/src/daemon.mjs";
-import { statusSnapshot, getAccount, getBinding, bindChannel, getFeishuSettings, patchFeishuSettings, getFeishuDelivery, patchFeishuDelivery, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut } from "../../core/src/store.mjs";
+import { statusSnapshot, getAccount, getBinding, bindChannel, getFeishuSettings, patchFeishuSettings, getFeishuDelivery, patchFeishuDelivery, setAccountState, platformLabelOf, recordPlatformUid, markAccountLoggedOut, uploadState } from "../../core/src/store.mjs";
 import { feishuState, reportCardFailed, reportCardSent } from "../../core/src/notify.mjs";
 import { readConfig, updateConfig, feishuProfileName, feishuAppId } from "../../core/src/config.mjs";
 import { fillAndSendCode, clickLoginButton, setInputValue, pageLoggedIn, qrProbe, switchToQr, readQr, refreshQr, qrStateOf, readCreatorId, QR_ACCOUNT_HINT } from "./login-xhs.mjs";
@@ -927,8 +927,25 @@ async function cmdServe() {
   // 离线模式连适配器都不加载：不会有任何东西能走到真实平台。
   const { adapters, errors } = offline ? { adapters: [], errors: [] } : await loadAdapters();
   const log = (m) => (human ? console.log(m) : console.error(m));
-  const { relayConnection: machineRelay, ...cloud } = createCloudHandlers({ offline, openBrowser, log });
-  const uploadQueue = createRelayUploadQueue({ log, machineRelay });
+  const { relayConnection: machineRelay, ...cloud } = createCloudHandlers({
+    offline, openBrowser, log, credentialsDir: paths().credentials,
+  });
+  const uploadQueue = createRelayUploadQueue({
+    log,
+    state: uploadState,
+    connection() {
+      const machine = machineRelay();
+      if (machine) return machine.role === "maker" && machine.url ? machine : null;
+      const relay = readConfig().relay;
+      if (typeof relay?.url === "string" && relay.url && typeof relay.push_token === "string" && relay.push_token) {
+        return { url: relay.url.replace(/\/+$/, ""), token: relay.push_token };
+      }
+      return null;
+    },
+    onFailure({ id, errorCode, reason, nextStep }) {
+      emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${id}:failed` });
+    },
+  });
   const handlers = daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue });
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";

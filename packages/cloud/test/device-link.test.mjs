@@ -117,6 +117,24 @@ test("ACC-cloud-03/04: 接入终态、刷新、账号隔离及退出这台", asy
   assert.equal(owned.machines.length, 1);
   assert.equal(owned.machines[0].id, claims.deviceId);
   assert.match(await (await request("/account", { headers: account })).text(), /退出这台/);
+  const makerChallenge = await start("maker");
+  await command("device.link.decide", { code: new URL(makerChallenge.url).searchParams.get("code"), decision: "allow" }, sessionCookie(other.token));
+  const maker = await poll(makerChallenge);
+  const revokeSelf = (headers) => command("device.revoke.self", {}, headers);
+  for (const credentials of [account, bearer(makerChallenge.pollToken), bearer(maker.machineToken)]) {
+    await assert.rejects(revokeSelf(credentials), { status: 401, code: "device_revoke_credential_invalid" });
+  }
+  const selfPath = cloudRoute("device.revoke.self").path;
+  const targetOther = await request(selfPath, {
+    method: "POST", body: JSON.stringify(machine),
+    headers: { Origin: origin, "Content-Type": "application/json", ...bearer(maker.refreshToken) },
+  });
+  assert.equal(targetOther.status, 400);
+  assert.deepEqual(await revokeSelf(bearer(maker.refreshToken)), { revoked: true });
+  assert.deepEqual(await revokeSelf(bearer(maker.refreshToken)), { revoked: true }, "重试注销自己的设备仍然成功");
+  await assert.rejects(command("device.refresh", {}, bearer(maker.refreshToken)), { status: 401, code: "device_inactive" });
+  assert.deepEqual(await command("device.list", {}, sessionCookie(other.token)), { machines: [] });
+  assert.equal(verify((await command("device.refresh", {}, bearer(linked.refreshToken))).machineToken).deviceId, claims.deviceId);
   assert.deepEqual(await command("device.revoke", machine, account), { revoked: true });
   assert.deepEqual(await command("device.list", {}, account), { machines: [] });
   await assert.rejects(command("device.refresh", {}, bearer(linked.refreshToken)), { status: 401, code: "device_inactive" });
