@@ -93,9 +93,9 @@ async function evaluateProject(scenario) {
     writeFileSync(join(root, "bin", "hifabu"), '#!/bin/sh\nexec "$HIFABU_EVAL_MAKER" "$@" --data "$HIFABU_EVAL_DATA" --offline\n', { mode: 0o700 });
     const childEnv = { ...env, HIFABU_ORIGIN: fixture.origin, HIFABU_EVAL_MAKER: join(plugin, "bin/hifabu"),
       HIFABU_EVAL_DATA: data, PATH: join(root, "bin") + ":" + env.PATH };
-    const args = [...common, "--tools", "Skill,Read,Glob,Grep,Bash,Write,Edit,AskUserQuestion",
+    const args = [...common, "--add-dir", plugin, "--add-dir", root, "--tools", "Skill,Read,Glob,Grep,Bash,Write,Edit,AskUserQuestion",
       "--allowedTools", "Skill", "--max-turns", "20", "--append-system-prompt",
-      `This is a loopback Hifabu evaluation. Use only the working project and the test data directory ${data}. Treat that exact path as CLAUDE_PLUGIN_DATA for both commands and files. Auto-update was already handled. Do not read or alter user Claude settings. Keep all temporary files in ${root}.`];
+      `This is a loopback Hifabu evaluation. Use the working project and the test data directory ${data}. Treat that exact path as CLAUDE_PLUGIN_DATA for both commands and files. Read the skill references from ${join(plugin, "skills/handoff/references")}. Auto-update was already handled. Do not read or alter user Claude settings. Keep all temporary files in ${root}.`];
     const run = async () => {
       let questions = 0;
       const reply = (text) => {
@@ -106,11 +106,17 @@ async function evaluateProject(scenario) {
         return /账号组|常用组|短片组/.test(text) ? "用常用组。前面你概括的约定和文案我确认。"
           : "我确认这个项目约定和你展示的选择，请按刚才的方案继续。";
       };
-      const observed = await claudeConversation({ cwd: project, env: childEnv, args, prompt: scenario.prompt,
+      const prompt = modes.includes("direct") ? "/hifabu:handoff " + scenario.prompt : scenario.prompt;
+      const observed = await claudeConversation({ cwd: project, env: childEnv, args, prompt,
         observe: (event) => {
           if (event.type === "assistant") {
             const tools = event.message.content.filter(({ type }) => type === "tool_use").map(({ name, input }) => [name, input]);
             if (tools.length) console.error(scenario.label, JSON.stringify(tools));
+          }
+          if (event.type === "user" && Array.isArray(event.message.content)) {
+            for (const block of event.message.content) {
+              if (block.type === "tool_result" && block.is_error) console.error(scenario.label, JSON.stringify(block.content));
+            }
           }
         },
         permission: ({ tool_name, input }) => {
