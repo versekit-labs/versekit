@@ -7,10 +7,10 @@
 import { request } from "node:http";
 import { spawn } from "node:child_process";
 import { openSync, closeSync } from "node:fs";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { paths, isInitialised } from "../../core/src/index.mjs";
 import { findCommand } from "../../core/src/commands.mjs";
+import { DAEMON_START_TIMEOUT_MS, daemonStartingPid, probeDaemonSocket, readDaemonReady, reserveDaemonStart, tryDaemonLock } from "../../core/src/daemon.mjs";
 import { ROUTES } from "../../core/src/routes.mjs";
 
 const CLI = fileURLToPath(new URL("./vk.mjs", import.meta.url));
@@ -87,37 +87,46 @@ export async function call(commandName, args = {}, { timeout } = {}) {
   return rawCall({ path: target, method: route.method, body, socketPath: paths().socket, timeout });
 }
 
-async function alive(socketPath, timeout = 400) {
-  try {
-    await rawCall({ path: "/api/now", method: "GET", socketPath, timeout });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Makes sure the daemon is up. Returns `{ started }` so `hifabu serve --detach` can say what happened
  * instead of hanging; throws only when the daemon genuinely could not come up.
  */
-export async function ensureDaemon({ timeoutMs = 6000, port = null, lan = false, log = () => {} } = {}) {
+export async function ensureDaemon({ timeoutMs = DAEMON_START_TIMEOUT_MS, port = null, lan = false, log = () => {} } = {}) {
   if (!isInitialised()) throw new Error("还没有初始化：先运行 hifabu init");
   const socketPath = paths().socket;
-  if (existsSync(socketPath) && (await alive(socketPath))) return { started: false };
-
-  log("守护进程没在跑，正在拉起…");
-  const args = [CLI, "serve", ...(port != null ? ["--port", String(port)] : []), ...(lan ? ["--lan"] : [])];
-  // detach 之后控制台就没了：把 stdout/stderr 落到 vk.log，排障才有现场。
-  const logFile = paths().log;
-  const fd = openSync(logFile, "a", 0o600);
-  const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
-  child.unref();
-  closeSync(fd);
-
   const end = Date.now() + timeoutMs;
+  let started = false;
+  let spawnError;
   while (Date.now() < end) {
-    await sleep(200);
-    if (existsSync(socketPath) && (await alive(socketPath))) return { started: true };
+    if (spawnError) throw spawnError;
+    if (readDaemonReady(socketPath) && await probeDaemonSocket(socketPath) === "listening") return { started };
+
+    if (!started && !daemonStartingPid(socketPath)) {
+      const unlock = tryDaemonLock(socketPath);
+      if (unlock) {
+        try {
+          // Recheck under the lock: a foreground daemon or another CLI may
+          // already have reserved this home without a listening socket.
+          if (!daemonStartingPid(socketPath) && await probeDaemonSocket(socketPath) === "absent") {
+            log("守护进程没在跑，正在拉起…");
+            const args = [CLI, "serve", ...(port != null ? ["--port", String(port)] : []), ...(lan ? ["--lan"] : [])];
+            const fd = openSync(paths().log, "a", 0o600);
+            try {
+              const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+              child.once("error", (err) => { spawnError = err; });
+              if (child.pid) reserveDaemonStart(socketPath, child.pid);
+              child.unref();
+              started = true;
+            } finally {
+              closeSync(fd);
+            }
+          }
+        } finally {
+          unlock();
+        }
+      }
+    }
+    await sleep(Math.min(200, Math.max(0, end - Date.now())));
   }
   throw new Error("守护进程没有起来：直接运行 hifabu serve，看它报什么错");
 }

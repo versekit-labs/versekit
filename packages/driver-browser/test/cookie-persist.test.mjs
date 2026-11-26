@@ -33,7 +33,7 @@ test("ACC-browser-login-02：后台会话 + 关掉修复 → 用人话报「登�
 });
 
 test("ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies 表有行、重开仍在", { timeout: 120_000 }, async () => {
-  const chrome = findChrome();
+  const chrome = process.env.HIFABU_TEST_CHROME_BIN ?? findChrome();
   assert.ok(chrome, "本测试需要本机有 Chrome/Chromium");
   process.env.HIFABU_CHROME_BIN = chrome;
   const id = DEFAULT_ACCOUNT;

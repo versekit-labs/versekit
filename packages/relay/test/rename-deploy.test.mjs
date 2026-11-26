@@ -99,20 +99,28 @@ test("ACC-brand-08 previews both scripts with only node and dirname on PATH", (t
 
 test("ACC-brand-08 Seoul check only reads service status and HTTP endpoints", (t) => {
   const dir = temp(t);
-  writeFileSync(join(dir, "systemctl"), `#!/bin/bash
-[[ "$1 $2" == "is-active --quiet" ]] || exit 2
-[[ "$3" == hifabu-cloud.service || "$3" == nginx.service ]]
-`, { mode: 0o700 });
-  writeFileSync(join(dir, "curl"), `#!/bin/bash
-case "\${!#}" in
-  http://127.0.0.1:8791/login|https://hifabu.com/login|https://assurelane.ai/) printf 200 ;;
-  https://vk.fangyouxi.cn/v1/ping) printf '%s' "\${RELAY_STATUS:-401}" ;;
-  *) exit 2 ;;
-esac
-`, { mode: 0o700 });
-  const run = (relayStatus) => spawnSync("/bin/bash", [deploy("hifabu/check-rename.sh")], {
-    cwd: dir, env: { PATH: dir, RELAY_STATUS: relayStatus }, encoding: "utf8", timeout: 5000,
-  });
+  // Load shell doubles once per run. Executable stubs started a fresh Bash for
+  // every systemctl/curl call, adding process startup to the 5 s test budget.
+  const fixture = join(dir, "commands.bash");
+  writeFileSync(fixture, `systemctl() {
+  [[ "$1 $2" == "is-active --quiet" ]] || return 2
+  [[ "$3" == hifabu-cloud.service || "$3" == nginx.service ]]
+}
+curl() {
+  case "\${!#}" in
+    http://127.0.0.1:8791/login|https://hifabu.com/login|https://assurelane.ai/) printf 200 ;;
+    https://vk.fangyouxi.cn/v1/ping) printf '%s' "\${RELAY_STATUS:-401}" ;;
+    *) return 2 ;;
+  esac
+}
+`);
+  const run = (relayStatus) => {
+    const result = spawnSync("/bin/bash", [deploy("hifabu/check-rename.sh")], {
+      cwd: dir, env: { PATH: dir, BASH_ENV: fixture, RELAY_STATUS: relayStatus }, encoding: "utf8", timeout: 5000,
+    });
+    assert.ifError(result.error);
+    return result;
+  };
   const healthy = run("401");
   assert.equal(healthy.status, 0, healthy.stderr);
   assert.match(healthy.stdout, /assurelane\.ai\/：HTTP 200/);
@@ -120,7 +128,7 @@ esac
   const unavailable = run("502");
   assert.equal(unavailable.status, 1);
   assert.match(unavailable.stderr, /HTTP 502，预期 401/);
-  assert.deepEqual(readdirSync(dir).sort(), ["curl", "systemctl"]);
+  assert.deepEqual(readdirSync(dir), ["commands.bash"]);
 });
 
 test("ACC-brand-08 moves data and code, retains old clients and rolls back with later deliveries", async (t) => {

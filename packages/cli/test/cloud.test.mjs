@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,11 +11,14 @@ import { test } from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { migrate, paths } from "../../core/src/index.mjs";
+import { readDaemonReady, startDaemon } from "../../core/src/daemon.mjs";
 import { openControlStore } from "../../cloud/src/control-store.mjs";
 import { createCloudServer, machineKeyPath, sessionCookieName } from "../../cloud/src/server.mjs";
 import { callCloud } from "../../cloud/src/transport.mjs";
 import { close, fakeGoogle, listen } from "../../cloud/test/fake-google.mjs";
 import { ping } from "../../relay/src/index.mjs";
+import { call, ensureDaemon } from "../src/client.mjs";
 
 const vk = fileURLToPath(new URL("../src/vk.mjs", import.meta.url));
 const exec = promisify(execFile);
@@ -37,6 +40,68 @@ async function until(probe) {
   }
   assert.fail("等不到离线 vk 的登录状态");
 }
+
+test("CLI 等待 Unix socket 就绪，慢 HTTP 响应也不会触发重复启动", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "vk-daemon-ready-"));
+  const originalHome = process.env.HIFABU_HOME;
+  process.env.HIFABU_HOME = home;
+  const socketRequested = Promise.withResolvers();
+  const bindSocket = Promise.withResolvers();
+  const nowRequested = Promise.withResolvers();
+  const respondNow = Promise.withResolvers();
+  let startup;
+  t.after(async () => {
+    bindSocket.resolve();
+    respondNow.resolve();
+    if (startup) await startup.then((daemon) => daemon.close(), () => {});
+    if (originalHome === undefined) delete process.env.HIFABU_HOME;
+    else process.env.HIFABU_HOME = originalHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+  migrate();
+  const { socket } = paths();
+
+  const originalListen = Server.prototype.listen;
+  t.mock.method(Server.prototype, "listen", function (options, ...args) {
+    if (options?.path !== socket) return originalListen.call(this, options, ...args);
+    const [dispatch] = this.listeners("request");
+    this.removeListener("request", dispatch);
+    this.on("request", async (req, res) => {
+      if (req.url === "/api/now") {
+        nowRequested.resolve();
+        await respondNow.promise;
+      }
+      return dispatch(req, res);
+    });
+    socketRequested.resolve();
+    bindSocket.promise.then(() => originalListen.call(this, options, ...args));
+    return this;
+  });
+
+  startup = startDaemon({ port: 0, offline: true, handlers: { now: () => ({ fixture: "ready" }) } });
+  await Promise.race([socketRequested.promise, startup]);
+  assert.equal(readDaemonReady(socket), null);
+  const rejectSpawn = () => assert.fail("CLI 试图另起一个 serve");
+  const clients = Promise.all([ensureDaemon({ log: rejectSpawn }), ensureDaemon({ log: rejectSpawn })]);
+  clients.catch(() => {});
+  await wait(0);
+  assert.equal(readDaemonReady(socket), null, "socket 绑定前不能发布就绪信息");
+  bindSocket.resolve();
+  const daemon = await startup;
+  assert.equal(readDaemonReady(socket)?.port, daemon.port);
+  assert.deepEqual(await clients, [{ started: false }, { started: false }]);
+  await assert.rejects(startDaemon({ port: 0, offline: true }), /已经在启动或运行/);
+
+  const response = call("now");
+  response.catch(() => {});
+  await nowRequested.promise;
+  try {
+    assert.deepEqual(await ensureDaemon({ log: rejectSpawn }), { started: false });
+  } finally {
+    respondNow.resolve();
+  }
+  assert.equal((await response).fixture, "ready");
+});
 
 test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传片连接并在断网时保留登录", {
   skip: process.platform === "win32",
@@ -88,10 +153,12 @@ test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传
     return res.json();
   };
   const status = () => request("/api/cloud/status");
+  const socketPath = join(home, ".local", "state", "versekit", "vk.sock");
   async function startDaemon() {
     daemon = spawn(process.execPath, [vk, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });
     daemonExit = once(daemon, "exit");
-    return until(() => status().catch(() => false));
+    await until(() => readDaemonReady(socketPath)?.pid === daemon.pid);
+    return status();
   }
   async function stopDaemon() {
     daemon.kill("SIGTERM");
@@ -102,9 +169,10 @@ test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传
   assert.equal((await startDaemon()).loggedIn, false);
 
   const login = cli(["cloud", "login", "--role", "maker", "--name", "本地测试制作机"]);
-  // Attach a rejection handler while the browser is being exercised.
-  const completion = login.then((result) => ({ result }), (error) => ({ error }));
+  let loginError;
+  const completion = login.catch((err) => { loginError = err; });
   const pending = await until(async () => {
+    if (loginError) throw loginError;
     const result = await status();
     return result.state === "waiting" && existsSync(browserPath) && result;
   });
@@ -113,19 +181,19 @@ test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传
   const code = new URL(pending.url).searchParams.get("code");
   await callCloud(origin, "device.link.decide", { code, decision: "allow" }, session);
   const completed = await completion;
-  if (completed.error) throw completed.error;
-  const data = JSON.parse(completed.result.stdout);
+  if (loginError) throw loginError;
+  const data = JSON.parse(completed.stdout);
   assert.equal(data.email, "offline@example.test");
   assert.equal(data.role, "maker");
   assert.equal(data.relayEnabled, false);
   assert.equal(data.loggedIn, true);
-  assert.ok(completed.result.stderr.includes(pending.code));
+  assert.ok(completed.stderr.includes(pending.code));
   assert.deepEqual(JSON.parse((await cli(["cloud", "status"])).stdout), await status());
   const credentialFile = join(home, ".config", "versekit", "credentials", "hifabu-machine.json");
   const saved = JSON.parse(readFileSync(credentialFile, "utf8"));
   assert.equal(statSync(credentialFile).mode & 0o777, 0o600);
   assert.ok(saved.machineToken && saved.refreshToken);
-  assert.doesNotMatch(completed.result.stdout, /machineToken|refreshToken/);
+  assert.doesNotMatch(completed.stdout, /machineToken|refreshToken/);
   await cli(["cloud", "logout"]);
   assert.equal((await status()).loggedIn, false);
   assert.ok(!existsSync(credentialFile));

@@ -1070,17 +1070,22 @@
   /** 扫码：二维码由发布机取回，显示在账号那一行下面。 */
   async function startQr(id) {
     stopPoll(id);
-    ui.login[id] = { step: "qr", qr: null, text: "正在取二维码…" };
+    const pending = { step: "qr", qr: null, text: "正在取二维码…" };
+    ui.login[id] = pending;
     draw();
+    let r;
     try {
-      const r = await post(accPath(id, "login/qr"), { accountId: id });
-      if (r.state === "failed") return fail(id, r.note ?? "取不到二维码：可以改用短信验证码，或在发布机上打开登录窗口。");
-      ui.login[id] = { step: "qr", qr: r.qr ?? null, text: r.qr ? "" : (r.note ?? "正在确认登录…") };
-      draw();
-      startPoll(id);
+      r = await post(accPath(id, "login/qr"), { accountId: id });
     } catch (err) {
-      fail(id, `取不到二维码：${err.message}`);
+      if (ui.login[id] === pending) fail(id, `取不到二维码：${err.message}`);
+      return;
     }
+    // 用户可能已经切换登录方式、取消或再次请求二维码。
+    if (ui.login[id] !== pending) return;
+    if (r.state === "failed") return fail(id, r.note ?? "取不到二维码：可以改用短信验证码，或在发布机上打开登录窗口。");
+    ui.login[id] = { step: "qr", qr: r.qr ?? null, text: r.qr ? "" : (r.note ?? "正在确认登录…") };
+    draw();
+    startPoll(id);
   }
 
   /** 在发布机上打开登录窗口：第三种方式，只有这种方式要人回来点一下。 */
