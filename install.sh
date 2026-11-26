@@ -9,7 +9,7 @@
 # 可用环境变量覆盖（开发机上验证用）：
 #   HIFABU_PREFIX          安装目录               默认 ~/.versekit
 #   HIFABU_PORT            控制台端口             默认 8787（被占用时自动换空闲端口）
-#   HIFABU_SERVICE_LABEL   服务名                 默认 com.versekit.daemon
+#   HIFABU_SERVICE_LABEL   服务名                 默认 com.hifabu.daemon
 #   HIFABU_SERVICE_MANAGER 强制 launchd|systemd|detach
 #   HIFABU_NODE_VERSION    Node 版本（写死，不用 latest-*）    默认 v26.13.1（Node 26 LTS）
 #   HIFABU_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
@@ -72,20 +72,44 @@ main() {
   # （与 npm 包 @larksuite/cli 里自带的那份逐字相同），按它校验。版本写死，升级时改这一行并过测试。
   local LARK_VERSION="${HIFABU_LARK_VERSION:-1.0.97}"
   local LARK_URL="${HIFABU_LARK_URL:-https://github.com/larksuite/cli/releases/download/v$LARK_VERSION}"
-  local STEP="准备"
+  STEP="准备"
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/versekit-install.XXXXXX")"
-  SWAPPED=0 HAD_APP=0 SERVICE_TOUCHED=0 DONE=0 OLD_PORT=""
+  APP_BACKED_UP=0 APP_REPLACED=0 NODE_REPLACED=0 BIN_TOUCHED=0 NODE_BACKUP=""
+  HAD_APP=0 SERVICE_STOPPED=0 SERVICE_TOUCHED=0 SERVICE_INSTALLED=0 DONE=0
+  OLD_PORT="" OLD_SERVICE_LABEL="" OLD_MANAGER="" OLD_OFFLINE="" FAIL_REASON=""
+  META="${HIFABU_HOME:-$HOME}/.local/state/versekit/service.json"
 
   # ------------------------------------------------------------ 输出与失败处理
   say() { printf '▸ %s\n' "$*"; }
   die() { # die <原因> <怎么办>
+    FAIL_REASON="$1"
     printf '\n✗ 安装失败：在「%s」这一步\n  原因：%s\n  怎么办：%s\n' "$STEP" "$1" "$2" >&2
     exit 1
   }
   cleanup() {
-    local code=$?
-    if [ "$DONE" != 1 ]; then rollback || true; fi
-    rm -rf "$TMP"
+    local code=$? keep_backup=0
+    if [ "$DONE" != 1 ]; then
+      if ! rollback; then
+        keep_backup=1
+        printf '  未能恢复升级前的后台服务，请查看上方错误。安装备份保留在 %s。\n' "$TMP" >&2
+        if [ -n "$NODE_BACKUP" ]; then printf '  Node 备份位于 %s。\n' "$NODE_BACKUP" >&2; fi
+      fi
+      if [ "$HAD_APP" = 1 ] && [ "${HIFABU_UPDATE:-}" != 1 ]; then
+        local reason="${FAIL_REASON:-「$STEP」执行失败（退出码 $code）}"
+        "$PREFIX/node/bin/node" --no-warnings --input-type=module -e '
+          import { pathToFileURL } from "node:url";
+          const [core, reason] = process.argv.slice(1);
+          const { emit } = await import(pathToFileURL(core));
+          emit({ type: "update.failed", severity: "warn",
+            payload: { error_code: "install_update_failed", reason, message: "安装升级失败：" + reason } });
+        ' "$PREFIX/app/packages/core/src/index.mjs" "$reason" ||
+          printf '  写入升级失败事件未成功。\n' >&2
+      fi
+    fi
+    if [ "$keep_backup" = 0 ]; then
+      rm -rf "$TMP"
+      [ -z "$NODE_BACKUP" ] || rm -rf "$NODE_BACKUP"
+    fi
     return $code
   }
   trap cleanup EXIT
@@ -99,30 +123,50 @@ main() {
   # 停止或恢复升级前的服务时，旧程序可能只认旧变量名。
   previous_cli() (
     if [ -n "${HIFABU_HOME+x}" ]; then export VK_HOME="$HIFABU_HOME"; fi
-    export VERSEKIT_PREFIX="$PREFIX"
-    export VERSEKIT_SERVICE_LABEL="${HIFABU_SERVICE_LABEL:-}"
-    export VERSEKIT_SERVICE_MANAGER="${HIFABU_SERVICE_MANAGER:-}"
-    export VERSEKIT_OFFLINE="${HIFABU_OFFLINE:-}"
+    export HIFABU_PREFIX="$PREFIX" VERSEKIT_PREFIX="$PREFIX"
+    export HIFABU_SERVICE_LABEL="$OLD_SERVICE_LABEL" VERSEKIT_SERVICE_LABEL="$OLD_SERVICE_LABEL"
+    export HIFABU_SERVICE_MANAGER="$OLD_MANAGER" VERSEKIT_SERVICE_MANAGER="$OLD_MANAGER"
+    export HIFABU_OFFLINE="$OLD_OFFLINE" VERSEKIT_OFFLINE="$OLD_OFFLINE"
     "$@"
   )
 
   # 失败时回到安装前：旧程序放回去（升级）或把服务卸掉（首次），绝不留下半启动的服务。
   rollback() {
-    [ "$SERVICE_TOUCHED" = 1 ] || [ "$SWAPPED" = 1 ] || return 0
-    local cli
+    local cli file failed=0 removed=0
     cli="$(installed_cli)"
-    if [ -x "$cli" ] && [ -d "$PREFIX/app" ]; then "$cli" service uninstall --service-only >/dev/null 2>&1 || true; fi
-    if [ "$SWAPPED" = 1 ]; then
-      rm -rf "$PREFIX/app"
-      if [ "$HAD_APP" = 1 ] && [ -d "$PREFIX/app.prev" ]; then
-        mv "$PREFIX/app.prev" "$PREFIX/app"
-        if [ -x "$cli" ] && [ -n "${OLD_PORT:-}" ]; then
-          local extra=(); [ "${HIFABU_OFFLINE:-}" = 1 ] && extra=(--offline)
-          previous_cli "$cli" service install --port "$OLD_PORT" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || true
-          printf '  已回到升级前的版本并尝试恢复旧服务。\n' >&2
-        fi
-      fi
+    if [ "$SERVICE_TOUCHED" = 1 ] && {
+      [ "$SERVICE_INSTALLED" = 1 ] || [ ! -f "$TMP/service.prev" ] || ! cmp -s "$TMP/service.prev" "$META"
+    }; then
+      "$cli" service uninstall --service-only --human >&2 && removed=1 || failed=1
     fi
+    if [ "$APP_REPLACED" = 1 ]; then rm -rf "$PREFIX/app" || failed=1; fi
+    if [ "$APP_BACKED_UP" = 1 ] && [ -d "$PREFIX/app.prev" ]; then mv "$PREFIX/app.prev" "$PREFIX/app" || failed=1; fi
+    if [ "$NODE_REPLACED" = 1 ] || { [ -n "$NODE_BACKUP" ] && [ -d "$NODE_BACKUP/node" ]; }; then
+      rm -rf "$PREFIX/node" || failed=1
+      if [ -n "$NODE_BACKUP" ] && [ -d "$NODE_BACKUP/node" ]; then mv "$NODE_BACKUP/node" "$PREFIX/node" || failed=1; fi
+    fi
+    if [ "$BIN_TOUCHED" = 1 ]; then
+      for file in hifabu vk biliup lark-cli; do
+        rm -f "$PREFIX/bin/$file" "$PREFIX/bin/$file.new" || failed=1
+        if [ -e "$TMP/bin.prev/$file" ] || [ -L "$TMP/bin.prev/$file" ]; then
+          mv "$TMP/bin.prev/$file" "$PREFIX/bin/$file" || failed=1
+        fi
+      done
+    fi
+    if [ "$SERVICE_STOPPED" = 1 ]; then
+      cli="$(installed_cli)"
+      cp -p "$TMP/service.prev" "$META" || failed=1
+      if [ "$removed" = 1 ]; then
+        # 新服务已提交后才失败；此时旧定义可能已经删除，需要旧版重新生成。
+        previous_cli "$cli" service install --port "$OLD_PORT" --human >&2 || failed=1
+      else
+        previous_cli "$cli" service start --human >&2 || failed=1
+      fi
+      curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$OLD_PORT/today" || failed=1
+      curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$OLD_PORT/api/now" || failed=1
+      if [ "$failed" = 0 ]; then printf '  已恢复升级前的后台服务。\n' >&2; fi
+    fi
+    [ "$failed" = 0 ]
   }
 
   # ------------------------------------------------------------ 平台
@@ -175,8 +219,19 @@ main() {
     OLD_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PREFIX/app/package.json" | head -1)"
     OLD_COMMIT="$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' "$PREFIX/app/.versekit-build.json" 2>/dev/null | head -1 || true)"
   fi
-  local META="${HIFABU_HOME:-$HOME}/.local/state/versekit/service.json"
-  if [ -f "$META" ]; then OLD_PORT="$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$META" | head -1)"; fi
+  if [ -f "$META" ]; then
+    cp -p "$META" "$TMP/service.prev"
+    OLD_PORT="$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$TMP/service.prev" | head -1)"
+    OLD_SERVICE_LABEL="$(sed -n 's/.*"label": *"\([^"]*\)".*/\1/p' "$TMP/service.prev" | head -1)"
+    OLD_MANAGER="$(sed -n 's/.*"manager": *"\([^"]*\)".*/\1/p' "$TMP/service.prev" | head -1)"
+    if grep -q '"offline": *true' "$TMP/service.prev"; then OLD_OFFLINE=1; fi
+    # R4 的自动更新器把已安装的标签传回安装脚本，识别并转换这个旧默认值。
+    if [ "$OLD_SERVICE_LABEL" = com.versekit.daemon ] && [ "${HIFABU_SERVICE_LABEL:-}" = com.versekit.daemon ]; then
+      export HIFABU_SERVICE_LABEL=com.hifabu.daemon
+    elif [ -n "$OLD_SERVICE_LABEL" ] && [ "$OLD_SERVICE_LABEL" != com.versekit.daemon ] && [ -z "${HIFABU_SERVICE_LABEL+x}" ]; then
+      export HIFABU_SERVICE_LABEL="$OLD_SERVICE_LABEL"
+    fi
+  fi
   WANT_PORT="${HIFABU_PORT:-${OLD_PORT:-8787}}"
 
   # ------------------------------------------------------------ 1. 私有 Node
@@ -271,17 +326,50 @@ main() {
   # ------------------------------------------------------------ 换上新程序
   STEP="安装程序文件"
   # 下载和校验都过了才动已安装的东西：任何一步失败都不会破坏现有版本。
-  local OLD_CLI
+  local OLD_CLI file
   OLD_CLI="$(installed_cli)"
-  if [ -x "$OLD_CLI" ] && [ -d "$PREFIX/app" ]; then previous_cli "$OLD_CLI" service stop >/dev/null 2>&1 || true; fi
-  if [ "$NODE_STAGED" = 1 ]; then rm -rf "$PREFIX/node"; mv "$TMP/node-x" "$PREFIX/node"; fi
+  mkdir "$TMP/bin.prev"
+  for file in hifabu vk biliup lark-cli; do
+    if [ -e "$PREFIX/bin/$file" ] || [ -L "$PREFIX/bin/$file" ]; then
+      cp -pP "$PREFIX/bin/$file" "$TMP/bin.prev/$file"
+    fi
+  done
+  if [ -x "$OLD_CLI" ] && [ -d "$PREFIX/app" ] && [ -n "$OLD_PORT" ]; then
+    SERVICE_STOPPED=1
+    local STOP_OUT STOP_REASON
+    if ! STOP_OUT="$(previous_cli "$OLD_CLI" service stop 2>"$TMP/service-stop.err")"; then
+      STOP_REASON="$("$PREFIX/node/bin/node" -e '
+        try { console.log(JSON.parse(process.argv[1]).error.message); } catch {}
+      ' "$STOP_OUT")"
+      die "不能停止旧服务：${STOP_REASON:-$(cat "$TMP/service-stop.err")}" "检查 hifabu service status 后重试"
+    fi
+    # 旧版 CLI 在服务停止失败时也可能退出 0，必须核对进程和端口状态。
+    if ! "$PREFIX/node/bin/node" -e '
+      const status = JSON.parse(process.argv[1]);
+      process.exit(status.ok && !status.loaded && !status.running && !status.reachable ? 0 : 1);
+    ' "$STOP_OUT"; then
+      die "旧服务仍在运行或状态无法确认：$OLD_SERVICE_LABEL" "检查 hifabu service status 后重试"
+    fi
+  fi
+  if [ "$NODE_STAGED" = 1 ]; then
+    if [ -d "$PREFIX/node" ]; then
+      NODE_BACKUP="$(mktemp -d "$PREFIX/.node-prev.XXXXXX")"
+      mv "$PREFIX/node" "$NODE_BACKUP/node"
+    fi
+    NODE_REPLACED=1
+    mv "$TMP/node-x" "$PREFIX/node"
+  fi
   local NODE="$PREFIX/node/bin/node"
+  BIN_TOUCHED=1
   cp "$BILIUP_BIN" "$PREFIX/bin/biliup.new" && chmod +x "$PREFIX/bin/biliup.new" && mv "$PREFIX/bin/biliup.new" "$PREFIX/bin/biliup"
   if [ -n "$LARK_STAGED" ]; then cp "$LARK_STAGED" "$PREFIX/bin/lark-cli.new" && chmod +x "$PREFIX/bin/lark-cli.new" && mv "$PREFIX/bin/lark-cli.new" "$PREFIX/bin/lark-cli"; fi
   rm -rf "$PREFIX/app.prev"
-  if [ "$HAD_APP" = 1 ]; then mv "$PREFIX/app" "$PREFIX/app.prev"; elif [ -d "$PREFIX/app" ]; then rm -rf "$PREFIX/app"; fi
+  if [ -d "$PREFIX/app" ]; then
+    APP_BACKED_UP=1
+    mv "$PREFIX/app" "$PREFIX/app.prev"
+  fi
+  APP_REPLACED=1
   mv "$TMP/app-x" "$PREFIX/app"
-  SWAPPED=1
   local HIFABU="$PREFIX/bin/hifabu"
   cat >"$HIFABU.new" <<EOF
 #!/bin/sh
@@ -298,7 +386,10 @@ EOF
   # ------------------------------------------------------------ 4. init + 服务
   STEP="初始化（hifabu init）"
   say "初始化数据库（hifabu init）……"
-  "$HIFABU" init >/dev/null || die "hifabu init 失败" "运行 $HIFABU init 看具体报错"
+  local INIT_OUT
+  if ! INIT_OUT="$("$HIFABU" init --human 2>&1)"; then
+    die "hifabu init 失败：$INIT_OUT" "运行 $HIFABU init --human 看具体报错"
+  fi
 
   STEP="选端口"
   local PORT="$WANT_PORT"
@@ -316,15 +407,18 @@ EOF
 
   STEP="注册后台服务"
   say "注册后台服务并启动（端口 ${PORT}）"
-  local extra=(); [ "${HIFABU_OFFLINE:-}" = 1 ] && extra=(--offline)
+  local extra=(); [ "${HIFABU_OFFLINE-$OLD_OFFLINE}" = 1 ] && extra=(--offline)
   SERVICE_TOUCHED=1
   local SVC_OUT
   if ! SVC_OUT="$("$HIFABU" service install --port "$PORT" ${extra[@]+"${extra[@]}"} --human 2>&1)"; then
     local LOGF="${HIFABU_HOME:-$HOME}/.local/state/versekit/vk.log"
     printf '%s\n' "$SVC_OUT" >&2
     [ -f "$LOGF" ] && { printf '  日志最后几行（%s）：\n' "$LOGF" >&2; tail -n 8 "$LOGF" >&2 || true; }
-    die "后台服务没能在 30 秒内起来（端口 ${PORT}）" "看上面的日志；修好后重新运行安装命令即可，没有留下半启动的服务"
+    local CAUSE
+    CAUSE="$(sed -n 's/^出错：//p' <<<"$SVC_OUT" | tail -1)"
+    die "${CAUSE:-后台服务未能启动（端口 ${PORT}）}" "看上面的日志；修好后重新运行安装命令"
   fi
+  SERVICE_INSTALLED=1
   printf '%s\n' "$SVC_OUT" | sed 's/^/  /'
 
   STEP="等控制台起来"

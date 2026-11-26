@@ -28,4 +28,14 @@
 
 `hifabu work push <清单> --dry-run --json` 只检查清单和中转状态。交付时，制作机先登记投递，再在当前命令中上传。遇到可重试的失败，下次交付时会尝试续传队列中的投递。
 
-在仓库根目录运行 `node scripts/build-maker-client.mjs` 构建 `plugins/hifabu/lib/hifabu.mjs`，并打包 `bin/hifabu` 和 `bin/hifabu-runtime`。构建会打印三个文件的大小和 SHA-256。`--out-dir <目录>` 可以把产物写到另一个目录。
+## 重建与校验
+
+在要核对的源码版本上，从仓库根目录运行以下命令。构建会把 `lib/hifabu.mjs` 和两个启动脚本写入临时目录，打印三个文件的大小和 SHA-256。最后一条命令输出的两份完整文件 SHA-256 应一致。
+
+```sh
+out=$(mktemp -d)
+node scripts/build-maker-client.mjs --out-dir "$out"
+shasum -a 256 plugins/hifabu/lib/hifabu.mjs "$out/lib/hifabu.mjs"
+```
+
+文件头的 `Source version` 取自仓库根目录 `package.json` 的 `version`。`SHA-256 (inputs)` 对按仓库相对路径排序的 `[路径, 文件 SHA-256]` 数组的 JSON 编码计算，覆盖制作机模块、构建脚本和两个启动脚本。`SHA-256 (body)` 校验文件头后空行之后的 ESM 正文。相同的源码版本和构建输入在完整克隆、浅克隆和 squash 合并后会生成逐字相同的文件。

@@ -17,7 +17,8 @@ import { request } from "node:http";
 import { paths, emit } from "../../core/src/index.mjs";
 import * as updates from "../../core/src/update.mjs";
 
-export const DEFAULT_LABEL = "com.versekit.daemon";
+export const DEFAULT_LABEL = "com.hifabu.daemon";
+const LEGACY_LABEL = "com.versekit.daemon";
 export const DEFAULT_PORT = 8787;
 export const RC_BEGIN = "# >>> versekit >>>";
 export const RC_END = "# <<< versekit <<<";
@@ -75,13 +76,27 @@ function readMeta() {
 
 function writeMeta(meta) {
   mkdirSync(paths().state, { recursive: true, mode: 0o700 });
-  writeFileSync(metaFile(), JSON.stringify(meta, null, 2) + "\n", { mode: 0o600 });
+  const dir = mkdtempSync(join(paths().state, ".service-"));
+  try {
+    const staged = join(dir, "service.json");
+    writeFileSync(staged, JSON.stringify(meta, null, 2) + "\n", { mode: 0o600 });
+    renameSync(staged, metaFile());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const plistPath = (label) => join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
 const unitName = (label) => `${label}.service`;
 const unitPath = (label) => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user", unitName(label));
 const guiTarget = (label) => `gui/${process.getuid()}/${label}`;
+const definitionPath = ({ manager, label }) => manager === "launchd" ? plistPath(label) : manager === "systemd" ? unitPath(label) : null;
+
+function systemctl(...args) {
+  const r = run("systemctl", ["--user", ...args]);
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error(`systemctl ${args.join(" ")} 失败：${(r.stderr || r.stdout).trim() || `退出码 ${r.status}`}`);
+}
 
 const xml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -184,6 +199,7 @@ async function waitDown(port, timeoutMs = 8000) {
 
 function launchdLoaded(label) {
   const r = run("launchctl", ["print", guiTarget(label)]);
+  if (r.error) throw r.error;
   if (r.status !== 0) return { loaded: false, running: false, pid: null };
   const pid = /\bpid = (\d+)/.exec(r.stdout)?.[1];
   return { loaded: true, running: /state = running/.test(r.stdout), pid: pid ? Number(pid) : null };
@@ -192,12 +208,17 @@ function launchdLoaded(label) {
 /** bootout 是异步的：命令返回时服务可能还在卸载中，必须等到 launchctl print 查不到才算拆干净。 */
 async function launchdBootout(label, timeoutMs = 15000) {
   if (!launchdLoaded(label).loaded) return;
-  run("launchctl", ["bootout", guiTarget(label)]);
+  const r = run("launchctl", ["bootout", guiTarget(label)]);
+  if (r.error) throw r.error;
+  if (r.status !== 0 && launchdLoaded(label).loaded) {
+    throw new Error(`launchctl bootout ${label} 失败：${(r.stderr || r.stdout).trim() || `退出码 ${r.status}`}`);
+  }
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     if (!launchdLoaded(label).loaded) return;
     await sleep(150);
   }
+  throw new Error(`launchctl bootout ${label} 超时`);
 }
 
 async function launchdBootstrap(label) {
@@ -268,8 +289,7 @@ function requireInstalled() {
   return meta;
 }
 
-export async function status() {
-  const meta = readMeta();
+async function inspectService(meta) {
   const label = meta?.label ?? labelOf();
   const manager = meta?.manager ?? null;
   const data = { ok: true, installed: Boolean(meta), manager, label, port: meta?.port ?? null, offline: Boolean(meta?.offline), running: false, pid: null, reachable: false, url: null, log: paths().log };
@@ -291,43 +311,112 @@ export async function status() {
   return data;
 }
 
+export const status = () => inspectService(readMeta());
+
+async function registerService(meta, env) {
+  const { label, manager } = meta;
+  const file = definitionPath(meta);
+  if (file) {
+    mkdirSync(dirname(file), { recursive: true });
+    const opts = { ...meta, env };
+    writeFileSync(file, manager === "launchd" ? renderPlist(opts) : renderUnit(opts));
+  }
+  if (manager === "launchd") {
+    await launchdBootout(label);
+    await launchdBootstrap(label);
+  } else if (manager === "systemd") {
+    systemctl("daemon-reload");
+    systemctl("enable", "--now", unitName(label));
+  } else detachStart(meta);
+}
+
+async function removeRegistration(meta) {
+  if (meta.manager === "launchd") await launchdBootout(meta.label);
+  else if (meta.manager === "systemd") systemctl("disable", "--now", unitName(meta.label));
+  else await detachStop();
+
+  const file = definitionPath(meta);
+  if (file) rmSync(file, { force: true });
+  if (meta.manager === "systemd") systemctl("daemon-reload");
+}
+
+async function migrateLabel(prev, next, env) {
+  const oldFile = definitionPath(prev);
+  const newFile = definitionPath(next);
+  if (newFile && existsSync(newFile)) throw new Error(`新服务定义已存在：${newFile}；请先核对该服务归属`);
+  const oldDefinition = oldFile ? readFileSync(oldFile) : null;
+  const oldEnabled = prev.manager === "systemd" && run("systemctl", ["--user", "is-enabled", unitName(prev.label)]).status === 0;
+  const wasRunning = (await inspectService(prev)).running;
+  let registering = false;
+  let removingOld = false;
+  try {
+    // 同一数据目录只有一个守护进程。保留旧定义，直到新进程过了两个自检接口。
+    await stopInternal(prev);
+    registering = true;
+    await registerService(next, env);
+    if (!(await waitHealthy(next.port, healthTimeoutMs(env)))) {
+      throw new Error(`新服务 ${next.label} 没通过自检（${HEALTH_PATH} 或 /today）`);
+    }
+    const result = await inspectService(next);
+    if (!result.running || !result.reachable) throw new Error(`新服务 ${next.label} 已停止或不可达`);
+    removingOld = true;
+    // detach 没有系统服务定义，PID 文件这时属于新进程。
+    if (oldFile) await removeRegistration(prev);
+    writeMeta(next);
+    return { ...result, up: true };
+  } catch (err) {
+    const failures = [];
+    if (registering) await removeRegistration(next).catch((e) => failures.push(e.message));
+    if (removingOld && oldFile) {
+      try {
+        if (!existsSync(oldFile)) writeFileSync(oldFile, oldDefinition);
+        if (prev.manager === "systemd") {
+          systemctl("daemon-reload");
+          if (oldEnabled) systemctl("enable", unitName(prev.label));
+        }
+      } catch (e) {
+        failures.push(e.message);
+      }
+    }
+    if (wasRunning) {
+      try {
+        const restored = await start();
+        if (!restored.running || !restored.reachable) failures.push(`旧服务 ${prev.label} 未能恢复`);
+      } catch (e) {
+        failures.push(e.message);
+      }
+    }
+    const recovery = failures.length ? `；恢复服务时：${failures.join("；")}` : "";
+    throw Object.assign(new Error(err.message + recovery, { cause: err }), { code: "service_migration_failed" });
+  }
+}
+
 /** 注册并启动。已存在则先停再重写（升级走这里）。 */
 export async function install({ port = DEFAULT_PORT, offline = false, waitMs = 30000, env = process.env } = {}) {
   const label = labelOf(env);
   const manager = detectManager(env);
   const prev = readMeta();
-  if (prev) await stopInternal(prev);
-
-  mkdirSync(paths().state, { recursive: true, mode: 0o700 });
-  if (manager === "launchd") {
-    const file = plistPath(label);
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, renderPlist({ label, port, offline, env }));
-    await launchdBootout(label);
-    await launchdBootstrap(label);
-  } else if (manager === "systemd") {
-    const file = unitPath(label);
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, renderUnit({ port, offline, env }));
-    run("systemctl", ["--user", "daemon-reload"]);
-    const r = run("systemctl", ["--user", "enable", "--now", unitName(label)]);
-    if (r.status !== 0) throw new Error(`systemctl enable 失败：${(r.stderr || r.stdout).trim()}`);
+  const next = { manager, label, port, offline, installed_at: new Date().toISOString() };
+  let result;
+  if (prev?.label === LEGACY_LABEL && label === DEFAULT_LABEL) {
+    result = await migrateLabel(prev, next, env);
   } else {
-    detachStart({ port, offline });
+    if (prev) await stopInternal(prev);
+    mkdirSync(paths().state, { recursive: true, mode: 0o700 });
+    await registerService(next, env);
+    writeMeta(next);
+    const up = await waitUp(port, waitMs);
+    result = { ...(await status()), up };
   }
-  writeMeta({ manager, label, port, offline, installed_at: new Date().toISOString() });
-
-  const up = await waitUp(port, waitMs);
-  const result = { ...(await status()), up };
   if (manager === "detach") result.note = "没有 systemd，已退回后台进程：重启电脑后要再运行一次安装命令";
   return result;
 }
 
 async function stopInternal(meta) {
   if (meta.manager === "launchd") await launchdBootout(meta.label);
-  else if (meta.manager === "systemd") run("systemctl", ["--user", "stop", unitName(meta.label)]);
+  else if (meta.manager === "systemd") systemctl("stop", unitName(meta.label));
   else await detachStop();
-  if (meta.port) await waitDown(meta.port);
+  if (meta.port && !(await waitDown(meta.port))) throw new Error(`后台服务停机后端口 ${meta.port} 仍在响应`);
 }
 
 export async function stop() {
@@ -505,17 +594,20 @@ async function waitHealthy(port, timeoutMs) {
 }
 
 /** 新版本起来了却不健康：把旧程序放回去，重新注册并启动服务。 */
-async function restorePrev(layout, port, offline, env) {
+async function restorePrev(layout, previous, env) {
   const prev = join(layout.prefix, "app.prev");
   if (!existsSync(prev)) throw new Error("app.prev 不见了，没法自动退回（重新运行安装命令即可）");
   const meta = readMeta();
-  if (meta) await stopInternal(meta);
+  if (meta) {
+    await stopInternal(meta);
+    await removeRegistration(meta);
+  }
+  rmSync(metaFile(), { force: true });
   rmSync(layout.app, { recursive: true, force: true });
   renameSync(prev, layout.app);
   // Let the restored version write the service template it knows how to read.
   const home = paths().root;
-  const label = meta?.label ?? labelOf(env);
-  const manager = meta?.manager ?? detectManager(env);
+  const { label, port, offline, manager } = previous;
   const args = [CLI, "service", "install", "--port", String(port), ...(offline ? ["--offline"] : [])];
   const result = run(process.execPath, args, {
     env: {
@@ -550,17 +642,18 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
   if (check.upToDate) return { ok: true, updated: false, message: "已是最新", version: current.version, display: updates.displayVersion(current), commit: current.commit };
 
   takeLock();
-  const port = meta?.port ?? DEFAULT_PORT;
-  const offline = Boolean(meta?.offline);
+  const previous = meta ?? { label: labelOf(env), manager: detectManager(env), port: DEFAULT_PORT, offline: false };
+  const { port, offline } = previous;
   const work = mkdtempSync(join(layout.prefix, ".update-"));
   updates.patchState({ in_progress: { since: Date.now(), to: check.latest } });
   const oldLabel = updates.displayVersion(current);
   const failed = (reason, extra = {}) => {
-    const message = `自动更新失败，已回到 ${oldLabel}：${reason}`;
-    emit({ type: "update.failed", severity: "warn", payload: { from: current.commit, to: check.latest, from_version: current.version, reason, message } });
+    const rolledBack = extra.restored !== false;
+    const message = `自动更新失败，${rolledBack ? `已回到 ${oldLabel}` : `未能恢复 ${oldLabel} 的后台服务`}：${reason}`;
+    emit({ type: "update.failed", severity: "warn", payload: { error_code: "update_failed", from: current.commit, to: check.latest, from_version: current.version, reason, message } });
     updates.patchState({ last_failure: { at: Date.now(), from: current.commit, to: check.latest, from_version: current.version, reason, message } });
     log(message);
-    return { ok: false, updated: false, rolledBack: true, message, reason, ...extra };
+    return { ok: false, updated: false, rolledBack, message, reason, ...extra };
   };
   try {
     log(`有新版本：${check.message}，开始更新（${current.short ?? "未知"} → ${updates.shortCommit(check.latest)}）`);
@@ -587,18 +680,18 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
       HIFABU_APP_SHA256: "",
       HIFABU_PORT: String(port),
       HIFABU_OFFLINE: offline ? "1" : "",
-      HIFABU_SERVICE_LABEL: meta?.label ?? labelOf(env),
+      HIFABU_SERVICE_LABEL: previous.label === LEGACY_LABEL ? DEFAULT_LABEL : previous.label,
       ...(meta?.manager ? { HIFABU_SERVICE_MANAGER: meta.manager } : {}),
     };
     const r = await runInstall(join(src, "install.sh"), installEnv, log);
     if (r.code !== 0) {
       // install.sh 在失败时自己回滚（旧程序放回、旧服务重新注册）。
       const why = /原因：(.*)/.exec(r.stderr)?.[1]?.trim() || r.stderr.trim().split("\n").pop() || `install.sh 退出码 ${r.code}`;
-      return failed(why);
+      return failed(why, r.stderr.includes("未能恢复升级前的后台服务") ? { restored: false } : {});
     }
 
     if (!(await waitHealthy(port, healthTimeoutMs(env)))) {
-      const back = await restorePrev(layout, port, offline, env).catch((err) => ({ up: false, error: err.message }));
+      const back = await restorePrev(layout, previous, env).catch((err) => ({ up: false, error: err.message }));
       return failed(`新版本起来后 ${Math.round(healthTimeoutMs(env) / 1000)} 秒内没通过自检（${HEALTH_PATH}）${back.up ? "" : `；退回时服务也没起来：${back.error ?? "请运行 hifabu service status 看看"}`}`, { restored: Boolean(back.up) });
     }
 

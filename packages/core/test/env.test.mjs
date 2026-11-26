@@ -69,6 +69,7 @@ test("ACC-brand-05 defaults retain the existing configuration and state director
   const { data, stderr } = inspect({});
   assert.equal(data.paths.config, join(homedir(), ".config", "versekit"));
   assert.equal(data.paths.state, join(homedir(), ".local", "state", "versekit"));
-  assert.equal(data.label, "com.versekit.daemon");
+  assert.equal(data.label, "com.hifabu.daemon");
+  assert.match(data.plist, /<key>Label<\/key><string>com\.hifabu\.daemon<\/string>/);
   assert.equal(stderr, "");
 });

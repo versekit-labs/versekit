@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hifabu.com/schemas/release-v1.json",
+  "title": "Hifabu 发布机版本清单",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "commit", "releasedAt", "app", "node", "components", "notes"],
+  "properties": {
+    "schema": { "const": "hifabu.release/1" },
+    "version": { "$ref": "#/$defs/version" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "releasedAt": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sha256", "size"],
+      "properties": {
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1, "exclusiveMaximum": 5000000 }
+      }
+    },
+    "node": { "$ref": "#/$defs/component" },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["biliup", "lark-cli"],
+      "properties": {
+        "biliup": {
+          "$ref": "#/$defs/component",
+          "required": ["licenseUrl"],
+          "properties": { "files": { "additionalProperties": { "required": ["checksumSource"] } } }
+        },
+        "lark-cli": { "$ref": "#/$defs/component" }
+      }
+    },
+    "notes": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?$"
+    },
+    "httpsUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dependencyFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sha256", "size", "upstream"],
+      "properties": {
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 },
+        "upstream": { "$ref": "#/$defs/httpsUrl" },
+        "checksumSource": { "const": "github-release-digest+dual-download", "description": "发布时在两个网络计算并比对 SHA-256，同时核对 GitHub 发布资产的摘要。" }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "files"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "licenseUrl": { "$ref": "#/$defs/httpsUrl" },
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"],
+          "properties": {
+            "darwin-arm64": { "$ref": "#/$defs/dependencyFile" },
+            "darwin-x64": { "$ref": "#/$defs/dependencyFile" },
+            "linux-arm64": { "$ref": "#/$defs/dependencyFile" },
+            "linux-x64": { "$ref": "#/$defs/dependencyFile" }
+          }
+        }
+      }
+    }
+  }
+}

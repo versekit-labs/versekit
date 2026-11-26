@@ -86,3 +86,55 @@ claude plugin list
 ```bash
 claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu
 ```
+
+## 7. 发版
+
+协调器在一批改动合并并验收后发版。正式发版从 P2 安装器合并后开始。先在 `main` 上提交 `package.json` 的版本号，再打对应的 `app-v<版本>` tag，由协调器检出干净的 tag。版本日期取 tag 日期（UTC）。程序包直接读取 Git 中的字节，固定归档元数据，保留可执行位，并限制在 5 MB 内。包内文件包括各工作区的运行代码和包元数据、Web 静态文件、`bin/`、演示数据入口及许可文件。
+
+准备本版发版说明和已评审的 P2 Bash 安装模板。说明格式见[发版说明骨架](../CHANGELOG.md)。模板应含一行 `HIFABU_RELEASE_MANIFEST=@HIFABU_RELEASE_MANIFEST@`，占位符只出现一次。发布脚本会把带引号的 JSON 清单嵌入这行，并执行 `bash -n`。安装器从这个变量读取锁定的版本、地址和哈希。两个输入都通过参数显式传入。
+
+### 准备上游文件与离线预览
+
+在协调器的发版环境，从同一 tag 运行两次下载命令，分别使用两个不同的网络出口。两个参数都指向尚不存在的目录。
+
+```bash
+node deploy/hifabu/publish-release.mjs --fetch-deps /path/to/upstream-a
+node deploy/hifabu/publish-release.mjs --fetch-biliup /path/to/upstream-b
+```
+
+清单覆盖 macOS 和 Linux 的 arm64、x64 包。Node 对照上游 `SHASUMS256.txt`，lark-cli 对照上游 `checksums.txt`。biliup-rs `v0.2.4` 要求两个网络下载的压缩包 SHA-256 相同，并与该 tag 的 GitHub 发布资产摘要一致。正式发布会重新获取上游校验数据，任一校验失败或无法获取数据时退出。lark-cli `v1.0.97` 的原包含 MIT 许可。biliup-rs 同样采用 MIT，发布时将带原版权声明的完整许可作为 `deps/` 同版文件公开，清单的 `licenseUrl` 指向它。两项镜像均保留原包字节。 [biliup-rs 许可](https://github.com/biliup/biliup-rs/blob/v0.2.4/LICENSE) · [lark-cli 许可](https://github.com/larksuite/cli/blob/v1.0.97/LICENSE) · [lark-cli 打包配置](https://github.com/larksuite/cli/blob/v1.0.97/.goreleaser.yml)
+
+下面的命令从本地输入生成预览，输出待发布的相对路径和 SHA-256。可选的 `--output-dir` 指向尚不存在的目录，省略时仅打印校验和。历史列表的预览默认只列候选版本。可以通过 `--publish-dir` 读入本机已有的版本目录。正式激活时，历史列表从目标机上的版本目录生成。开发机可运行 `node --test packages/core/test/publish-release.test.mjs`，用临时 Git 仓库和本地上游替身复现。
+
+```bash
+release_inputs=(
+  --deps-dir /path/to/upstream-a
+  --biliup-second-dir /path/to/upstream-b
+  --installer-template /path/to/p2-install-template.sh
+  --changelog /path/to/release-notes.md
+)
+preview="$(mktemp -d)"
+node deploy/hifabu/publish-release.mjs --dry-run "${release_inputs[@]}" --output-dir "$preview/download"
+```
+
+### 就位、验证与切换
+
+协调器从本机的干净 tag 检出目录运行。SSH 别名须指向具备 `/var/www/hifabu/download` 写权限且已安装 Node.js 22.13 或更高版本的 seoul-vps 账号。首次运行先校验上游数据，再通过 SSH/SCP 将候选版本和依赖上传到目标机的暂存目录。目标机重新计算每个文件的 SHA-256，校验通过后将版本目录一次改名就位。同名文件仅接受完全相同的字节。`SHA256SUMS` 记录版本目录内其余每个文件的哈希。
+
+```bash
+node deploy/hifabu/publish-release.mjs "${release_inputs[@]}" --host seoul-vps
+```
+
+使用候选版本固定地址 `/download/<版本>/install.sh`，在临时 HOME 中各演练一次全新安装和从上个正式版升级。两次通过后，以相同输入再运行一次并加 `--activate`。目标机核对已就位的文件，刷新 `versions/index.html`，最后原子替换 `latest.json`。
+
+```bash
+node deploy/hifabu/publish-release.mjs "${release_inputs[@]}" --host seoul-vps --activate
+```
+
+同机部署时，把 `--host seoul-vps` 换成 `--publish-dir /var/www/hifabu/download`。
+
+### 撤回和清理
+
+在下载目录所在的服务器上，用干净的 tag 检出执行维护。历史版本目录一直保留。附 `--publish-dir /var/www/hifabu/download --withdraw <版本> --reason '<原因>'` 可在历史列表标注撤回原因。撤回当前版本并且有可用旧版本时，附上 `--replacement <已验证旧版本>`，脚本最后原子切换 `latest.json`。
+
+用 `--publish-dir /var/www/hifabu/download --prune` 预览超过 90 天且没有任何保留版本引用的镜像文件。协调器核对列表后，按命令输出附上 `--confirm-prune <清单哈希>` 重新执行。
