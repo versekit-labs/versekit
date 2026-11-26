@@ -15,7 +15,7 @@ import { openControlStore } from "../../cloud/src/control-store.mjs";
 import { createCloudServer, sessionCookieName } from "../../cloud/src/server.mjs";
 import { callCloud, cloudRoute } from "../../cloud/src/transport.mjs";
 import { close, fakeGoogle, listen } from "../../cloud/test/fake-google.mjs";
-import { CLOUD_COMMANDS, COMMANDS } from "../../core/src/commands.mjs";
+import { CLOUD_COMMANDS, COMMANDS, MAKER_COMMANDS } from "../../core/src/commands.mjs";
 import { listDeliveries } from "../../relay/src/client.mjs";
 import { createRelayServer } from "../../relay/src/server.mjs";
 
@@ -76,13 +76,13 @@ test("ACC-maker-01/03: maker --help parity, reproducible standalone bundle and e
     .map(([, path]) => path);
   assert.ok(modulePaths.includes("packages/cli/src/maker.mjs"));
   assert.ok(modulePaths.includes(registry));
-  const makerCommands = COMMANDS.filter(({ roles }) => roles?.includes("maker"));
   const cloudCommands = CLOUD_COMMANDS.filter(({ name }) =>
     ["device.link.start", "device.link.poll", "device.refresh", "device.revoke.self"].includes(name));
   const registrySource = readFileSync(join(root, registry), "utf8");
   const validation = registrySource.slice(registrySource.indexOf("const EMPTY_STRING_MEANS_VALUE =")).trimEnd();
   const projectedRegistry = [
-    `export const COMMANDS = ${JSON.stringify(makerCommands, null, 2)};`,
+    `export const MAKER_COMMANDS = ${JSON.stringify(MAKER_COMMANDS, null, 2)};`,
+    "export const COMMANDS = MAKER_COMMANDS.filter(({ http }) => http != null);",
     `export const CLOUD_COMMANDS = ${JSON.stringify(cloudCommands, null, 2)};`,
     validation,
   ].join("\n\n");
@@ -103,11 +103,12 @@ test("ACC-maker-01/03: maker --help parity, reproducible standalone bundle and e
   assert.doesNotMatch(bundle, /node:sqlite|packages\/(?:adapter-|driver-browser|web\/)|\/src\/(?:server|daemon|store|login-page|account-page)\.mjs/);
   const standalone = process.platform === "win32" ? [process.execPath, join(a, "lib/hifabu.mjs")] : [join(a, "bin/hifabu")];
   const output = execFileSync(standalone[0], [...standalone.slice(1), "--help"], { encoding: "utf8" });
-  const listed = [...output.matchAll(/^hifabu (\S+) (\S+)/gm)].map(([, area, action]) => area + "." + action).sort();
-  const registered = makerCommands.map(({ name }) => name).sort();
-  assert.equal(registered.length, 7);
-  assert.deepEqual(listed, registered);
-  assert.ok(!listed.includes("device.revoke.self"));
+  const listed = output.split("\n").filter((line) => line.startsWith("hifabu "));
+  assert.deepEqual(listed, MAKER_COMMANDS.map(({ cli }) => cli.usage));
+  assert.deepEqual(
+    MAKER_COMMANDS.map(({ name, roles }) => { assert.deepEqual(roles, ["maker"]); return name; }),
+    [...COMMANDS.filter(({ roles }) => roles?.includes("maker")).map(({ name }) => name), "scan"],
+  );
 });
 
 test("ACC-maker-03: only the bundled command definitions affect the maker build", (t) => {

@@ -624,6 +624,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-test-iso-01] `packages/driver-browser/test/isolation.test.mjs` 在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败。查清楚原因（端口、Chrome 启动、并行抢资源）写进 PR；不许用加长固定等待或跳过测试的办法掩盖。
 - [ACC-test-update-01] `packages/cli/test/update.test.mjs` 的「ACC-update-03 自动更新关掉：服务启动后不检查、不更新」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-18 起 CI 上偶发失败）。查清原因写进 PR（端口、计时、与别的测试抢资源、服务启动顺序）；修测试或修实现都可以，但不许加长固定等待、放宽断言或跳过。`packages/core/test/update.test.mjs` 的 ACC-update-03 照旧通过。
+- [ACC-test-flaky-01] 在本机按默认并发跑 `npm run ci`，连续跑 5 次都必须通过。这里专门盯两类测试：一类是 `packages/relay/test/rename-deploy.test.mjs` 里 ACC-brand-08 的 Seoul 检查（以前会跑到 5000ms 超时），另一类是登录、cookie 相关的 Chrome 夹具（以前出现过 SIGABRT）。修的时候先查清原因并写进 PR；可以改测试，也可以改实现，但不许加长超时、放宽断言、跳过测试，也不许调低并发。2026-11-26 这一天，#482、#487、#491、#495 都碰到了这两个问题。
 - [ACC-test-browser-01] `packages/driver-browser` 里「ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies 表有行、重开仍在」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-21 前 15 次 main CI 挂过 2 次，PR #266 也挂过 1 次）。查清原因写进 PR（Chrome 落盘 Cookies 的时机、关浏览器的顺序、端口或 profile 目录竞争）；不许加长固定等待、放宽断言或跳过。
 - [ACC-test-load-01] 机器负载高时全量 `npm test` 仍稳定（2026-11-21 PR #287 记录：几个 worker 同时跑测试时，`packages/channel-feishu/test/feishu.test.mjs` 的假 `lark-cli` 5 秒探测超时，报「飞书未配置：没有找到 lark-cli」，事件测试报 `0 !== 1`；`packages/cli/test/login-xhs.test.mjs` 等报「tab 连接已断开」「tab 已关闭」；单独复跑全过）。复现办法写进 PR（如同时起 3 份全量测试）；查清是探测超时写死、子进程启动慢还是共用端口或 Chrome；修测试的等待条件或实现的超时设置，不许加长固定等待、放宽断言或跳过。验收：同时起 3 份全量 `npm test`，连做 3 次都不失败；CI 上 Node 22 和 Node 26 都绿。
 - [ACC-test-load-02] `packages/core/test/egress.test.mjs` 的「ACC-v3-egress-09 慢但一直有数据的下载能成功」在 CI 上偶发失败（2026-11-23 PR #352 的 Node 26 一次失败、重跑通过）：夹具每 20ms 给一块、无数据超时只有 120ms，机器一卡、两块之间超过 120ms 就被判成「连续没数据」。改成不依赖真实时钟的判定（例如给 `refreshGeoDb` 注入时钟或计时器，测试里推进假时间），或者让夹具在两块之间的真实间隔与超时之间有数量级的余量，同时仍能证明「总时长超过超时也能成功」；不许删掉这条测试、放宽断言或改成跳过。同文件里另外几条用 `idleMs` 的 egress-09 测试按同样方式检查。验收：本机同时起 3 份 `node --test packages/core/test/egress.test.mjs`，连做 5 次都不失败；CI 上 Node 22 和 Node 26 都绿。
@@ -714,6 +715,13 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-plugin-v2-06] 自动更新：第一次使用时，技能用 `Edit` 在用户的 `~/.claude/settings.json` 里给 `hifabu` 市场加上 `"autoUpdate": true`。这一步要经过权限确认，用户能看到改了什么。改完说一句「已打开 Hifabu 插件的自动更新，不想要可以在 /plugin 里关掉」。用户拒绝后不再问，并把「已问过」记在插件数据目录里。离线评测覆盖同意和拒绝两种情况。
 - [ACC-plugin-v2-07] 不装发布机：技能里没有任何安装 VerseKit、Hifabu 完整版、biliup、lark-cli 的步骤，也没有 `curl | bash`。找不到 Node 时，走 ACC-maker-10 的运行时流程。没登录、或者没开通传片时，按 `references/setup.md` 的说法引导用户去 hifabu.com。发布机不在线、或者版本太旧时，告诉用户「到发布机那台电脑上打开或更新 Hifabu，下载地址 hifabu.com」。对外只出现 Hifabu 这个名字，不出现 VerseKit、vk。
 - [ACC-plugin-v2-08] 端到端离线评测：在临时 HOME 里，从本地生成的市场安装 0.2.0，用本地假云端和假中转跑完整流程，覆盖以下情况：第一次使用（扫描并确认约定、选账号组、打开自动更新）、预览、交付、关掉会话后上传继续、问「到了吗」、多个候选文件、没有封面、没有文案（起草后先给用户看）、上传途中断网。PR 里附上评测记录。发布到 hifabu.com 由协调器在合并后执行；0.1.0 的 zip 保留，市场清单只指向 0.2.0。
+- [ACC-plugin-v2-09] 项目变大以后，作品的 `work.key` 保持不变。路径里能认出期号的（比如 `07_草本故事/` 里的 `07`），即使目前只有一个视频，也按期号定 `work.key`。认不出期号的单视频项目，才用 `works` 里经用户确认的作品名。
+  - 离线评测要加一个固定场景，分三步：
+    1. 嵌套目录下只有第 07 期，交付一次；
+    2. 再交付一次，两次的 `work.key` 必须相同；
+    3. 加入第 08 期后交付第 08 期，第 07 期的 `work.key` 仍然不变，第 08 期拿到它自己的 key。
+  - 这几次交付都不能追问作品是哪一期。
+  - 这个场景要写进 `test/plugin/real-model.mjs`。真实模型的结果在 PR 里原样贴出来。
 
 ### 发布机下载与正式发版（2026-11-26）
 
