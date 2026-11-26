@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const lockFile = "version-lock.json";
 const { version } = JSON.parse(readFileSync(join(root, ".claude-plugin/plugin.json"), "utf8"));
-// 0.1.0 发布内容不含这两个生成文件。第 5 单切到 0.2.0 时取消排除、全量计算。
-const unreleasedMakerFiles = new Set(["bin/hifabu", "lib/hifabu.mjs"]);
+// 0.1.0 发布内容不含制作机客户端和运行时安装器。第 5 单切到 0.2.0 时取消排除、全量计算。
+const unreleasedMakerFiles = new Set(["bin/hifabu", "bin/hifabu-runtime", "lib/hifabu.mjs"]);
 // 原 0.1.0 记录也散列了本检查脚本自身。保留发布时的摘要，使测试规则更新不重写历史版本。
 const releasedVersionTestHash = "0f2aba33a0733f8b0536c089914576956ca979bc16a5d22656506921d2dabab5";
 

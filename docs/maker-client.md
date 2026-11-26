@@ -1,8 +1,26 @@
 # Hifabu 制作机命令
 
-`plugins/hifabu/bin/hifabu` 需要 Node 22.13 或更高版本。运行 `hifabu --help` 查看命令。
+`plugins/hifabu/bin/hifabu` 优先使用 PATH 中的 Node.js 22.13 或更高版本，其次使用插件数据目录下的 `runtime/bin/node`。两处都没有时，启动器会返回 `runtime_required`，列出下载大小、安装目录和需要用户同意的安装命令。
 
-制作机的数据默认放在 `~/.local/state/hifabu/maker`。用 `--data <目录>` 可以指定其他位置，例如插件传入的 `${CLAUDE_PLUGIN_DATA}`。`device.json` 保存刷新凭据，权限为 600。短期机器令牌只在运行时保存在内存中。`queue/` 保存等待上传的投递和最近的失败记录。
+制作机的数据默认放在 `~/.local/state/hifabu/maker`。插件用 `--data <目录>` 传入 `${CLAUDE_PLUGIN_DATA}`，安装私有运行时和执行制作机命令时应传同一个目录。`queue/` 保存等待上传的投递和最近的失败记录。
+
+## 安装私有运行时
+
+在 macOS 和 Linux 的 x64 或 ARM64 机器上，运行与 `hifabu` 同目录的 `hifabu-runtime install --data <目录>`，输入 `yes` 同意。自动化调用在用户同意后可传 `--yes`。安装器从 `nodejs.org` 下载锁定的 v22.23.5 官方压缩包，按插件内置的 SHA-256 校验，然后将 Node 放进插件数据目录。它只安装插件所需的 `node` 可执行文件，系统安装和 PATH 保持原样。可以通过 `HIFABU_RUNTIME_URL` 指定同一压缩包的镜像完整地址，校验值随插件版本固定。 [Node.js v22.23.5 发布记录](https://nodejs.org/en/blog/release/v22.23.5/)
+
+## 凭据位置和清理
+
+运行 `hifabu --data <目录> cloud status --human` 查看当前存储位置，JSON 输出的对应字段为 `credentialStorage`。
+
+- macOS 使用钥匙串，服务名为 `hifabu`，账户名为设备 ID。
+- Linux 使用由 `secret-tool` 提供的 Secret Service，条目标签为 `Hifabu`，属性为 `service=hifabu` 和 `device=<设备 ID>`。
+- 系统工具缺失时，刷新凭据保存在权限为 `0600` 的 `<数据目录>/device.json`。有系统工具但无法写入时，登录会报错并提示检查系统凭据服务。已有的文件凭据可以继续用，退出并重新登录后会按当前机器选择存储位置。
+
+使用系统存储时，权限为 `0600` 的 `device.json` 只保存设备和连接资料。有效期一小时的机器令牌保存在运行进程的内存中。
+
+卸载前运行 `hifabu --data <目录> cloud logout`，让 Hifabu 作废设备并删除本地凭据。若退出时无法联网，可在「我的 Hifabu」移除该设备。插件卸载通常删除数据目录，包括私有 Node 和未完成的投递，除非卸载时选择保留数据。钥匙串和 Secret Service 条目由系统保管，可能在插件卸载后保留。若已卸载，可以在 macOS「钥匙串访问」中按服务 `hifabu` 和设备 ID 找到并删除该条目。Linux 可在系统密码管理器中删除对应的 `Hifabu` 条目，或运行 `secret-tool clear service hifabu device <设备 ID>`。保留了插件数据时，文件凭据仍在 `device.json`，可在退出 Hifabu 后删除该文件。
+
+## 制作机命令
 
 项目选择放在同一数据目录的 `projects/<项目 id>.json`，格式为 `{"group":"账号组名"}`。旧清单未指定 `--group` 时会按项目选择使用该组。v1 清单通过 `target.group` 指定本次投递的组。
 
@@ -10,4 +28,4 @@
 
 `hifabu work push <清单> --dry-run --json` 只检查清单和中转状态。交付时，制作机先登记投递，再在当前命令中上传。遇到可重试的失败，下次交付时会尝试续传队列中的投递。
 
-在仓库根目录运行 `node scripts/build-maker-client.mjs` 构建 `plugins/hifabu/bin/hifabu` 和 `plugins/hifabu/lib/hifabu.mjs`。构建会打印两个文件的大小和 SHA-256。`--out-dir <目录>` 可以把产物写到另一个目录。
+在仓库根目录运行 `node scripts/build-maker-client.mjs` 构建 `plugins/hifabu/lib/hifabu.mjs`，并打包 `bin/hifabu` 和 `bin/hifabu-runtime`。构建会打印三个文件的大小和 SHA-256。`--out-dir <目录>` 可以把产物写到另一个目录。

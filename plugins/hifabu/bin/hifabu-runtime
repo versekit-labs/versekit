@@ -1,0 +1,162 @@
+#!/bin/sh
+
+# Node.js release SHASUMS: https://nodejs.org/en/blog/release/v22.23.5/
+version=v22.23.5
+bin_dir=$(dirname "$0")
+
+fail() {
+  printf '{"ok":false,"error":{"code":"%s","message":"%s"}}\n' "$1" "$2"
+  exit 1
+}
+
+runtime_release() {
+  platform=$(uname -s)-$(uname -m)
+  case "$platform" in
+    Darwin-arm64)
+      target=darwin-arm64
+      sha256=e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d
+      download_bytes=50004868 ;;
+    Darwin-x86_64)
+      target=darwin-x64
+      sha256=c53383238206b9ae4db23c5d8a63645e2e753bec8ab51a49cc81939aa64e9422
+      download_bytes=51197448 ;;
+    Linux-aarch64|Linux-arm64)
+      target=linux-arm64
+      sha256=8bd3dc69eee8f3f226315a80d7d1d4faccf217a4c8fae500168ac2e38f3bdba3
+      download_bytes=56713682 ;;
+    Linux-x86_64)
+      target=linux-x64
+      sha256=c54118104acc524633b5abe106bbf44a53126ec8b4e5fa105cb92b5d7de8a1a1
+      download_bytes=56856114 ;;
+    *) return 1 ;;
+  esac
+  release=node-$version-$target
+  download_mib=$(( (download_bytes + 524288) / 1048576 ))
+}
+
+set_data_dir() {
+  data_dir=${HOME:-~}/.local/state/hifabu/maker
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --data ]; then
+      shift
+      case "${1:-}" in
+        ''|--*) fail runtime_data_invalid '--data 需要一个目录路径。' ;;
+        *) data_dir=$1 ;;
+      esac
+    fi
+    shift
+  done
+  case "$data_dir" in
+    /*) ;;
+    *) data_dir=$PWD/$data_dir ;;
+  esac
+  runtime_dir=$data_dir/runtime
+  runtime_node=$runtime_dir/bin/node
+}
+
+compatible_node() {
+  "$1" --version 2>/dev/null | LC_ALL=C awk -F '[v.]' '
+    /^v[0-9]+\.[0-9]+\.[0-9]+$/ { supported = ($2 > 22 || ($2 == 22 && $3 >= 13)) }
+    END { exit !supported }
+  '
+}
+
+runtime_required() {
+  runtime_release || fail runtime_unsupported '需要 Node.js 22.13 或更新版本。请在这台机器上安装系统 Node.js。'
+  HIFABU_RUNTIME_PATH=$runtime_dir HIFABU_RUNTIME_DATA=$data_dir HIFABU_RUNTIME_INSTALL=$bin_dir/hifabu-runtime \
+    LC_ALL=C awk -v version="$version" -v size="$download_bytes" '
+    function json(value,    i, c, result) {
+      result = "\""
+      for (i = 1; i <= length(value); i++) {
+        c = substr(value, i, 1)
+        if (c == "\"" || c == "\\") result = result "\\" c
+        else if (c in control) result = result control[c]
+        else result = result c
+      }
+      return result "\""
+    }
+    BEGIN {
+      for (i = 1; i < 32; i++) control[sprintf("%c", i)] = sprintf("\\u%04x", i)
+      printf "{\"ok\":false,\"error\":{\"code\":\"runtime_required\","
+      printf "\"message\":\"需要 Node.js 22.13 或更新版本。请先询问用户是否同意下载私有运行时。\","
+      printf "\"required\":\"Node.js >=22.13\",\"version\":\"%s\",\"downloadBytes\":%s,", version, size
+      printf "\"directory\":%s,\"consentRequired\":true,", json(ENVIRON["HIFABU_RUNTIME_PATH"])
+      printf "\"installCommand\":[%s,\"install\",\"--data\",%s,\"--yes\"]}}\n", json(ENVIRON["HIFABU_RUNTIME_INSTALL"]), json(ENVIRON["HIFABU_RUNTIME_DATA"])
+    }'
+  exit 1
+}
+
+install_runtime() {
+  consent=no
+  set_data_dir "$@"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --data) shift ;;
+      --yes) consent=yes ;;
+      *) fail runtime_usage '用法：hifabu-runtime install [--data <目录>] [--yes]。' ;;
+    esac
+    shift
+  done
+  if compatible_node "$runtime_node"; then
+    printf '{"ok":true,"state":"already_installed"}\n'
+    return
+  fi
+  runtime_release || fail runtime_unsupported '没有适用于这台机器的私有 Node.js。请安装系统 Node.js 22.13 或更新版本。'
+  if [ "$consent" != yes ]; then
+    printf '下载 Node.js %s（约 %s MiB）并安装到 %s？输入 yes 同意：' "$version" "$download_mib" "$runtime_dir" >&2
+    IFS= read -r consent
+    [ "$consent" = yes ] || fail runtime_consent_required '未收到下载许可。仅在用户同意后重试。'
+  fi
+
+  url=${HIFABU_RUNTIME_URL:-https://nodejs.org/dist/$version/$release.tar.gz}
+  case "$url" in
+    https://*) protocols='=https' ;;
+    http://*) protocols='=http,https' ;;
+    *) fail runtime_url_invalid '运行时下载地址须为 HTTP 或 HTTPS。' ;;
+  esac
+  command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 ||
+    fail runtime_tools_missing '安装私有 Node.js 需要 curl 和 tar。'
+  case "$target" in
+    linux-*)
+      command -v gzip >/dev/null 2>&1 ||
+        fail runtime_tools_missing '在 Linux 上解压 Node.js 需要 gzip。请安装 gzip 后重试。' ;;
+  esac
+  if command -v shasum >/dev/null 2>&1; then
+    set -- shasum -a 256
+  elif command -v sha256sum >/dev/null 2>&1; then
+    set -- sha256sum
+  else
+    fail runtime_tools_missing '安装私有 Node.js 需要 shasum 或 sha256sum。'
+  fi
+
+  umask 077
+  mkdir -p "$data_dir" || fail runtime_install_failed '无法创建插件数据目录。'
+  stage=$(mktemp -d "$data_dir/.runtime.XXXXXXXX") || fail runtime_install_failed '无法创建运行时临时目录。'
+  trap 'rm -rf "$stage"' 0
+  trap 'exit 1' HUP INT TERM
+  archive=$stage/node.tar.gz
+  curl --disable --fail --silent --show-error --location --proto "$protocols" --proto-redir "$protocols" \
+    --output "$archive" -- "$url" || fail runtime_download_failed '无法下载 Node.js，请检查网络后重试。'
+  digest=$("$@" < "$archive") || fail runtime_checksum_failed '无法计算 Node.js 下载文件的 SHA-256。'
+  [ "${digest%% *}" = "$sha256" ] || fail runtime_checksum_mismatch 'Node.js 下载文件的 SHA-256 与锁定值不符，已停止安装。'
+
+  member=$release/bin/node
+  tar -xzf "$archive" -C "$stage" "$member" || fail runtime_extract_failed '无法解压已校验的 Node.js。'
+  [ "$("$stage/$member" --version 2>/dev/null)" = "$version" ] ||
+    fail runtime_binary_invalid '无法运行已解压的 Node.js，请检查操作系统和架构。'
+  # Stage on the same filesystem so parallel launchers only see a complete binary.
+  mkdir -p "$runtime_dir/bin" && mv -f "$stage/$member" "$runtime_dir/bin/" ||
+    fail runtime_install_failed '无法把 Node.js 安装到插件数据目录。'
+  printf '{"ok":true,"state":"installed","version":"%s"}\n' "$version"
+}
+
+case "${1:-}" in
+  _run)
+    shift
+    if compatible_node node; then exec node "$bin_dir/../lib/hifabu.mjs" "$@"; fi
+    set_data_dir "$@"
+    if compatible_node "$runtime_node"; then exec "$runtime_node" "$bin_dir/../lib/hifabu.mjs" "$@"; fi
+    runtime_required ;;
+  install) shift; install_runtime "$@" ;;
+  *) fail runtime_usage '用法：hifabu-runtime install [--data <目录>] [--yes]。' ;;
+esac
