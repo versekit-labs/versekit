@@ -686,6 +686,13 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-brand-01] `npm run check:brand`（脚本 `scripts/ci/check-brand.mjs`）扫描仓库里所有已跟踪的文本文件，找出 `versekit`（不分大小写）、`VERSEKIT_`、`VK_`，以及作为独立命令出现的 `vk`（单词边界：命令行开头、反引号里、`npm run vk`；`vkey` 这类词里的 vk 不算）。输出按类别分组统计（用户看得见的字、命令、环境变量、本机路径、内部名字、服务器、其他），每类给出数量和前几处的 `文件:行号`，最后给总数。本单是报告模式：发现残留也以 0 退出，`npm run check` 接入它，但不因为它失败。加 `--strict` 时，白名单以外只要有残留就以 1 退出（留给 R8 用），测试要覆盖这两种模式。
 - [ACC-brand-02] 白名单是显式文件 `scripts/ci/brand-allowlist.txt`，每条写明路径或匹配规则、理由类别（协议常量 / 仓库地址 / Orca 流程 / 历史文档 / 迁移代码 / 白名单本身）和一句话理由。没写理由的条目，脚本在任何模式下都报错。首批白名单至少包括：中转令牌 audience `versekit-relay` 等线上协议常量、`github.com/versekit-labs/versekit` 仓库地址、`bin/orca-flow.mjs` 和 `.orca-kit/` 等 Orca 流程文件、标注日期的历史文档。测试要能证明：命中白名单的不计入残留；没写理由的条目会报错。
+- [ACC-brand-03] R2 用户看得见的字改为 Hifabu：本地控制台每一页的 `<title>` 和侧栏、飞书卡片、中转和投递状态的文案（比如「打开那台电脑上的 Hifabu」）、CLI 的人话输出和错误信息、`site/`、`docs/design` 里现行的设计稿和 `.impeccable` 任务书，都不再出现 VerseKit 或 versekit 字样。浅色和深色各截一张主要页面的图，附在 PR 里；`npm run design:check` 通过。命令名、环境变量、本机路径、内部包名不在本单范围内。改完后，`check:brand` 报告里「用户看得见的字」这一类归零。
+- [ACC-brand-04] R3 命令改名为 `hifabu`：`package.json` 的 bin 和 scripts（`npm run hifabu -- …`）、`commands.mjs` 每条 `cli.usage`、AGENTS.md §5、技能和文档里的命令示例、`install.sh` 都改成 `hifabu`。子命令和参数不变。`vk` 作为别名保留两个小版本：照常可用，每次在 stderr 提示一句「vk 已改名为 hifabu」，stdout 和退出码与 `hifabu` 完全一致。测试要覆盖三点：`hifabu --help` 和 `vk --help` 列出的命令集合相同；完整版 `hifabu` 接受 `--data <目录>` 参数并忽略它（和插件小程序的调用方式兼容，见 RENAME §2.1）；三端一致测试仍然通过。
+- [ACC-brand-05] R4 环境变量改名：所有 `VERSEKIT_*` 和 `VK_*` 改为 `HIFABU_*`（例如 `VK_HOME` 改为 `HIFABU_HOME`）。只设旧名时照样生效，并在 stderr 提示一次；新旧都设时用新名。测试改用新名，另外加一组测试专门覆盖旧名后备。本机数据目录的默认值不变，仍是 `~/.versekit`、`~/.config/versekit`、`~/.local/state/versekit`。
+- [ACC-brand-06] R5 后台服务改名，数据目录不动：后台服务从 `com.versekit.daemon` 改为 `com.hifabu.daemon`（Linux 的 systemd user 单元同理）。更新时先注册并启动新服务，确认它健康后再卸载旧服务。更新完成后只剩新服务；新服务读的仍是原来的数据目录，更新前后账号数、作品数、各平台登录状态都一致。更新中途任何一步失败，旧服务照常运行，并写明原因。先在临时 HOME 里测完，PR 里附上记录；所有者在自己那台发布机上点更新，作为最后一道验收。
+- [ACC-brand-07] R6 内部名字：根包名改为 `hifabu`，`@versekit-app/*` 改为 `@hifabu/*`，`vk.mjs` 等文件改名，`.claude/skills/versekit-ingest` 改为 `hifabu-ingest`，品牌图标改名，代码注释里的产品名一并改掉。`npm test` 全绿，`check:brand` 报告里「内部名字」这一类归零。
+- [ACC-brand-08] R7 服务器：volc1 和 seoul 上的 systemd 单元、数据目录、`/opt` 目录、Caddy 片段，以及 `deploy/` 下的脚本和文档，都改成 hifabu 的名字。数据目录用 `mv`，旧路径留一个符号链接，保留一周。仓库里要有切换脚本和回滚脚本，并且支持 `--dry-run`。切换由协调器在部署窗口执行：切换前后，中转上的投递数和 blob 数一致；0.1.0 插件和旧版发布机切换后照常能拉取（协议常量没改）；同机的其他服务（assurelane 等）不受影响。
+- [ACC-brand-09] R8 闸门改为拦截：`npm run check` 改用 `check:brand --strict`。白名单以外的残留为 0；新增任何一处 `versekit`、`VERSEKIT_`、`VK_` 或独立的 `vk` 命令，CI 都会失败（测试里用一个故意写入的样例来证明）。本机数据路径和飞书 profile `versekit` 这一条白名单，理由写「暂不迁移，待发布机新安装器」。
 
 ### 部署（2026-11-25）
 
