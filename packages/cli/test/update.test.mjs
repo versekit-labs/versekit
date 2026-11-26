@@ -73,7 +73,6 @@ function buildApp(name, version, patch = null) {
   writeFileSync(join(dir, "package.json"), JSON.stringify(pkg, null, 2));
   const skip = (src) => !/(^|\/)(node_modules|test|\.git)(\/|$)/.test(src);
   cpSync(join(ROOT, "packages"), join(dir, "packages"), { recursive: true, filter: skip });
-  cpSync(join(ROOT, "schemas"), join(dir, "schemas"), { recursive: true });
   cpSync(join(ROOT, "scripts"), join(dir, "scripts"), { recursive: true, filter: skip });
   cpSync(INSTALL_SH, join(dir, "install.sh"));
   patch?.(dir);

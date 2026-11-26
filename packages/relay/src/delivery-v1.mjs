@@ -1,6 +1,45 @@
-import schema from "../../../schemas/delivery-v1.json" with { type: "json" };
+// Relay deployments ship packages/ only. The schema test keeps this definition in
+// sync with the public schemas/delivery-v1.json contract.
+const object = (required, properties) => ({
+  type: "object", ...(required.length ? { required } : {}), properties,
+});
+const label = (maxLength) => ({ type: "string", pattern: "\\S", maxLength });
+const file = { $ref: "#/$defs/file" };
+const copy = { $ref: "#/$defs/copy" };
 
-export const DELIVERY_V1 = schema.properties.schema.const;
+export const DELIVERY_V1 = "hifabu.delivery/1";
+export const deliverySchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://hifabu.com/schema/delivery-v1.json",
+  title: "Hifabu delivery v1",
+  ...object(["schema", "work", "cuts", "target", "from"], {
+    schema: { const: DELIVERY_V1 },
+    work: object(["key", "title"], {
+      key: { type: "string", pattern: "^[^/\\\\]+/[^/\\\\]+$", maxLength: 512 },
+      title: label(200),
+      language: label(32),
+    }),
+    cuts: {
+      type: "array", minItems: 1,
+      items: object(["video"], {
+        title: label(200), video: file, cover: file,
+        copy: object([], { default: copy, bilibili: copy, douyin: copy, shipinhao: copy, tiktok: copy, xiaohongshu: copy, youtube: copy }),
+      }),
+    },
+    target: object(["group"], { group: label(64) }),
+    from: object(["client"], { client: label(128), device: label(128) }),
+  }),
+  $defs: {
+    file: object(["name", "sha256", "size"], {
+      name: { type: "string", pattern: "^(?!\\.$)[^/\\\\\\u0000]+$", maxLength: 255 },
+      sha256: { type: "string", pattern: "^[0-9a-fA-F]{64}$" },
+      size: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+    }),
+    copy: object([], {
+      title: { type: "string" }, body: { type: "string" }, tags: { type: "array", items: { type: "string" } },
+    }),
+  },
+};
 export const ACCEPTED_DELIVERY_SCHEMAS = Object.freeze([DELIVERY_V1]);
 export const DELIVERY_UPGRADE = "请先更新发布机上的 Hifabu，再从制作机重新交付。";
 
@@ -34,7 +73,7 @@ export function assertNoLocalPaths(...values) {
 
 // The published schema uses only these validation keywords. Unknown object properties are allowed.
 function validate(value, rule, field) {
-  if (rule.$ref) rule = schema.$defs[rule.$ref.slice("#/$defs/".length)];
+  if (rule.$ref) rule = deliverySchema.$defs[rule.$ref.slice("#/$defs/".length)];
   const invalid = () => { throw problem("invalid_manifest", "交付清单的 " + field + " 字段格式不正确。"); };
   switch (rule.type) {
     case "object":
@@ -64,7 +103,7 @@ function validate(value, rule, field) {
 export function validateDeliveryV1(manifest) {
   if (manifest?.schema !== DELIVERY_V1) throw unsupportedDelivery();
   assertNoLocalPaths(manifest);
-  validate(manifest, schema, "manifest");
+  validate(manifest, deliverySchema, "manifest");
 }
 
 export const deliveryFiles = (manifest) => manifest.cuts.flatMap(({ video, cover }) => cover ? [video, cover] : [video]);
@@ -87,8 +126,8 @@ export function validateDeliveryEnvelope({ manifest, group, blobs }) {
 /** Return only v1 copy fields understood by this reader, including at each platform level. */
 export function deliveryCopy(copy) {
   if (!copy) return undefined;
-  const platforms = Object.keys(schema.properties.cuts.items.properties.copy.properties);
-  const fields = Object.keys(schema.$defs.copy.properties);
+  const platforms = Object.keys(deliverySchema.properties.cuts.items.properties.copy.properties);
+  const fields = Object.keys(deliverySchema.$defs.copy.properties);
   return Object.fromEntries(platforms.filter((platform) => Object.hasOwn(copy, platform))
     .map((platform) => [platform, Object.fromEntries(fields.filter((key) => Object.hasOwn(copy[platform], key))
       .map((key) => [key, copy[platform][key]]))]));
