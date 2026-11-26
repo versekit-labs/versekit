@@ -8,11 +8,11 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createServer as netServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir, platform, arch } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { fakeRelease, NODE_VERSION } from "./install-fixtures.mjs";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const INSTALL_SH = join(ROOT, "install.sh");
@@ -20,26 +20,20 @@ const INSTALL_SH = join(ROOT, "install.sh");
 const WORK = mkdtempSync(join(platform() === "darwin" ? "/tmp" : tmpdir(), "vk-install-"));
 const OS = platform() === "darwin" ? "darwin" : "linux";
 const CPU = arch() === "arm64" ? "arm64" : "x64";
-const BILIUP_PLAT = `${CPU === "arm64" ? "aarch64" : "x86_64"}-${OS === "darwin" ? "macos" : "linux"}`;
-// 假 Node 的版本号取自 install.sh 里写死的默认值：脚本默认要装哪一版，测试就按那一版造包。
-const PINNED = /HIFABU_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
-const NODE_VER = PINNED?.[1] ?? "0.0.0";
-const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
-
-// 假 lark-cli：版本号取自 install.sh 里写死的默认值，--version 输出和真的一样的格式。
-const LARK_PIN = /HIFABU_LARK_VERSION:-(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
-const LARK_VER = LARK_PIN?.[1] ?? "0.0.0";
-const LARK_FILE = `lark-cli-${LARK_VER}-${OS}-${CPU === "arm64" ? "arm64" : "amd64"}.tar.gz`;
-let breakLarkSum = false;
-let larkArchiveHits = 0;
-
+const PLATFORM = `${OS}-${CPU}`;
+const A = "a".repeat(40);
+const B = "b".repeat(40);
+const FIRST = "0.1.0";
+const SECOND = "9.9.9";
 const homes = [];
+const hits = [];
 let server;
 let base;
-let breakNodeSum = false;
-let appTarball = "app-1";
+let currentVersion = FIRST;
+let releases;
+let breakPath;
+let missingPath;
 
-const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const tar = (args) => {
   const r = spawnSync("tar", args, { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -52,13 +46,13 @@ const freePort = () =>
     });
   });
 
-/** 假 Node：`-v` 报 22.99.0，其余转给真 Node。 */
+/** 假 Node：`-v` 报清单里的版本，其余转给真 Node。 */
 function buildFakeNode() {
   const dir = join(WORK, "node-pkg", "node");
   mkdirSync(join(dir, "bin"), { recursive: true });
-  writeFileSync(join(dir, "bin", "node"), `#!/bin/sh\n[ "$1" = "-v" ] && { echo v${NODE_VER}; exit 0; }\nexec "${process.execPath}" "$@"\n`);
+  writeFileSync(join(dir, "bin", "node"), `#!/bin/sh\n[ "$1" = "-v" ] && { echo ${NODE_VERSION}; exit 0; }\nexec "${process.execPath}" "$@"\n`);
   chmodSync(join(dir, "bin", "node"), 0o755);
-  tar(["-czf", join(WORK, NODE_FILE), "-C", join(WORK, "node-pkg"), "node"]);
+  tar(["-czf", join(WORK, "node.tar.gz"), "-C", join(WORK, "node-pkg"), "node"]);
 }
 
 /** 假 versekit：拿当前仓库的程序文件（不含测试和 git）打成 tarball，版本号可改。 */
@@ -71,52 +65,52 @@ function buildApp(name, version) {
   const skip = (src) => !/(^|\/)(node_modules|test|\.git)(\/|$)/.test(src);
   cpSync(join(ROOT, "packages"), join(dir, "packages"), { recursive: true, filter: skip });
   cpSync(join(ROOT, "scripts"), join(dir, "scripts"), { recursive: true, filter: skip });
+  if (name === "source") {
+    cpSync(INSTALL_SH, join(dir, "install.sh"));
+    mkdirSync(join(dir, "deploy/hifabu"), { recursive: true });
+    cpSync(join(ROOT, "deploy/hifabu/install-template.sh"), join(dir, "deploy/hifabu/install-template.sh"));
+  }
   tar(["-czf", join(WORK, `${name}.tar.gz`), "-C", join(WORK, `${name}-src`), "versekit-main"]);
 }
 
-function buildLark() {
-  const dir = join(WORK, "lark-pkg");
+function buildComponent(name) {
+  const dir = join(WORK, `${name}-pkg`);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "lark-cli"), `#!/bin/sh\n[ "$1" = "--version" ] && { echo "lark-cli version ${LARK_VER}"; exit 0; }\necho lark-fake\n`);
-  chmodSync(join(dir, "lark-cli"), 0o755);
-  tar(["-czf", join(WORK, LARK_FILE), "-C", dir, "lark-cli"]);
-}
-
-function buildBiliup() {
-  const dir = join(WORK, "biliup-pkg", `biliupR-v0.0.0-${BILIUP_PLAT}`);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "biliup"), "#!/bin/sh\necho biliup-fake\n");
-  chmodSync(join(dir, "biliup"), 0o755);
-  tar(["-czf", join(WORK, "biliup.tar.gz"), "-C", join(WORK, "biliup-pkg"), `biliupR-v0.0.0-${BILIUP_PLAT}`]);
+  writeFileSync(join(dir, name), `#!/bin/sh\necho ${name}-release\n`, { mode: 0o755 });
+  tar(["-czf", join(WORK, `${name}.tar.gz`), "-C", dir, name]);
 }
 
 before(async () => {
   buildFakeNode();
-  buildApp("app-1", "0.1.0");
-  buildApp("app-2", "9.9.9");
-  buildBiliup();
-  buildLark();
+  buildApp("app-1", FIRST);
+  buildApp("app-2", SECOND);
+  buildApp("source", "8.8.8");
+  buildComponent("biliup");
+  buildComponent("lark-cli");
   server = createServer((req, res) => {
-    const url = req.url ?? "";
-    if (url === "/node/SHASUMS256.txt") {
-      const sum = breakNodeSum ? "0".repeat(64) : sha(join(WORK, NODE_FILE));
-      res.end(`${sum}  ${NODE_FILE}\n${"1".repeat(64)}  node-v${NODE_VER}-win-x64.zip\n`);
-    } else if (url === `/node/${NODE_FILE}`) res.end(readFileSync(join(WORK, NODE_FILE)));
-    else if (url === "/app.tar.gz") res.end(readFileSync(join(WORK, `${appTarball}.tar.gz`)));
-    else if (url === "/lark/checksums.txt") {
-      const sum = breakLarkSum ? "0".repeat(64) : sha(join(WORK, LARK_FILE));
-      res.end(`${sum}  ${LARK_FILE}\n${"2".repeat(64)}  lark-cli-${LARK_VER}-windows-amd64.zip\n`);
-    } else if (url === `/lark/${LARK_FILE}`) {
-      larkArchiveHits += 1;
-      res.end(readFileSync(join(WORK, LARK_FILE)));
-    } else if (url === "/biliup.tar.gz") res.end(readFileSync(join(WORK, "biliup.tar.gz")));
-    else {
-      res.statusCode = 404;
-      res.end("no");
-    }
+    const url = req.url;
+    hits.push(url);
+    const body = releases[currentVersion][url] ?? releases[FIRST][url] ?? releases[SECOND][url];
+    if (body === undefined || url === missingPath) return res.writeHead(404).end("no");
+    if (url !== breakPath) return res.end(body);
+    if (url.endsWith("/SHA256SUMS")) return res.end(body.replace(/^\w{64}(?=  manifest\.json$)/m, "0".repeat(64)));
+    res.end(Buffer.concat([Buffer.from(body), Buffer.from("corrupted")]));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
+  releases = Object.fromEntries([[FIRST, A, "app-1"], [SECOND, B, "app-2"]].map(([version, commit, app]) => [
+    version,
+    fakeRelease(base, {
+      version, commit, platform: PLATFORM,
+      app: readFileSync(join(WORK, `${app}.tar.gz`)),
+      node: readFileSync(join(WORK, "node.tar.gz")),
+      components: {
+        biliup: readFileSync(join(WORK, "biliup.tar.gz")),
+        "lark-cli": readFileSync(join(WORK, "lark-cli.tar.gz")),
+      },
+    }),
+  ]));
+  writeFileSync(join(WORK, "release-install.sh"), releases[FIRST][`/${FIRST}/install.sh`]);
 });
 
 after(async () => {
@@ -141,10 +135,8 @@ async function newHome(extra = {}) {
     HIFABU_SERVICE_MANAGER: "detach",
     HIFABU_OFFLINE: "1",
     HIFABU_NO_OPEN: "1",
-    HIFABU_NODE_URL: `${base}/node`,
-    HIFABU_APP_URL: `${base}/app.tar.gz`,
-    HIFABU_BILIUP_URL: `${base}/biliup.tar.gz`,
-    HIFABU_LARK_URL: `${base}/lark`,
+    HIFABU_INSTALL_TEST: "1",
+    HIFABU_DOWNLOAD_URL: base,
     ...extra,
   };
   delete env.HIFABU_HOME;
@@ -206,16 +198,23 @@ test("ACC-brand-05 安装器兼容旧环境变量，新变量即使为空也优�
 // 这几条按顺序依赖同一个临时 HOME：装 → 升级 → 卸载。
 let main;
 
-test("ACC-install-01/02/05：一条命令装好——私有 Node、程序、biliup、服务、控制台 200、最后一行写明地址", { timeout: 120000 }, async () => {
+test("ACC-release-02 / ACC-install-01/02/05：正式版全新安装只装 Node 和程序，先预告服务", { timeout: 120000 }, async (t) => {
   main = await newHome();
-  const r = await install(main);
+  const start = hits.length;
+  const r = await sh(main, "bash", [join(WORK, "release-install.sh")], {
+    env: { HIFABU_APP_URL: "file:///not-the-release", HIFABU_APP_SHA256: "invalid" },
+  });
   assert.equal(r.code, 0, r.stdout + r.stderr);
+  t.diagnostic(r.stdout.trim());
+  assert.deepEqual(hits.slice(start), ["/deps/node.tar.gz", `/${FIRST}/app.tar.gz`]);
+  assert.match(r.stdout, /后台服务 com\.versekit\.test\.[^：]+：.*控制台.*排期.*日志：.*vk\.log\n▸ 注册后台服务/);
 
   const lines = r.stdout.trim().split("\n");
   assert.equal(lines.at(-1), `装好了，控制台地址 http://127.0.0.1:${main.port}，终端可以关了`, r.stderr);
 
   const prefix = join(main.home, ".versekit");
-  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "bin/biliup", "bin/lark-cli", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
+  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
+  assert.equal(readFileSync(join(prefix, "app/release-manifest.json"), "utf8"), releases[FIRST][`/${FIRST}/manifest.json`]);
   assert.ok(existsSync(join(main.home, ".local/state/versekit/vk.db")), "vk init 应该建库");
   assert.equal(await status(main.port), 200);
 
@@ -231,7 +230,8 @@ test("ACC-install-01/02/05：一条命令装好——私有 Node、程序、bili
   assert.equal(markerCount(rc), 1);
   assert.match(readFileSync(rc, "utf8"), new RegExp(`export PATH="${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/bin:\\$PATH"`));
 
-  // 装好的 vk 可以直接用，服务环境里能找到 biliup
+  assert.deepEqual(readdirSync(join(prefix, "bin")).sort(), ["hifabu", "vk"]);
+  // 装好的 vk 可以直接用。
   const v = await sh(main, vkOf(main), ["service", "status"]);
   const st = JSON.parse(v.stdout);
   assert.equal(st.running, true);
@@ -239,7 +239,7 @@ test("ACC-install-01/02/05：一条命令装好——私有 Node、程序、bili
   assert.equal(st.manager, "detach");
 });
 
-test("ACC-install-03：再运行一次就是升级——数据、配置、凭证保留，输出前后版本，只留一段 PATH", { timeout: 120000 }, async () => {
+test("ACC-release-02 / ACC-install-03：旧地址按 latest.json 升级，保留数据并更新已有组件", { timeout: 120000 }, async (t) => {
   const vk = vkOf(main);
   const added = await sh(main, vk, ["group", "add", "保留我"]);
   assert.equal(added.code, 0, added.stdout + added.stderr);
@@ -247,11 +247,22 @@ test("ACC-install-03：再运行一次就是升级——数据、配置、凭证
   writeFileSync(cred, "secret");
   const before = JSON.parse((await sh(main, vk, ["service", "status"])).stdout).pid;
 
-  appTarball = "app-2";
+  const prefix = join(main.home, ".versekit");
+  const stamp = join(prefix, "app/.versekit-build.json");
+  writeFileSync(stamp, readFileSync(stamp, "utf8").replace(/^  "release":.*\n/m, ""));
+  for (const name of ["biliup", "lark-cli"]) writeFileSync(join(prefix, "bin", name), "old version", { mode: 0o755 });
+
+  currentVersion = SECOND;
   const r = await install(main);
-  appTarball = "app-1";
+  currentVersion = FIRST;
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /已升级 0\.1\.0\+未知提交 → 9\.9\.9\+未知提交/);
+  t.diagnostic(r.stdout.trim());
+  assert.match(r.stdout, /^安装地址已改为 hifabu\.com\/download/);
+  assert.match(r.stdout, /已升级 0\.1\.0\+aaaaaaa → 9\.9\.9/);
+  assert.match(readFileSync(join(main.home, ".local/state/versekit/vk.log"), "utf8"), /\[release\.transition\] 已改为从 hifabu\.com 获取正式版本/);
+  for (const name of ["biliup", "lark-cli"]) {
+    assert.equal((await sh(main, join(prefix, "bin", name), [])).stdout.trim(), `${name}-release`);
+  }
   assert.equal(r.stdout.trim().split("\n").at(-1), `装好了，控制台地址 http://127.0.0.1:${main.port}，终端可以关了`);
 
   assert.equal(JSON.parse(readFileSync(join(main.home, ".versekit/app/package.json"), "utf8")).version, "9.9.9");
@@ -262,6 +273,12 @@ test("ACC-install-03：再运行一次就是升级——数据、配置、凭证
   const after = JSON.parse((await sh(main, vk, ["service", "status"])).stdout).pid;
   assert.notEqual(after, before, "升级要重启服务");
   assert.ok(!existsSync(join(main.home, ".versekit/app.prev")), "升级成功后不留旧程序");
+});
+
+test("ACC-release-02：升级后 release-manifest.json 原样换成本次发版清单", () => {
+  const installed = readFileSync(join(main.home, ".versekit/app/release-manifest.json"), "utf8");
+  assert.equal(installed, releases[SECOND][`/${SECOND}/manifest.json`]);
+  assert.notEqual(installed, releases[FIRST][`/${FIRST}/manifest.json`]);
 });
 
 test("ACC-install-04：vk service stop / start / restart 管得住后台服务", { timeout: 60000 }, async () => {
@@ -299,73 +316,92 @@ test("ACC-install-04：--purge 先列出要删的目录，再删数据", { timeo
   assert.ok(!existsSync(join(h.home, ".local/state/versekit")));
 });
 
-test("ACC-install-03/05：校验不过——非 0 退出、说清哪一步、不留服务、不动 PATH", { timeout: 60000 }, async () => {
+test("ACC-release-02：任一文件 SHA-256 不符就停止，首次失败无残留", { timeout: 60000 }, async (t) => {
+  for (const path of ["/deps/node.tar.gz", `/${FIRST}/app.tar.gz`, `/${FIRST}/install.sh`, `/${FIRST}/manifest.json`]) {
+    const h = await newHome();
+    breakPath = path;
+    const r = await install(h);
+    breakPath = undefined;
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.ok(r.stderr.includes(`${path.split("/").at(-1)} 的 SHA-256 校验不通过`), r.stderr);
+    assert.ok(!existsSync(join(h.home, ".versekit")));
+    assert.ok(!existsSync(join(h.home, ".local/state/versekit/service.json")));
+    assert.ok(!existsSync(join(h.home, ".zshrc")));
+    assert.equal(await status(h.port), null);
+    if (path.endsWith("app.tar.gz")) t.diagnostic(r.stderr.trim());
+  }
+});
+
+test("ACC-release-02：版本指针与 SHA256SUMS 的清单哈希不一致，拒绝下载安装脚本", { timeout: 60000 }, async () => {
   const h = await newHome();
-  breakNodeSum = true;
+  const start = hits.length;
+  breakPath = `/${FIRST}/SHA256SUMS`;
   const r = await install(h);
-  breakNodeSum = false;
-  assert.notEqual(r.code, 0);
-  assert.match(r.stderr, /校验 Node/);
-  assert.match(r.stderr, /怎么办/);
-  assert.ok(!existsSync(join(h.home, ".local/state/versekit/service.json")));
-  assert.equal(await status(h.port), null);
-  assert.ok(!existsSync(join(h.home, ".zshrc")), "失败了就不该改 shell 配置");
+  breakPath = undefined;
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /SHA256SUMS 中 manifest\.json 的 SHA-256 与 latest\.json 不符（期望 [0-9a-f]{64}，实际 0{64}）/);
+  assert.deepEqual(hits.slice(start), ["/latest.json", `/${FIRST}/SHA256SUMS`, `/${FIRST}/manifest.json`]);
+  assert.ok(!existsSync(join(h.home, ".versekit")));
 });
 
-test("ACC-v3-feishu-08：首次安装装上飞书组件 lark-cli（校验过、可执行、版本对）；重复运行跳过下载；系统里的 lark-cli 不动", { timeout: 180000 }, async () => {
-  assert.ok(LARK_PIN, "install.sh 里要有写死的 HIFABU_LARK_VERSION 默认值");
-  // 系统 PATH 里放一个「已有的」lark-cli，装完它必须原样还在。
-  const sysBin = join(WORK, "sysbin");
-  mkdirSync(sysBin, { recursive: true });
-  writeFileSync(join(sysBin, "lark-cli"), "#!/bin/sh\necho system-lark\n");
-  chmodSync(join(sysBin, "lark-cli"), 0o755);
-  const h = await newHome({ PATH: `${sysBin}:${process.env.PATH}` });
-  const own = join(h.home, ".versekit", "bin", "lark-cli");
-  const before = larkArchiveHits;
-  const first = await install(h);
-  assert.equal(first.code, 0, first.stdout + first.stderr);
-  assert.equal(larkArchiveHits, before + 1, "首次应下载一次");
-  assert.ok(existsSync(own), "lark-cli 装在 versekit 目录下");
-  const v = spawnSync(own, ["--version"], { encoding: "utf8" });
-  assert.equal(v.stdout.trim(), `lark-cli version ${LARK_VER}`);
-  assert.equal(readFileSync(join(sysBin, "lark-cli"), "utf8"), "#!/bin/sh\necho system-lark\n", "系统里已有的 lark-cli 不动");
-
-  const again = await install(h);
-  assert.equal(again.code, 0, again.stdout + again.stderr);
-  assert.match(again.stdout, /飞书组件 lark-cli \S+ 已经在了，跳过下载/);
-  assert.equal(larkArchiveHits, before + 1, "重复运行不该再下载");
-  assert.ok(existsSync(own));
-  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
-});
-
-test("ACC-v3-feishu-08：lark-cli 校验不过——不拖垮安装：versekit 照常装好，说清原因和补装办法，不留飞书组件", { timeout: 120000 }, async () => {
+test("ACC-release-02：测试下载源需要显式打开测试开关", async () => {
   const h = await newHome();
-  breakLarkSum = true;
-  const r = await install(h);
-  breakLarkSum = false;
-  assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout + r.stderr, /飞书组件没装上/);
-  assert.match(r.stderr, /校验不通过/);
-  assert.match(r.stderr, /重新运行这一行安装命令/);
-  assert.ok(!existsSync(join(h.home, ".versekit/bin/lark-cli")), "校验不过不能装上");
-  assert.ok(existsSync(join(h.home, ".versekit/app")), "versekit 本体照常装上");
-  assert.ok(existsSync(join(h.home, ".versekit/bin/vk")));
-  assert.notEqual(await status(h.port), null, "后台服务在跑");
-  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
-  // 网络恢复后重新运行：补装上
-  const again = await install(h);
-  assert.equal(again.code, 0, again.stderr);
-  assert.ok(existsSync(join(h.home, ".versekit/bin/lark-cli")), "重新运行后补装");
-  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+  const start = hits.length;
+  const r = await install(h, { env: { HIFABU_INSTALL_TEST: "" } });
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /仅离线测试可设置测试下载源/);
+  assert.deepEqual(hits.slice(start), []);
 });
 
-test("ACC-install-03：下载失败——退出码非 0 并指出是哪一步", { timeout: 60000 }, async () => {
-  const h = await newHome({ HIFABU_BILIUP_URL: `${base}/nope.tar.gz` });
+test("ACC-release-02：已有组件的校验失败保留旧程序、组件和服务", { timeout: 120000 }, async () => {
+  const h = await newHome();
+  assert.equal((await install(h)).code, 0);
+  const prefix = join(h.home, ".versekit");
+  const lark = join(prefix, "bin/lark-cli");
+  writeFileSync(lark, "keep lark", { mode: 0o755 });
+  breakPath = "/deps/lark-cli.tar.gz";
+  currentVersion = SECOND;
+  const start = hits.length;
   const r = await install(h);
-  assert.notEqual(r.code, 0);
-  assert.match(r.stderr, /下载 biliup/);
-  assert.ok(!existsSync(join(h.home, ".local/state/versekit/service.json")));
-  assert.ok(!existsSync(join(h.home, ".versekit/app")), "还没走到换程序就失败，不该留下半个安装");
+  currentVersion = FIRST;
+  breakPath = undefined;
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /lark-cli\.tar\.gz 的 SHA-256 校验不通过/);
+  assert.ok(!hits.slice(start).includes("/deps/biliup.tar.gz"));
+  assert.equal(readFileSync(lark, "utf8"), "keep lark");
+  assert.equal(JSON.parse(readFileSync(join(prefix, "app/package.json"), "utf8")).version, FIRST);
+  assert.equal(await status(h.port), 200);
+  assert.match((await sh(h, vkOf(h), ["events"])).stdout, /install_update_failed/);
+});
+
+test("ACC-install-03：下载失败——退出码非 0 并指出文件", { timeout: 60000 }, async () => {
+  const h = await newHome();
+  missingPath = `/${FIRST}/app.tar.gz`;
+  const r = await install(h);
+  missingPath = undefined;
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /下载失败：.*app\.tar\.gz/);
+});
+
+test("ACC-release-02：旧更新器传入本地源码包，保留 app.prev 且不改 PATH", { timeout: 120000 }, async (t) => {
+  const h = await newHome();
+  assert.equal((await install(h)).code, 0);
+  const previousPath = readFileSync(join(h.home, ".zshrc"), "utf8");
+  const prefix = join(h.home, ".versekit");
+  const source = join(WORK, "source.tar.gz");
+  const start = hits.length;
+  const r = await sh(h, "bash", [join(WORK, "source-src/versekit-main/install.sh")], {
+    env: { VERSEKIT_UPDATE: "1", VERSEKIT_APP_URL: pathToFileURL(source).href, VERSEKIT_APP_COMMIT: B },
+  });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const previous = JSON.parse(readFileSync(join(prefix, "app.prev/package.json"), "utf8")).version;
+  const installed = JSON.parse(readFileSync(join(prefix, "app/package.json"), "utf8")).version;
+  assert.equal(previous, FIRST);
+  assert.equal(installed, "8.8.8");
+  assert.equal(await status(h.port, "/api/now"), 200);
+  assert.equal(readFileSync(join(h.home, ".zshrc"), "utf8"), previousPath);
+  assert.deepEqual(hits.slice(start), []);
+  t.diagnostic(`${r.stdout.trim()}\napp.prev/package.json version=${previous}；app/package.json version=${installed}；/api/now=200；PATH 未改`);
 });
 
 test("ACC-install-03：8787 被别的程序占用时自动换空闲端口，最后一行写明实际地址", { timeout: 120000 }, async () => {
@@ -422,19 +458,11 @@ test("ACC-install-02：macOS 用 LaunchAgent（RunAtLoad + KeepAlive），卸载
   assert.equal(await status(h.port), null);
 });
 
-test("ACC-install-01：Node 版本写死为 26.x，下载地址不含浮动的 latest-*", () => {
-  const sh = readFileSync(INSTALL_SH, "utf8");
-  assert.ok(PINNED, "install.sh 里要有写死的 HIFABU_NODE_VERSION 默认值");
-  assert.equal(NODE_VER.split(".")[0], "26", "默认装 Node 26 LTS");
-  assert.match(sh, /https:\/\/nodejs\.org\/dist\/\$NODE_VERSION/);
-  assert.doesNotMatch(sh, /latest-v\d+\.x/);
-});
-
 test("ACC-install-06：安装输出有「正在…」进度提示，非 tty 时不刷进度条", { timeout: 120000 }, async () => {
   const h = await newHome();
   const r = await install(h);
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  for (const re of [/下载 Node v\S+（约 \d+MB/, /校验并解压 Node……/, /下载 versekit 程序（约 \d+MB/, /解压 versekit……/, /下载 biliup（约 \d+MB/, /初始化数据库.*……/, /等控制台起来.*……/]) {
+  for (const re of [/下载 Node v\S+……/, /校验通过，解压 Node……/, /准备 Hifabu 程序……/, /解压 Hifabu 程序……/, /初始化数据库.*……/, /等控制台起来.*……/]) {
     assert.match(r.stdout, re);
   }
   assert.doesNotMatch(r.stderr, /#{5,}/, "非 tty 不应输出 curl 进度条");
@@ -493,24 +521,11 @@ test("ACC-install-06：export-ignore 之后的程序包 ≤ 5MB，只含运行�
   }
 });
 
-test("ACC-update-06：版本号带短提交号——不同提交装上去前后不同，同一提交重装不说已升级", { timeout: 180000 }, async () => {
-  const A = "a".repeat(40);
-  const B = "b".repeat(40);
+test("ACC-release-02：重装同一锁定版本不会报告升级", { timeout: 120000 }, async () => {
   const h = await newHome();
-  const first = await install(h, { env: { HIFABU_APP_COMMIT: A } });
-  assert.equal(first.code, 0, first.stdout + first.stderr);
-  assert.match(first.stdout, /已安装 0\.1\.0\+aaaaaaa/);
-
-  const second = await install(h, { env: { HIFABU_APP_COMMIT: B } });
-  assert.equal(second.code, 0, second.stdout + second.stderr);
-  assert.match(second.stdout, /已升级 0\.1\.0\+aaaaaaa → 0\.1\.0\+bbbbbbb/);
-
-  const again = await install(h, { env: { HIFABU_APP_COMMIT: B } });
+  assert.equal((await install(h)).code, 0);
+  const again = await install(h);
   assert.equal(again.code, 0, again.stdout + again.stderr);
-  assert.match(again.stdout, /已是最新（bbbbbbb），重新装了一遍/);
+  assert.match(again.stdout, /已是最新（aaaaaaa），重新装了一遍/);
   assert.doesNotMatch(again.stdout, /已升级/);
-
-  const v = await sh(h, vkOf(h), ["version"]);
-  assert.match(v.stdout.split("\n")[0], /^0\.1\.0\+bbbbbbb/);
-  await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
 });

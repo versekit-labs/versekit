@@ -16,6 +16,7 @@ import { publishTimeoutMs as configuredPublishTimeoutMs } from "./config.mjs";
 import { LOGIN_TRACKED, takeCheckTrigger } from "./scheduler.mjs";
 import { recordLogin } from "./egress.mjs";
 import { computeLoginClock, loginRecords } from "./overview.mjs";
+import { componentBinary } from "./components.mjs";
 
 const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -337,6 +338,12 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending", fallback: "no_upload_path" };
       }
 
+      if (adapter.platform === "bilibili" && adapter.publish === "cli" && !componentBinary("biliup")) {
+        const error = new AdapterError("component_missing");
+        applyPublishError(publishId, error);
+        throw error;
+      }
+
       const running = row.mode === "draft" ? "draft_running" : "auto_running";
       if (row.state === "queued") transitionPublish(publishId, running);
 
@@ -414,7 +421,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         if (disposition.retryable) throw toAdapterError(err);
         // 超时还要把 run 标成失败：任务页靠 run.state=failed 显示这条错误并给出「重试」入口。
         // 其他终态失败（auth / asset_invalid …）已有对应状态与人话，run 正常结束即可。
-        if (disposition.code === "timeout") throw toAdapterError(err);
+        if (["timeout", "component_missing"].includes(disposition.code)) throw toAdapterError(err);
         // Terminal or already handed to a human: the run is done, the row carries the reason.
         log(`[publish] ${adapter.platform} ${publishId} 失败（${disposition.code}），不再重试`);
         return { state: getPublishRow(publishId)?.state, error: disposition.code };

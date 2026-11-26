@@ -89,9 +89,9 @@ claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu
 
 ## 7. 发版
 
-协调器在一批改动合并并验收后发版。正式发版从 P2 安装器合并后开始。先在 `main` 上提交 `package.json` 的版本号，再打对应的 `app-v<版本>` tag，由协调器检出干净的 tag。版本日期取 tag 日期（UTC）。程序包直接读取 Git 中的字节，固定归档元数据，保留可执行位，并限制在 5 MB 内。包内文件包括各工作区的运行代码和包元数据、Web 静态文件、`bin/`、演示数据入口及许可文件。
+协调器在一批改动合并并验收后发版。首发时先就位并验证正式版，再切换 main 上的旧安装入口与后台更新。发版使用含本版 `package.json` 的 `app-v<版本>` tag，由协调器检出干净的 tag。版本日期取 tag 日期（UTC）。程序包直接读取 Git 中的字节，固定归档元数据，保留可执行位，并限制在 5 MB 内。包内文件包括各工作区的运行代码和包元数据、Web 静态文件、`bin/`、演示数据入口及许可文件。
 
-准备本版发版说明和已评审的 P2 Bash 安装模板。说明格式见[发版说明骨架](../CHANGELOG.md)。模板应含一行 `HIFABU_RELEASE_MANIFEST=@HIFABU_RELEASE_MANIFEST@`，占位符只出现一次。发布脚本会把带引号的 JSON 清单嵌入这行，并执行 `bash -n`。安装器从这个变量读取锁定的版本、地址和哈希。两个输入都通过参数显式传入。
+准备本版发版说明，并通过 `--installer-template` 指定仓库内的安装模板。发布脚本把清单直接嵌入生成的 Bash 安装器，并执行 `bash -n`。说明格式见[发版说明骨架](../CHANGELOG.md)。模板见 [deploy/hifabu/install-template.sh](../deploy/hifabu/install-template.sh)。
 
 ### 准备上游文件与离线预览
 
@@ -110,7 +110,7 @@ node deploy/hifabu/publish-release.mjs --fetch-biliup /path/to/upstream-b
 release_inputs=(
   --deps-dir /path/to/upstream-a
   --biliup-second-dir /path/to/upstream-b
-  --installer-template /path/to/p2-install-template.sh
+  --installer-template deploy/hifabu/install-template.sh
   --changelog /path/to/release-notes.md
 )
 preview="$(mktemp -d)"
@@ -132,6 +132,16 @@ node deploy/hifabu/publish-release.mjs "${release_inputs[@]}" --host seoul-vps -
 ```
 
 同机部署时，把 `--host seoul-vps` 换成 `--publish-dir /var/www/hifabu/download`。
+
+### 发布机安装
+
+使用固定版本的安装地址，例如 `https://hifabu.com/download/0.3.0/install.sh`。系统需有 Bash、curl、tar、Perl（含 JSON::PP）与 shasum 或 sha256sum。首次安装只下载锁定的程序和私有 Node。升级沿用 `~/.versekit` 和原数据目录，同时用清单版本更新已装在 `~/.versekit/bin` 的 biliup 和 lark-cli。安装器先校验本次下载的每个文件，再替换程序文件。它在注册前显示服务名称、用途和日志路径。
+
+正式版安装和升级都会把本版的 `manifest.json` 原样落盘为 `~/.versekit/app/release-manifest.json`，与 `packages/` 同级，供按需安装组件时读取。
+
+旧 GitHub 安装地址通过 HTTPS 读取 `latest.json`，下载指定版本的 `SHA256SUMS` 和 `manifest.json`。先确认 `SHA256SUMS` 中登记的清单哈希等于 `latest.json`，再校验 `manifest.json` 和 `install.sh` 的实际哈希，通过后才运行安装脚本。仅在离线测试中，可同时设 `HIFABU_INSTALL_TEST=1` 和 `HIFABU_DOWNLOAD_URL`，改用回环 HTTP 地址或本地文件目录。
+
+仍在运行的旧更新程序可以继续提交 `file://` 本地源码包用于升级，保留 `app.prev` 供原有自检和回滚处理。
 
 ### 撤回和清理
 

@@ -33,6 +33,7 @@
 .app .subin input{flex:1 1 180px;max-width:260px}
 .app .subin .how{flex:1 1 280px;display:grid;gap:4px;min-width:0}
 .app .subin .how b{font-size:14px;font-weight:600}
+.app .subin .release-notes{white-space:pre-wrap;overflow-wrap:anywhere}
 .app .subin .how .alt{display:flex;gap:4px 16px;flex-wrap:wrap}
 .app .sw{display:inline-flex;gap:6px;align-items:center;min-height:32px;cursor:pointer;color:var(--ink2)}
 .app .sw input{width:auto}
@@ -118,6 +119,8 @@
     credsMissingIds: new Set(), // 后端明确说「没有应用凭证」的账号 id（平台清单可能晚一拍，别让状态盖回去）
     renaming: null, newGroup: false, newGroupName: "", groupBusy: false, groupNote: "",
     addPlatform: "", addName: "", addBusy: false, addNote: "",
+    addComponent: false, fsComponent: false,
+    components: null, componentsError: "", componentActions: {},
     renamingAcc: null, renameAccName: "", renameAccBusy: false, renameAccNote: "",
     cred: { key: "", secret: "", busy: false, note: "", bad: false },
     checktime: null,      // { time, value, busy, note }：视频号每天检查登录的钟点
@@ -171,7 +174,8 @@
   /** 发布方案、发布机、更新、中转、最近出的问题：都来自 /api。一块读不到不拖垮别的块。 */
   async function loadSections(group) {
     ui.sectionErr = null;
-    if (!group) { await loadFeishu(); ui.egress = null; ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; ui.checktime = null; return; }
+    const components = loadComponents();
+    if (!group) { await Promise.all([loadFeishu(), components]); ui.egress = null; ui.plan = null; ui.machine = null; ui.update = null; ui.relay = null; ui.problems = []; ui.checktime = null; return; }
     const q = `group=${encodeURIComponent(group.id)}`;
     const [plan, machine, runs, update, relay, ct, egress] = await Promise.all([
       VK.request(`/api/plan?${q}`).catch((e) => { ui.sectionErr = e.message; return null; }),
@@ -183,7 +187,7 @@
       VK.request(`/api/egress?${q}`).catch(() => null),
     ]);
     ui.egress = egress;
-    await loadFeishu();
+    await Promise.all([loadFeishu(), components]);
     if (ct) ui.checktime = { ...(ui.checktime ?? {}), time: ct.time, value: ui.checktime?.dirty ? ui.checktime.value : ct.time, busy: false, note: ui.checktime?.note ?? "" };
     ui.plan = plan;
     ui.machine = machine;
@@ -203,6 +207,15 @@
     catch (err) { ui.fs = null; ui.fsErr = err.message || "读不到"; }
   }
 
+  async function loadComponents() {
+    try {
+      ui.components = (await VK.request("/api/components")).components;
+      ui.componentsError = "";
+    } catch (err) {
+      ui.componentsError = `读不到发布机的组件：${err.message}`;
+    }
+  }
+
   async function refresh() {
     await VK.bootstrap({ force: true });
     await load();
@@ -214,11 +227,30 @@
   const pfn = (platform, name) => `<span class="pfn">${pfBadge(platform)}${esc(name ?? labelOf(platform))}</span>`;
   const B = (attrs, text, cls = "btn", extra = "") => `<button class="${cls}" ${attrs}${extra}>${text}</button>`;
   const subRow = (cols, html, cls = "") => `<tr class="subrow"><td colspan="${cols}"><div class="subin${cls ? ` ${cls}` : ""}">${html}</div></td></tr>`;
+  const component = (name) => ui.components?.find((item) => item.name === name);
+  const componentLabel = (name) => name === "biliup" ? "B 站上传组件" : "飞书组件";
+  const componentSize = (size) => size < 1000 ? `${size} B`
+    : size < 1e6 ? `${Math.round(size / 1000)} KB` : `${(size / 1e6).toFixed(1)} MB`;
+  const componentDetails = (item) => [
+    item?.lockedVersion ? `本版使用 ${item.lockedVersion}` : null,
+    item?.size ? componentSize(item.size) : null,
+    item?.source,
+  ].filter(Boolean).join(" · ");
+
+  function installStep(name, flow) {
+    const item = component(name);
+    const status = ui.componentActions[name];
+    const error = status?.error || item?.installError || ui.componentsError;
+    const title = name === "biliup" ? "B 站上传要用开源组件 biliup" : "接飞书要用飞书官方组件 lark-cli";
+    const progress = '<span role="status">正在下载并校验… <progress aria-label="安装进度"></progress></span>';
+    return `<div class="how"><b>${title}</b><span class="sub">${esc(componentDetails(item))}</span>${error ? `<span class="say bad" role="alert">${esc(error)}</span>` : ""}</div>` +
+      `<span class="acts">${status?.busy ? progress : B(`data-component-cancel="${flow}"`, "取消", "link") + B(`data-component="${name}" data-component-flow="${flow}"`, status?.error ? "重试" : "安装并继续", "btn pri")}</span>`;
+  }
 
   function cloudContent() {
     const s = ui.cloud;
     const busy = ui.cloudAction ? ' aria-disabled="true"' : "";
-    const platformAction = ui.credOpen || Object.values(ui.login).some(({ step }) => ["sms1", "sms2", "win"].includes(step));
+    const platformAction = ui.addComponent || ui.credOpen || Object.values(ui.login).some(({ step }) => ["sms1", "sms2", "win"].includes(step));
     const action = (key, label, cls) => B(`data-cloud-action="${key}"`, label, platformAction && cls === "btn pri" ? "btn" : cls, busy);
     const unreadable = ui.cloudError?.code === "cloud_credential_unreadable";
     const note = ui.cloudNote || (unreadable ? ui.cloudError.message : ui.cloudError && "读不到 Hifabu 账号状态，稍后会再试。") || s?.message;
@@ -464,10 +496,12 @@
     if (none) return '<tr><td colspan="6" class="sub">没有已安装的平台。</td></tr>';
     if (allTaken) return '<tr><td colspan="6" class="sub">这个组能接的平台都接上了。一个组里每个平台接一个号；要接第二个号，新建一个账号组。</td></tr>';
     const opts = ui.platforms.map((p) => `<option value="${esc(p.platform)}"${p.platform === ui.addPlatform && !taken(p.platform) ? " selected" : ""}${taken(p.platform) ? " disabled" : ""}>${esc(labelOf(p.platform))}${taken(p.platform) ? "（已接入）" : ""}</option>`).join("");
-    return `<tr class="addrow" id="addrow"><td><select id="add-platform" aria-label="要接入的平台">${opts}</select></td>` +
-      `<td><input type="text" id="add-name" placeholder="账号名（你自己认得出就行，不影响平台）" aria-label="账号名" autocomplete="off" maxlength="40" value="${esc(ui.addName)}"></td>` +
+    const installing = ui.addComponent && ui.componentActions.biliup?.busy;
+    return `<tr class="addrow" id="addrow"><td><select id="add-platform" aria-label="要接入的平台"${installing ? " disabled" : ""}>${opts}</select></td>` +
+      `<td><input type="text" id="add-name" placeholder="账号名（你自己认得出就行，不影响平台）" aria-label="账号名" autocomplete="off" maxlength="40" value="${esc(ui.addName)}"${installing ? " disabled" : ""}></td>` +
       `<td colspan="3" class="sub"><span class="say${ui.addBad ? " bad" : ""}" role="status">${ui.addNote ? esc(ui.addNote) : `接入后当场登录，归到「${esc(group.name)}」。`}</span></td>` +
-      `<td class="n">${B("data-add", "接入账号", "btn", ui.addBusy || !group ? " disabled" : "")}</td></tr>`;
+      `<td class="n">${B("data-add", "接入账号", "btn", ui.addBusy || ui.addComponent || !group ? " disabled" : "")}</td></tr>` +
+      (ui.addComponent ? subRow(6, installStep("biliup", "account"), " wait") : "");
   }
 
   /** 平台清单读不到时，账号表上方说清楚：不能把「读失败」显示成「都正常」或「没装平台」。 */
@@ -560,7 +594,15 @@
 
   // ── 画页面：设备（发布机、中转、版本与更新）─────────────────────────────────
   const ago = (ms) => (ms < 90e3 ? "刚刚" : ms < 3600e3 ? `${Math.round(ms / 60e3)} 分钟前` : `${Math.round(ms / 3600e3)} 小时前`);
-  const RECENT_UPDATE_MS = 3 * 864e5;
+  const releaseCheck = (u) => u?.lastCheck?.latestVersion ? u.lastCheck : null;
+  const updateAvailable = (u) => {
+    const check = releaseCheck(u);
+    return Boolean(check && !check.up_to_date && check.latestVersion !== u.version);
+  };
+  const releaseNotes = (u) => {
+    if (updateAvailable(u) && u.lastCheck.notes) return { version: u.lastCheck.latestVersion, text: u.lastCheck.notes };
+    return u?.notes ? { version: u.version, text: u.notes } : null;
+  };
 
   /** 中转：连接状态、上次拉取、正在下载的投递和进度。没配中转就不画。 */
   function relayRows() {
@@ -580,16 +622,14 @@
     if (!u) return '<span class="sub">读不到版本</span>';
     const ver = `<span class="mono">${esc(u.display ?? `${u.version}+${u.short ?? "未知提交"}`)}</span>`;
     if (ui.upd) return `${ver}<div class="sub">服务会短暂重启，几十秒后回来</div>`;
-    const behind = u.lastCheck && !u.lastCheck.up_to_date;
-    const latest = u.lastCheck?.up_to_date;
-    const lu = u.lastUpdate;
-    const hasNotes = lu && Date.now() - lu.at < RECENT_UPDATE_MS && (lu.commits ?? []).length;
+    const behind = updateAvailable(u);
     const state = behind ? `<span class="sub">${esc(u.lastCheck.message || "有新版本")}</span>`
-      : latest ? `<span class="sub">已是最新</span>${hasNotes ? ` <button class="link" data-notes aria-expanded="${ui.notesOpen}">${ui.notesOpen ? "收起" : "看更新了什么"}</button>` : ""}`
+      : releaseCheck(u) ? '<span class="sub">已是最新</span>'
       : '<span class="sub">还没检查过</span>';
-    const checked = u.lastCheckAt ? `<div class="sub">上次检查 ${esc(ago(Date.now() - u.lastCheckAt))}</div>` : "";
+    const notes = releaseNotes(u) ? ` <button class="link" data-notes aria-expanded="${ui.notesOpen}">${ui.notesOpen ? "收起" : "看更新了什么"}</button>` : "";
+    const checked = releaseCheck(u) && u.lastCheckAt ? `<div class="sub">上次检查 ${esc(ago(Date.now() - u.lastCheckAt))}</div>` : "";
     const auto = `<div class="sub">自动更新${u.auto ? "开着" : "关着"} <button class="link" data-autoupd="${u.auto ? "off" : "on"}"${ui.updBusy ? " disabled" : ""}>${u.auto ? "关掉" : "打开"}</button>${u.auto ? `　每 ${esc(u.intervalHours)} 小时检查，只在空闲时更新，失败自动退回` : ""}</div>`;
-    return `${ver} ${state}${checked}${auto}`;
+    return `${ver} ${state}${notes}${checked}${auto}`;
   }
 
   // ── 出口位置：平台看到的你在哪（ACC-v3-egress-01/04/06）─────────────────────
@@ -674,15 +714,15 @@
       : online ? `<span class="st done">在线</span><div class="sub">${esc(ago(m.heartbeatAgeMs ?? 0))}还连着</div>`
       : `<span class="st bad">不在线</span><div class="sub">${m.heartbeatAgeMs == null ? "还没有收到心跳" : `${esc(ago(m.heartbeatAgeMs))}有心跳`}</div>`;
     const accountsN = (VK.snapshot()?.accounts ?? []).length;
-    const behind = u?.lastCheck && !u.lastCheck.up_to_date;
+    const behind = updateAvailable(u);
     let act = "";
     if (!ui.upd && u) {
       const dis = !online ? ` disabled title="${esc(machineName())}不在线，上线后才能更新"` : "";
       act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? `<div class="sub">${esc(machineName())}不在线，上线后才能更新</div>` : ""}`;
     }
-    const lu = ui.update?.lastUpdate;
-    const notes = ui.notesOpen && lu?.commits?.length
-      ? subRow(6, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
+    const release = releaseNotes(u);
+    const notes = ui.notesOpen && release
+      ? subRow(6, `<div class="how"><b>${esc(release.version)} · 更新内容</b><div class="release-notes">${esc(release.text)}</div></div>`)
       : "";
     const updMsg = ui.upd ? subRow(6, `<p role="status">正在更新到最新版本，更新时${esc(machineName())}的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
       : ui.updNote ? subRow(6, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
@@ -708,11 +748,30 @@
     return `<h2 class="sec">发布机 · 你的平台账号在${esc(machineName())}上登录和发布，登录数据只存在它上面</h2>` +
       `<div class="tblwrap"><table class="dev"><thead><tr><th>电脑</th><th>状态</th><th>出口位置 · 平台看到的你在哪</th><th>账号</th><th>版本</th><th class="n"></th></tr></thead><tbody>${deviceRow()}${relayAction()}</tbody></table></div>` +
       `<div class="cmd">出口位置每 10 分钟查一次。它和账号平时的位置不在同一个国家时，会先暂停那个账号的发布并告诉你。${ui.egress ? esc(ui.egress.source) : ""}${ui.egress?.geoDb?.cityDate ? ` 位置库的日期：${esc(new Date(ui.egress.geoDb.cityDate).toLocaleDateString())}。` : ""}</div>` +
-      `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>`;
+      `<div class="cmd">自动更新只在空闲时进行，失败会自动退回原版本，并出现在「最近出的问题」里。</div>` + componentsBlock();
+  }
+
+  function componentsBlock() {
+    const head = '<h2 class="sec" id="components">组件</h2>';
+    if (!ui.components) return head + `<div class="panel empty">${esc(ui.componentsError || "正在读组件状态…")}</div>`;
+    const rows = ui.components.map((item) => {
+      const status = ui.componentActions[item.name];
+      const error = status?.error || (!item.installed && item.installError);
+      const state = item.installed ? `已安装${item.installedVersion ? " " + item.installedVersion : ""}` : "未安装";
+      const action = item.installed ? "remove" : "install";
+      const buttons = status?.busy ? '<span role="status">正在处理…</span>'
+        : item.installed && !item.removable ? '<span class="sub">由其他工具管理</span>'
+        : B(`data-component="${esc(item.name)}" data-component-operation="${action}"`, item.installed ? "移除" : status?.error ? "重试" : "安装");
+      return `<tr><td><b class="nm">${componentLabel(item.name)} · ${esc(item.name)}</b><div class="sub">${esc(componentDetails(item))}</div>` +
+        (error ? `<div class="say bad" role="alert">${esc(error)}</div>` : "") +
+        `</td><td><span class="st${item.installed ? " done" : ""}">${esc(state)}</span></td><td class="n">${buttons}</td></tr>`;
+    }).join("");
+    return head + `<div class="tblwrap"><table><tbody>${rows}</tbody></table></div>`;
   }
 
   // ── 最近出的问题（在分段上面）──────────────────────────────────────────────
   const WHAT = { failed: "没发出去", blocked: "被拦下了", expired: "过了时间没确认" };
+  const fsComponentFailure = () => ui.fs?.bound && ui.fs.installed === false ? ui.fs.failure : null;
 
   /** 最近出的问题里的更新失败：7 天内的那一条（页头计数和列表共用这一个判断）。 */
   const updFailure = () => {
@@ -727,7 +786,9 @@
       ? `<tr><td><b class="nm">自动更新</b><span class="sub">${esc(whenText(uf.at))}</span></td><td></td><td><span class="st bad">没更新成功，已回到原版本</span><div class="sub">${esc(uf.message)}</div></td><td class="n"></td></tr>`
       : "";
     const relayRowsHtml = (ui.relay?.failures ?? []).map((f) => `<tr><td><b class="nm">中转投递${f.title ? `「${esc(f.title)}」` : ""}</b><span class="sub">${esc(whenText(f.at))}</span></td><td></td><td><span class="st bad">没入库</span><div class="sub">${esc(f.message)}</div></td><td class="n"></td></tr>`).join("");
-    const rows = updRow + relayRowsHtml + ui.problems.map(({ run, p }) => {
+    const fsFailure = fsComponentFailure();
+    const fsRow = fsFailure ? `<tr><td><b class="nm">飞书通知</b><span class="sub">${esc(whenText(fsFailure.at))}</span></td><td></td><td><span class="st bad">卡片发不出去</span><div class="sub">${esc(fsFailure.reason)}。到「设备」里的「组件」重新安装，也可以在网页的「今天」里确认。</div></td><td></td></tr>` : "";
+    const rows = updRow + relayRowsHtml + fsRow + ui.problems.map(({ run, p }) => {
       const day = whenText(run?.created_at ?? p.scheduledAt ?? Date.now());
       const why = p.error?.message ?? run?.last_error ?? "";
       return `<tr><td><a class="wcell" href="/work#id=${esc(p.workId)}${p.cutId ? `&cut=${esc(p.cutId)}` : ""}">${cover(ui.covers.get(p.workId), 48, 36)}<span><b>${esc(p.workTitle)}</b><span class="sub">${esc(p.cutTitle ?? "")}${p.cutTitle ? " · " : ""}${esc(day)}</span></span></a></td>` +
@@ -762,9 +823,9 @@
     const group = VK.current();
     const pending = {};
     for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
-    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + ui.problems.length + (updFailure() ? 1 : 0) + (ui.relay?.failures ?? []).length + fsTodo();
+    const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + ui.problems.length + (updFailure() ? 1 : 0) + (ui.relay?.failures ?? []).length + (fsComponentFailure() ? 1 : 0) + fsTodo();
     const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
-    const behind = ui.update?.lastCheck && !ui.update.lastCheck.up_to_date;
+    const behind = updateAvailable(ui.update);
     const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0) + (egressPaused().length ? 1 : 0);
     const counts = { accounts: group ? ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length : 0, plan: 0, devices: devN, notify: fsTodo() };
     const tabs = `<div class="seg tabs" role="group" aria-label="系统的哪一部分">${TABS.map(([k, n]) => `<button data-tab="${k}" aria-pressed="${k === ui.tab}">${n}${counts[k] ? ` ${counts[k]}` : ""}</button>`).join("")}</div>`;
@@ -806,10 +867,11 @@
     // 扫码建机器人那一步失败后回到「还没接」：把原因留在页面上（二维码已收起，只剩「接飞书」重新来）。
     const noteText = ui.fsNote || (s === "none" && f.create?.error ? `没接成：${f.create.error}` : "");
     const note = noteText ? `<div class="note bad" role="alert" style="margin-bottom:12px">${esc(noteText)}</div>` : "";
+    if (ui.fsComponent) return head + `<div class="subin wait">${installStep("lark-cli", "feishu")}</div>` + link;
     if (s === "missing") {
       return head + note + `<div class="tblwrap"><table><tbody><tr><td><span class="st bad">发布机上还没有飞书组件</span>` +
-        `<div class="sub">接飞书要靠发布机上的飞书组件，它是装发布机时一起装的；这台发布机上没找到，所以现在接不了。补装办法：在发布机上重新运行安装页上的那一行安装命令（可以反复运行，数据、账号、登录都保留），装好后回到这里刷新。要你确认的先在网页的「今天」里做，不会漏。</div></td>` +
-        `<td class="n"><span class="acts">${B('data-fs="off"', "不用飞书", "link")}${B("disabled", "接飞书", "btn pri", ' title="这台发布机上没有飞书组件，接不了"')}</span></td></tr></tbody></table></div>` + link;
+        `<div class="sub">接入时会安装飞书组件。要你确认的也可以在网页的「今天」里做。</div></td>` +
+        `<td class="n"><span class="acts">${f.bound ? "" : B('data-fs="off"', "不用飞书", "link", busy)}${B('data-fs="connect"', f.bound ? "恢复飞书" : "接飞书", "btn pri", busy)}</span></td></tr></tbody></table></div>` + link;
     }
     if (s === "none" || s === "off") {
       // 机器人早先建好了、但还没认出你是谁（老版本要扫两次码，第二次授权不了）：重新扫一次就好，不用先删旧的。
@@ -855,7 +917,12 @@
   }
 
   /** 「接飞书」：只点一下、只扫一次码，后面的步骤（建应用 → 配对 → 探订阅 → 测试卡片）自己往下走。 */
-  async function fsConnect() {
+  async function fsConnect({ componentReady = false } = {}) {
+    if (ui.fsBusy) return;
+    if (!componentReady && (component("lark-cli")?.installed === false || ui.fs?.installed === false)) {
+      ui.fsComponent = true;
+      return draw();
+    }
     ui.fsBusy = true; ui.fsNote = ""; ui.fsTried = false; ui.fsPaused = false; draw();
     try {
       if (ui.fs?.skipped) await fsCall("unskip");
@@ -1023,8 +1090,9 @@
     ui.login[id] = { step: "win", text: "正在打开登录窗口…" };
     draw();
     try {
-      await post(accPath(id, "login/open"), { accountId: id });
-      ui.login[id] = { step: "win", text: `登录窗口已经在发布机「${machineName()}」上打开。${a?.platform === "xiaohongshu" ? QR_HINT : "登录完这里会自动认出来；认不出来就点右边的按钮。"}` };
+      const r = await post(accPath(id, "login/open"), { accountId: id });
+      const hint = r.mode === "browser-qrcode" ? "用 B 站 App 扫码并确认，登录后这里会自动识别。" : a?.platform === "xiaohongshu" ? QR_HINT : "登录完这里会自动认出来；认不出来就点右边的按钮。";
+      ui.login[id] = { step: "win", text: `登录窗口已经在发布机「${machineName()}」上打开。${hint}` };
       draw();
       startPoll(id);
     } catch (err) {
@@ -1091,11 +1159,20 @@
   }
 
   // ── 接入账号 / 账号组 / 应用凭证 ───────────────────────────────────────────
-  async function addAccount() {
+  async function addAccount({ componentReady = false } = {}) {
+    if (ui.addBusy || (ui.addComponent && !componentReady)) return;
     const group = VK.current();
     const name = ui.addName.trim();
     const say = (t, bad = true) => { ui.addNote = t; ui.addBad = bad; draw(); };
     if (!ui.addPlatform) return say("先选一个平台");
+    if (!componentReady && ui.addPlatform === "bilibili") {
+      if (ui.componentsError) return say(ui.componentsError);
+      if (component("biliup")?.installed === false) {
+        if (!name) return say("请填账号名");
+        ui.addComponent = true;
+        return draw();
+      }
+    }
     // 名字规则（非空、≤40 字）只在 core 一处；这里不再另加「不许和组名同名 / 不许同名」之类的限制。
     ui.addBusy = true; ui.addNote = ""; draw();
     try {
@@ -1110,6 +1187,31 @@
       ui.addBusy = false;
       say(/占用|已经在账号组/.test(err.message) ? `${err.message}（换号要先退出登录，再把旧账号移走）` : err.message);
     }
+  }
+
+  async function changeComponent(name, operation, flow) {
+    if (ui.componentActions[name]?.busy) return;
+    ui.componentActions[name] = { busy: true };
+    draw();
+    try {
+      await post(`/api/components/${encodeURIComponent(name)}/${operation}`, {});
+    } catch (err) {
+      ui.componentActions[name] = { error: err.message };
+      return draw();
+    }
+    await loadComponents();
+    delete ui.componentActions[name];
+    if (flow === "account") {
+      ui.addComponent = false;
+      return addAccount({ componentReady: true });
+    }
+    if (flow === "feishu") {
+      ui.fsComponent = false;
+      // Reinstalling a component for an existing binding should resume delivery without rebinding.
+      if (!ui.fs?.bound) return fsConnect({ componentReady: true });
+    }
+    await loadFeishu();
+    draw();
   }
 
   async function groupAction(fn, okMsg) {
@@ -1165,7 +1267,8 @@
       if (s) {
         const changed = (s.commit ?? s.display) !== ui.upd?.from;
         if (changed) return done(() => toast(`已更新到 ${s.display}`));
-        if (s.lastFailure && s.lastFailure.at >= (ui.upd?.since ?? 0)) return done(() => toast("没更新成功，已回到原来的版本；原因在「最近出的问题」里"));
+        if (s.lastFailure && s.lastFailure.at >= (ui.upd?.since ?? 0)) return done(() => toast(s.lastFailure.message));
+        if (s.lastCheckError && s.lastCheckError.at >= (ui.upd?.since ?? 0)) return done();
         if (!s.inProgress && reads >= 4) return done(() => { ui.updNote = "没有更新：已经是最新版本，或者现在不能更新。"; });
       }
       if (ticks > Math.round(270e3 / (POLL_MS * 1.5))) done(() => { ui.updNote = "更新还没完成，过一会儿回来看版本有没有变。"; });
@@ -1187,7 +1290,10 @@
   });
   main.addEventListener("change", (e) => {
     const t = e.target;
-    if (t.id === "add-platform") ui.addPlatform = t.value;
+    if (t.id === "add-platform") {
+      ui.addPlatform = t.value;
+      if (ui.addComponent) { ui.addComponent = false; draw(); }
+    }
     else if (t.id === "pe-kind" && ui.planEdit) ui.planEdit.kind = t.value;
     else if (t.id === "pe-lang" && ui.planEdit) ui.planEdit.language = t.value;
     else if (t.dataset?.fson) {
@@ -1218,7 +1324,7 @@
     else if (id === "sms-code") { e.preventDefault(); main.querySelector("[data-smsgo]")?.click(); }
     else if (id === "relay-token") { e.preventDefault(); main.querySelector("[data-relaysave]")?.click(); }
   });
-  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-switch],[data-switchyes],[data-switchno],[data-ctsave],[data-ipx],[data-fs],[data-cloud-action]";
+  const CLICKABLE = "[data-tab],[data-sw],[data-login],[data-loginmode],[data-smssend],[data-smsresend],[data-smsgo],[data-done],[data-cancel],[data-add],[data-credopen],[data-credcancel],[data-credsave],[data-newg],[data-ngsave],[data-ngcancel],[data-accrename],[data-accrenamesave],[data-accrenamecancel],[data-rename],[data-renamesave],[data-renamecancel],[data-plan],[data-planadd],[data-plansave],[data-plancancel],[data-planremove],[data-planreset],[data-retry],[data-autoupd],[data-updnow],[data-updnoteok],[data-notes],[data-relayadd],[data-relaycancel],[data-relaysave],[data-relayask],[data-relayno],[data-relayoff],[data-logout],[data-logoutyes],[data-logoutno],[data-switch],[data-switchyes],[data-switchno],[data-ctsave],[data-ipx],[data-fs],[data-cloud-action],[data-component],[data-component-cancel]";
   main.addEventListener("click", async (e) => {
     const b = e.target.closest(CLICKABLE);
     if (!b) return;
@@ -1229,6 +1335,12 @@
       draw();
     } else if (d.cloudAction) {
       await changeCloud(d.cloudAction);
+    } else if (d.component) {
+      await changeComponent(d.component, d.componentOperation || "install", d.componentFlow);
+    } else if (d.componentCancel) {
+      if (d.componentCancel === "account") ui.addComponent = false;
+      else ui.fsComponent = false;
+      draw();
     } else if ("sw" in d) {
       e.preventDefault();
       try { await VK.useGroup(d.sw); location.reload(); } catch (err) { toast(`没切过去：${err.message}`); }
