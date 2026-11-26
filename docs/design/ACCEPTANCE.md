@@ -241,6 +241,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-orca-17 | 读 `bin/orca-flow.mjs` 的 `commonConstraints`；`node --test packages/core/test/orca-flow.test.mjs` | 实现与返工任务书的通用约束写成「不改已有的 API 形状、数据库 schema 和 commands.mjs 里已有的命令定义；口径要求新增的命令、字段、表，可以向后兼容地加（只加不改不删）」，不再一刀切禁止改 commands.mjs。2026-11-24 worker 为原句问了 4 次（#395、#396、#397） |
 | ACC-harness-orca-18 | `node --test packages/core/test/orca-flow.test.mjs`；读 `bin/orca-flow.mjs` 派验收的循环 | 某张单的实现或返工 worker 还在跑（Dispatch 没结算、进程没退出）时，orca-flow 不给它派验收，日志写「#N 跳过验收：实现 / 返工 worker 还在跑，等它交活」；验收 worker 本身不算。2026-11-24 #398 的实现方开了 PR 后还在修 Linux 测试，同一目录里却被派了两个验收员 |
 | ACC-harness-orca-19 | `node --test packages/core/test/orca-flow.test.mjs`；读 `bin/orca-flow.mjs` 的 `startWorker` | `worker-start` 被判为失败（命令出错，或者回执 status/state 是 failed、outcome_unknown），而回执里带有 dispatchId 时，先 `worker-stop --dispatch <id>` 停掉它，日志写「启动结果不明，已停掉 dispatch … 再退回」，然后再按原规则退回或改派；停不掉时写 ⚠ 提醒协调器。2026-11-25 #435 的第一次派工回执是 outcome_unknown，被退回后重派，同一个 worktree 里出现了两个 Codex |
+| ACC-harness-scope-01 | `node --test packages/core/test/agentctl.test.mjs` | 工单「涉及」段里，「改：」和「不动：」下面缩进写的子条目，继承父行的归属：「改：」下的路径计入涉及文件，「不动：」下的不计入；单行写法照旧有效。2026-11-26，#482 把路径写成子条目，被判定为没写涉及，结果 #486 一直不能并行 |
 | ACC-harness-route-01 | 离线测试：`bin/worker-channel.sh --role engineer` 与 `--role rework --round 1/2`，分别给 label：无、`model:sonnet`、`model:opus`、`model:deepseek`、`model:neon`；用假 `codex` 分别模拟「可用」「没装」「未登录」「冷却期内（`codex-exhausted` 未到期）」（所有者 2026-11-24：「worker 可以先让codex去做，额度用完了再切换成sonnet」） | 没有 model label 的实现单和返工 round 1 **默认走 Codex**（`codex\|<CODEX_MODEL>\|…`）；Codex 不可用或在冷却期内时改派 Sonnet，原因写进日志；返工 round ≥ 2 升 Sonnet；`model:sonnet` 强制走 Sonnet；`model:opus`（显式、须人点头）、`model:deepseek` 的行为不变；`model:codex` 仍然认，效果和默认一样；验收仍优先走 DeepSeek（都不可用时的备用见 ACC-harness-route-05）；探测不跑 `codex exec`，不花 token |
 | ACC-harness-route-02 | 离线测试（假 `orca`）：让一个在跑的 Codex 实现 worker 的 `worker-read` 输出末尾出现用量上限提示（如 `You've hit your usage limit ... try again at <时间>`）；另造一次只有 Codex 自带提示行 `Tip: ... /usage to check your account usage ...` 的情况；各跑一轮 `bin/orca-flow.mjs tick` | 出现用量上限提示时，orca-flow 写 `codex-exhausted`（「到期 epoch 秒<TAB>到期时间文本」；解析不出时间就按 5 小时算），停掉这个 worker，**同一轮里**把这张单改派 Sonnet，在原 worktree 接着做，不丢已有提交；日志写「Codex 额度用完，到 <时间> 为止 → #N 改派 Sonnet」；冷却期内新派的单都直接走 Sonnet，到点自动恢复 Codex；只有 Tip 提示行时不算额度用完，什么都不做 |
 | ACC-harness-route-03 | 离线测试：给 issue 打 `model:neon`，跑 `bin/worker-channel.sh --role engineer`，再用假 `orca` 跑一轮 `bin/orca-flow.mjs tick` 并记录 `worker-start` 的参数；另模拟 `agy` 不在 `PATH` 里（所有者 2026-11-24：「设计方面的活、出图啊之类的可以让agy的neon模型去做」） | `model:neon` 的实现单和返工 round 1 走 `--agent antigravity --model <NEON_MODEL>`（默认 `gemini-4-neon-high`，环境变量可改）；返工 round ≥ 2 升 Sonnet；`agy` 不可用时改派 Sonnet，原因写进日志；验收仍优先走 DeepSeek（都不可用时的备用见 ACC-harness-route-05）；Neon 实现单的任务书同样带 ACC-v3-fid-08 证据包要求（界面单时） |
@@ -713,6 +714,58 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-plugin-v2-06] 自动更新：第一次使用时，技能用 `Edit` 在用户的 `~/.claude/settings.json` 里给 `hifabu` 市场加上 `"autoUpdate": true`。这一步要经过权限确认，用户能看到改了什么。改完说一句「已打开 Hifabu 插件的自动更新，不想要可以在 /plugin 里关掉」。用户拒绝后不再问，并把「已问过」记在插件数据目录里。离线评测覆盖同意和拒绝两种情况。
 - [ACC-plugin-v2-07] 不装发布机：技能里没有任何安装 VerseKit、Hifabu 完整版、biliup、lark-cli 的步骤，也没有 `curl | bash`。找不到 Node 时，走 ACC-maker-10 的运行时流程。没登录、或者没开通传片时，按 `references/setup.md` 的说法引导用户去 hifabu.com。发布机不在线、或者版本太旧时，告诉用户「到发布机那台电脑上打开或更新 Hifabu，下载地址 hifabu.com」。对外只出现 Hifabu 这个名字，不出现 VerseKit、vk。
 - [ACC-plugin-v2-08] 端到端离线评测：在临时 HOME 里，从本地生成的市场安装 0.2.0，用本地假云端和假中转跑完整流程，覆盖以下情况：第一次使用（扫描并确认约定、选账号组、打开自动更新）、预览、交付、关掉会话后上传继续、问「到了吗」、多个候选文件、没有封面、没有文案（起草后先给用户看）、上传途中断网。PR 里附上评测记录。发布到 hifabu.com 由协调器在合并后执行；0.1.0 的 zip 保留，市场清单只指向 0.2.0。
+
+### 发布机下载与正式发版（2026-11-26）
+
+设计依据：`docs/design/download/DESIGN.md`。所有者 11-26 定（原话「按照你的建议来」）：
+- 测试期用锁定版本的一行安装脚本，不出未签名的 .pkg；
+- 在 hifabu.com 镜像 Node、biliup、lark-cli，sha256 以上游为准；
+- 所有者的发布机改为跟正式发版走，不再跟 main；
+- 新的更新逻辑上线前，发布机先关掉自动更新。
+
+本节取代 ACC-update-02、ACC-update-03 中「比较 main 最新提交」「从 GitHub main 下载」的写法，以及 ACC-install-01 中「从 GitHub main `curl | bash`」的写法；空闲判断、自检、退回仍按原口径。凡是改到命令、文件、服务、更新的单，都要附 ACC-arch-09。
+
+- [ACC-release-01] P1 发布脚本与版本清单：`deploy/hifabu/publish-release.mjs` 加 `schemas/release-v1.json`，`docs/deploy-cloud.md` 新增「发版」一节。要求：
+  - 同一个 tag 打两次包，程序包 sha256 相同；
+  - 程序包按白名单装文件，体积小于 5MB；
+  - 工作区不干净或不在 tag 上时拒绝运行；
+  - `--dry-run` 不连网，列出文件和 sha256；
+  - 已存在的版本文件，内容不同时拒绝覆盖，文件只增不改，`latest.json` 最后原子替换；
+  - 上游文件（Node、biliup、lark-cli）的 sha256 与上游校验和一致，才写进清单和镜像；
+  - 核对 biliup-rs、lark-cli 的许可证是否允许再分发，不允许的只记上游地址、不镜像，结论写进 PR。
+- [ACC-release-02] P2 安装脚本改为「锁定清单，只装核心」：`hifabu.com/download/<版本>/install.sh` 写死所有文件的 sha256。要求：
+  - 在全新的临时 HOME 里，用本地假下载源安装，装完只有 Node 和程序，没有 biliup、lark-cli；
+  - 任何一个文件 sha256 不符就停下，说明是哪个文件，不留下半截安装；
+  - 注册后台服务前，先打印服务名、它做什么、日志在哪；
+  - 在已有安装上升级（带 biliup、lark-cli 和数据），数据和组件都保留，版本按清单；
+  - 在 macOS 14、15 真机上各装一次，没有被 Gatekeeper 拦截，结果写进 PR；
+  - 从 main 上旧的 install.sh 地址运行，装到的是 `latest.json` 指定的版本；
+  - 模拟旧更新程序（`VERSEKIT_UPDATE=1` 加 `VERSEKIT_APP_URL=file://…`）调用 main 上的 install.sh，升级后 `app.prev` 还在，旧更新程序的自检和退回照常可用。
+- [ACC-release-03] P3 自动更新跟着发版走：`update.mjs` 改为读 `https://hifabu.com/download/latest.json`。要求：
+  - 下载的 install.sh 的 sha256 对不上时不升级，并留事件；
+  - 空闲判断、自检、退回保持不变，沿用 ACC-update-03、ACC-update-04 的测试；
+  - 系统页显示这个版本的 CHANGELOG；
+  - 请求里不带任何个人信息；
+  - 没有「跟 main 走」的配置项。
+- [ACC-release-04] P4 组件用到时才装：在 `commands.mjs` 新增 `component.list`、`component.install`、`component.remove`。要求：
+  - 没装 biliup 时，添加 B 站账号会先出现「安装并继续」这一步，装完直接进入扫码；接飞书同理；
+  - 下载按清单校验，sha256 不符就不装；
+  - biliup 被删后，到点要发 B 站时，这一条进入「出了问题」，带 `error_code: component_missing` 和事件，不能静默跳过；
+  - 已经装好的组件不动；
+  - 网页上不出现命令行；
+  - 三端一致测试覆盖这几条新命令。
+- [ACC-release-05] P5 下载页 `hifabu.com/download`：要求：
+  - 版本号、大小、sha256 都取自清单，不手写；
+  - 设计稿 §3.1 的 9 块内容都有，第一块讲「发布机要和发布用的手机在同一个网络」；
+  - 浅色、深色、手机宽度三种截图，都没有横向溢出；
+  - 「先校验再运行」的三行命令在真机上跑通；
+  - 页面上不出现 VerseKit 和 vk；
+  - 页头导航、首页、「我的 Hifabu」都能链到这一页。
+- [ACC-release-06] P6 第一个正式版本，以及所有者那台机器的升级：发布 `0.3.0`。要求：
+  - 先演练：在临时 HOME 里用真机数据的副本，从所有者机器当前的版本模拟点「现在更新」升级到 0.3.0，前后账号数、作品数、排期数、登录状态文件都一致；
+  - 所有者在系统页点一次「现在更新」，协调器陪同，挑接下来 1 小时内没有要发的时段；升级后系统页显示 0.3.0，后台服务只剩 `com.hifabu.daemon`；
+  - 升级后 24 小时内，到点的发布照常执行；
+  - 核对通过后再打开自动更新，之后只装 `latest.json` 指定的版本。
 
 ### 改名 Hifabu（2026-11-26）
 
