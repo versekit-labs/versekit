@@ -659,9 +659,14 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 ### 插件对外分发（2026-11-25）
 
 - [ACC-plugin-dist-01] 插件名改为 `hifabu`，目录改为 `plugins/hifabu`，技能命令是 `/hifabu:handoff`；`plugin.json` 写明 description、author（Hifabu）、homepage（`https://hifabu.com/plugin/`）、license 和 `version`（语义化版本，从 `0.1.0` 开始）。插件目录里任何文件改了就必须升版本：仓库里记一份「版本号 → 插件内容哈希」，测试发现内容哈希变了而版本没升就失败。这样 `claude plugin validate --strict` 能通过，用户执行 `claude plugin update` 也能拿到新版本（2026-11-25 实测：Claude Code 2.1.332 的 strict 校验会把缺 version 当失败）。仓库里任何地方都不再出现 `versekit` 插件名或 `/versekit:handoff`。
-- [ACC-plugin-dist-02] 仓库根目录有 `.claude-plugin/marketplace.json`，市场名为 `hifabu`，`owner` 为 Hifabu，只列 `hifabu` 一个插件，source 写 `./plugins/hifabu`。`claude plugin validate . --strict` 和 `claude plugin validate plugins/hifabu --strict` 都通过。新用户的安装命令是 `/plugin marketplace add versekit-labs/versekit` 和 `/plugin install hifabu@hifabu`。PR 里附上一份在临时 HOME 下用 `claude plugin marketplace add <本地仓库>` 加 `claude plugin install hifabu@hifabu` 装成功的记录（不改开发机自己的 Claude 配置）。
+- [ACC-plugin-dist-02] 仓库根目录有 `.claude-plugin/marketplace.json`，市场名为 `hifabu`，`owner` 为 Hifabu，只列 `hifabu` 一个插件，source 写 `./plugins/hifabu`。`claude plugin validate . --strict` 和 `claude plugin validate plugins/hifabu --strict` 都通过。仓库根目录这份清单只给开发者在本地调试用；对外的安装方式见 ACC-plugin-dist-05。PR 里附上一份在临时 HOME 下用 `claude plugin marketplace add <本地仓库>` 加 `claude plugin install hifabu@hifabu` 装成功的记录（不改开发机自己的 Claude 配置）。
 - [ACC-plugin-dist-03] 第一次使用的引导：找不到 `vk` 时，技能给出一键安装命令（`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`）并说明会装什么，用户同意后才执行；装完用 `$HOME/.versekit` 下的 `vk` 继续这一期，不让用户重说。之后按已有规则走登录 Hifabu、开通传片、预览、登记。插件里不写死任何个人路径、账号或邮箱。
-- [ACC-plugin-dist-04] `https://hifabu.com/plugin/` 是公开页面，不用登录：写明前提（Claude Code、一台装了 Hifabu 的发布机、Hifabu 账号）、上面两行安装命令、第一次怎么用（举「把 17 期交给发布机」的例子）、怎么更新和卸载；页头、页脚和首页、隐私政策、服务条款保持一致，首页链到这一页。
+- [ACC-plugin-dist-04] `https://hifabu.com/plugin/` 是公开页面，不用登录：写明前提（Claude Code、一台装了 Hifabu 的发布机、Hifabu 账号）、ACC-plugin-dist-05 的一句话安装（Claude Code 里一句话，或终端一行命令）、第一次怎么用（举「把 17 期交给发布机」的例子）、怎么更新和卸载；页头、页脚和首页、隐私政策、服务条款保持一致，首页链到这一页。
+- [ACC-plugin-dist-05] 插件从 hifabu.com 分发，新用户一句话装好，不需要 GitHub 账号或 SSH 密钥，也不克隆整个仓库：
+  - 发布脚本把 `plugins/hifabu` 打成 zip，生成 `https://hifabu.com/plugin/marketplace.json`，市场名为 `hifabu`，插件 source 用 `archive`，写上 zip 的 https 地址和 sha256。zip 文件名带版本号，旧版本的 zip 保留，不覆盖。
+  - 终端一行命令：`claude plugin marketplace add https://hifabu.com/plugin/marketplace.json && claude plugin install hifabu@hifabu`。在一个全新的临时 HOME 里（没有 SSH 密钥、没有 GitHub 登录），从执行这行命令到 `claude plugin list` 里看到 hifabu，60 秒内完成。PR 里附上这次安装的记录。
+  - Claude Code 里一句话：用户说「帮我安装 hifabu.com/plugin 的插件」，Claude 打开这个页面后，能照页面上写给 AI 助手的说明执行上面那行命令。说明写成纯文本，放在页面上，并另存一份 `https://hifabu.com/plugin/install.txt`。装好后提醒用户运行 `/reload-plugins` 或重开会话。
+  - 升级插件：升 `version`，然后重跑发布脚本。用户执行 `claude plugin update hifabu@hifabu` 就能拿到新版本。发布脚本支持 `--dry-run`，只列出要上传的文件，不连网。
 
 ### 部署（2026-11-25）
 
