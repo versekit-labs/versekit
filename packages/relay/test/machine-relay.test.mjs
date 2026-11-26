@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 import { createMachineSigner } from "../../cloud/src/machine-token.mjs";
-import { createRelayServer, listDeliveryStatus, getDeliveryStatus, ping, pullOnce, pushDelivery, RETENTION_MS } from "../src/index.mjs";
+import { createRelayServer, getGroupSnapshot, listDeliveries, listDeliveryStatus, getDeliveryStatus, ping, pullOnce, pushDelivery, RETENTION_MS } from "../src/index.mjs";
 
 const A = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const B = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -74,6 +74,62 @@ test("ACC-cloud-08 离线验签，拒绝过期、篡改、其他签名方、未�
   for (const res of [await send(maker, "GET", "/deliveries"), await send(executor, "POST", "/deliveries", "{}")]) {
     assert.equal(res.status, 401);
   }
+});
+
+test("ACC-iface-06 两个 Hifabu 账号的快照和版本声明隔离，快照按白名单存储", async (t) => {
+  const { conn, issue, send, start } = await fixture(t);
+  const makerA = issue(A, "maker");
+  const makerB = issue(B, "maker");
+  const publisherA = issue(A, "executor");
+  const publisherB = issue(B, "executor");
+  const snapshot = {
+    device: { id: "local-device", name: "A 的发布机", token: "不应保留" },
+    groups: [{ name: "A 组", default: true, id: "group-id", accounts: [{ platform: "bilibili", name: "显示名", id: "account-id", cookie: "fake-cookie",
+      credential: "/home/test/credentials" }] }],
+    reportedAt: Date.now(),
+    cookie: "fake-device-cookie",
+  };
+  assert.equal(await getGroupSnapshot(conn(makerA)), null);
+  assert.equal((await send(makerA, "POST", "/deliveries/pull", JSON.stringify({ accepts: [], groupSnapshot: snapshot }))).status, 401);
+  assert.equal((await send(publisherA, "GET", "/group-snapshot")).status, 401);
+  await listDeliveries({ ...conn(publisherA), accepts: ["hifabu.delivery/1"], groupSnapshot: snapshot });
+  await listDeliveries({ ...conn(publisherB), accepts: ["hifabu.delivery/2"], groupSnapshot: null });
+  assert.equal(await getGroupSnapshot(conn(makerB)), null);
+  assert.deepEqual((await ping(conn(makerA))).accepts, ["hifabu.delivery/1"]);
+  assert.deepEqual((await ping(conn(makerB))).accepts, ["hifabu.delivery/2"]);
+
+  await start(false);
+  assert.deepEqual(await getGroupSnapshot(conn(makerA)), {
+    device: { id: A.slice(1) + "Y", name: "A 的发布机" },
+    reportedAt: snapshot.reportedAt,
+    groups: [{ name: "A 组", default: true, accounts: [{ platform: "bilibili", name: "显示名" }] }],
+  });
+  const invalid = { ...snapshot, device: { ...snapshot.device, name: "C:\\Users\\test" } };
+  await assert.rejects(listDeliveries({ ...conn(publisherA), accepts: ["hifabu.delivery/2"], groupSnapshot: invalid }), { code: "invalid_group_snapshot" });
+  assert.deepEqual((await ping(conn(makerA))).accepts, ["hifabu.delivery/1"]);
+  assert.equal((await getGroupSnapshot(conn(makerA))).device.name, "A 的发布机");
+});
+
+test("ACC-iface-04 上传前核对 accepts，旧发布机照常取旧清单", async (t) => {
+  const { conn, issue, file, push, send } = await fixture(t);
+  const maker = issue(A, "maker");
+  const publisher = issue(A, "executor");
+  const video = file("episode.mp4", "versioned movie");
+  const manifest = {
+    schema: "hifabu.delivery/1", work: { key: "p_demo/17", title: "第 17 期" },
+    cuts: [{ video: { name: video.name, sha256: video.sha256.toUpperCase(), size: video.size } }],
+    target: { group: "首选" }, from: { client: "hifabu-plugin/0.2.0" },
+  };
+  const upload = () => pushDelivery({ ...conn(maker), group: manifest.target.group, manifest, files: [video] });
+  await assert.rejects(upload(), { code: "schema_unsupported", hint: /更新发布机/ });
+  assert.deepEqual(await (await send(maker, "GET", "/blobs/" + video.sha256 + "/status")).json(), { complete: false, received: 0 });
+  await listDeliveries({ ...conn(publisher), accepts: ["hifabu.delivery/1"] });
+  const versioned = await upload();
+  const legacy = await push(maker, "旧清单", [video]);
+  assert.deepEqual((await listDeliveries(conn(publisher))).map(({ id }) => id), [legacy.id]);
+  const ready = await listDeliveries({ ...conn(publisher), accepts: ["hifabu.delivery/1"] });
+  assert.deepEqual(ready.map(({ id }) => id).sort(), [legacy.id, versioned.id].sort());
+  assert.deepEqual(ready.find(({ id }) => id === versioned.id).manifest, manifest);
 });
 
 test("ACC-cloud-08 两个账号同时拉取，只回报自己的投递，文件哈希和活动记录也按账号分", async (t) => {

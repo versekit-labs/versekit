@@ -1,3 +1,5 @@
+import { deliveryTitle } from "./delivery-v1.mjs";
+
 // ADR-0003 §3 的实测基线（字节/秒）；有较新的上传或发布机下载样本时优先用实测样本。
 export const BASELINE_TRANSFER = { uploadBytesPerSecond: 1.1e6, downloadBytesPerSecond: 0.11e6 };
 const OFFLINE_AFTER_MS = 6 * 3600e3;
@@ -21,7 +23,7 @@ export function deliveryProgress(bytes, totalBytes, bytesPerSecond) {
 }
 
 export function deliveryStatusView(row, { lastPullAt = null, downloadBytesPerSecond, now = Date.now() } = {}) {
-  const title = row.manifest?.title ?? null;
+  const title = deliveryTitle(row.manifest);
   const totalBytes = row.blobs.reduce((n, blob) => n + blob.size, 0);
   const meta = { id: row.id, title, group: row.group, totalBytes, createdAt: row.created_at, updatedAt: row.updated_at, lastPullAt };
   if (row.state === "ingested") {

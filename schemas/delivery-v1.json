@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hifabu.com/schema/delivery-v1.json",
+  "title": "Hifabu delivery v1",
+  "type": "object",
+  "required": ["schema", "work", "cuts", "target", "from"],
+  "properties": {
+    "schema": { "const": "hifabu.delivery/1" },
+    "work": {
+      "type": "object",
+      "required": ["key", "title"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[^/\\\\]+/[^/\\\\]+$", "maxLength": 512 },
+        "title": { "type": "string", "pattern": "\\S", "maxLength": 200 },
+        "language": { "type": "string", "pattern": "\\S", "maxLength": 32 }
+      }
+    },
+    "cuts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["video"],
+        "properties": {
+          "title": { "type": "string", "pattern": "\\S", "maxLength": 200 },
+          "video": { "$ref": "#/$defs/file" },
+          "cover": { "$ref": "#/$defs/file" },
+          "copy": {
+            "type": "object",
+            "properties": {
+              "default": { "$ref": "#/$defs/copy" },
+              "bilibili": { "$ref": "#/$defs/copy" },
+              "douyin": { "$ref": "#/$defs/copy" },
+              "shipinhao": { "$ref": "#/$defs/copy" },
+              "tiktok": { "$ref": "#/$defs/copy" },
+              "xiaohongshu": { "$ref": "#/$defs/copy" },
+              "youtube": { "$ref": "#/$defs/copy" }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["group"],
+      "properties": { "group": { "type": "string", "pattern": "\\S", "maxLength": 64 } }
+    },
+    "from": {
+      "type": "object",
+      "required": ["client"],
+      "properties": {
+        "client": { "type": "string", "pattern": "\\S", "maxLength": 128 },
+        "device": { "type": "string", "pattern": "\\S", "maxLength": 128 }
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "required": ["name", "sha256", "size"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^(?!\\.$)[^/\\\\\\u0000]+$", "maxLength": 255 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

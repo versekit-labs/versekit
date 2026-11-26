@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
 import { eventForTransition, isKnownEvent } from "./events.mjs";
+import { frozenDeliveryOverrides } from "./store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = join(HERE, "schema.sql");
@@ -365,7 +366,7 @@ export const PUBLISH_TRANSITIONS = {
   skipped: ["pending_confirm", "queued", "notify_pending", "canceled"],
 };
 
-export function transitionPublish(publishId, to, { reason = null, patch = {} } = {}) {
+export function transitionPublish(publishId, to, { reason = null, patch = {}, input } = {}) {
   const conn = open();
   const row = conn.prepare("SELECT * FROM publish WHERE id = ?").get(publishId);
   if (!row) throw new Error(`没有这条发布：${publishId}`);
@@ -374,6 +375,11 @@ export function transitionPublish(publishId, to, { reason = null, patch = {} } =
     throw new Error(`非法状态迁移：${row.state} → ${to}（允许：${allowed.join(", ") || "无"}）`);
   }
   const fields = { ...patch, state: to, updated_at: Date.now() };
+  if ((to === "published" || to === "published_limited") && row.state !== "published_limited") {
+    const overrides = Object.hasOwn(fields, "overrides_json") ? fields.overrides_json : row.overrides_json;
+    const frozen = frozenDeliveryOverrides(conn, row, overrides, input);
+    if (frozen !== overrides) fields.overrides_json = frozen;
+  }
   if (reason === "approved_now_by_operator") fields.approved_now = 1;
   const sets = Object.keys(fields).map((k) => `${k} = ?`).join(", ");
   conn.prepare(`UPDATE publish SET ${sets} WHERE id = ?`).run(...Object.values(fields), publishId);

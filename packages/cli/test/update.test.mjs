@@ -145,6 +145,7 @@ async function newHome(extra = {}) {
     VERSEKIT_NODE_URL: `${base}/node`,
     VERSEKIT_APP_URL: `${base}/app.tar.gz`,
     VERSEKIT_BILIUP_URL: `${base}/biliup.tar.gz`,
+    VERSEKIT_LARK_URL: `${base}/lark`,
     VERSEKIT_UPDATE_API: `${base}/api`,
     VERSEKIT_UPDATE_HEALTH_TIMEOUT_MS: "4000",
     ...extra,

@@ -434,7 +434,7 @@ export function getWork(workId) {
  * 清单的校验与规整：只看清单本身，不碰库、不看文件在不在。work.add 入库前用它，
  * 制作机 `vk work push` 上传前也用它——同一套规则，不合格当场报错。
  */
-export function checkWorkPlan({ title, source = null, cuts }, { onCopyViolation } = {}) {
+export function checkWorkPlan({ title, source = null, cuts }, { onCopyViolation, deliveryV1 = false } = {}) {
   const t = requireString(title, "作品标题", { max: 200 });
   if (!Array.isArray(cuts) || !cuts.length) fail("至少要有一支成片");
   const seenCuts = new Set();
@@ -445,7 +445,7 @@ export function checkWorkPlan({ title, source = null, cuts }, { onCopyViolation 
     const versions = Array.isArray(c?.versions) ? c.versions : [];
     if (!versions.length) fail(`成片「${cutTitle}」至少要有一个语言版本`);
     const seenLang = new Set();
-    const cutCopy = normaliseCopy(c?.copy, `成片「${cutTitle}」的文案`, onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle })));
+    const cutCopy = normaliseCopy(c?.copy, "成片「" + cutTitle + "」的文案", onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle })), { deliveryV1 });
     return {
       title: cutTitle,
       versions: versions.map((v) => {
@@ -453,7 +453,7 @@ export function checkWorkPlan({ title, source = null, cuts }, { onCopyViolation 
         if (seenLang.has(language)) fail(`成片「${cutTitle}」的语言重复：${language}`);
         seenLang.add(language);
         const where = `成片「${cutTitle}」${language} 版本`;
-        const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`, onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle, language }))));
+        const copy = mergeCopy(cutCopy, normaliseCopy(v?.copy, `${where}的文案`, onCopyViolation && ((violation) => onCopyViolation({ ...violation, cut: cutTitle, language })), { deliveryV1 }));
         const cover = normaliseCover(v, c, where);
         const meta0 = copy ? { ...(v?.meta ?? {}), copy } : v?.meta ?? null;
         const meta = cover ? { ...(meta0 ?? {}), cover } : meta0;
@@ -518,16 +518,19 @@ function refreshRelayDrafts(conn, cutId, versionId, copy, now) {
   }
 }
 
-export function upsertWork({ title, source = null, cuts, meta = null }, { relay = false } = {}) {
-  const { t, plan, sourceKey } = checkWorkPlan({ title, source, cuts });
+export function upsertWork({ title, source = null, cuts, meta = null }, { relay = false, deliveryKey, relayScope = "" } = {}) {
+  const deliveryV1 = deliveryKey != null;
+  const { t, plan, sourceKey } = checkWorkPlan({ title, source, cuts }, { deliveryV1 });
 
   const conn = open();
   const now = Date.now();
   const stats = { cuts: { created: 0, updated: 0 }, versions: { created: 0, updated: 0 } };
   conn.exec(relay ? "BEGIN IMMEDIATE" : "BEGIN");
   try {
-    let work = conn.prepare("SELECT * FROM work WHERE source = ? AND title = ?").get(sourceKey, t);
-    if (relay && !work) {
+    let work = deliveryV1
+      ? conn.prepare("SELECT work_id AS id FROM relay_work_key WHERE scope = ? AND work_key = ?").get(relayScope, deliveryKey)
+      : conn.prepare("SELECT id FROM work WHERE source = ? AND title = ?").get(sourceKey, t);
+    if (relay && !deliveryV1 && !work) {
       const matches = conn.prepare("SELECT id FROM work WHERE source = ? LIMIT 2").all(sourceKey);
       if (matches.length > 1) fail(`同一来源有多个作品，无法确定要更新哪一个：请用已有作品的标题重新交付「${t}」`);
       work = matches[0];
@@ -540,7 +543,8 @@ export function upsertWork({ title, source = null, cuts, meta = null }, { relay 
       const id = newId("work");
       conn
         .prepare("INSERT INTO work (id, title, asset_path, meta_json, created_at, source) VALUES (?,?,?,?,?,?)")
-        .run(id, t, primary.asset, meta ? JSON.stringify(meta) : null, now, sourceKey);
+        .run(id, t, primary.asset, meta ? JSON.stringify(meta) : null, now, deliveryV1 ? null : sourceKey);
+      if (deliveryV1) conn.prepare("INSERT INTO relay_work_key (scope, work_key, work_id) VALUES (?,?,?)").run(relayScope, deliveryKey, id);
       work = { id };
     }
     // 交付通常只有一支成片。改了片名也沿用原成片和平台稿，多成片清单继续按片名匹配。
@@ -559,12 +563,16 @@ export function upsertWork({ title, source = null, cuts, meta = null }, { relay 
         stats.cuts.created++;
       }
       for (const v of c.versions) {
-        const have = conn.prepare("SELECT id, meta_json, edited_fields FROM cut_version WHERE cut_id = ? AND language = ?").get(cut.id, v.language);
+        const fields = "SELECT id, meta_json, edited_fields FROM cut_version WHERE cut_id = ?";
+        const have = deliveryV1
+          ? conn.prepare(fields).get(cut.id) // v1 has one video per cut, including when its language is corrected.
+          : conn.prepare(fields + " AND language = ?").get(cut.id, v.language);
         // 人改过的通用文案字段不被再次入库覆盖（ACC-v3-edit-07）。
         const versionMeta = have ? keepEditedCopy(v.meta, have, relay) : v.meta;
         const metaJson = versionMeta ? JSON.stringify(versionMeta) : null;
         if (have) {
-          conn.prepare("UPDATE cut_version SET asset_path = ?, meta_json = ? WHERE id = ?").run(v.asset, metaJson ?? (relay ? null : have.meta_json), have.id);
+          conn.prepare("UPDATE cut_version SET language = ?, asset_path = ?, meta_json = ? WHERE id = ?")
+            .run(v.language, v.asset, metaJson ?? (relay ? null : have.meta_json), have.id);
           if (relay) refreshRelayDrafts(conn, cut.id, have.id, versionMeta?.copy, now);
           stats.versions.updated++;
         } else {
@@ -662,7 +670,7 @@ export function copyViolations(platform, copy) {
  * 是按平台写；也可以显式写 `default`。平台名写错（表里没有）直接拒绝，免得文案悄悄落空。
  * 平台文案在这里就按平台限制校验；默认文案要到生成平台稿、知道发哪个平台时才能判（plan.apply）。
  */
-export function normaliseCopy(raw, where, onViolation) {
+export function normaliseCopy(raw, where, onViolation, { deliveryV1 = false } = {}) {
   if (raw == null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) fail(`${where}：copy 必须是对象`);
   const out = {};
@@ -672,6 +680,10 @@ export function normaliseCopy(raw, where, onViolation) {
     else if (key === "default") out.default = normaliseEntry(value, `${where} 的默认文案`);
     else {
       const platform = copyPlatformOf(key);
+      if (deliveryV1 && platform === "shipinhao") {
+        out[platform] = normaliseEntry(value, where + " 的视频号文案");
+        continue;
+      }
       if (!COPY_LIMITS[platform]) fail(`${where}：不认识的平台「${key}」（可选：${Object.keys(COPY_LIMITS).join(" / ")}；不分平台的默认文案直接写 title / body / tags）`);
       const entry = normaliseEntry(value, `${where} 的 ${COPY_LIMITS[platform].label} 文案`);
       const bad = copyViolations(platform, entry);
@@ -779,6 +791,10 @@ const textList = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === "string
  */
 export function effectiveCopy({ overrides, versionMeta, workMeta, cutTitle = null, workTitle = null }) {
   const ov = asObject(overrides);
+  if (ov.relayPublishedV1) {
+    const { title, body, tags } = ov.relayPublishedV1;
+    return { title, body, tags };
+  }
   const oc = ov.copy && typeof ov.copy === "object" ? ov.copy : {};
   const vm = asObject(versionMeta);
   const vd = vm.copy && typeof vm.copy.default === "object" && vm.copy.default ? vm.copy.default : {};
@@ -843,15 +859,31 @@ export function resolvePublishCopy(publishId) {
   const copy = effectiveCopy({ overrides: row.overrides_json, versionMeta: row.version_meta, workMeta: row.work_meta, cutTitle: row.cut_title, workTitle: row.work_title });
   const { copy: _planCopy, ...versionRest } = asObject(row.version_meta);
   const meta = { ...asObject(row.work_meta), ...versionRest, title: copy.title, body: copy.body, description: copy.body, tags: copy.tags };
+  const published = asObject(row.overrides_json).relayPublishedV1;
+  if (published) {
+    delete meta.cover;
+    if (published.cover) meta.cover = published.cover;
+  }
   return {
     ...copy,
-    language: row.language ?? null,
+    language: published?.language ?? row.language ?? null,
     cutId: row.cut_id ?? null,
-    cutTitle: row.cut_title ?? null,
-    workTitle: row.work_title,
+    cutTitle: published?.cutTitle ?? row.cut_title ?? null,
+    workTitle: published?.workTitle ?? row.work_title,
     metaJson: JSON.stringify(meta),
     overridesJson: row.overrides_json ?? null,
   };
+}
+
+/** Record the resolved v1 draft when it leaves the queue. Subsequent cut updates can safely change shared media and defaults. */
+export function frozenDeliveryOverrides(conn, row, overridesJson, input) {
+  if (!conn.prepare("SELECT 1 FROM relay_work_key WHERE work_id = ?").get(row.work_id)) return overridesJson;
+  const { title, body, tags, language, workTitle, cutTitle, metaJson } = input?.copy ?? resolvePublishCopy(row.id);
+  const asset = input?.asset ?? conn.prepare("SELECT asset_path FROM cut_version WHERE id = ?").get(row.version_id)?.asset_path;
+  return JSON.stringify({
+    ...asObject(overridesJson),
+    relayPublishedV1: { title, body, tags, language, workTitle, cutTitle, asset, cover: asObject(metaJson).cover },
+  });
 }
 
 /** 适配器 load() 用：把解析后的文案摊成它原来读的那几列（work_title / meta_json / overrides_json）。 */
@@ -923,7 +955,7 @@ function workView(work) {
         titleEdited: Boolean(nonEmpty(asObject(p.overrides_json).title)),
         ownFields: ownCopyFields(p.overrides_json),
         versionId: p.version_id,
-        language: p.language ?? null,
+        language: asObject(p.overrides_json).relayPublishedV1?.language ?? p.language ?? null,
         // 建议时间过了还没确认的，读出来按平台规则顺延（ACC-v3-time-03）；原定时间一并给出，页面写「原定…，已顺延」。
         scheduledAt: schedule.at,
         ...(schedule.shifted ? { originalAt: schedule.originalAt, shifted: true } : {}),
@@ -2000,6 +2032,7 @@ export function lastHeartbeat() {
 
 const relayKey = (id) => `relay.delivery.${id}`;
 const RELAY_STATE_KEY = "relay.state";
+const RELAY_DEVICE_ID_KEY = "relay.device_id";
 
 const putMeta = (key, value) => open().prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(value));
 const readMeta = (key) => {
@@ -2013,6 +2046,12 @@ const readMeta = (key) => {
 
 export const getRelayDelivery = (id) => readMeta(relayKey(id));
 export const setRelayDelivery = (id, record) => putMeta(relayKey(id), record);
+export function relayDeviceId() {
+  const existing = readMeta(RELAY_DEVICE_ID_KEY);
+  if (existing) return existing;
+  open().prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(RELAY_DEVICE_ID_KEY, JSON.stringify(newId("device")));
+  return readMeta(RELAY_DEVICE_ID_KEY);
+}
 export const getRelayState = () => readMeta(RELAY_STATE_KEY) ?? {};
 export const patchRelayState = (patch) => {
   const next = { ...getRelayState(), ...patch };

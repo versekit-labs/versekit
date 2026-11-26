@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS work (
 -- 同一来源、同一标题只有一个作品（ACC-v2-cut-01）。source 为空的不参与。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_source_title ON work(source, title) WHERE source IS NOT NULL;
 
+-- v1 交付按中转账号和期标识匹配，旧作品继续使用 source。
+CREATE TABLE IF NOT EXISTS relay_work_key (
+  scope    TEXT NOT NULL,
+  work_key TEXT NOT NULL,
+  work_id  TEXT NOT NULL UNIQUE REFERENCES work(id) ON DELETE CASCADE,
+  PRIMARY KEY (scope, work_key)
+);
+
 -- 成片：一个作品有 1 到多支（docs/design/HANDOFF.md v2）。平台稿挂在成片下。
 CREATE TABLE IF NOT EXISTS cut (
   id         TEXT PRIMARY KEY,
