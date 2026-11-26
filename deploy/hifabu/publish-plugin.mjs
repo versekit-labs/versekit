@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { checkVersion } from "../../plugins/hifabu-src/version.mjs";
+import { DEFAULT_REPO_URL, renderPluginArtifacts } from "../../site/plugin/render.mjs";
 
 const pluginDir = fileURLToPath(new URL("../../plugins/hifabu/", import.meta.url));
 const packageFiles = [
@@ -67,6 +68,8 @@ function build(root) {
     input: packageFiles.join("\n") + "\n",
   });
 
+  const zipUrl = new URL(encodeURIComponent(archive), publicUrl).href;
+  const zipSha256 = sha256(join(root, archive));
   const marketplace = {
     name,
     owner: author,
@@ -75,25 +78,28 @@ function build(root) {
       name, version, description, author, homepage, license,
       source: {
         source: "archive",
-        url: new URL(encodeURIComponent(archive), publicUrl).href,
-        sha256: sha256(join(root, archive)),
+        url: zipUrl,
+        sha256: zipSha256,
       },
     }],
   };
   writeFileSync(join(root, "marketplace.json"), JSON.stringify(marketplace, null, 2) + "\n");
-  writeFileSync(join(root, "install.txt"), [
-    "给 AI 助手：用户请你安装 Hifabu 插件时，请在终端执行以下一行命令。",
-    "",
-    `claude plugin marketplace add ${publicUrl}marketplace.json && claude plugin install hifabu@hifabu`,
-    "",
-    "安装成功后，提醒用户运行 /reload-plugins 或者重开 Claude Code 会话。",
-    "",
-    "升级时先刷新 Hifabu 市场清单，再更新插件。",
-    "",
-    "claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu",
-    "",
-  ].join("\n"));
-  return [archive, "install.txt", "marketplace.json"];
+  const tag = `${name}--v${version}`;
+  const { html, installTxt } = renderPluginArtifacts({
+    version,
+    released_at: new Date().toISOString().slice(0, 10),
+    zip_name: archive,
+    zip_url: zipUrl,
+    zip_sha256: zipSha256,
+    source_url: `${DEFAULT_REPO_URL}/tree/${tag}/plugins/hifabu`,
+    changelog_url: `${DEFAULT_REPO_URL}/blob/${tag}/plugins/hifabu/CHANGELOG.md`,
+  }, { publicUrl });
+  if (html.includes("{{") || installTxt.includes("{{")) {
+    throw new Error("生成的插件页或 install.txt 仍留有未替换占位符，拒绝发布。");
+  }
+  writeFileSync(join(root, "index.html"), html);
+  writeFileSync(join(root, "install.txt"), installTxt);
+  return [archive, "index.html", "install.txt", "marketplace.json"];
 }
 
 function upload(host, root, files) {
@@ -110,8 +116,8 @@ function upload(host, root, files) {
 cd '${destination}'
 stage='${stage}'
 archive='${archive}'
-chmod 644 "$stage/$archive" "$stage/install.txt" "$stage/marketplace.json"
-for manifest in install.txt marketplace.json; do
+chmod 644 "$stage/$archive" "$stage/index.html" "$stage/install.txt" "$stage/marketplace.json"
+for manifest in index.html install.txt marketplace.json; do
   if [ -d "$manifest" ]; then
     echo "发布文件路径是目录：$manifest" >&2
     exit 1
@@ -124,6 +130,7 @@ if ! ln -- "$stage/$archive" . 2>/dev/null; then
     exit 1
   fi
 fi
+mv -f -- "$stage/index.html" index.html
 mv -f -- "$stage/install.txt" install.txt
 mv -f -- "$stage/marketplace.json" marketplace.json
 `);
