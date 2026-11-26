@@ -48,3 +48,35 @@ systemd 以 `hifabu-cloud` 用户运行 `packages/cloud`，在 `127.0.0.1:8791` 
 确认两台机器和传片均稳定后，由所有者择日把 `relay.allow_legacy_tokens` 改为 `false` 并重启中转。复核旧固定令牌请求返回 401、账号令牌仍能传片。确认迁移结束后再清理两端留存的旧令牌和原中转目录。
 
 **回退。** 把 `relay.allow_legacy_tokens` 改回 `true` 并重启。旧令牌或其队列如已清理，从安全备份恢复；令牌无法恢复时按旧令牌流程生成并重新连接。
+
+## 6. 发布插件
+
+插件源目录为 `plugins/hifabu`。插件内容变更后，先提升 `plugins/hifabu/.claude-plugin/plugin.json` 的语义化版本号，再运行 `node plugins/hifabu/test/version.test.mjs --print-hash`，把新版本和哈希追加到 `plugins/hifabu/version-lock.json`。发布脚本会对暂存的插件内容执行版本校验。
+
+从仓库检出目录运行以下命令进行离线预览。需要 Node.js 22.13 或更高版本及 `zip`。省略 `--output-dir` 时，脚本打印三个文件的名称和 SHA-256，随后清理暂存文件。
+
+```bash
+preview="$(mktemp -d)"
+node deploy/hifabu/publish-plugin.mjs --dry-run --output-dir "$preview"
+```
+
+协调器发布时传入有写权限的 SSH 主机别名。服务器的 nginx 静态根目录为 `/var/www/hifabu`。
+
+```bash
+node deploy/hifabu/publish-plugin.mjs --host seoul-vps
+```
+
+脚本将文件上传到 `/var/www/hifabu/plugin/` 下的暂存目录，先公开 `hifabu-<version>.zip` 和 AI 助手安装说明 `install.txt`，最后切换 `marketplace.json`。旧版 zip 继续可用。同一版本重复发布时，只有服务器上的 zip 与本地构建字节一致才更新清单。
+
+发布后用一个新的 Claude Code 用户环境实测安装。安装成功后，在现有会话运行 `/reload-plugins` 或重开会话。
+
+```bash
+claude plugin marketplace add https://hifabu.com/plugin/marketplace.json && claude plugin install hifabu@hifabu
+claude plugin list
+```
+
+已有用户升级时先刷新市场清单，再更新插件。Claude Code 2.1.332 的插件更新命令会使用已缓存的市场清单。
+
+```bash
+claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu
+```
