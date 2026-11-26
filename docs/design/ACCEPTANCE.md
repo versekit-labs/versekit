@@ -668,6 +668,13 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
   - Claude Code 里一句话：用户说「帮我安装 hifabu.com/plugin 的插件」，Claude 打开这个页面后，能照页面上写给 AI 助手的说明执行上面那行命令。说明写成纯文本，放在页面上，并另存一份 `https://hifabu.com/plugin/install.txt`。装好后提醒用户运行 `/reload-plugins` 或重开会话。
   - 升级插件：升 `version`，然后重跑发布脚本。用户执行 `claude plugin update hifabu@hifabu` 就能拿到新版本。发布脚本支持 `--dry-run`，只列出要上传的文件，不连网。
 
+### 改名 Hifabu（2026-11-26）
+
+所有者定：产品名改为 Hifabu，遗留的 versekit、vk 命令都改成 hifabu 体系。GitHub 仓库 `versekit-labs/versekit` 和 Orca 流程（orca-flow、worktree 路径、协调器脚本）这次不改。计划见 `docs/design/RENAME-HIFABU.md`，分 R1–R8 八步串行做。
+
+- [ACC-brand-01] `npm run check:brand`（脚本 `scripts/ci/check-brand.mjs`）扫描仓库里所有已跟踪的文本文件，找出 `versekit`（不分大小写）、`VERSEKIT_`、`VK_`，以及作为独立命令出现的 `vk`（单词边界：命令行开头、反引号里、`npm run vk`；`vkey` 这类词里的 vk 不算）。输出按类别分组统计（用户看得见的字、命令、环境变量、本机路径、内部名字、服务器、其他），每类给出数量和前几处的 `文件:行号`，最后给总数。本单是报告模式：发现残留也以 0 退出，`npm run check` 接入它，但不因为它失败。加 `--strict` 时，白名单以外只要有残留就以 1 退出（留给 R8 用），测试要覆盖这两种模式。
+- [ACC-brand-02] 白名单是显式文件 `scripts/ci/brand-allowlist.txt`，每条写明路径或匹配规则、理由类别（协议常量 / 仓库地址 / Orca 流程 / 历史文档 / 迁移代码 / 白名单本身）和一句话理由。没写理由的条目，脚本在任何模式下都报错。首批白名单至少包括：中转令牌 audience `versekit-relay` 等线上协议常量、`github.com/versekit-labs/versekit` 仓库地址、`bin/orca-flow.mjs` 和 `.orca-kit/` 等 Orca 流程文件、标注日期的历史文档。测试要能证明：命中白名单的不计入残留；没写理由的条目会报错。
+
 ### 部署（2026-11-25）
 
 - [ACC-deploy-cloud-01] seoul-vps 上的账号服务部署材料放在 `deploy/hifabu/`：
