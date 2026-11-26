@@ -21,9 +21,10 @@
     "check:parity": "node scripts/ci/parity.mjs",
     "check:contract": "node scripts/ci/adapter-contract.mjs",
     "check:backdoor": "node scripts/ci/no-backdoor.mjs",
+    "check:brand": "node scripts/ci/check-brand.mjs",
     "design:check": "node scripts/design-check.mjs",
-    "check": "npm test && npm run design:check",
-    "ci": "npm run check:parity && npm run check:contract && npm run check:backdoor && npm test && npm run design:check",
+    "check": "npm run check:brand && npm test && npm run design:check",
+    "ci": "npm run check:parity && npm run check:contract && npm run check:backdoor && npm run check",
     "design:accept": "node scripts/design-accept.mjs",
     "agentctl": "node bin/agentctl.mjs"
   }
