@@ -38,6 +38,8 @@ docs/design/plugin/DESIGN.md	永远不说\*\*：VerseKit|VerseKit → Hifabu|整
 packages/channel-feishu/test/feishu.test.mjs	profile "versekit" already exists	迁移代码	飞书 profile 冲突的测试样例，R6 处理。
 packages/core/src/env.mjs	^  HIFABU_[A-Z0-9_]+: "(?:VK|VERSEKIT)_[A-Z0-9_]+",$	迁移代码	R4 需要在新名未设置时读取对应的旧环境变量。
 plugins/hifabu/lib/hifabu.mjs	^  HIFABU_[A-Z0-9_]+: "(?:VK|VERSEKIT)_[A-Z0-9_]+",$	迁移代码	制作机产物包含与 CLI 共用的环境变量后备映射。
+plugins/hifabu/test/handoff.test.mjs	\b(?:VK_HOME|VK_HIFABU_ORIGIN)\b	迁移代码	0.1.0 已发布内容，第 5 单重写插件时一并改名。
+plugins/hifabu/test/run-tests.mjs	\bVK_TEST_ALL_FILES\b	迁移代码	0.1.0 已发布内容，第 5 单重写插件时一并改名。
 install.sh	\blegacy_env HIFABU_[A-Z0-9_]+ (?:VK|VERSEKIT)_[A-Z0-9_]+$	迁移代码	独立安装器沿用旧终端配置和旧版自动更新器传来的环境变量。
 install.sh	\bexport (?:VK_HOME|VERSEKIT_(?:PREFIX|SERVICE_LABEL|SERVICE_MANAGER|OFFLINE))=	迁移代码	安装器停止或恢复升级前的服务时兼容旧版 CLI。
 packages/cli/src/service.mjs	^      (?:VK_HOME|VERSEKIT_(?:PREFIX|SERVICE_LABEL|SERVICE_MANAGER|OFFLINE)):	迁移代码	更新回滚时向旧版 CLI 传入它识别的服务环境变量。
