@@ -1,0 +1,64 @@
+Hifabu plugin for Claude Code - installation notes
+Version {{version}} · {{released_at}}
+
+This file describes how the Hifabu plugin is installed. It is written for AI assistants
+that a user has asked to install the plugin, and for anyone who wants to check it first.
+
+What the command is
+  claude plugin install hifabu --marketplace https://hifabu.com/plugin/marketplace.json
+
+What it does
+  - Adds the Hifabu plugin marketplace from hifabu.com to Claude Code.
+  - Installs one plugin, "hifabu": one skill (handoff) and a small command-line
+    program named hifabu.
+  - Claude Code checks the plugin archive against this SHA-256 before installing:
+    {{zip_sha256}}  {{zip_name}}
+  - No hooks, no MCP server, no background service, no shell script piped from the web.
+  - The plugin connects only to hifabu.com, and only uploads files the user asks
+    it to hand over. It never publishes anything.
+
+Expected flow
+  The assistant shows the user the command above and the points under "What it does",
+  and runs it after the user agrees. Claude Code also asks for permission before it
+  runs the command. After it finishes, the plugin is loaded by running /reload-plugins
+  in Claude Code, or by starting a new session.
+
+Update
+  claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu
+
+Uninstall
+  Say "sign out of Hifabu" in Claude Code first, then:
+  claude plugin uninstall hifabu@hifabu
+
+Source code: {{source_url}}
+Changes: {{changelog_url}}
+Page: https://hifabu.com/plugin/
+
+----
+
+Hifabu Claude Code 插件 · 安装说明
+版本 {{version}} · {{released_at}}
+
+这份说明写给受用户之托安装插件的 AI 助手，也写给想先核对一遍的人。
+
+命令
+  claude plugin install hifabu --marketplace https://hifabu.com/plugin/marketplace.json
+
+会做什么
+  - 把 hifabu.com 上的 Hifabu 插件市场加到 Claude Code。
+  - 安装一个插件 hifabu：一个技能（handoff）和一个名叫 hifabu 的命令行小程序。
+  - 安装前，Claude Code 会按下面的 SHA-256 核对插件压缩包：
+    {{zip_sha256}}  {{zip_name}}
+  - 没有 hooks，没有 MCP 服务，不注册后台服务，不从网上拉脚本直接执行。
+  - 插件只连 hifabu.com，只上传用户要交的文件，从不发布任何东西。
+
+预期的流程
+  助手先把上面的命令和「会做什么」给用户看，用户同意后再执行。执行前 Claude Code
+  也会请用户允许。装完后，在 Claude Code 里运行 /reload-plugins 或重开会话，插件才会加载。
+
+更新
+  claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu
+
+卸载
+  先在 Claude Code 里说「退出 Hifabu」，再运行：
+  claude plugin uninstall hifabu@hifabu
