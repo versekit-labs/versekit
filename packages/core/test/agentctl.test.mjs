@@ -759,3 +759,12 @@ test("涉及段：改/不动下面缩进的子条目继承归属（ACC-harness-s
   const inline = "## 涉及与不可动\n- 改：`bin/agentctl.mjs`\n- 不动：`packages/`\n";
   assert.deepEqual(issueTouchedFiles(inline), ["bin/agentctl.mjs"]);
 });
+
+test("六问小节认 ADR-0005 §13 / ACC-arch-09 标题（ACC-harness-arch-answers-01）", async () => {
+  const { hasArchitectureAnswers } = await import("../../../bin/agentctl.mjs");
+  const items = ["1. a", "2. b", "3. c", "4. d", "5. e", "6. f"].join("\n");
+  assert.equal(hasArchitectureAnswers("## ACC-arch-09 · ADR-0005 §13\n\n" + items), true);
+  assert.equal(hasArchitectureAnswers("## 六问\n" + items), true);
+  assert.equal(hasArchitectureAnswers("## ACC-arch-09\n1. a\n2. b"), false);
+  assert.equal(hasArchitectureAnswers("## 其他\n" + items), false);
+});
