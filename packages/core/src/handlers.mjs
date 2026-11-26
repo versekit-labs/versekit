@@ -9,8 +9,9 @@ import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath, dirname } from "node:path";
 import { basename, extname } from "node:path";
 import { open, transitionPublish, enqueue, emit, paths, DEFAULT_LANGUAGE } from "./index.mjs";
-import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES, relayConnectionKey } from "../../relay/src/index.mjs";
+import { hashFile, uniqueBlobs, newDeliveryId, ping, pushDelivery, pullOnce, listDeliveryStatus, getDeliveryStatus, MIN_FREE_BYTES, relayConnectionKey, assertPublisherAccepts, getGroupSnapshot } from "../../relay/src/index.mjs";
 import { BASELINE_TRANSFER, deliveryProgress, deliveryStatusView, formatBytes, formatDuration, transferSeconds } from "../../relay/src/status.mjs";
+import { deliveryCopy, deliveryFileKey, deliveryFiles, isVersionedDelivery, looksLikeLocalPath, validateDeliveryV1 } from "../../relay/src/delivery-v1.mjs";
 import { queuePublish, queueCollect, MAX_ATTEMPTS } from "./runner.mjs";
 import { assetSetOf, ASSET_KIND_LABEL, MAX_IMAGE_NOTE } from "./asset-kind.mjs";
 import * as store from "./store.mjs";
@@ -40,6 +41,18 @@ const fail = (message, hint) => {
 const requireGroup = (ref) => store.findGroup(ref) ?? fail(`没有这个账号组：${ref}（在系统页的账号组里看有哪些）`, "vk group list");
 
 const titleOf = (asset) => basename(asset, extname(asset)) || "未命名";
+
+/** v1 uses file identities on the wire. The work pipeline still takes cuts with local asset paths. */
+function deliveryWorkPlan(manifest, pathOf) {
+  const { title, language = DEFAULT_LANGUAGE } = manifest.work;
+  const cuts = manifest.cuts.map(({ title: cutTitle, video, cover, copy }, i) => ({
+    title: cutTitle ?? (manifest.cuts.length === 1 ? title : "成片 " + (i + 1)),
+    ...(cover ? { cover: pathOf(cover) } : {}),
+    copy: deliveryCopy(copy),
+    versions: [{ language, asset: pathOf(video) }],
+  }));
+  return { title, cuts };
+}
 
 /** `--to tiktok,bilibili` arrives as an array; tolerate a comma string from a card button. */
 const platformList = (to) => {
@@ -433,28 +446,33 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   };
 
   /** 把一个已下载好的投递入库：先验后写，不合格就一行都不写；平台稿一律待确认（plan.apply）。 */
-  function ingestDelivery(delivery, filePaths, inboxDir) {
-    const g = store.findGroup(delivery.group) ?? fail(`这台发布机上没有账号组「${delivery.group}」：先到系统页建同名的账号组并接入账号，再让制作机重新送一次`, `vk group add ${delivery.group}`);
-    if (!store.listAccounts({ groupId: g.id }).length) fail(`账号组「${g.name}」里还没有账号，平台稿没地方放：先接入账号，再让制作机重新 push`);
+  function ingestDelivery(delivery, filePaths, inboxDir, accountId) {
     const m = delivery.manifest ?? {};
-    const blobPath = (ref) => {
-      const sha = /^blob:([0-9a-f]{64})$/.exec(String(ref ?? ""))?.[1];
-      const local = sha ? filePaths[sha] : null;
-      if (!local) fail(`清单引用了没有上传的文件：${ref ?? "（空）"}`);
-      return resolvePath(local);
-    };
-    // 封面（ACC-v3-fid-10）和成片一样是中转里的文件：换成发布机上的本地路径，没写的保持没写。
-    const coverOf = (o) => (o?.cover ? { cover: blobPath(o.cover) } : {});
-    const cuts = (Array.isArray(m.cuts) ? m.cuts : []).map((c) => ({
-      ...c,
-      ...coverOf(c),
-      versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...coverOf(v), asset: blobPath(v?.asset) })),
-    }));
-    const plan = { title: m.title, source: m.source ?? joinPath(inboxDir, delivery.id), cuts };
-    // 旧清单没有制作机来源，只能沿用投递号。新清单按制作机的一期路径识别作品。
-    const work = m.source == null
-      ? handlers["work.add"](plan).work
-      : store.showWork(store.upsertWork(plan, { relay: true }).id);
+    const deliveryV1 = isVersionedDelivery(m);
+    const group = deliveryV1 ? store.listGroups().find(({ name }) => name === delivery.group) : store.findGroup(delivery.group);
+    const g = group ?? fail("这台发布机上没有账号组「" + delivery.group + "」：先到系统页建同名的账号组并接入账号，再让制作机重新送一次", "vk group add " + delivery.group);
+    if (!store.listAccounts({ groupId: g.id }).length) fail(`账号组「${g.name}」里还没有账号，平台稿没地方放：先接入账号，再让制作机重新 push`);
+    let work;
+    if (deliveryV1) {
+      const plan = deliveryWorkPlan(m, (file) => filePaths[deliveryFileKey(file)]);
+      work = store.showWork(store.upsertWork(plan, { relay: true, deliveryKey: m.work.key, relayScope: accountId }).id);
+    } else {
+      const blobPath = (ref) => {
+        const sha = /^blob:([0-9a-f]{64})$/.exec(String(ref ?? ""))?.[1];
+        const local = sha ? filePaths[sha] : null;
+        if (!local) fail("清单引用了没有上传的文件：" + (ref ?? "（空）"));
+        return resolvePath(local);
+      };
+      const coverOf = (o) => o?.cover ? { cover: blobPath(o.cover) } : {};
+      const cuts = (Array.isArray(m.cuts) ? m.cuts : []).map((c) => ({
+        ...c,
+        ...coverOf(c),
+        versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...coverOf(v), asset: blobPath(v?.asset) })),
+      }));
+      const plan = { title: m.title, source: m.source ?? joinPath(inboxDir, delivery.id), cuts };
+      // 0.1.0 按制作机路径匹配；更早没有来源的清单沿用投递号。
+      work = m.source == null ? handlers["work.add"](plan).work : store.showWork(store.upsertWork(plan, { relay: true }).id);
+    }
     const created = [];
     const draftIds = [];
     const rejected = [];
@@ -466,7 +484,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     }
     if (!created.length && !work.cuts.some((c) => c.publishes?.length)) {
       const notes = rejected.map((x) => `${x.platform}：${x.reason}`);
-      fail(`作品「${m.title}」已入库，但一条平台稿都没生成：${notes.join("；") || "账号组里没有能发的账号"}`);
+      fail(`作品「${work.title}」已入库，但一条平台稿都没生成：${notes.join("；") || "账号组里没有能发的账号"}`);
     }
     const drafts = draftIds.map((id) => {
       const row = store.getPublish(id);
@@ -485,6 +503,23 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
   }
 
   const deliveryKey = (accountId, id) => accountId ? `${accountId}.${id}` : id;
+  function publisherGroupSnapshot(defaultGroup) {
+    const safeLabel = (value) => typeof value === "string" && value.trim() && value.length <= 255 && !looksLikeLocalPath(value);
+    const name = deviceName();
+    const defaultId = defaultGroup ? store.findGroup(defaultGroup)?.id : null;
+    return {
+      device: { id: store.relayDeviceId(), name: safeLabel(name) ? name : "发布机" },
+      reportedAt: Date.now(),
+      groups: store.listGroups().filter((group) => safeLabel(group.name)).map((group) => ({
+        name: group.name,
+        ...(group.id === defaultId ? { default: true } : {}),
+        accounts: store.listAccounts({ groupId: group.id }).filter((account) => safeLabel(account.platform)).map((account) => ({
+          platform: store.copyPlatformOf(account.platform),
+          name: safeLabel(account.display_name) ? account.display_name : platformLabel(account.platform),
+        })),
+      })),
+    };
+  }
   const pullState = (accountId) => {
     const st = store.getRelayState();
     return accountId ? st.pull_accounts?.[accountId] ?? {} : st;
@@ -517,6 +552,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       fail("上一轮拉取正在结束，请稍后重试。");
     }
     const inboxDir = joinPath(paths().state, "relay-inbox", accountId ?? "");
+    const groupSnapshot = publisherGroupSnapshot(cfg.defaultGroup);
     relayRoundAccount = accountId;
     relayRound = { startedAt: Date.now(), finishedAt: null, total: 0, items: [] };
     relayPulling = (async () => {
@@ -525,10 +561,11 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           url: cfg.url,
           token: cfg.pullToken,
           inboxDir,
+          groupSnapshot,
           log,
           getRecord: (id) => store.getRelayDelivery(deliveryKey(accountId, id)),
           record: (id, rec) => recordRelay(id, rec, accountId),
-          ingest: (d, filePaths) => ingestDelivery(d, filePaths, inboxDir),
+          ingest: (d, filePaths) => ingestDelivery(d, filePaths, inboxDir, accountId),
           onEvent: (e) => {
             const rd = relayRound;
             if (!rd) return;
@@ -599,8 +636,6 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     // 云端中转（#226）。
     "work.push": async ({ manifest, group, dryRun = false }) => {
       const cfg = makerConnection();
-      const groupName = String(group ?? cfg.defaultGroup ?? "").trim();
-      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>，或用 vk relay connect 记住默认组");
       if (!manifest || !existsSync(manifest)) fail(`找不到清单：${manifest ?? "（没给）"}`);
       let raw;
       try {
@@ -608,19 +643,26 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
       } catch (err) {
         fail(`清单不是合法的 JSON：${manifest}（${err.message}）`);
       }
+      const deliveryV1 = isVersionedDelivery(raw);
+      if (deliveryV1) validateDeliveryV1(raw);
+      const groupName = String(deliveryV1 ? raw.target.group : group ?? cfg.defaultGroup ?? "").trim();
+      if (!groupName) fail("要先选账号组：投递到发布机上的哪个账号组", "--group <组名>，或用 vk relay connect 记住默认组");
+      if (deliveryV1 && group != null && group.trim() !== groupName) fail("指定的账号组和清单里的目标组不一致。", "让 --group 和清单的 target.group 一致。");
       const baseDir = dirname(resolvePath(manifest));
       const rel = (p) => (typeof p === "string" && p ? resolvePath(baseDir, p) : p);
-      const cuts = (Array.isArray(raw?.cuts) ? raw.cuts : []).map((c) => ({
+      const legacyCuts = () => (Array.isArray(raw?.cuts) ? raw.cuts : []).map((c) => ({
         ...c,
         ...(c?.cover ? { cover: rel(c.cover) } : {}),
         versions: (Array.isArray(c?.versions) ? c.versions : []).map((v) => ({ ...v, ...(v?.cover ? { cover: rel(v.cover) } : {}), asset: rel(v?.asset) })),
       }));
+      const plan = deliveryV1 ? deliveryWorkPlan(raw, (file) => rel(file.name)) : { title: raw?.title, source: raw?.source, cuts: legacyCuts() };
+      const { cuts } = plan;
       // 规则和 work.add 同一套：不合格当场报错，一个字节都不上传。
       const rejected = [];
       const onCopyViolation = dryRun ? (violation) => {
         if (!rejected.some((r) => r.platform === violation.platform && r.cut === violation.cut && r.reason === violation.reason)) rejected.push(violation);
       } : undefined;
-      const checked = store.checkWorkPlan({ title: raw?.title, source: raw?.source, cuts }, { onCopyViolation });
+      const checked = store.checkWorkPlan(plan, { onCopyViolation, deliveryV1 });
       const covers = [...new Set(cuts.flatMap((c) => [c.cover, ...c.versions.map((v) => v.cover)]).filter(Boolean))];
       const missingCovers = covers.filter((a) => !existsSync(a) || !statSync(a).isFile());
       if (missingCovers.length) fail(`找不到封面图片：${missingCovers.join("、")}（路径相对清单所在目录）`);
@@ -637,15 +679,33 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         if (!size) fail(`文件是空的：${path}，补好后再交付`);
         const sha256 = await hashFile(path);
         files.push({ path, sha256, size, name: basename(path) });
-        bySha.set(path, sha256);
+        bySha.set(path, { sha256, size });
+      }
+      if (deliveryV1) {
+        for (const file of deliveryFiles(raw)) {
+          const actual = bySha.get(rel(file.name));
+          if (actual.sha256 !== file.sha256.toLowerCase() || actual.size !== file.size) {
+            throw Object.assign(new Error("素材「" + file.name + "」和清单里的 SHA-256 或大小不一致，请重新生成清单。"), { code: "hash_mismatch" });
+          }
+        }
       }
       const unique = uniqueBlobs(files);
       const bytes = unique.reduce((n, f) => n + f.size, 0);
+      let targetPlatforms;
+      if (deliveryV1) {
+        const snapshot = await getGroupSnapshot(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
+        if (snapshot) {
+          const target = snapshot.groups.find(({ name }) => name === groupName);
+          if (!target) fail("发布机上没有「" + groupName + "」组，现在有：" + (snapshot.groups.map(({ name }) => name).join("、") || "没有账号组") + "。");
+          targetPlatforms = [...new Set(target.accounts.map(({ platform }) => platform))];
+        }
+      }
       if (dryRun) {
-        // 发布机才知道账号组里有哪些平台，先按本机已有的所有平台文案规则预检。
+        // 有快照时只报告目标组的平台；旧清单继续按全部平台预检。
+        const platforms = targetPlatforms ?? Object.keys(store.COPY_LIMITS);
         for (const cut of checked.plan) {
           const version = cut.versions.find((v) => v.language === "zh") ?? cut.versions[0];
-          for (const platform of Object.keys(store.COPY_LIMITS)) {
+          for (const platform of platforms) {
             const copy = store.copyFor(version.meta?.copy, platform);
             const bad = store.copyViolations(platform, { ...copy, title: copy.title ?? cut.title });
             if (bad.length) onCopyViolation({ platform, cut: cut.title, language: version.language, reason: bad.join("；") });
@@ -657,6 +717,7 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
           warnings.push({ code: err.code, message: err.message });
           return {};
         });
+        if (deliveryV1 && !warnings.length) assertPublisherAccepts(details, raw.schema);
         const { freeBytes = null, minFreeBytes = MIN_FREE_BYTES } = details;
         const speeds = { ...BASELINE_TRANSFER };
         for (const key of Object.keys(speeds)) {
@@ -672,20 +733,24 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         return {
           dryRun: true, group: groupName, title: checked.t, files: unique.map(({ name, size }) => ({ name, size })), bytes,
           etaSeconds: uploadSeconds + downloadSeconds, transfer: { ...speeds, uploadSeconds, downloadSeconds },
-          freeBytes, minFreeBytes, rejected, warnings,
+          freeBytes, minFreeBytes, rejected: targetPlatforms ? rejected.filter(({ platform }) => targetPlatforms.includes(platform)) : rejected, warnings,
         };
       }
-      const blobOf = (o) => (o?.cover ? { cover: `blob:${bySha.get(o.cover)}` } : {});
-      const wire = {
+      const blobOf = (o) => (o?.cover ? { cover: "blob:" + bySha.get(o.cover).sha256 } : {});
+      const wire = deliveryV1 ? raw : {
         title: raw.title,
         ...(raw.source == null ? {} : { source: rel(raw.source.trim()) }),
-        cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: `blob:${bySha.get(v.asset)}` })) })),
+        cuts: cuts.map((c) => ({ ...c, ...blobOf(c), versions: c.versions.map((v) => ({ ...v, ...blobOf(v), asset: "blob:" + bySha.get(v.asset).sha256 })) })),
       };
       const id = newDeliveryId();
       const createdAt = Date.now();
       const upload = { id, url: cfg.url, connectionKey: relayConnectionKey(cfg), title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
         uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
       if (uploadQueue) {
+        if (deliveryV1) {
+          const info = await ping(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
+          if (info) assertPublisherAccepts(info, raw.schema);
+        }
         uploadQueue.register({ ...upload, manifest: wire, files: unique });
         return { id, state: "pending", group: groupName, files: unique.length, bytes, message: `已登记，投递 ${id}，后台会上传。` };
       }
@@ -699,9 +764,9 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
         return { id: delivery.id, state: delivery.state, group: groupName, files: unique.length, bytes, message: `已上传到中转，投递 ${delivery.id}，等发布机拉取（发布机上之后一律待确认，不会自动发）` };
       } catch (err) {
         const errorCode = err.code ?? "upload_failed";
-        const nextStep = errorCode === "disk_low" || errorCode === "quota_exceeded" ? "清出中转空间后，再从制作机重新交付。"
+        const nextStep = err.hint ?? (errorCode === "disk_low" || errorCode === "quota_exceeded" ? "清出中转空间后，再从制作机重新交付。"
           : errorCode === "relay_disabled" ? "到我的 Hifabu 申请开通传片，再从制作机重新交付。"
-          : "检查中转连接后，从制作机重新交付。";
+          : "检查中转连接后，从制作机重新交付。");
         const failed = { ...upload, updatedAt: Date.now(), errorCode, reason: err.message, nextStep };
         const history = (store.getRelayState().push_failures ?? []).filter((r) => r.updatedAt >= Date.now() - RELAY_WEEK_MS);
         store.patchRelayState({ push_failures: [failed, ...history].slice(0, 20) });

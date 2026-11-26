@@ -43,7 +43,7 @@ export function getPublishRow(publishId) {
 export function resolvePublishAsset(publishId) {
   const row = open()
     .prepare(
-      `SELECT p.id, p.cut_id, p.version_id, v.asset_path AS asset, v.language, v.cut_id AS version_cut
+      `SELECT p.id, p.cut_id, p.version_id, p.overrides_json, v.asset_path AS asset, v.language, v.cut_id AS version_cut
          FROM publish p
          LEFT JOIN cut_version v ON v.id = p.version_id
         WHERE p.id = ?`,
@@ -59,10 +59,13 @@ export function resolvePublishAsset(publishId) {
   if (row.cut_id && row.version_cut !== row.cut_id) {
     throw new AdapterError("asset_invalid", `平台稿 ${publishId} 的语言版本 ${row.version_id} 不属于它的成片 ${row.cut_id}，没有调用平台`);
   }
-  if (typeof row.asset !== "string" || !row.asset.trim()) {
+  let published;
+  try { published = JSON.parse(row.overrides_json)?.relayPublishedV1; } catch { /* old overrides may not be JSON */ }
+  const asset = published?.asset ?? row.asset;
+  if (typeof asset !== "string" || !asset.trim()) {
     throw new AdapterError("asset_invalid", `平台稿 ${publishId} 的语言版本 ${row.version_id}（${row.language}）没有素材路径；没有调用平台`);
   }
-  return { asset: row.asset, versionId: row.version_id, language: row.language, cutId: row.version_cut };
+  return { asset, versionId: row.version_id, language: published?.language ?? row.language, cutId: row.version_cut };
 }
 
 /**
@@ -95,7 +98,7 @@ export function recordSnapshot({ publishId, source, status, metrics, capturedAt 
  * Applies a successful adapter answer: state, external id, followups, and the first collection.
  * Called at the adapter boundary so a malformed result fails before any row is touched.
  */
-export function applyPublishResult(publishId, result) {
+export function applyPublishResult(publishId, result, input) {
   assertPublishResult(result, `publish ${publishId}`);
   const row = getPublishRow(publishId);
   if (!row) throw new Error(`没有这条发布：${publishId}`);
@@ -109,7 +112,7 @@ export function applyPublishResult(publishId, result) {
       .prepare("UPDATE publish SET external_id=?, external_url=?, updated_at=? WHERE id=?")
       .run(patch.external_id, patch.external_url, Date.now(), publishId);
   } else {
-    transitionPublish(publishId, result.state, { patch });
+    transitionPublish(publishId, result.state, { patch, input });
   }
 
   const followups = [];

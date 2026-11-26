@@ -6,6 +6,7 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync,
 import { dirname } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { isVersionedDelivery, validateDeliveryEnvelope, unsupportedDelivery } from "./delivery-v1.mjs";
 
 export class RelayError extends Error {
   constructor(message, { status = null, code = "relay_error", retryable = false, data = null } = {}) {
@@ -111,6 +112,17 @@ export async function ping({ url, token, details = false }) {
   return res.json();
 }
 
+export function assertPublisherAccepts(info, schema) {
+  if (!Array.isArray(info.accepts) || !info.accepts.includes(schema)) throw unsupportedDelivery();
+}
+
+export async function getGroupSnapshot({ url, token }) {
+  const res = await request({ url, token, path: "/v1/group-snapshot", signal: AbortSignal.timeout(10_000) });
+  if (res.status === 404) return null; // Relay predating snapshots.
+  if (!res.ok) throw await failOf(res, "读取账号组快照失败");
+  return (await res.json()).snapshot;
+}
+
 /** 读流时盯着进度：停住太久就掐断让重试接上，不然一条死连接会把后台拉取永远挂住。 */
 function watch(onBytes, controller, stallMs, { waitForReply = false } = {}) {
   let timer = null;
@@ -192,6 +204,12 @@ export const newDeliveryId = () => `dl_${randomBytes(8).toString("hex")}`;
 export async function pushDelivery({ url, token, group, manifest, files, onProgress = () => {}, retries = 5, backoffMs = 1000, id = newDeliveryId(), signal }) {
   // files: [{ sha256, size, name, path }]
   const unique = uniqueBlobs(files);
+  const blobs = unique.map(({ sha256, size, name }) => ({ sha256, size, name }));
+  if (isVersionedDelivery(manifest)) {
+    validateDeliveryEnvelope({ manifest, group, blobs });
+    const details = await withRetry(() => ping({ url, token }), { retries, backoffMs });
+    assertPublisherAccepts(details, manifest.schema);
+  }
   const deliveryTotal = unique.reduce((sum, file) => sum + file.size, 0);
   let completedBytes = 0;
   for (const f of unique) {
@@ -201,7 +219,7 @@ export async function pushDelivery({ url, token, group, manifest, files, onProgr
     });
     completedBytes += f.size;
   }
-  const body = JSON.stringify({ id, group, manifest, blobs: unique.map(({ sha256, size, name }) => ({ sha256, size, name })) });
+  const body = JSON.stringify({ id, group, manifest, blobs });
   const delivery = await withRetry(
     async () => {
       signal?.throwIfAborted();
@@ -216,8 +234,16 @@ export async function pushDelivery({ url, token, group, manifest, files, onProgr
   return delivery;
 }
 
-export async function listDeliveries({ url, token, states = null }) {
-  const res = await request({ url, token, path: `/v1/deliveries${states ? `?state=${states.join(",")}` : ""}` });
+export async function listDeliveries({ url, token, states = null, accepts, groupSnapshot }) {
+  const query = states ? "?state=" + states.join(",") : "";
+  if (accepts != null) {
+    const reported = await request({ url, token, path: "/v1/deliveries/pull" + query, method: "POST",
+      body: JSON.stringify({ accepts, groupSnapshot }), signal: AbortSignal.timeout(10_000) });
+    if (reported.ok) return (await reported.json()).deliveries;
+    if (![404, 405].includes(reported.status)) throw await failOf(reported, "报告发布机能力或读取待拉取的投递失败");
+    await reported.body?.cancel();
+  }
+  const res = await request({ url, token, path: "/v1/deliveries" + query, signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw await failOf(res, "读取待拉取的投递失败");
   return (await res.json()).deliveries;
 }

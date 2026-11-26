@@ -70,6 +70,7 @@ function buildApp(name, version) {
   writeFileSync(join(dir, "package.json"), JSON.stringify(pkg, null, 2));
   const skip = (src) => !/(^|\/)(node_modules|test|\.git)(\/|$)/.test(src);
   cpSync(join(ROOT, "packages"), join(dir, "packages"), { recursive: true, filter: skip });
+  cpSync(join(ROOT, "schemas"), join(dir, "schemas"), { recursive: true });
   cpSync(join(ROOT, "scripts"), join(dir, "scripts"), { recursive: true, filter: skip });
   tar(["-czf", join(WORK, `${name}.tar.gz`), "-C", join(WORK, `${name}-src`), "versekit-main"]);
 }
@@ -440,7 +441,7 @@ test("ACC-install-06：export-ignore 之后的程序包 ≤ 5MB，只含运行�
     assert.ok(!names.some((n) => n.startsWith(bad)), `不该打进包：${bad}`);
   }
   assert.ok(!names.some((n) => /^packages\/[^/]+\/test\//.test(n)), "各包 test 不该打进包");
-  for (const need of ["package.json", "packages/cli/src/vk.mjs", "packages/core/src/schema.sql", "scripts/demo-seed.mjs"]) {
+  for (const need of ["package.json", "packages/cli/src/vk.mjs", "packages/core/src/schema.sql", "schemas/delivery-v1.json", "scripts/demo-seed.mjs"]) {
     assert.ok(names.includes(need), `缺运行必需文件 ${need}`);
   }
   assert.ok(names.some((n) => n.startsWith("packages/web/public/")), "控制台静态页要在包里");

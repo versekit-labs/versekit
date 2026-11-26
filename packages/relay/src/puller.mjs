@@ -4,7 +4,9 @@
 // 状态记在 core 的 meta 表里），所以重复拉取、服务重启都不会重复入库。
 
 import { join } from "node:path";
+import { existsSync, linkSync } from "node:fs";
 import { downloadBlob, listDeliveries, reportState, RelayError } from "./client.mjs";
+import { ACCEPTED_DELIVERY_SCHEMAS, deliveryFileKey, deliveryFiles, deliveryTitle, isVersionedDelivery, validateDeliveryEnvelope } from "./delivery-v1.mjs";
 
 const safeName = (n) => String(n).replace(/[\\/]/g, "_").replace(/^\.+/, "_") || "file";
 const PROGRESS_REPORT_MS = 5000;
@@ -18,15 +20,14 @@ const PROGRESS_REPORT_MS = 5000;
  *   onProgress(p)           { id, name, title, received, total } 或 null（没有在下载的）
  *   onEvent(e)              这一轮的进展（ACC-relay-06）：round{total} / begin{index,total,id,title,size} / ingested / failed / pending
  */
-export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest, onProgress = () => {}, onEvent = () => {}, log = () => {}, retries = 3, backoffMs = 1000 }) {
+export async function pullOnce({ url, token, inboxDir, groupSnapshot, getRecord, record, ingest, onProgress = () => {}, onEvent = () => {}, log = () => {}, retries = 3, backoffMs = 1000 }) {
   const out = { seen: 0, ingested: [], failed: [], skipped: [], pending: [] };
-  const deliveries = await listDeliveries({ url, token });
+  const deliveries = await listDeliveries({ url, token, accepts: ACCEPTED_DELIVERY_SCHEMAS, groupSnapshot });
   out.seen = deliveries.length;
 
   const wellFormed = (d) => /^dl_[0-9a-f]{12,32}$/.test(d?.id ?? "") && Array.isArray(d.blobs) && !d.blobs.some((b) => !/^[0-9a-f]{64}$/.test(b?.sha256 ?? "") || !Number.isInteger(b?.size));
   const todo = deliveries.filter((d) => wellFormed(d) && !["ingested", "failed"].includes(getRecord(d.id)?.state));
   onEvent({ type: "round", total: todo.length });
-  const titleOf = (d) => d.manifest?.title ?? null;
 
   for (const d of deliveries) {
     // 中转是外部输入：id 和 sha 要长得对，才拿来拼本地路径。
@@ -45,7 +46,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
     }
 
     const index = todo.indexOf(d) + 1;
-    const title = titleOf(d);
+    const title = deliveryTitle(d.manifest);
     const size = d.blobs.reduce((n, b) => n + b.size, 0);
     onEvent({ type: "begin", index, total: todo.length, id: d.id, title, size });
     const paths = {};
@@ -67,16 +68,29 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
         })
         .finally(() => { reporting = null; });
     };
-    progressReport(0);
     try {
-      for (const b of d.blobs) {
+      const versioned = isVersionedDelivery(d.manifest);
+      if (versioned) validateDeliveryEnvelope(d);
+      const files = versioned ? deliveryFiles(d.manifest) : d.blobs;
+      progressReport(0);
+      for (const b of files) {
         current = b;
+        const sha = b.sha256.toLowerCase();
+        const dest = join(inboxDir, d.id, versioned ? sha : sha.slice(0, 12), versioned ? b.name : safeName(b.name));
+        if (versioned) {
+          // One verified download per hash. Keep each declared basename for extension inference.
+          const prior = paths[sha];
+          paths[deliveryFileKey(b)] = dest;
+          if (prior) {
+            if (!existsSync(dest)) linkSync(prior, dest);
+            continue;
+          }
+        }
         let previous = null;
-        const dest = join(inboxDir, d.id, b.sha256.slice(0, 12), safeName(b.name));
         await downloadBlob({
           url,
           token,
-          sha256: b.sha256,
+          sha256: sha,
           size: b.size,
           dest,
           retries,
@@ -88,13 +102,16 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
             if (performance.now() - lastProgressAt >= PROGRESS_REPORT_MS) progressReport(completedBytes + received);
           },
         });
-        paths[b.sha256] = dest;
+        paths[sha] = dest;
         completedBytes += b.size;
       }
     } catch (err) {
       onProgress(null);
       if (err instanceof RelayError && err.code === "hash_mismatch") {
         failure = { errorCode: err.code, reason: `文件「${current?.name ?? "成片"}」下载后校验不过（sha256 不符），没有入库：重新从制作机 push 一次` };
+      }
+      else if (["invalid_manifest", "local_path_in_manifest", "schema_unsupported"].includes(err.code)) {
+        failure = { errorCode: err.code, reason: err.message, nextStep: err.hint };
       }
       else {
         // 网络问题不是投递的错：留着，下一轮接着下。
@@ -116,7 +133,7 @@ export async function pullOnce({ url, token, inboxDir, getRecord, record, ingest
       await report({ state: "downloaded", downloadBytesPerSecond }).catch((err) => log(`[relay] 回报 ${d.id} 已下载失败：${err.message}`));
       try {
         const res = await ingest(d, paths);
-        record(d.id, { state: "ingested", at: Date.now(), title: d.manifest?.title ?? null, ...(res ?? {}) });
+        record(d.id, { state: "ingested", at: Date.now(), title, ...(res ?? {}) });
         out.ingested.push(d.id);
         onEvent({ type: "ingested", index, total: todo.length, id: d.id, title, drafts: res?.drafts ?? 0 });
         await report({ state: "ingested", reason: res?.reason, summary: res?.summary }).catch((err) => log(`[relay] 回报「已入库」失败（下一轮补报）：${err.message}`));

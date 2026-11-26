@@ -26,7 +26,8 @@ const { createCoreHandlers } = await import("../src/handlers.mjs");
 const { startDaemon } = await import("../src/daemon.mjs");
 const { findCommand } = await import("../src/commands.mjs");
 const { updateConfig, readConfig } = await import("../src/config.mjs");
-const { createRelayServer } = await import("../../relay/src/index.mjs");
+const { createRelayServer, getGroupSnapshot, ping } = await import("../../relay/src/index.mjs");
+const { applyPublishResult, publishInputFor, resolvePublishAsset, resolvePublishCopy } = await import("../src/publish-flow.mjs");
 const { deliverPending, NEW_WORK_DELAY_MS } = await import("../src/notify.mjs");
 
 const PUSH = "push-secret-xyz";
@@ -289,6 +290,12 @@ test("ACC-relay-03 空账号组 / 清单不合法：同样不入库并回报失�
 /** 一个假中转：列表里的文件内容和声明的 sha256 对不上；或者慢速下载，给进度用。 */
 function fakeRelay({ bytes, declared, slowMs = 0, id }) {
   const server = createServer((req, res) => {
+    // 旧中转只认识 GET /v1/deliveries。
+    if (req.url === "/v1/deliveries/pull") {
+      req.resume();
+      res.writeHead(404);
+      return res.end();
+    }
     if (req.url.startsWith("/v1/deliveries/") && req.method === "POST") {
       req.resume();
       res.setHeader("content-type", "application/json");
@@ -391,7 +398,7 @@ test("ACC-relay-04 系统页「发布机」一块显示中转，「最近出的�
   assert.doesNotMatch(html, /vk relay/, "界面上不写命令（ACC-v3-nocli-01）");
 });
 
-test("ACC-deliver-01 同一期再交更新成片、封面和待确认稿，已发布的跳过并回报", async () => {
+test("ACC-deliver-01 / ACC-iface-05 0.1.0 旧清单仍按 source 更新成片、封面和待确认稿，已发稿跳过", async () => {
   const source = join(ROOT, "src", "episode-395");
   const send = async (version, body) => {
     as(MAKER);
@@ -465,6 +472,167 @@ test("ACC-deliver-01 同一期再交更新成片、封面和待确认稿，已�
   assert.deepEqual((await mk()["relay.pull"]()).skipped, [second.id]);
   assert.equal((await readReceipt()).reason, report.reason);
   assert.equal(store.showWork(workId).cuts[0].rev, updated.cuts[0].rev);
+});
+
+function deliveryV1(revision) {
+  const file = (name, data) => ({ name, sha256: sha(data), size: Buffer.byteLength(data) });
+  const body = "第" + revision + "版正文";
+  const videoData = "video v" + revision;
+  const coverData = "cover v" + revision;
+  const manifest = {
+    schema: "hifabu.delivery/1",
+    work: { key: "p_7Q3M9X2K/459", title: "交付接口第" + revision + "版", language: revision === 1 ? "en" : "zh" },
+    cuts: [{
+      video: file("episode459-v" + revision + ".mp4", videoData),
+      cover: file("episode459-v" + revision + ".png", coverData),
+      copy: { default: { body, tags: ["第" + revision + "版"], newCopyField: "忽略" }, bilibili: { title: "B站第" + revision + "版" },
+        shipinhao: { title: "视频号" }, newPlatform: { title: "忽略" } },
+    }],
+    target: { group: "主号组" }, from: { client: "hifabu-plugin/0.2.0" }, newField: { caption: "未知字段仍原样保存" },
+  };
+  video(manifest.cuts[0].video.name, videoData);
+  video(manifest.cuts[0].cover.name, coverData);
+  return manifest;
+}
+
+test("ACC-iface-02 / ACC-iface-04 同一个 work.key 连交两次只有一个作品，未发稿更新、已发稿原样保留", async () => {
+  const send = async (manifest) => {
+    as(MAKER);
+    const pushed = await maker["work.push"]({ manifest: manifestFile("episode-459.json", manifest) });
+    const stored = JSON.parse(readFileSync(join(CLOUD, "deliveries", pushed.id + ".json"), "utf8"));
+    assert.deepEqual(stored.manifest, manifest, "中转原样保存未知字段");
+    as(PUBLISHER);
+    assert.deepEqual((await publisher["relay.pull"]()).ingested, [pushed.id]);
+    return { id: pushed.id, workId: store.getRelayDelivery(pushed.id).workId };
+  };
+
+  const total = works(PUBLISHER).length;
+  await publisher["relay.pull"]();
+  assert.deepEqual((await ping({ url, token: PUSH })).accepts, ["hifabu.delivery/1"]);
+  const first = await send(deliveryV1(1));
+  const original = store.showWork(first.workId);
+  const [cut] = original.cuts;
+  const draft = cut.publishes.find((p) => p.platform === "bilibili");
+  const sent = cut.publishes.find((p) => p.platform === "xiaohongshu");
+  core.transitionPublish(sent.id, "notify_pending");
+  core.transitionPublish(sent.id, "published", { patch: { external_id: "local-v1", published_at: Date.now() } });
+  const published = () => ({
+    row: core.open().prepare("SELECT * FROM publish WHERE id = ?").get(sent.id),
+    media: resolvePublishAsset(sent.id),
+    copy: resolvePublishCopy(sent.id),
+  });
+  const before = published();
+  assert.equal(draft.state, "pending_confirm");
+  core.transitionPublish(draft.id, "queued");
+  core.transitionPublish(draft.id, "auto_running");
+  const originalDraft = publishInputFor(draft.id);
+
+  const second = await send(deliveryV1(2));
+  assert.notEqual(first.id, second.id);
+  assert.equal(second.workId, first.workId);
+  assert.equal(store.listWorks().length, total + 1);
+  assert.equal(store.showWork(second.workId).title, "交付接口第2版");
+  assert.deepEqual(published(), before, "已发稿的文案、文件、语言和状态都原样保留");
+  const afterDraft = resolvePublishCopy(draft.id);
+  assert.equal(afterDraft.body, "第2版正文");
+  assert.equal(afterDraft.title, "B站第2版");
+  assert.equal(afterDraft.language, "zh");
+  assert.equal(readFileSync(resolvePublishAsset(draft.id).asset, "utf8"), "video v2");
+  assert.equal(readFileSync(JSON.parse(afterDraft.metaJson).cover, "utf8"), "cover v2");
+  const finalCut = store.showWork(second.workId).cuts[0];
+  assert.equal(finalCut.id, cut.id);
+  assert.deepEqual(finalCut.publishes.map(({ state, title, body, tags }) => ({ state, title, body, tags })),
+    finalCut.publishes.map((p) => p.id === sent.id
+      ? { state: "published", title: before.copy.title, body: before.copy.body, tags: before.copy.tags }
+      : { state: "auto_running", title: afterDraft.title, body: afterDraft.body, tags: afterDraft.tags }));
+  as(MAKER);
+  assert.match((await maker["delivery.show"]({ id: second.id })).reason, /已发布.*小红书 @x/);
+
+  // 如果平台在收新版期间才回报成功，仍以真正提交给适配器的文件和文案为准。
+  as(PUBLISHER);
+  applyPublishResult(draft.id, { state: "published", id: "local-deferred", url: "https://example.invalid/local", visibility: "public" }, originalDraft);
+  assert.equal(resolvePublishAsset(draft.id).asset, originalDraft.asset);
+  assert.equal(resolvePublishCopy(draft.id).body, originalDraft.copy.body);
+});
+
+test("ACC-iface-03 / ACC-iface-04 中转和发布机拒绝本机路径，制作机 delivery.show 收到 schema_unsupported 和下一步", async () => {
+  const violations = [
+    { edit: (m) => { m.work.key = "/Users/maker/episode"; }, code: "local_path_in_manifest" },
+    { edit: (m) => { m.cuts[0].video.name = "/home/maker/episode.mp4"; }, code: "local_path_in_manifest" },
+    { edit: (m) => { m.newField.deep = [{ path: "C:\\Users\\maker\\episode.mp4" }]; }, code: "local_path_in_manifest" },
+    { edit: (m) => { m.newField.deep = ["parent/../episode.mp4"]; }, code: "local_path_in_manifest" },
+    { edit: (m) => { m.newField.deep = ["~/episode.mp4"]; }, code: "local_path_in_manifest" },
+    { edit: (m) => { m.schema = "hifabu.delivery/2"; }, code: "schema_unsupported" },
+  ];
+  const manifest = deliveryV1(1);
+  const blobs = [manifest.cuts[0].video, manifest.cuts[0].cover];
+  const before = works(PUBLISHER).length;
+  for (const [i, { edit, code }] of violations.entries()) {
+    const broken = structuredClone(manifest);
+    edit(broken);
+    const id = "dl_4590a0b0c0d0e0f" + i;
+    const posted = await fetch(url + "/v1/deliveries", {
+      method: "POST", headers: { authorization: "Bearer " + PUSH, "content-type": "application/json" },
+      body: JSON.stringify({ id, group: "主号组", manifest: broken, blobs }),
+    });
+    assert.equal(posted.status, 422);
+    const rejection = await posted.json();
+    assert.equal(rejection.error, code);
+    assert.match(rejection.message, code === "schema_unsupported" ? /不支持.*版本/ : /本机路径/);
+    const file = join(CLOUD, "deliveries", id + ".json");
+    assert.ok(!existsSync(file), "拒收的清单没有落盘");
+    // 模拟升级前已进入待取队列的旧中转数据。发布机必须独立检查并回报。
+    writeFileSync(file, JSON.stringify({ id, group: "主号组", manifest: broken, blobs, state: "pending", created_at: Date.now(), updated_at: Date.now() }));
+    as(PUBLISHER);
+    const pulled = await publisher["relay.pull"]();
+    assert.deepEqual(pulled.failed.map((failure) => failure.id), [id]);
+    assert.equal(store.getRelayDelivery(id).errorCode, code);
+    assert.equal(store.listWorks().length, before);
+    const event = core.open().prepare("SELECT payload_json FROM event WHERE dedupe_key = ?").get("delivery:" + id + ":failed");
+    assert.equal(JSON.parse(event.payload_json).errorCode, code);
+    as(MAKER);
+    const receipt = await maker["delivery.show"]({ id });
+    assert.equal(receipt.state, "failed");
+    assert.equal(receipt.title, manifest.work.title);
+    assert.equal(receipt.errorCode, code);
+    assert.match(receipt.reason, code === "schema_unsupported" ? /不支持.*版本/ : /本机路径/);
+    assert.match(receipt.nextStep, code === "schema_unsupported" ? /更新发布机.*重新交付/ : /重新交付/);
+  }
+});
+
+test("ACC-iface-06 发布机账号组快照字段白名单，账号 ID、Cookie 字段和凭据路径留在本机", async () => {
+  as(PUBLISHER);
+  const group = store.findGroup("主号组");
+  const [account] = store.listAccounts({ groupId: group.id });
+  const conn = core.open();
+  conn.prepare("UPDATE account SET display_name = ?, credential_ref = ? WHERE id = ?")
+    .run("测试显示名", "/Users/test/credentials.json", account.id);
+  conn.exec("ALTER TABLE account ADD COLUMN cookie TEXT");
+  conn.prepare("UPDATE account SET cookie = ? WHERE id = ?").run("fake_cookie_from_local_db", account.id);
+  updateConfig({ device: { name: "测试发布机" }, relay: { default_group: "主号组" } });
+  const clock = Date.now();
+  await publisher["relay.pull"]();
+  const first = await getGroupSnapshot({ url, token: PUSH });
+  assert.ok(first.reportedAt >= clock);
+  assert.match(first.device.id, /^device_[a-z0-9]+$/);
+  assert.deepEqual(first, {
+    device: { id: first.device.id, name: "测试发布机" },
+    reportedAt: first.reportedAt,
+    groups: [
+      { name: "主号组", default: true, accounts: [{ platform: "bilibili", name: "测试显示名" }, { platform: "xiaohongshu", name: "小红书" }] },
+      { name: "空组", accounts: [] },
+    ],
+  });
+  for (const secret of [account.id, "fake_cookie_from_local_db", "/Users/test/credentials.json", account.handle]) {
+    assert.ok(!JSON.stringify(first).includes(secret));
+  }
+  conn.prepare("UPDATE account SET display_name = ? WHERE id = ?").run("新的显示名", account.id);
+  await publisher["relay.pull"]();
+  const latest = await getGroupSnapshot({ url, token: PUSH });
+  assert.deepEqual(latest.device, first.device);
+  assert.ok(latest.reportedAt >= first.reportedAt);
+  assert.equal(latest.groups[0].accounts[0].name, "新的显示名");
+  assert.ok(!Object.hasOwn(await ping({ url, token: PUSH, details: true }), "groupSnapshot"));
 });
 
 test("ACC-deliver-02 CLI 与 HTTP 走相同预览，只读校验、估到达时间、提示空间和文案超限", async () => {

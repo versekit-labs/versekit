@@ -346,18 +346,18 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       const progress = { step: null };
       const controller = new AbortController();
       let timer = null;
-      const runAdapter = Promise.resolve().then(() =>
-        adapter.adapter.publish(
-          // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）。
-          publishInputFor(publishId, {
-            signal: controller.signal,
-            // 适配器边跑边报「现在停在哪一步」，超时文案才能说人话，而不是一句「出错了」。
-            onStep: (step) => {
-              if (step) progress.step = String(step).slice(0, 80);
-            },
-          }),
-        ),
-      );
+      let input;
+      const runAdapter = Promise.resolve().then(() => {
+        // 素材路径由 core 按平台稿的语言版本解析后传入（ACC-v2-confirm-07）。
+        input = publishInputFor(publishId, {
+          signal: controller.signal,
+          // 适配器边跑边报「现在停在哪一步」，超时文案才能说人话，而不是一句「出错了」。
+          onStep: (step) => {
+            if (step) progress.step = String(step).slice(0, 80);
+          },
+        });
+        return adapter.adapter.publish(input);
+      });
       const deadline = new Promise((_, reject) => {
         timer = setTimeout(() => {
           const seconds = Math.max(1, Math.round(timeoutMs / 1000));
@@ -377,7 +377,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
       try {
         const result = await Promise.race([runAdapter, deadline]);
         if (result?.dryRun) return result;
-        const applied = applyPublishResult(publishId, result);
+        const applied = applyPublishResult(publishId, result, input);
         if (result?.notice?.code) recordNotice(publishId, result.notice);
         if (Array.isArray(result?.notes) && result.notes.length) recordNotes(publishId, adapter.platform, result.notes);
         // 选了「送草稿箱」不是失败也不是降级：说清楚下一步在 TikTok 收件箱里发。

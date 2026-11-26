@@ -13,7 +13,9 @@
 //   GET  /v1/blobs/:sha                   拉取：支持 Range: bytes=N-（断点续传）
 //   POST /v1/deliveries                   推送：{ id, group, manifest, blobs:[{sha256,size,name}] }，幂等
 //   GET  /v1/deliveries?state=a,b         拉取：默认 pending,downloaded
+//   POST /v1/deliveries/pull              拉取：声明版本和账号组快照，返回同一待投递列表
 //   GET  /v1/deliveries?view=maker        推送：查看投递（不领取）
+//   GET  /v1/group-snapshot              推送：读取同账号最后一份账号组快照
 //   GET  /v1/deliveries/:id               任一 token
 //   POST /v1/deliveries/:id/state         拉取：下载进度、已下载、入库摘要或失败原因
 //   GET, DELETE /v1/control/accounts/:id  账号服务控制凭据 → 读取用量或删除账号目录
@@ -26,6 +28,8 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createMachineTokenVerifier, machineTokenTtlMs } from "../../cloud/src/machine-token.mjs";
 import { createRelayControlVerifier, relayAccountId as ACCOUNT_ID } from "../../cloud/src/relay-control.mjs";
+import { isVersionedDelivery, validateDeliveryEnvelope } from "./delivery-v1.mjs";
+import { projectGroupSnapshot } from "./group-snapshot.mjs";
 
 export const MIN_FREE_BYTES = 2 * 1024 ** 3;
 export const RETENTION_MS = 7 * 864e5;
@@ -261,6 +265,7 @@ export function createRelayServer({
     if (!claims || revoked(revocationPath(claims.sub), now())) return null;
     return {
       accountId: claims.sub,
+      deviceId: claims.deviceId,
       role: claims.role === "maker" ? "push" : "pull",
       relayEnabled: claims.relayEnabled,
       capacityBytes: claims.capacityBytes,
@@ -372,6 +377,14 @@ export function createRelayServer({
     if (!Array.isArray(blobs) || !blobs.length || blobs.some((b) => !SHA.test(b?.sha256 ?? "") || !Number.isInteger(b?.size) || typeof b?.name !== "string")) {
       return send(res, 400, { error: "bad_request", message: "文件列表不合法" });
     }
+    if (isVersionedDelivery(manifest)) {
+      try {
+        validateDeliveryEnvelope({ group, manifest, blobs });
+      } catch (err) {
+        log("[relay] 拒收投递 " + id + "（" + err.code + "）：" + err.message);
+        return send(res, 422, { error: err.code, message: err.message, ...(err.hint ? { nextStep: err.hint } : {}) });
+      }
+    }
     const low = lowDisk();
     if (low) return send(res, 507, { error: "disk_low", message: low });
     const missing = blobs.filter((b) => sizeOf(blobPath(b.sha256)) !== b.size).map((b) => b.sha256);
@@ -476,7 +489,7 @@ export function createRelayServer({
     }
   }
 
-  function handleDelivery(req, res, url, auth, deny) {
+  async function handleDelivery(req, res, url, auth, deny) {
     const { role, storage } = auth;
     const { blobPath, partPath, allDeliveries, readDelivery, readActivity, saveActivity } = storage;
     const parts = url.pathname.split("/").filter(Boolean);
@@ -491,12 +504,25 @@ export function createRelayServer({
       deny();
       return false;
     };
-    storage.ensure();
     const m = req.method;
+    if (kind === "group-snapshot" && !key && m === "GET") {
+      if (!need("push")) return;
+      return send(res, 200, { snapshot: readActivity().groupSnapshot ?? null });
+    }
+    storage.ensure();
+    const pullDeliveries = (patch) => {
+      saveActivity({ ...patch, lastPullAt: now() });
+      const want = (url.searchParams.get("state") ?? "pending,downloaded").split(",").filter((s) => STATES.includes(s));
+      const rows = allDeliveries().filter((d) => want.includes(d.state) && (patch || !isVersionedDelivery(d.manifest)))
+        .sort((a, b) => a.created_at - b.created_at);
+      return send(res, 200, { deliveries: rows.map(view) });
+    };
 
     if (kind === "ping" && m === "GET") {
       const details = url.searchParams.get("details") === "1";
-      return send(res, 200, { ok: true, role, ...(details ? { ...readActivity(), freeBytes: free(), minFreeBytes } : {}) });
+      const { accepts, groupSnapshot: _private, ...activity } = readActivity();
+      return send(res, 200, { ok: true, role, ...(accepts ? { accepts } : {}),
+        ...(details ? { ...activity, freeBytes: free(), minFreeBytes } : {}) });
     }
     if (kind === "blobs" && SHA.test(key ?? "")) {
       if (tail === "status" && m === "GET") {
@@ -516,6 +542,15 @@ export function createRelayServer({
       if (!tail && m === "GET") return need("pull") && getBlob(req, res, key, storage);
     }
     if (kind === "deliveries") {
+      if (key === "pull" && !tail && m === "POST") {
+        if (!need("pull")) return;
+        const { accepts, groupSnapshot } = await readJson(req) ?? {};
+        if (!Array.isArray(accepts) || accepts.length > 16 || accepts.some((s) => typeof s !== "string" || !/^hifabu\.delivery\/[1-9][0-9]{0,7}$/.test(s))) {
+          return send(res, 400, { error: "invalid_accepts", message: "发布机声明的交付清单版本格式不正确。" });
+        }
+        const snapshot = groupSnapshot == null ? null : projectGroupSnapshot(groupSnapshot, auth.deviceId);
+        return pullDeliveries({ accepts, ...(snapshot ? { groupSnapshot: snapshot } : {}) });
+      }
       if (!key && m === "POST") return need("push") && postDelivery(req, res, storage);
       if (!key && m === "GET") {
         if (url.searchParams.get("view") === "maker") {
@@ -525,10 +560,7 @@ export function createRelayServer({
           return send(res, 200, { deliveries: rows.map(view), lastPullAt: activity.lastPullAt ?? null, downloadBytesPerSecond: activity.downloadBytesPerSecond ?? null });
         }
         if (!need("pull")) return;
-        saveActivity({ lastPullAt: now() });
-        const want = (url.searchParams.get("state") ?? "pending,downloaded").split(",").filter((s) => STATES.includes(s));
-        const rows = allDeliveries().filter((d) => want.includes(d.state)).sort((a, b) => a.created_at - b.created_at);
-        return send(res, 200, { deliveries: rows.map(view) });
+        return pullDeliveries();
       }
       if (DELIVERY_ID.test(key ?? "")) {
         if (!tail && m === "GET") {
@@ -548,7 +580,8 @@ export function createRelayServer({
   const server = createServer((req, res) => {
     handle(req, res).catch((err) => {
       log(`[relay] 处理请求出错：${err.message}`);
-      if (!res.headersSent) send(res, err.status ?? 500, { error: "error", message: err.status ? err.message : "云端出错了，稍后再试" });
+      if (!res.headersSent) send(res, err.status ?? 500, { error: err.status && err.code ? err.code : "error",
+        message: err.status ? err.message : "云端出错了，稍后再试" });
       else res.destroy();
     });
   });
