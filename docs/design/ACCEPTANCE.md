@@ -722,6 +722,17 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
     3. 加入第 08 期后交付第 08 期，第 07 期的 `work.key` 仍然不变，第 08 期拿到它自己的 key。
   - 这几次交付都不能追问作品是哪一期。
   - 这个场景要写进 `test/plugin/real-model.mjs`。真实模型的结果在 PR 里原样贴出来。
+- [ACC-plugin-v2-10] 版本与更新（插件第 6 单）：
+  - 插件页上写的更新命令，与 `claude plugin marketplace update hifabu && claude plugin update hifabu@hifabu` 一致。在临时 HOME 里先装旧版、再在本地假 hifabu.com 上发布新版，照着页面上的命令能更新到新版。
+  - `hifabu` 发现自己的版本落后于 hifabu.com 上的最新版时，在回复末尾提醒一次，提醒里带上更新命令，不阻断交付。同一个版本每天最多提醒一次。
+  - 查新版本失败时只记日志，不打扰用户。请求里不带任何个人信息。
+  - 有测试覆盖：落后时提醒；已是最新时不提醒；查不到新版本时不提醒，交付照常。
+- [ACC-plugin-v2-11] 插件页与安装说明（插件第 7 单），依据 `docs/design/plugin/PAGE.md`，页面底稿是设计提交 d7f09bd 里的 `site/plugin/index.html`：
+  - 页面要写清以下几点：插件里有什么、没有什么、源码链接、zip 的 sha256、怎么卸载。
+  - 「在 Claude Code 里说一句」放在第一位。给 AI 助手的那一段，改成「先给用户看命令和它做什么，用户同意了再执行」。另外提供 `install.txt`。
+  - 页面和 `install.txt` 由发布脚本从同一份来源生成：版本号、sha256 自动填进 `{{…}}` 占位；生成结果里还留有 `{{`，就拒绝发布。要有测试钉住这一条。
+  - 实测：在全新账号、全新 HOME 的 Claude Code 里说一句「安装 hifabu.com/plugin 上的 Hifabu 插件」，Claude 要能找到命令、先给用户看、得到同意后装好，并提醒用户运行 `/reload-plugins`。默认模型和一个小模型各测 3 次，6 次都要成功，记录写进 PR。
+  - 页面上不出现 VerseKit，也不出现 `curl | bash`。
 
 ### 发布机下载与正式发版（2026-11-26）
 
