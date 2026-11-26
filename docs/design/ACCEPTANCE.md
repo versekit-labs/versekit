@@ -682,9 +682,9 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 ### 插件重设计：hifabu 制作机小程序（2026-11-26）
 
-设计依据：`docs/design/plugin/DESIGN.md` §A.1、§A.2、§A.7。所有者 11-26 定：形态用小程序，不用 MCP。小程序只包含制作机要用的 8 条命令，由 `commands.mjs` 派生，和完整版 `hifabu` 同名、同参数。
+设计依据：`docs/design/plugin/DESIGN.md` §A.1、§A.2、§A.7。所有者 11-26 定：形态用小程序，不用 MCP。小程序只包含制作机要用的 7 条命令（覆盖设计 §A.1 的 8 项能力），由 `commands.mjs` 派生，和完整版 `hifabu` 同名、同参数。
 
-- [ACC-maker-01] 命令表标角色：`commands.mjs` 里制作机要用的 8 条命令（`cloud.login`、`cloud.status`、`cloud.logout`、`work.push`（含 `--dry-run`）、`delivery.list`、`delivery.show`、`group.list`、`device.revoke.self`）加上 `roles: ["maker"]`，只加字段，不改已有字段。`group.list` 在制作机上读中转里发布机上报的账号组快照（ACC-iface-06），在完整版里读本机库，两边 `--json` 输出格式相同，都带 `reportedAt`（本机库给出读取时间）。`device.revoke.self` 让设备用自己的凭据在服务端注销自己。CI 里有 parity 测试：小程序 `--help` 列出的命令集合，必须等于命令表里 `roles` 含 `maker` 的集合。
+- [ACC-maker-01] 命令表标角色：在 `commands.mjs` 的 `COMMANDS` 里，给制作机要用的 7 条已有命令加上 `roles: ["maker"]`，只加这个字段，已有字段不改。这 7 条是：`cloud.login`、`cloud.status`、`cloud.logout`、`work.push`（含 `--dry-run`，对应设计 §A.1 里「预览」「交付」两项能力）、`delivery.list`、`delivery.show`、`group.list`。`group.list` 在制作机上读中转里发布机上报的账号组快照（ACC-iface-06），在完整版里读本机库；两边的 `--json` 输出格式相同，都带 `reportedAt`，完整版填读取时间。另外，在 `CLOUD_COMMANDS` 里新增服务端命令 `device.revoke.self`，和 `device.revoke`、`device.refresh` 放在同一张表，由 `packages/cloud` 派生出 HTTP 路由。它的作用是让设备用自己的凭据在服务端注销自己，供 `cloud.logout` 调用（见 ACC-maker-05）；它不进制作机小程序的命令集合。CI 里加一个 parity 测试：小程序 `--help` 列出的命令集合，必须等于 `COMMANDS` 里 `roles` 含 `maker` 的那 7 条。
 - [ACC-maker-02] 校验抽成纯函数：`work.push` 用到的清单校验、文案限制、违规检查（现在挂在 `store` 上）抽到 `packages/core/src/plan-rules.mjs`，改成不碰数据库的纯函数，完整版和小程序共用。上传队列和失败记录抽象成一个小接口：完整版用库实现，小程序用数据目录里的 JSON 文件实现。抽完以后，完整版的已有测试全部照常通过。
 - [ACC-maker-03] 构建：`scripts/build-maker-client.mjs` 生成 `plugins/hifabu/bin/hifabu`（启动脚本）和 `plugins/hifabu/lib/hifabu.mjs`（单文件 ESM，可读、不压缩，不超过 256KiB，文件头写源码提交号和 sha256）。产物里不能 import `node:sqlite`，也不能带平台适配器、浏览器驱动或 Web 代码（测试扫描产物来断言）。同一提交构建两次，产物的 sha256 相同。不新增运行时依赖；如果要加构建期依赖，必须在 PR 里说明理由。
 - [ACC-maker-04] 输出一致：同一份清单，`hifabu work push <清单> --dry-run --json` 用完整版跑和用小程序跑，输出逐字相同（时间戳一类的易变字段除外，测试里列出这些字段）。小程序接受 `--data <目录>` 参数，把凭据、队列、项目选择存到这个目录；不给 `--data` 时，用一个写在文档里的默认目录。
