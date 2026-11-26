@@ -308,7 +308,7 @@ function hasArchitectureAcceptance(body) {
 }
 
 function hasArchitectureAnswers(body) {
-  const sections = markdownSections(markdownProseLines(body), /^ {0,3}(#{2,3})[ \t]+.*六问/);
+  const sections = markdownSections(markdownProseLines(body), /^ {0,3}(#{2,3})[ \t]+.*(?:六问|ADR-0005 §13|ACC-arch-09)/);
   for (const section of sections) {
     const answers = section.map((line) => /^ {0,3}([1-6])\.[ \t]+\S/.exec(line)?.[1]).filter(Boolean);
     if (answers.join("") === "123456") return true;
@@ -2234,4 +2234,5 @@ export {
   effectiveFailCount,
   latestVerdict,
   latestFail,
+  hasArchitectureAnswers,
 };
