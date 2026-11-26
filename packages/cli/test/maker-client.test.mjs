@@ -36,11 +36,15 @@ function temp(t) {
   return directory;
 }
 
+function commandPath(command) {
+  return execFileSync("/bin/sh", ["-c", 'command -v "$1"', "sh", command], { encoding: "utf8" }).trim();
+}
+
 function isolatedPath(directory, commands) {
   const bin = join(directory, "isolated-bin");
   mkdirSync(bin);
   for (const command of commands) {
-    const target = command === "node" ? process.execPath : execFileSync("/bin/sh", ["-c", 'command -v "$1"', "sh", command], { encoding: "utf8" }).trim();
+    const target = command === "node" ? process.execPath : commandPath(command);
     symlinkSync(target, join(bin, command));
   }
   return bin;
@@ -112,6 +116,19 @@ printf '%s\n' "$previous" >> "$HIFABU_TEST_REQUESTS"
   assert.deepEqual(readdirSync(home), []);
   evidence(`Node-free HOME, launch exit=${missing.status} (${info.code}), declined install exit=${refused.status} (${JSON.parse(refused.stdout).error.code}), curl calls=0`);
 
+  if (process.platform === "linux") {
+    const missingGzip = run(runtime, ["install", "--data", data, "--yes"]);
+    assert.equal(missingGzip.status, 1);
+    const { error } = JSON.parse(missingGzip.stdout);
+    assert.equal(error.code, "runtime_tools_missing");
+    assert.match(error.message, /gzip/);
+    assert.equal(existsSync(requests), false);
+    assert.equal(existsSync(data), false);
+    evidence(`Linux without gzip after consent: exit=${missingGzip.status} (${error.code}), curl calls=0, no data directory`);
+    // GNU tar starts gzip through PATH when extracting a .tar.gz.
+    symlinkSync(commandPath("gzip"), join(bin, "gzip"));
+  }
+
   const mismatch = run(runtime, ["install", "--data", data], "yes\n");
   assert.equal(mismatch.status, 1);
   assert.equal(JSON.parse(mismatch.stdout).error.code, "runtime_checksum_mismatch");
@@ -139,6 +156,7 @@ printf '%s\n' "$previous" >> "$HIFABU_TEST_REQUESTS"
   const fallback = run(maker, ["--data", data, "--help"]);
   assert.equal(fallback.status, 0);
   assert.match(fallback.stdout, /Hifabu 制作机/);
+  evidence(`${process.platform}: verified fixture archive extracted and launcher used private Node`);
   writeFileSync(oldNode, '#!/bin/sh\nif [ "$1" = --version ]; then printf "v22.13.0\\n"; else printf "system node\\n"; fi\n');
   assert.equal(run(maker, ["--data", data, "--help"]).stdout.trim(), "system node");
 });

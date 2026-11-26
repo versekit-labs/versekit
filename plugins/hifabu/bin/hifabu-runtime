@@ -116,6 +116,11 @@ install_runtime() {
   esac
   command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 ||
     fail runtime_tools_missing '安装私有 Node.js 需要 curl 和 tar。'
+  case "$target" in
+    linux-*)
+      command -v gzip >/dev/null 2>&1 ||
+        fail runtime_tools_missing '在 Linux 上解压 Node.js 需要 gzip。请安装 gzip 后重试。' ;;
+  esac
   if command -v shasum >/dev/null 2>&1; then
     set -- shasum -a 256
   elif command -v sha256sum >/dev/null 2>&1; then
