@@ -28,7 +28,7 @@ const PHONE = "13812345678";
 const CODE = "246810";
 const QR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#fff"/><path d="M10 10h30v30H10zM80 10h30v30H80zM10 80h30v30H10zM50 50h20v20H50zM80 80h10v30H80z" fill="#111"/></svg>');
 
-test("系统页：扫码自己走到正常、短信转给发布机且不落痕迹、窗口登录才有「我登录好了」、发布机不在线时登录按钮不可用、现在更新", { skip: skipBrowser, timeout: 120e3 }, async () => {
+test("系统页：扫码自己走到正常、短信转给发布机且不落痕迹、窗口登录才有「我登录好了」、发布机不在线时登录按钮不可用、现在更新", { skip: skipBrowser, timeout: 120e3 }, async (t) => {
   core.migrate();
   const group = store.addGroup({ name: "出海合规" });
   store.useGroup(group.id);
@@ -120,6 +120,11 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
   const row = (id) => `tr[data-acc="${id}"]`;
   const rowText = (id) => tab.eval(`(() => { const r = document.querySelector(${JSON.stringify(row(id))}); return r ? r.innerText + "\\n" + (r.nextElementSibling?.classList.contains("subrow") ? r.nextElementSibling.innerText : "") : ""; })()`);
 
+  const waitQr = (id, what) => tab.waitFor(`(() => {
+    const account = document.querySelector(${JSON.stringify(row(id))});
+    return account?.innerText.includes("等你扫码") && !!account.nextElementSibling?.querySelector(".qr img");
+  })()`, [], { timeout: 15e3, every: 150, what });
+
   try {
     tab = await driver.openAccount({ accountId: `sys-login-ui-${process.pid}`, url: `${base}/system#pollms=200`, headless: process.env.CI === "true" });
     await tab.waitFor(`document.querySelector("main table")`, [], { timeout: 25e3, what: "系统页" });
@@ -132,7 +137,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
 
     // ── 扫码：二维码在账号那一行下面，状态自己往前走，不需要人点「我登录好了」 ──
     await click(`${row("a_xhs")} [data-login]`);
-    await waitText(/等你扫码/, "等你扫码");
+    await waitQr("a_xhs", "等你扫码并显示二维码");
     assert.equal(await tab.eval(`!!document.querySelector(${JSON.stringify(row("a_xhs"))}).nextElementSibling.querySelector(".qr img")`), true, "二维码显示在这一行下面");
     assert.match(await rowText("a_xhs"), /用小红书 App 扫这个码/);
     assert.match(await rowText("a_xhs"), /改用短信验证码/);
@@ -147,7 +152,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     assert.match(await rowText("a_xhs"), /换一个/);
     await shot("system-qr-expired.png");
     await click(`${row("a_xhs")} + tr [data-loginmode="qr"]`); // 换一个
-    await waitText(/等你扫码/, "换了新码");
+    await waitQr("a_xhs", "换了新码");
     assert.equal(script.qrCalls, 2, "换一个 = 再取一次码");
     script.qr = "ok";
     await tab.waitFor(`/正常/.test(document.querySelector(${JSON.stringify(row("a_xhs"))}).innerText)`, [], { timeout: 15e3, every: 150, what: "扫完自己变成正常" });
@@ -158,10 +163,28 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     await tab.goto(`${base}/system?r=1#pollms=200`);
     await tab.waitFor(`document.querySelector(${JSON.stringify(row("a_xhs"))})`, [], { timeout: 15e3, what: "刷新后的系统页" });
     await watch();
-    await click(`${row("a_xhs")} [data-login]`);
-    await waitText(/等你扫码/, "又是扫码");
-    await click(`${row("a_xhs")} + tr [data-loginmode="sms"]`);
-    await waitText(/用短信验证码登录小红书/, "短信第一步");
+    await t.test("延迟的扫码响应不覆盖已切换的短信步骤", async () => {
+      await tab.eval(`(() => {
+        const request = VK.request;
+        const gate = Promise.withResolvers();
+        let qrResponse;
+        VK.request = (path, options) => {
+          const response = request(path, options);
+          if (path !== "/api/accounts/a_xhs/login/qr") return response;
+          return qrResponse = Promise.all([response, gate.promise]).then(([result]) => result);
+        };
+        window.__deliverQr = async () => {
+          VK.request = request;
+          gate.resolve();
+          await qrResponse;
+        };
+      })()`);
+      await click(`${row("a_xhs")} [data-login]`);
+      await waitText(/等你扫码/, "又是扫码");
+      await click(`${row("a_xhs")} + tr [data-loginmode="sms"]`);
+      await tab.eval("window.__deliverQr()");
+      await waitText(/用短信验证码登录小红书/, "短信第一步");
+    });
     assert.match(await rowText("a_xhs"), /手机号只用来登录这一次，不会存下来/);
     await shot("system-sms-phone.png");
     await tab.eval(`(() => { const i = document.getElementById("sms-phone"); i.value = "123"; document.querySelector("[data-smssend]").click(); })()`);
