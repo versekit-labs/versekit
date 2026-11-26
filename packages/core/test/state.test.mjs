@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-test-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-test-"));
 
 const core = await import("../src/index.mjs");
 

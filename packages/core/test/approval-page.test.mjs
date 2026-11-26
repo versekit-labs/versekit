@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-approval-page-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-approval-page-"));
 const core = await import("../src/index.mjs");
 mkdirSync(dirname(core.paths().configFile), { recursive: true });
 const approval = await import("../src/approval.mjs");

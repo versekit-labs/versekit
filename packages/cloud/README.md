@@ -18,7 +18,7 @@
 
 运行 `node packages/cloud/src/cli.mjs --help` 可看云端命令。创建会话会给出浏览器登录地址，Google 授权在浏览器内完成。读取和撤销已有会话可通过 `HIFABU_SESSION_TOKEN` 传入该会话的凭据。
 
-本机运行 `hifabu cloud login --role maker` 接入制作机，发布机使用 `hifabu cloud login --role executor`。浏览器会打开接入页，核对六位数字后点「允许」，本机会自动继续。`hifabu cloud status` 查看当前 Hifabu 账号、机器角色和传片状态。`hifabu cloud logout` 清除本机登录。测试可通过 `VK_HIFABU_ORIGIN` 指向本地假服务。
+本机运行 `hifabu cloud login --role maker` 接入制作机，发布机使用 `hifabu cloud login --role executor`。浏览器会打开接入页，核对六位数字后点「允许」，本机会自动继续。`hifabu cloud status` 查看当前 Hifabu 账号、机器角色和传片状态。`hifabu cloud logout` 清除本机登录。测试可通过 `HIFABU_ORIGIN` 指向本地假服务。
 
 已登录的用户可以在「我的 Hifabu」查看自己接入的机器，并点「退出这台」。CLI 对应 `vk-cloud device list` 和 `vk-cloud device revoke <机器 id>`，会话通过 `HIFABU_SESSION_TOKEN` 提供。退出后，机器刷新会被拒绝，已签发令牌在一小时内到期。
 

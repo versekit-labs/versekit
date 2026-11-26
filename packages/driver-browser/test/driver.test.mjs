@@ -8,10 +8,10 @@ import { isAbsolute, join, sep } from "node:path";
 
 // 必须在 import 之前指好状态目录，否则 PROFILE/PORT 会落在真实 HOME 下。
 const HOME = mkdtempSync(join(tmpdir(), "vk-driver-"));
-process.env.VK_HOME = HOME;
-delete process.env.VK_CHROME_PROFILE;
-delete process.env.VK_CDP_PORT;
-delete process.env.VK_BROWSER_POOL;
+process.env.HIFABU_HOME = HOME;
+delete process.env.HIFABU_CHROME_PROFILE;
+delete process.env.HIFABU_CDP_PORT;
+delete process.env.HIFABU_BROWSER_POOL;
 
 const driver = await import("../src/index.mjs");
 const { accountProfile, accountPort, evidencePath, poolLimit } = driver;

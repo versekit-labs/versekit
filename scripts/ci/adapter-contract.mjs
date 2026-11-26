@@ -6,7 +6,7 @@
 //   1. loadAdapters() 能加载它，validateAdapter() 认它的形状（platform / ready / capabilities）。
 //   2. ready() 只回答 null（可用）或非空字符串（人能看懂的缺失原因）。
 //      ready() 抛错、返回 ""、返回 false 都是产品缺陷——账号墙会显示一片空白。
-//   3. ready() 为 null 时，在一个全新的 VK_HOME（mkdtempSync）里造 account / work / publish
+//   3. ready() 为 null 时，在一个全新的 HIFABU_HOME（mkdtempSync）里造 account / work / publish
 //      + 真实的临时素材文件，调 publish({ publishId, asset, dryRun: true })（入参由 core 的 publishInputFor 组装）。
 //      dry-run 是「发布前彩排」：必须返回 { dryRun: true }，且不产生任何副作用。
 //   4. 副作用断言：publish 状态不变、external_id 不变、不新增 snapshot、不联网。
@@ -117,13 +117,13 @@ for (const info of loaded.adapters) {
     continue;
   }
 
-  // 3) fixture：独立 VK_HOME，真素材文件，真 account/work/publish 行。
+  // 3) fixture：独立 HIFABU_HOME，真素材文件，真 account/work/publish 行。
   const home = mkdtempSync(join(tmpdir(), `vk-contract-${platform}-`));
-  const originalHome = process.env.VK_HOME;
+  const originalHome = process.env.HIFABU_HOME;
   const realFetch = globalThis.fetch;
   let db = null;
   try {
-    process.env.VK_HOME = home;
+    process.env.HIFABU_HOME = home;
     migrate();
     db = open();
 
@@ -248,7 +248,7 @@ for (const info of loaded.adapters) {
     bad(
       `contract.fixture.${platform}`,
       `${label} 的 fixture / dry-run 执行失败：${err.message}`,
-      "检查适配器是否把 VK_HOME 当唯一状态根；fixture 必须在空目录里自给自足，不依赖本机 ~/.config",
+      "检查适配器是否把 HIFABU_HOME 当唯一状态根；fixture 必须在空目录里自给自足，不依赖本机 ~/.config",
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -257,8 +257,8 @@ for (const info of loaded.adapters) {
     } catch {
       /* 已经关闭 */
     }
-    if (originalHome === undefined) delete process.env.VK_HOME;
-    else process.env.VK_HOME = originalHome;
+    if (originalHome === undefined) delete process.env.HIFABU_HOME;
+    else process.env.HIFABU_HOME = originalHome;
     rmSync(home, { recursive: true, force: true });
   }
 }

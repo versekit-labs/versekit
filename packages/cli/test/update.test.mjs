@@ -19,7 +19,7 @@ const WORK = mkdtempSync(join(platform() === "darwin" ? "/tmp" : tmpdir(), "vk-u
 const OS = platform() === "darwin" ? "darwin" : "linux";
 const CPU = arch() === "arm64" ? "arm64" : "x64";
 const BILIUP_PLAT = `${CPU === "arm64" ? "aarch64" : "x86_64"}-${OS === "darwin" ? "macos" : "linux"}`;
-const NODE_VER = /VERSEKIT_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"))?.[1] ?? "0.0.0";
+const NODE_VER = /HIFABU_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"))?.[1] ?? "0.0.0";
 const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
 
 const A = "a".repeat(40);
@@ -137,21 +137,21 @@ async function newHome(extra = {}) {
     ...process.env,
     HOME: home,
     SHELL: "/bin/zsh",
-    VERSEKIT_PORT: String(port),
-    VERSEKIT_SERVICE_LABEL: `com.versekit.test.upd.${process.pid}.${homes.length}`,
-    VERSEKIT_SERVICE_MANAGER: "detach",
-    VERSEKIT_OFFLINE: "1",
-    VERSEKIT_NO_OPEN: "1",
-    VERSEKIT_NODE_URL: `${base}/node`,
-    VERSEKIT_APP_URL: `${base}/app.tar.gz`,
-    VERSEKIT_BILIUP_URL: `${base}/biliup.tar.gz`,
-    VERSEKIT_LARK_URL: `${base}/lark`,
-    VERSEKIT_UPDATE_API: `${base}/api`,
-    VERSEKIT_UPDATE_HEALTH_TIMEOUT_MS: "4000",
+    HIFABU_PORT: String(port),
+    HIFABU_SERVICE_LABEL: `com.versekit.test.upd.${process.pid}.${homes.length}`,
+    HIFABU_SERVICE_MANAGER: "detach",
+    HIFABU_OFFLINE: "1",
+    HIFABU_NO_OPEN: "1",
+    HIFABU_NODE_URL: `${base}/node`,
+    HIFABU_APP_URL: `${base}/app.tar.gz`,
+    HIFABU_BILIUP_URL: `${base}/biliup.tar.gz`,
+    HIFABU_LARK_URL: `${base}/lark`,
+    HIFABU_UPDATE_API: `${base}/api`,
+    HIFABU_UPDATE_HEALTH_TIMEOUT_MS: "4000",
     ...extra,
   };
-  delete env.VK_HOME;
-  delete env.VERSEKIT_PREFIX;
+  delete env.HIFABU_HOME;
+  delete env.HIFABU_PREFIX;
   const h = { home, port, env, prefix: join(home, ".versekit") };
   homes.push(h);
   return h;
@@ -185,7 +185,7 @@ const appVersion = (h) => JSON.parse(readFileSync(join(h.prefix, "app/package.js
 
 async function installV1(h, commit = A) {
   appTarball = "app-1";
-  const r = await sh(h, "bash", [INSTALL_SH], { env: { VERSEKIT_APP_COMMIT: commit } });
+  const r = await sh(h, "bash", [INSTALL_SH], { env: { HIFABU_APP_COMMIT: commit } });
   assert.equal(r.code, 0, r.stdout + r.stderr);
 }
 
@@ -348,7 +348,7 @@ test("ACC-update-04 下载不到新包：什么都没动，同样说人话并留
 });
 
 test("ACC-update-03 后台服务自己更新：启动后检查，空闲就更新（脱离守护进程跑完，服务换成新版本）", { timeout: 180000 }, async () => {
-  const h = await newHome({ VERSEKIT_UPDATE_START_DELAY_MS: "1500" });
+  const h = await newHome({ HIFABU_UPDATE_START_DELAY_MS: "1500" });
   // 装 v1 之前假 GitHub 就说「已是最新」，装好后再放出新版本，避免装的过程中被自己更新
   latest = A;
   await installV1(h);
@@ -402,8 +402,8 @@ test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", 
   await new Promise((resolve) => updateServer.listen(0, "127.0.0.1", resolve));
 
   const h = await newHome({
-    VERSEKIT_UPDATE_API: `http://127.0.0.1:${updateServer.address().port}/api`,
-    VERSEKIT_UPDATE_START_DELAY_MS: "500",
+    HIFABU_UPDATE_API: `http://127.0.0.1:${updateServer.address().port}/api`,
+    HIFABU_UPDATE_START_DELAY_MS: "500",
   });
   await installV1(h);
   const initial = json(await vk(h, "service", "status"));

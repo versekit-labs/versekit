@@ -7,10 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-login-win-"));
-process.env.VK_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
-process.env.VK_CDP_PORT = String(55500 + Math.floor(Math.random() * 4000));
-delete process.env.VK_CHROME_PROFILE;
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-login-win-"));
+process.env.HIFABU_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
+process.env.HIFABU_CDP_PORT = String(55500 + Math.floor(Math.random() * 4000));
+delete process.env.HIFABU_CHROME_PROFILE;
 
 const d = await import("../src/index.mjs");
 after(() => d.closeAllAccounts?.());

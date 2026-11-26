@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-sched-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-sched-"));
 
 const core = await import("../src/index.mjs");
 const { dueAccounts, sweepAccountChecks, CHECK_INTERVAL_MS } = await import("../src/scheduler.mjs");

@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..", "..");
 const HOME = mkdtempSync(join(tmpdir(), "vk-douyin-"));
-process.env.VK_HOME = HOME;
-delete process.env.VK_DOUYIN_BASE;
+process.env.HIFABU_HOME = HOME;
+delete process.env.HIFABU_DOUYIN_BASE;
 
 const core = await import("../../core/src/index.mjs");
 const { createAdapter, planDraft, MAX_TITLE_CHARS, MAX_TOPICS } = await import("../src/index.mjs");
@@ -163,7 +163,7 @@ test("[02] 真实站点上的 dry-run 只出计划：不开浏览器、不联网
 
 test("[02] 本机模拟页上的 dry-run 真走一遍，停在「存草稿」前一步并截图，没有任何副作用", async () => {
   const { adapter, sim, acc } = setup({ cover: COVER });
-  const env = { VK_DOUYIN_BASE: "http://127.0.0.1:8099" };
+  const env = { HIFABU_DOUYIN_BASE: "http://127.0.0.1:8099" };
   const rehearsal = createAdapter({ driver: sim.driver, sleep: sim.sleep, now: sim.now, env });
   const out = await rehearsal.publish({
     publishId: null,
@@ -577,7 +577,7 @@ test("离线模拟页（fixtures/）复现了适配器依赖的结构和文案",
 
 test("isLocalBase / baseUrl：只有回环地址和 file:// 算本机模拟页", () => {
   assert.equal(page.baseUrl({}), "https://creator.douyin.com");
-  assert.equal(page.baseUrl({ VK_DOUYIN_BASE: "http://127.0.0.1:8099/" }), "http://127.0.0.1:8099");
+  assert.equal(page.baseUrl({ HIFABU_DOUYIN_BASE: "http://127.0.0.1:8099/" }), "http://127.0.0.1:8099");
   assert.equal(page.isLocalBase("http://127.0.0.1:8099"), true);
   assert.equal(page.isLocalBase("http://localhost:1"), true);
   assert.equal(page.isLocalBase("https://creator.douyin.com"), false);

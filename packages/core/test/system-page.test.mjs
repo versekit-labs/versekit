@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-system-page-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 delete process.env.TIKTOK_CLIENT_KEY;
 delete process.env.TIKTOK_CLIENT_SECRET;
 

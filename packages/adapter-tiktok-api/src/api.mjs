@@ -8,6 +8,7 @@
 //   · 文件、时长、帧率不合格               → asset_invalid
 //   · 其余 4xx                             → platform_reject；5xx / 网络错误 → unknown（可重试）
 
+import { readEnv } from "../../core/src/env.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 import { proxiedFetch } from "./proxy.mjs";
 import { apiBase } from "./settings.mjs";
@@ -74,9 +75,9 @@ const defaultSleep = (ms, signal) =>
     );
   });
 
-/** 退避基数：生产 1s、2s、4s、8s；测试用 VK_TIKTOK_BACKOFF_MS 压到几毫秒。 */
+/** 退避基数：生产 1s、2s、4s、8s；测试用 HIFABU_TIKTOK_BACKOFF_MS 压到几毫秒。 */
 const backoffBaseMs = () => {
-  const n = Number(process.env.VK_TIKTOK_BACKOFF_MS);
+  const n = Number(readEnv("HIFABU_TIKTOK_BACKOFF_MS"));
   return Number.isFinite(n) && n >= 0 ? n : 1000;
 };
 export const MAX_429_RETRIES = 4;

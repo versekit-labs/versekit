@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-runner-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-runner-"));
 
 const core = await import("../src/index.mjs");
 const { createRunner, MAX_ATTEMPTS, BACKOFF_MS } = await import("../src/runner.mjs");

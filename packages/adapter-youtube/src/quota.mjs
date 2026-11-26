@@ -8,10 +8,11 @@
 //   https://developers.google.com/youtube/v3/determine_quota_cost
 //   https://developers.google.com/youtube/v3/getting-started
 // 项目过审后额度可以申请调高：数字写进 config.json（youtube.daily_inserts / youtube.daily_units）
-// 或环境变量（VK_YOUTUBE_DAILY_INSERTS / VK_YOUTUBE_DAILY_UNITS），不要改这里的默认值。
+// 或环境变量（HIFABU_YOUTUBE_DAILY_INSERTS / HIFABU_YOUTUBE_DAILY_UNITS），不要改这里的默认值。
 //
 // 记账文件放在本机凭证目录里（youtube/_quota.json，权限 600），适配器不碰数据库。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { createHash } from "node:crypto";
 import { readConfig } from "../../core/src/config.mjs";
 import { readJsonFile, writeJsonFile } from "./settings.mjs";
@@ -33,8 +34,8 @@ const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) 
 export const limits = () => {
   const c = readConfig().youtube ?? {};
   return {
-    inserts: posInt(process.env.VK_YOUTUBE_DAILY_INSERTS) ?? posInt(c.daily_inserts) ?? DEFAULT_DAILY_INSERTS,
-    units: posInt(process.env.VK_YOUTUBE_DAILY_UNITS) ?? posInt(c.daily_units) ?? DEFAULT_DAILY_UNITS,
+    inserts: posInt(readEnv("HIFABU_YOUTUBE_DAILY_INSERTS")) ?? posInt(c.daily_inserts) ?? DEFAULT_DAILY_INSERTS,
+    units: posInt(readEnv("HIFABU_YOUTUBE_DAILY_UNITS")) ?? posInt(c.daily_units) ?? DEFAULT_DAILY_UNITS,
   };
 };
 

@@ -1,5 +1,5 @@
 // 制作机 → 云端中转 → 发布机（#226，ACC-relay-02/03/04）。
-// 制作机和发布机是两个临时 VK_HOME，中转是本机 127.0.0.1 上起的真服务；
+// 制作机和发布机是两个临时 HIFABU_HOME，中转是本机 127.0.0.1 上起的真服务；
 // 不碰 volc1，不碰任何平台账号，视频是几个字节的假文件。
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -12,13 +12,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-process.env.VERSEKIT_OFFLINE = "1";
+process.env.HIFABU_OFFLINE = "1";
 const ROOT = mkdtempSync(join(tmpdir(), "vk-rf-")); // macOS 的 Unix socket 路径最多 104 字节
 const MAKER = join(ROOT, "maker");
 const PUBLISHER = join(ROOT, "publisher");
 const CLOUD = join(ROOT, "cloud");
-process.env.VK_HOME = MAKER;
-const as = (home) => { process.env.VK_HOME = home; };
+process.env.HIFABU_HOME = MAKER;
+const as = (home) => { process.env.HIFABU_HOME = home; };
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -374,7 +374,7 @@ test("ACC-relay-03 守护进程后台自动拉取：不用手动 pull，入库�
   video("bg.mp4", Buffer.from("background-bytes"));
   const r = await maker["work.push"]({ manifest: manifestFile("bg.json", { ...goodDoc("bg.mp4"), title: "后台拉取作品" }), group: "主号组" });
   as(PUBLISHER);
-  process.env.VERSEKIT_RELAY_START_DELAY_MS = "30";
+  process.env.HIFABU_RELAY_START_DELAY_MS = "30";
   const daemon = await startDaemon({ handlers: mk(), port: 0, socketPath: join(ROOT, "d.sock"), runQueue: false, offline: true });
   try {
     // 等状态落定再断言：入库和回报「已入库」不是同一刻发生，不靠固定时长
@@ -383,7 +383,7 @@ test("ACC-relay-03 守护进程后台自动拉取：不用手动 pull，入库�
     assert.ok(store.listWorks().some((w) => w.title === "后台拉取作品"), "后台拉取入库了");
     assert.equal(stateOf(), "ingested");
   } finally {
-    delete process.env.VERSEKIT_RELAY_START_DELAY_MS;
+    delete process.env.HIFABU_RELAY_START_DELAY_MS;
     await daemon.close();
   }
 });

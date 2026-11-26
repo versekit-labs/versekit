@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-cut-edit-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-cut-edit-"));
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -348,8 +348,8 @@ test("ACC-v3-time-09：整批现在发时，过不了的平台留在待确认并
 
 test("迁移：旧库补上 cut.rev / cut_version.edited_fields（只加不减，带 CHECK），幂等，旧数据不丢", () => {
   const oldHome = mkdtempSync(join(tmpdir(), "vk-cut-edit-migrate-"));
-  const keep = process.env.VK_HOME;
-  process.env.VK_HOME = oldHome;
+  const keep = process.env.HIFABU_HOME;
+  process.env.HIFABU_HOME = oldHome;
   core.close();
   const { db } = core.ensureDirs();
   const legacy = new DatabaseSync(db);
@@ -378,7 +378,7 @@ test("迁移：旧库补上 cut.rev / cut_version.edited_fields（只加不减�
   assert.equal(done.rev, 1);
 
   core.close();
-  process.env.VK_HOME = keep;
+  process.env.HIFABU_HOME = keep;
 });
 
 // ---- #245：改内容的界面要读的东西（只增字段）

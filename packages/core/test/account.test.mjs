@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-account-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -196,7 +196,7 @@ test("HTTP 派生：POST 缺 group 是 400；DELETE /api/accounts/:id 移除；G
 
 test("迁移 #11 旧库：补 removed_at，并把唯一索引换成只约束在用账号", () => {
   const oldHome = mkdtempSync(join(tmpdir(), "vk-account-migrate-"));
-  process.env.VK_HOME = oldHome;
+  process.env.HIFABU_HOME = oldHome;
   core.close();
 
   const { db } = core.ensureDirs();
@@ -224,5 +224,5 @@ test("迁移 #11 旧库：补 removed_at，并把唯一索引换成只约束在�
   assert.equal(store.listAccounts().length, 1, "旧账号一个都不能少");
 
   core.close();
-  process.env.VK_HOME = HOME;
+  process.env.HIFABU_HOME = HOME;
 });

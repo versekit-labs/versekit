@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-consistency-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-consistency-"));
 const { seedDemoAsync } = await import("../../../scripts/demo-seed.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
 const store = await import("../src/store.mjs");

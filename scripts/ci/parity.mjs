@@ -22,6 +22,7 @@
 //
 // 用法：node scripts/ci/parity.mjs   （npm run check:parity）
 
+import { readEnv } from "../../packages/core/src/env.mjs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,10 +198,11 @@ try {
   const samples = sampleCards();
   const problems = [];
   let total = 0;
+  const rogueAction = readEnv("HIFABU_PARITY_ROGUE_CARD_ACTION");
   for (const [name, card] of Object.entries(samples)) {
     const actions = cardActions(card);
     // 测试钩子：模拟有人在卡片上加了命令表里没有的动作，验证这道门禁真的会失败。
-    if (process.env.VK_PARITY_ROGUE_CARD_ACTION && name === "edit:scheduled") actions.push({ cmd: process.env.VK_PARITY_ROGUE_CARD_ACTION });
+    if (rogueAction && name === "edit:scheduled") actions.push({ cmd: rogueAction });
     total += actions.length;
     for (const p of cardActionProblems(actions)) problems.push(`${name} 卡片：${p}`);
   }
@@ -223,9 +225,8 @@ try {
   const { readFileSync } = await import("node:fs");
   const { CARD_VIEWS, cardActionProblems } = await import("../../packages/core/src/commands.mjs");
   const { cardActions, sampleCards } = await import("../../packages/core/src/cards.mjs");
-  const src = process.env.VK_PARITY_CARDS_SOURCE_APPEND
-    ? readFileSync(join(ROOT, "packages/core/src/cards.mjs"), "utf8") + "\n" + process.env.VK_PARITY_CARDS_SOURCE_APPEND
-    : readFileSync(join(ROOT, "packages/core/src/cards.mjs"), "utf8");
+  const fixture = readEnv("HIFABU_PARITY_CARDS_SOURCE_APPEND");
+  const src = readFileSync(join(ROOT, "packages/core/src/cards.mjs"), "utf8") + (fixture ? "\n" + fixture : "");
   const problems = [];
   // 按钮只能经 commandButton / viewButton 造；直接调 callback(...) 或手写 { type: "callback" } 都是绕开命令表。
   // 先剔掉 callback 的定义与两个唯一合法的包装（commandButton / viewButton），剩下的调用就都是绕开的。

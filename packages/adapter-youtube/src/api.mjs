@@ -9,6 +9,7 @@
 //   · 401 / 令牌被撤销 / 缺权限                    → auth（转「需要重新登录」）
 //   · 其余 4xx                                     → platform_reject，带 Google 返回的原因
 
+import { readEnv } from "../../core/src/env.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
 import { proxiedFetch } from "./proxy.mjs";
 import { apiBase, tokenBase } from "./settings.mjs";
@@ -76,9 +77,9 @@ const defaultSleep = (ms, signal) =>
     );
   });
 
-/** 退避基数：生产 1s、2s、4s、8s；测试用 VK_YOUTUBE_BACKOFF_MS 压到几毫秒。 */
+/** 退避基数：生产 1s、2s、4s、8s；测试用 HIFABU_YOUTUBE_BACKOFF_MS 压到几毫秒。 */
 export const backoffBaseMs = () => {
-  const n = Number(process.env.VK_YOUTUBE_BACKOFF_MS);
+  const n = Number(readEnv("HIFABU_YOUTUBE_BACKOFF_MS"));
   return Number.isFinite(n) && n >= 0 ? n : 1000;
 };
 export const MAX_RETRIES = 4;

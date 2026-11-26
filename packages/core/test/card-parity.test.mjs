@@ -55,7 +55,7 @@ test("check:parity 通过；故意塞一个表外卡片动作时失败并点名"
   assert.equal(clean.status, 0, clean.stdout + clean.stderr);
   assert.match(clean.stdout, /parity\.cards\.actions-in-table/);
 
-  const rogue = run({ VK_PARITY_ROGUE_CARD_ACTION: "card.rogue" });
+  const rogue = run({ HIFABU_PARITY_ROGUE_CARD_ACTION: "card.rogue" });
   assert.equal(rogue.status, 1, "表外卡片动作必须让 check:parity 失败");
   assert.match(rogue.stdout, /parity\.cards\.actions-in-table/);
   assert.match(rogue.stdout, /card\.rogue/);
@@ -65,7 +65,7 @@ test("cards.mjs 手写 callback 会被 check:parity 抓到", () => {
   const r = spawnSync(process.execPath, ["scripts/ci/parity.mjs"], {
     cwd: ROOT,
     encoding: "utf8",
-    env: { ...process.env, VK_PARITY_CARDS_SOURCE_APPEND: 'const x = callback("card.rogue", {}, { now });' },
+    env: { ...process.env, HIFABU_PARITY_CARDS_SOURCE_APPEND: 'const x = callback("card.rogue", {}, { now });' },
   });
   assert.equal(r.status, 1);
   assert.match(r.stdout, /parity\.cards\.derived/);

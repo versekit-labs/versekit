@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-cards-v2-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-cards-v2-"));
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");

@@ -259,7 +259,7 @@ PRD 说 “系统自己核实”，所以 `followup.verify` 是一个**可执行
 | `timeout` | 总时限内没有结果（页面停在某一步） | 发布卡住了，已超时中止 | 直接 failed，带「停在哪一步」，人可重试 |
 | `unknown` | 其他 | 出错了（附截图） | 退避重试 |
 
-`auto_running` 有总时限（默认 5 分钟，可用 `VK_PUBLISH_TIMEOUT_MS` 或 `config.json` 的
+`auto_running` 有总时限（默认 5 分钟，可用 `HIFABU_PUBLISH_TIMEOUT_MS` 或 `config.json` 的
 `publish.timeout_ms` 调整）：到点先 abort 适配器（它负责关闭为这次发布打开的浏览器），再转
 `failed`；没有活 run 的残留行由守护进程定期扫描收掉。任何发布都不允许无限停在 `auto_running`。
 

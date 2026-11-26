@@ -8,6 +8,7 @@
 // The HTTP layer is deliberately thin: route → validate args → call a handler → audit. Anything
 // that looks like business logic belongs in handlers.mjs, not here.
 
+import { readEnv } from "./env.mjs";
 import { createServer } from "node:http";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -798,14 +799,14 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   }
 
   // 后台自动更新（#217）：启动后不久查一次，之后每 update.interval_hours 小时一次，只在空闲时更新。
-  // 离线模式不联网，除非明确指了 VERSEKIT_UPDATE_API（开发机上对着本地假服务器验证）。
+  // 离线模式不联网，除非明确指了 HIFABU_UPDATE_API（开发机上对着本地假服务器验证）。
   let stopAutoUpdate = () => {};
-  if (autoUpdate && (!offline || process.env.VERSEKIT_UPDATE_API)) {
+  if (autoUpdate && (!offline || readEnv("HIFABU_UPDATE_API"))) {
     stopAutoUpdate = startAutoUpdate({
       log,
       apply: autoUpdate.apply,
       busy: autoUpdate.busy,
-      startDelayMs: Number(process.env.VERSEKIT_UPDATE_START_DELAY_MS) || 30e3,
+      startDelayMs: Number(readEnv("HIFABU_UPDATE_START_DELAY_MS")) || 30e3,
     });
   }
 
@@ -815,7 +816,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     stopRelayPull = startRelayPuller({
       log, pull: () => handlers["relay.pull"](),
       configured: handlers["relay.status"] && (() => handlers["relay.status"]().configured),
-      startDelayMs: Number(process.env.VERSEKIT_RELAY_START_DELAY_MS) || 5e3,
+      startDelayMs: Number(readEnv("HIFABU_RELAY_START_DELAY_MS")) || 5e3,
     });
   }
 

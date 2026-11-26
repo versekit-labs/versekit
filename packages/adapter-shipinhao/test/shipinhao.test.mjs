@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-sph-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-sph-"));
 
 const core = await import("../../core/src/index.mjs");
 const adapter = (await import("../src/index.mjs")).default;
@@ -21,7 +21,7 @@ const { validateAdapter } = await import("../../core/src/contract.mjs");
 
 setPace(0.001); // 页面动画级别的等待压到几乎为零；超时与重试次数照旧
 const db = () => core.open();
-const tmp = process.env.VK_HOME;
+const tmp = process.env.HIFABU_HOME;
 const file = (name) => { const p = join(tmp, name); writeFileSync(p, "x"); return p; };
 const VIDEO = file("成片.mp4");
 const COVER34 = file("cover34.png");

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import vm from "node:vm";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-today-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");

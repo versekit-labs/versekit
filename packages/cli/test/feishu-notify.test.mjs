@@ -53,7 +53,7 @@ async function boot({ larkBin = FAKE, registration = null } = {}) {
   const home = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "vkf-"));
   const lark = mkdtempSync(join(tmpdir(), "vk-fakelark-"));
   const port = await freePort();
-  const env = { ...process.env, VK_HOME: home, VK_NO_BROWSER: "1", FAKE_LARK_DIR: lark, VK_LARK_BIN: larkBin ?? join(lark, "没有这个文件"), ...(registration ? { VK_FEISHU_ACCOUNTS_URL: registration.url, VK_FEISHU_POLL_SCALE: "0.01" } : {}) };
+  const env = { ...process.env, HIFABU_HOME: home, HIFABU_NO_BROWSER: "1", FAKE_LARK_DIR: lark, HIFABU_LARK_BIN: larkBin ?? join(lark, "没有这个文件"), ...(registration ? { HIFABU_FEISHU_ACCOUNTS_URL: registration.url, HIFABU_FEISHU_POLL_SCALE: "0.01" } : {}) };
   const init = spawn(process.execPath, [VK, "init"], { env });
   await new Promise((r) => init.on("close", r));
   const child = spawn(process.execPath, [VK, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });

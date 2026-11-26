@@ -25,7 +25,7 @@ deploy/volc1/deploy.sh          # 默认 ssh 别名 volc1
 
 它只**新增**以下东西，不碰 radar 或任何已有服务：
 
-- 用户 `versekit`（nologin），代码 `/opt/versekit`，数据与配置 `/var/lib/versekit-relay`（`VK_HOME`，目录权限 700）
+- 用户 `versekit`（nologin），代码 `/opt/versekit`，数据与配置 `/var/lib/versekit-relay`（`HIFABU_HOME`，目录权限 700）
 - 服务 `versekit-relay.service`（`systemctl status versekit-relay`）
 - `/etc/caddy/Caddyfile` 末尾追加一个带标记的站点块。追加前备份为 `Caddyfile.bak-versekit-<时间>`，`caddy validate` 通过才 `reload`；不通过就还原并报错。块已存在时跳过，所以重复执行安全
 
@@ -76,9 +76,9 @@ deploy/volc1/deploy.sh          # 默认 ssh 别名 volc1
 
 ```bash
 # 制作机用（推送）
-ssh volc1 'runuser -u versekit -- env VK_HOME=/var/lib/versekit-relay node /opt/versekit/packages/cli/src/vk.mjs relay token push'
+ssh volc1 'runuser -u versekit -- env HIFABU_HOME=/var/lib/versekit-relay node /opt/versekit/packages/cli/src/vk.mjs relay token push'
 # 发布机用（拉取）
-ssh volc1 'runuser -u versekit -- env VK_HOME=/var/lib/versekit-relay node /opt/versekit/packages/cli/src/vk.mjs relay token pull'
+ssh volc1 'runuser -u versekit -- env HIFABU_HOME=/var/lib/versekit-relay node /opt/versekit/packages/cli/src/vk.mjs relay token pull'
 ```
 
 然后在对应机器上：
@@ -99,13 +99,13 @@ curl -s -o /dev/null -w '%{http_code}\n' https://vk.fangyouxi.cn/v1/ping   # 无
 deploy/volc1/e2e.sh
 ```
 
-`e2e.sh` 用 ffmpeg 生成 2 秒测试视频；制作机、发布机各用一个临时 `VK_HOME`，发布机带 `VERSEKIT_OFFLINE=1`，
+`e2e.sh` 用 ffmpeg 生成 2 秒测试视频；制作机、发布机各用一个临时 `HIFABU_HOME`，发布机带 `HIFABU_OFFLINE=1`，
 不配任何平台账号凭证（只建没有凭证的占位账号），所以碰不到平台。步骤：发布机建组 → 连中转 → 制作机 `hifabu work push` →
 发布机 `hifabu relay pull` → 核对作品入库、平台稿「等确认」。结束（包括失败）时清掉本机临时目录、两个守护进程，
 以及 volc1 上这次测试的投递文件和成片。
 
 **注意**：发布机不能用 `hifabu serve --offline`。离线模式不加载适配器，入库时 `plan.apply` 一条平台稿也生成不了，
-投递会落成「没入库：一条平台稿都没生成」。这里的「离线」靠 `VERSEKIT_OFFLINE=1` 标记 + 没有任何账号凭证来保证；
+投递会落成「没入库：一条平台稿都没生成」。这里的「离线」靠 `HIFABU_OFFLINE=1` 标记 + 没有任何账号凭证来保证；
 拉取入库只生成待确认稿，不发布、不采集。
 
 ## 日常运维

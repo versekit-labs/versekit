@@ -8,6 +8,7 @@
 //    归属按「本次测试进程自己建的」精确认定，而不是「跑完之后 /tmp 下多了什么」：这台机器上常有别的会话同时在跑测试，
 //    它们的目录和 Chrome 不能算进来，更不能误删。系统临时目录下多出来、但认不出归属的 vk* 目录只作提示（不失败、不动）。
 // 独占根目录让「同时起 3 份全量测试」互不误判；测试里写死 /tmp 的 mkdtemp 会被改到根目录里（见 test-cleanup.mjs）。
+import { readEnv } from "../../packages/core/src/env.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, readdirSync as ls, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,8 +23,8 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const root = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "tr-"));
 
 // 要扫的系统临时目录：原始 $TMPDIR（子进程里会被换成 root）、/tmp。
-// VK_TEST_ALL_SCAN（逗号分隔）：换掉要扫的目录，给「残留检查本身」的测试用，免得它在真 /tmp 里留的目录被别的全量测试撞见。
-const scanList = process.env.VK_TEST_ALL_SCAN?.split(",").filter(Boolean) ?? [tmpdir(), "/tmp"];
+// HIFABU_TEST_ALL_SCAN（逗号分隔）：换掉要扫的目录，给「残留检查本身」的测试用，免得它在真 /tmp 里留的目录被别的全量测试撞见。
+const scanList = readEnv("HIFABU_TEST_ALL_SCAN")?.split(",").filter(Boolean) ?? [tmpdir(), "/tmp"];
 const scanDirs = [...new Set(scanList.map((d) => { try { return realpathSync(d); } catch { return d; } }))];
 const vkDirs = (dir) => {
   try {
@@ -50,13 +51,21 @@ function files() {
 }
 
 const preload = join(repo, "scripts", "ci", "test-cleanup.mjs");
-// VK_TEST_ALL_FILES（逗号分隔）：只跑指定文件，给「残留检查本身」的测试用；平时不设。
-const only = process.env.VK_TEST_ALL_FILES?.split(",").filter(Boolean);
-const args = ["--test", "--import", preload, ...process.argv.slice(2), ...(only ?? files())];
+// HIFABU_TEST_ALL_FILES（逗号分隔）：只跑指定文件，给「残留检查本身」的测试用；平时不设。
+const only = readEnv("HIFABU_TEST_ALL_FILES")?.split(",").filter(Boolean);
+const testArgs = process.argv.slice(2);
+// 已发布的 0.1.0 插件入口只认旧变量。它追加的默认测试不应覆盖新版入口的文件筛选。
+const pluginTestDir = join(repo, "plugins", "hifabu", "test");
+if (only?.length && process.argv[1] === join(pluginTestDir, "run-tests.mjs") &&
+    testArgs.at(-2) === join(pluginTestDir, "handoff.test.mjs") &&
+    testArgs.at(-1) === join(pluginTestDir, "version.test.mjs")) {
+  testArgs.splice(-2);
+}
+const args = ["--test", "--import", preload, ...testArgs, ...(only ?? files())];
 const child = spawn(process.execPath, args, {
   cwd: repo,
   stdio: "inherit",
-  env: { ...process.env, VK_TEST_ALL_FILES: "", VK_TEST_ALL_SCAN: "", VK_TEST_SCAN_DIRS: scanDirs.join(":"), VK_TEST_ROOT: root, TMPDIR: root, TMP: root, TEMP: root },
+  env: { ...process.env, HIFABU_TEST_ALL_FILES: "", HIFABU_TEST_ALL_SCAN: "", HIFABU_TEST_SCAN_DIRS: scanDirs.join(":"), HIFABU_TEST_ROOT: root, TMPDIR: root, TMP: root, TEMP: root },
 });
 const code = await new Promise((r) => {
   child.on("exit", (c, sig) => r(c ?? (sig ? 1 : 0)));

@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-login-"));
 const { openAccount, closeAccount, browserReady } = await import("../../driver-browser/src/index.mjs");
 const { setInputValue, fillAndSendCode, clickLoginButton } = await import("../src/login-xhs.mjs");
 

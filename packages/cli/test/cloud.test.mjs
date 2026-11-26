@@ -73,9 +73,9 @@ test("ACC-cloud-03 / 07: CLI 和本机 HTTP 共用接入状态，自动保存传
   const session = { Cookie: `${sessionCookieName}=${token}` };
   const browserPath = join(home, "opened-url");
   const opener = join(home, process.platform === "darwin" ? "open" : "xdg-open");
-  writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$VK_TEST_BROWSER_OUTPUT"\n', { mode: 0o700 });
+  writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$HIFABU_TEST_BROWSER_OUTPUT"\n', { mode: 0o700 });
   const env = {
-    ...process.env, VK_HOME: home, VK_HIFABU_ORIGIN: origin, VK_TEST_BROWSER_OUTPUT: browserPath,
+    ...process.env, HIFABU_HOME: home, HIFABU_ORIGIN: origin, HIFABU_TEST_BROWSER_OUTPUT: browserPath,
     PATH: `${home}:${process.env.PATH}`,
   };
   const cli = (args) => exec(process.execPath, [vk, ...args], { env, timeout: 20_000 });
@@ -202,11 +202,11 @@ test("ACC-cloud-08: 关掉固定令牌后，制作机队列与发布机后台拉
     rmSync(home, { recursive: true, force: true });
   });
   const cli = async (role, ...args) => JSON.parse((await exec(process.execPath, [vk, ...args], {
-    env: { ...process.env, VK_HOME: join(home, role) }, timeout: 10_000,
+    env: { ...process.env, HIFABU_HOME: join(home, role) }, timeout: 10_000,
   })).stdout);
   async function serve(role, args, ready) {
     const child = spawn(process.execPath, [vk, ...args], {
-      env: { ...process.env, VK_HOME: join(home, role), VERSEKIT_RELAY_START_DELAY_MS: "100" },
+      env: { ...process.env, HIFABU_HOME: join(home, role), HIFABU_RELAY_START_DELAY_MS: "100" },
       stdio: ["ignore", "ignore", "pipe"],
     });
     const exited = once(child, "exit");

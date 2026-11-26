@@ -20,6 +20,7 @@
 //   captions         { path, language, name } 字幕文件（可选）
 // 缩略图用成片版本 meta.cover。默认不加播放列表、不传字幕。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { closeSync, existsSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { open } from "../../core/src/index.mjs";
@@ -69,7 +70,7 @@ const chars = (s) => [...String(s ?? "")].length;
 
 /** 分块方案：每块是 256 KB 的整数倍（默认 8 MiB）；不足一块就一整块。 */
 export function planChunks(size) {
-  const override = Number(process.env.VK_YOUTUBE_CHUNK_BYTES);
+  const override = Number(readEnv("HIFABU_YOUTUBE_CHUNK_BYTES"));
   const unit = Number.isFinite(override) && override >= CHUNK_UNIT ? Math.floor(override / CHUNK_UNIT) * CHUNK_UNIT : DEFAULT_CHUNK;
   return { chunkSize: unit, total: Math.max(1, Math.ceil(size / unit)) };
 }

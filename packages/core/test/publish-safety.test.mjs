@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { attachVersion } from "./fixtures/attach-version.mjs";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-publish-safety-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { buildHandlers } = await import("../src/adapters.mjs");
@@ -121,17 +121,17 @@ test("视频照常：适配器按时返回时发布成功，不受超时逻辑�
 
 test("默认 5 分钟总时限，可用环境变量配置", () => {
   assert.equal(DEFAULT_PUBLISH_TIMEOUT_MS, 5 * 60e3);
-  const previous = process.env.VK_PUBLISH_TIMEOUT_MS;
+  const previous = process.env.HIFABU_PUBLISH_TIMEOUT_MS;
   try {
-    process.env.VK_PUBLISH_TIMEOUT_MS = "1234";
+    process.env.HIFABU_PUBLISH_TIMEOUT_MS = "1234";
     assert.equal(publishTimeoutMs(), 1234);
-    process.env.VK_PUBLISH_TIMEOUT_MS = "oops";
+    process.env.HIFABU_PUBLISH_TIMEOUT_MS = "oops";
     assert.equal(publishTimeoutMs(), DEFAULT_PUBLISH_TIMEOUT_MS, "配错了退回默认值，而不是变成永不超时");
-    delete process.env.VK_PUBLISH_TIMEOUT_MS;
+    delete process.env.HIFABU_PUBLISH_TIMEOUT_MS;
     assert.equal(publishTimeoutMs(), DEFAULT_PUBLISH_TIMEOUT_MS);
   } finally {
-    if (previous === undefined) delete process.env.VK_PUBLISH_TIMEOUT_MS;
-    else process.env.VK_PUBLISH_TIMEOUT_MS = previous;
+    if (previous === undefined) delete process.env.HIFABU_PUBLISH_TIMEOUT_MS;
+    else process.env.HIFABU_PUBLISH_TIMEOUT_MS = previous;
   }
 });
 

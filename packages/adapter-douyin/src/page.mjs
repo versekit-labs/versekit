@@ -1,3 +1,4 @@
+import { readEnv } from "../../core/src/env.mjs";
 // 抖音创作者中心的页面知识：地址、文案、选择器，以及在页面里执行的小函数。
 //
 // ported from dreammis/social-auto-upload@3847fff uploader/douyin_uploader/main.py
@@ -13,11 +14,11 @@
 // 所有在页面里执行的函数都必须是顶层具名函数、自包含（会被序列化后送进页面，不能引用外面的变量）：
 // 离线测试里的模拟页按函数名接管它们（test/sim-page.mjs），所以名字就是接口。
 
-/** 创作者中心根地址。开发机测试时用 VK_DOUYIN_BASE 指向本地模拟页，永远不要在开发机上指向真实站点。 */
+/** 创作者中心根地址。开发机测试时用 HIFABU_DOUYIN_BASE 指向本地模拟页，永远不要在开发机上指向真实站点。 */
 export const DEFAULT_BASE = "https://creator.douyin.com";
 
 export function baseUrl(env = process.env) {
-  return String(env.VK_DOUYIN_BASE || DEFAULT_BASE).replace(/\/+$/, "");
+  return String(readEnv("HIFABU_DOUYIN_BASE", env) || DEFAULT_BASE).replace(/\/+$/, "");
 }
 
 /** 地址是不是本机的模拟页（回环地址或 file://）。只有这种地址上才会真的走一遍彩排，真实站点上 dry-run 只出计划。 */

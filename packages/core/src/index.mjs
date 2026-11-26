@@ -1,6 +1,7 @@
 // Core: paths, database, and the two things every other package needs — a handle and an id.
 // Everything that writes goes through here; adapters and channels never touch the file directly.
 
+import { readEnv } from "./env.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, readFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
@@ -20,7 +21,7 @@ export const DEFAULT_LANGUAGE = "default";
 
 /** All state lives under one root so a test can point it elsewhere. */
 export function paths() {
-  const home = process.env.VK_HOME ?? homedir();
+  const home = readEnv("HIFABU_HOME") ?? homedir();
   const config = join(home, ".config", "versekit");
   const state = join(home, ".local", "state", "versekit");
   return {
@@ -51,7 +52,7 @@ export function ensureDirs() {
 }
 
 // One process, one home. Connections are cached per database path so a test (or a daemon test
-// file) can point VK_HOME at a fresh directory without sharing state between cases.
+// file) can point HIFABU_HOME at a fresh directory without sharing state between cases.
 let cache = { path: null, write: null, read: null };
 
 /**

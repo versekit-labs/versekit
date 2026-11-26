@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-bili-login-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-bili-login-"));
 
 const { credentialPathFor, cookiesFrom, cookieFilePayload, writeCookieFile, loginStatus } = await import("../src/login.mjs");
 
@@ -21,8 +21,8 @@ const cdpCookies = [
 ];
 
 before(() => {
-  // VK_HOME 必须在 import core 之前设置（login.mjs 用了 paths()），所以放在文件顶部。
-  assert.ok(process.env.VK_HOME);
+  // HIFABU_HOME 必须在 import core 之前设置（login.mjs 用了 paths()），所以放在文件顶部。
+  assert.ok(process.env.HIFABU_HOME);
 });
 
 test("只挑凭证 cookie：没有 SESSDATA / bili_jct 就不算登录", () => {
@@ -50,7 +50,7 @@ test("文件形状是 biliup-rs 的 LoginInfo：cookie_info + token_info + platf
 
 test("写凭证：落在 credentials/，文件 0600，内容可被适配器读回", () => {
   const file = credentialPathFor("acc_test");
-  assert.equal(file, join(process.env.VK_HOME, ".config", "versekit", "credentials", "bili-acc_test.json"));
+  assert.equal(file, join(process.env.HIFABU_HOME, ".config", "versekit", "credentials", "bili-acc_test.json"));
   writeCookieFile(file, cookiesFrom(cdpCookies));
   const parsed = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(parsed.cookie_info.cookies.find((c) => c.name === "SESSDATA").value, "sess-token");
@@ -59,7 +59,7 @@ test("写凭证：落在 credentials/，文件 0600，内容可被适配器读�
 });
 
 test("TV 交换回来的完整 LoginInfo 原样落盘（token_info 不能丢，否则 biliup renew 会 -400）", () => {
-  const file = `${process.env.VK_HOME}/tv-login.json`;
+  const file = `${process.env.HIFABU_HOME}/tv-login.json`;
   writeCookieFile(file, {
     cookie_info: { cookies: [{ name: "SESSDATA", value: "x" }], domains: [".bilibili.com"] },
     sso: [],

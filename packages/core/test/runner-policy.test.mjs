@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attachVersion } from "./fixtures/attach-version.mjs";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-policy-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-policy-"));
 
 const core = await import("../src/index.mjs");
 const { createRunner } = await import("../src/runner.mjs");

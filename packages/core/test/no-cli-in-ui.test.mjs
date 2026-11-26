@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-nocli-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 const ROOT = new URL("../../../", import.meta.url).pathname;
 
 const core = await import("../src/index.mjs");
@@ -162,7 +162,7 @@ test("ACC-v3-nocli-03：以前靠命令才能做的事，页面脚本里都有�
 });
 
 test("ACC-v3-nocli-04：CLI 完整律：上面每个入口对应的命令都在 hifabu commands --json 里", () => {
-  const out = JSON.parse(execFileSync(process.execPath, [join(ROOT, "packages/cli/src/vk.mjs"), "commands", "--json"], { env: { ...process.env, VK_HOME: HOME }, encoding: "utf8" }));
+  const out = JSON.parse(execFileSync(process.execPath, [join(ROOT, "packages/cli/src/vk.mjs"), "commands", "--json"], { env: { ...process.env, HIFABU_HOME: HOME }, encoding: "utf8" }));
   const names = new Set((out.commands ?? out).map((c) => c.name));
   for (const n of [
     "group.add", "group.rename", "group.use", "account.add", "account.login.qr", "account.login.start", "account.login.verify", "account.login.resend",

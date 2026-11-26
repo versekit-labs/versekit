@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-bootstrap-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -226,7 +226,7 @@ test("CLI --json 与 /api/bootstrap 返回完全一致（验收 §三）", async
 
   const viaHttp = await (await fetch(`http://127.0.0.1:${daemon.port}/api/bootstrap`)).json();
   const { stdout } = await execFileAsync(process.execPath, [CLI, "bootstrap"], {
-    env: { ...process.env, VK_HOME: HOME },
+    env: { ...process.env, HIFABU_HOME: HOME },
     timeout: 20_000,
     maxBuffer: 16 * 1024 * 1024,
   });

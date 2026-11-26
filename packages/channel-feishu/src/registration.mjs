@@ -1,3 +1,4 @@
+import { readEnv } from "../../core/src/env.mjs";
 // ported from larksuite/cli@c5fbf1a52df77d5cb9cac2b1501770b2fb9af7d2 internal/auth/app_registration.go
 //
 // 飞书「应用注册」设备流：begin 拿二维码地址，poll 等用户在飞书里扫码确认，
@@ -25,8 +26,8 @@ const BEGIN_TIMEOUT = 30e3;
 const BOOTSTRAP = "feishu";
 
 /** 测试用：把注册接口指到本地假服务（两个品牌共用一个地址）。 */
-const accountsBase = (brand) => process.env.VK_FEISHU_ACCOUNTS_URL || ENDPOINTS[brand].accounts;
-const openBase = (brand) => process.env.VK_FEISHU_OPEN_URL || ENDPOINTS[brand].open;
+const accountsBase = (brand) => readEnv("HIFABU_FEISHU_ACCOUNTS_URL") || ENDPOINTS[brand].accounts;
+const openBase = (brand) => readEnv("HIFABU_FEISHU_OPEN_URL") || ENDPOINTS[brand].open;
 
 const parseBrand = (v) => (String(v ?? "").trim().toLowerCase() === "lark" ? "lark" : "feishu");
 const str = (o, k) => (typeof o?.[k] === "string" ? o[k] : "");

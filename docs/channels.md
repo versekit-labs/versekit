@@ -94,4 +94,4 @@ hifabu approval apply <token> retry  # 在电脑上也能执行同一动作
 hifabu serve --lan     # 监听 0.0.0.0；除 /a/* 审批页外，局域网访问一律 403
 ```
 
-链接里的地址取本机局域网 IP；如果有公网隧道，可设置 `VK_PUBLIC_URL` 或配置 `server.public_url`。
+链接里的地址取本机局域网 IP；如果有公网隧道，可设置 `HIFABU_PUBLIC_URL` 或配置 `server.public_url`。

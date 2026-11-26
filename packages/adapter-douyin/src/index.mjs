@@ -27,7 +27,7 @@ import * as ledger from "./state.mjs";
 export { planDraft, MAX_TITLE_CHARS, MAX_TOPICS, normaliseTopics } from "./plan.mjs";
 
 const PLATFORM = "douyin";
-/** 登录窗口的地址要含这个站点的主机名（默认 creator.douyin.com；VK_DOUYIN_BASE 指向模拟页时跟着变）。 */
+/** 登录窗口的地址要含这个站点的主机名（默认 creator.douyin.com；HIFABU_DOUYIN_BASE 指向模拟页时跟着变）。 */
 const hostMatcher = (base) => {
   try {
     return new RegExp(new URL(base).hostname.replace(/\./g, "\\."));

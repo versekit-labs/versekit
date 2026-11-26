@@ -12,6 +12,7 @@
 // 驱动只保证「绝不为同一账号开第二个实例」，不做业务加锁。
 // 兼容壳 PROFILE / PORT / openTab() 固定走 default 账号，旧调用方一行都不用改。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -27,7 +28,7 @@ const PORT_TOP = 65000;
 
 /** 旧的固定端口仍是默认账号的端口；其余账号从它后面按摘要分配。 */
 function resolveBasePort() {
-  const raw = Number(process.env.VK_CDP_PORT ?? DEFAULT_CDP_PORT);
+  const raw = Number(readEnv("HIFABU_CDP_PORT") ?? DEFAULT_CDP_PORT);
   return Number.isInteger(raw) && raw >= 1024 && raw <= 64000 ? raw : DEFAULT_CDP_PORT;
 }
 
@@ -40,7 +41,7 @@ export const MAX_POOL = 4;
  * 池上限解析成纯函数，方便单测；非法值（0、负数、小数、非数字）回落到 4 而不是抛错——
  * 配置坏了也不该让守护进程起不来。超过产品上限时按上限截断。
  */
-export function poolLimit(raw = process.env.VK_BROWSER_POOL) {
+export function poolLimit(raw = readEnv("HIFABU_BROWSER_POOL")) {
   if (raw === undefined || raw === null || raw === "") return MAX_POOL;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) return MAX_POOL;
@@ -53,7 +54,7 @@ export const POOL_LIMIT = poolLimit();
 
 function stateRoot() {
   // 与 core.paths() 的 state 目录保持一致；驱动不 import core，避免基础包反向依赖。
-  return join(process.env.VK_HOME ?? homedir(), ".local", "state", "versekit");
+  return join(readEnv("HIFABU_HOME") ?? homedir(), ".local", "state", "versekit");
 }
 
 function browserRoot() {
@@ -81,10 +82,9 @@ function requireAccountId(accountId) {
 /** state/browser/<accountId>/：每个账号一份 profile，绝不复用别的账号。 */
 export function accountProfile(accountId) {
   const id = requireAccountId(accountId);
-  if (id === DEFAULT_ACCOUNT && process.env.VK_CHROME_PROFILE) {
-    // 兼容旧配置：单例时代指向哪，default 账号就继续用哪。
-    return resolve(process.env.VK_CHROME_PROFILE);
-  }
+  // 兼容旧配置：单例时代指向哪，default 账号就继续用哪。
+  const configured = id === DEFAULT_ACCOUNT ? readEnv("HIFABU_CHROME_PROFILE") : undefined;
+  if (configured) return resolve(configured);
   const root = browserRoot();
   const profile = resolve(join(root, id));
   if (!profile.startsWith(resolve(root) + sep)) throw new TypeError(`accountId 越出了 profile 目录：${accountId}`);
@@ -125,8 +125,9 @@ export function findChrome() {
 /** null = 可用；否则一句人能照着做的话（这句会直接出现在 UI 上）。 */
 export function browserReady() {
   const chrome = findChrome();
-  if (!chrome) return "没有找到 Chrome/Chromium：装一个，或设置 VK_CHROME_BIN 指向它";
-  if (process.env.VK_CHROME_BIN && !existsSync(process.env.VK_CHROME_BIN)) return `VK_CHROME_BIN 不存在：${process.env.VK_CHROME_BIN}`;
+  if (!chrome) return "没有找到 Chrome/Chromium：装一个，或设置 HIFABU_CHROME_BIN 指向它";
+  const configured = readEnv("HIFABU_CHROME_BIN");
+  if (configured && !existsSync(configured)) return `HIFABU_CHROME_BIN 不存在：${configured}`;
   return null;
 }
 
@@ -135,10 +136,10 @@ export function browserReady() {
  *
  * --use-mock-keychain：daemon 从后台会话（launchctl managername = Background）起来时，Chrome 读不到
  * 钥匙串里的 "Chrome Safe Storage"，cookie 无法加密就完全不写盘——一重启就掉线（#100）。
- * 用 mock keychain 让登录态不依赖钥匙串。VK_CHROME_MOCK_KEYCHAIN=0 可关掉（只用于验证自检）。
+ * 用 mock keychain 让登录态不依赖钥匙串。HIFABU_CHROME_MOCK_KEYCHAIN=0 可关掉（只用于验证自检）。
  */
 export function mockKeychainEnabled(env = process.env) {
-  return env.VK_CHROME_MOCK_KEYCHAIN !== "0";
+  return readEnv("HIFABU_CHROME_MOCK_KEYCHAIN", env) !== "0";
 }
 
 export function chromeArgs({ port, profile, headless = false }, env = process.env) {
@@ -188,7 +189,7 @@ export function cookiePersistenceCheck({ env = process.env, managername } = {}) 
     return {
       ok: false,
       detail: "登录不会被保存：当前是后台会话，Chrome 读不到钥匙串里的 Chrome Safe Storage，cookie 无法加密就不写盘，Chrome 一重启就掉线",
-      next: "关掉 VK_CHROME_MOCK_KEYCHAIN=0 的设置后重启服务",
+      next: "关掉 HIFABU_CHROME_MOCK_KEYCHAIN=0 的设置后重启服务",
     };
   }
   return { ok: true, detail: "登录会被保存（依赖系统钥匙串；已关闭 mock keychain）" };
@@ -380,9 +381,10 @@ async function pickPort(accountId, profile, rejectedPorts) {
 }
 
 async function startChrome({ accountId, port, profile, headless, deadline }) {
-  const chrome = process.env.VK_CHROME_BIN ?? findChrome();
+  const configured = readEnv("HIFABU_CHROME_BIN");
+  const chrome = configured ?? findChrome();
   if (!chrome) throw new Error(browserReady() ?? "没有可用的 Chrome");
-  if (process.env.VK_CHROME_BIN && !existsSync(chrome)) throw new Error(`VK_CHROME_BIN 不存在：${chrome}`);
+  if (configured && !existsSync(chrome)) throw new Error(`HIFABU_CHROME_BIN 不存在：${chrome}`);
 
   const child = spawn(chrome, chromeArgs({ port, profile, headless }), {
     detached: true, stdio: ["ignore", "ignore", "pipe"],
@@ -649,8 +651,8 @@ function clearStaleSingleton(profile, pid) {
  */
 const DEFAULT_IDLE_CLOSE_MS = 10 * 60e3;
 
-/** 空闲时限；VK_BROWSER_IDLE_MS 可缩短（测试用），非法值回落默认。每次现读，方便测试改环境变量。 */
-export function idleCloseMs(raw = process.env.VK_BROWSER_IDLE_MS) {
+/** 空闲时限；HIFABU_BROWSER_IDLE_MS 可缩短（测试用），非法值回落默认。每次现读，方便测试改环境变量。 */
+export function idleCloseMs(raw = readEnv("HIFABU_BROWSER_IDLE_MS")) {
   if (raw === undefined || raw === null || raw === "") return DEFAULT_IDLE_CLOSE_MS;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 10 ? n : DEFAULT_IDLE_CLOSE_MS;
@@ -1290,7 +1292,7 @@ async function finishCloseAccount(id) {
 
 /**
  * 退出登录（#220）：关掉这个账号的 Chrome，再删掉它自己的 profile 目录（cookie、登录态都在里面）。
- * 只动 state/browser/<accountId>/ 这一个目录；default 账号走自定义 VK_CHROME_PROFILE 时不删
+ * 只动 state/browser/<accountId>/ 这一个目录；default 账号走自定义 HIFABU_CHROME_PROFILE 时不删
  * （那是用户自己指定的目录，不是我们建的）。返回 { closed, removed }。
  */
 export async function logoutAccount(accountId) {

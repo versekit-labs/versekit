@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// 演示数据（#180）：在指定的 VK_HOME 里造出今天页、作品页的典型数据，供验收与演示用。
+// 演示数据（#180）：在指定的 HIFABU_HOME 里造出今天页、作品页的典型数据，供验收与演示用。
 //
-//   VK_HOME=$(mktemp -d) node scripts/demo-seed.mjs        # 或：VK_HOME=... vk demo seed
+//   HIFABU_HOME=$(mktemp -d) node scripts/demo-seed.mjs        # 或：HIFABU_HOME=... vk demo seed
 //
 // 造出来的东西：
 //   · 待确认：一个长片作品（含一支长片 + 一支短片，各发两个平台）
@@ -10,8 +10,9 @@
 // 账号全是假的，且 last_checked_at 都写成「刚刚」——哪怕有人误起了不带 --offline 的服务，
 // 调度器也不会马上给它们排体检。
 //
-// 安全：必须显式给 VK_HOME。不给就会写进真实的家目录，那正是这个脚本要避免的事。
+// 安全：必须显式给 HIFABU_HOME。不给就会写进真实的家目录，那正是这个脚本要避免的事。
 
+import { readEnv } from "../packages/core/src/env.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,8 +28,8 @@ async function load() {
 }
 
 export async function seedDemoAsync(options = {}) {
-  if (!process.env.VK_HOME) {
-    throw new Error("没有设置 VK_HOME：演示数据只能写进临时目录，例如 VK_HOME=$(mktemp -d) vk demo seed");
+  if (!readEnv("HIFABU_HOME")) {
+    throw new Error("没有设置 HIFABU_HOME：演示数据只能写进临时目录，例如 HIFABU_HOME=$(mktemp -d) vk demo seed");
   }
   return run(await load(), options.now ?? Date.now());
 }

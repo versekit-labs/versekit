@@ -64,12 +64,12 @@ test("没改过的输入框不算编辑中；缺提交号的帧忽略", () => {
 });
 
 test("/api/stream 的帧带当前提交号（来自 buildInfo）", async () => {
-  process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-live-"));
+  process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-live-"));
   const core = await import("../src/index.mjs");
   core.migrate();
   const { startDaemon } = await import("../src/daemon.mjs");
   const { buildInfo, displayVersion } = await import("../src/update.mjs");
-  const daemon = await startDaemon({ runQueue: false, port: 0, socketPath: join(process.env.VK_HOME, "vk.sock"), handlers: {} });
+  const daemon = await startDaemon({ runQueue: false, port: 0, socketPath: join(process.env.HIFABU_HOME, "vk.sock"), handlers: {} });
   try {
     const frame = await new Promise((resolve, reject) => {
       const req = request({ host: "127.0.0.1", port: daemon.port, path: "/api/stream" }, (res) => {

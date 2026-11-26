@@ -6,13 +6,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VERSEKIT_OFFLINE = "1";
+process.env.HIFABU_OFFLINE = "1";
 const ROOT = mkdtempSync(join(tmpdir(), "vk-work-cover-"));
 const MAKER = join(ROOT, "maker");
 const PUBLISHER = join(ROOT, "publisher");
 const CLOUD = join(ROOT, "cloud");
-process.env.VK_HOME = MAKER;
-const as = (home) => { process.env.VK_HOME = home; };
+process.env.HIFABU_HOME = MAKER;
+const as = (home) => { process.env.HIFABU_HOME = home; };
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");

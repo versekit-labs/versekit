@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { request } from "node:http";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-offline-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { startDaemon, offlineHandlers } = await import("../src/daemon.mjs");

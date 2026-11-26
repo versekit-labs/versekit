@@ -7,22 +7,22 @@
 # 全程不用 sudo、不问问题。再运行一次就是升级：数据库、配置、凭证、账号、浏览器登录都保留。
 #
 # 可用环境变量覆盖（开发机上验证用）：
-#   VERSEKIT_PREFIX          安装目录               默认 ~/.versekit
-#   VERSEKIT_PORT            控制台端口             默认 8787（被占用时自动换空闲端口）
-#   VERSEKIT_SERVICE_LABEL   服务名                 默认 com.versekit.daemon
-#   VERSEKIT_SERVICE_MANAGER 强制 launchd|systemd|detach
-#   VERSEKIT_NODE_VERSION    Node 版本（写死，不用 latest-*）    默认 v26.13.1（Node 26 LTS）
-#   VERSEKIT_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
-#   VERSEKIT_APP_URL         versekit tarball 地址   VERSEKIT_APP_SHA256 可选校验
-#   VERSEKIT_BILIUP_URL      biliup-rs 压缩包地址    VERSEKIT_BILIUP_VERSION 默认 v0.2.4
-#   VERSEKIT_LARK_VERSION    飞书组件 lark-cli 版本（写死）   默认 1.0.97
-#   VERSEKIT_LARK_URL        lark-cli 下载目录（含 checksums.txt）  默认 https://github.com/larksuite/cli/releases/download/v<版本>
-#   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
-#   VERSEKIT_NO_OPEN=1       不自动打开浏览器
-#   VERSEKIT_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
-#   VERSEKIT_UPDATE=1        后台自动更新（hifabu update）用：不动 PATH 配置、不开浏览器，升完保留 app.prev
+#   HIFABU_PREFIX          安装目录               默认 ~/.versekit
+#   HIFABU_PORT            控制台端口             默认 8787（被占用时自动换空闲端口）
+#   HIFABU_SERVICE_LABEL   服务名                 默认 com.versekit.daemon
+#   HIFABU_SERVICE_MANAGER 强制 launchd|systemd|detach
+#   HIFABU_NODE_VERSION    Node 版本（写死，不用 latest-*）    默认 v26.13.1（Node 26 LTS）
+#   HIFABU_NODE_URL        Node 下载目录（含 SHASUMS256.txt）  默认 https://nodejs.org/dist/<Node 版本>
+#   HIFABU_APP_URL         versekit tarball 地址   HIFABU_APP_SHA256 可选校验
+#   HIFABU_BILIUP_URL      biliup-rs 压缩包地址    HIFABU_BILIUP_VERSION 默认 v0.2.4
+#   HIFABU_LARK_VERSION    飞书组件 lark-cli 版本（写死）   默认 1.0.97
+#   HIFABU_LARK_URL        lark-cli 下载目录（含 checksums.txt）  默认 https://github.com/larksuite/cli/releases/download/v<版本>
+#   HIFABU_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
+#   HIFABU_NO_OPEN=1       不自动打开浏览器
+#   HIFABU_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
+#   HIFABU_UPDATE=1        后台自动更新（hifabu update）用：不动 PATH 配置、不开浏览器，升完保留 app.prev
 #                            给更新程序做「起来后自检、不行就退回」，由它自己清掉
-#   VK_HOME                  数据目录的 HOME（和 hifabu 本身一致）
+#   HIFABU_HOME              数据目录的 HOME（和 hifabu 本身一致）
 
 # 提交号：GitHub 源码包（git archive）会把这一行的占位符替换成 40 位提交号（见 .gitattributes 的 export-subst）。
 # 直接从 raw 地址拿到的脚本里它没被替换，下面只认 40 位十六进制，所以不会误读。
@@ -33,19 +33,45 @@ APP_COMMIT_STAMP='$Format:%H$'
 main() {
   set -euo pipefail
 
+  # 兼容旧终端配置和旧版自动更新器。导出新名，子进程沿用相同值。
+  legacy_env() {
+    local name="$1" legacy="$2"
+    if [ -z "${!name+x}" ] && [ -n "${!legacy+x}" ]; then
+      printf '%s 已改名为 %s，请更新环境变量。\n' "$legacy" "$name" >&2
+      export "$name=${!legacy}"
+    fi
+  }
+  legacy_env HIFABU_HOME VK_HOME
+  legacy_env HIFABU_PREFIX VERSEKIT_PREFIX
+  legacy_env HIFABU_PORT VERSEKIT_PORT
+  legacy_env HIFABU_SERVICE_LABEL VERSEKIT_SERVICE_LABEL
+  legacy_env HIFABU_SERVICE_MANAGER VERSEKIT_SERVICE_MANAGER
+  legacy_env HIFABU_NODE_VERSION VERSEKIT_NODE_VERSION
+  legacy_env HIFABU_NODE_URL VERSEKIT_NODE_URL
+  legacy_env HIFABU_APP_URL VERSEKIT_APP_URL
+  legacy_env HIFABU_APP_SHA256 VERSEKIT_APP_SHA256
+  legacy_env HIFABU_BILIUP_URL VERSEKIT_BILIUP_URL
+  legacy_env HIFABU_BILIUP_VERSION VERSEKIT_BILIUP_VERSION
+  legacy_env HIFABU_LARK_VERSION VERSEKIT_LARK_VERSION
+  legacy_env HIFABU_LARK_URL VERSEKIT_LARK_URL
+  legacy_env HIFABU_OFFLINE VERSEKIT_OFFLINE
+  legacy_env HIFABU_NO_OPEN VERSEKIT_NO_OPEN
+  legacy_env HIFABU_APP_COMMIT VERSEKIT_APP_COMMIT
+  legacy_env HIFABU_UPDATE VERSEKIT_UPDATE
+
   # 下面这些是全局变量（不加 local）：EXIT trap 在 main 返回之后才触发，那时 local 已经没了。
-  PREFIX="${VERSEKIT_PREFIX:-$HOME/.versekit}"
+  PREFIX="${HIFABU_PREFIX:-$HOME/.versekit}"
   local WANT_PORT
   # Node 版本号写死（升级 Node 时改这一行并过一遍测试），不用 latest-* 这类会漂的地址：
   # 同一份脚本任何时候装出来的 Node 都一样，SHASUMS256 校验的也是这个确定的版本。
-  local NODE_VERSION="${VERSEKIT_NODE_VERSION:-v26.13.1}"
-  local NODE_URL="${VERSEKIT_NODE_URL:-https://nodejs.org/dist/$NODE_VERSION}"
-  local APP_URL="${VERSEKIT_APP_URL:-https://codeload.github.com/versekit-labs/versekit/tar.gz/refs/heads/main}"
-  local BILIUP_VERSION="${VERSEKIT_BILIUP_VERSION:-v0.2.4}"
+  local NODE_VERSION="${HIFABU_NODE_VERSION:-v26.13.1}"
+  local NODE_URL="${HIFABU_NODE_URL:-https://nodejs.org/dist/$NODE_VERSION}"
+  local APP_URL="${HIFABU_APP_URL:-https://codeload.github.com/versekit-labs/versekit/tar.gz/refs/heads/main}"
+  local BILIUP_VERSION="${HIFABU_BILIUP_VERSION:-v0.2.4}"
   # lark-cli：飞书官方命令行（larksuite/cli）。官方发布渠道是 GitHub Releases，每个版本附 checksums.txt
   # （与 npm 包 @larksuite/cli 里自带的那份逐字相同），按它校验。版本写死，升级时改这一行并过测试。
-  local LARK_VERSION="${VERSEKIT_LARK_VERSION:-1.0.97}"
-  local LARK_URL="${VERSEKIT_LARK_URL:-https://github.com/larksuite/cli/releases/download/v$LARK_VERSION}"
+  local LARK_VERSION="${HIFABU_LARK_VERSION:-1.0.97}"
+  local LARK_URL="${HIFABU_LARK_URL:-https://github.com/larksuite/cli/releases/download/v$LARK_VERSION}"
   local STEP="准备"
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/versekit-install.XXXXXX")"
   SWAPPED=0 HAD_APP=0 SERVICE_TOUCHED=0 DONE=0 OLD_PORT=""
@@ -70,6 +96,16 @@ main() {
     else printf '%s\n' "$PREFIX/bin/vk"; fi
   }
 
+  # 停止或恢复升级前的服务时，旧程序可能只认旧变量名。
+  previous_cli() (
+    if [ -n "${HIFABU_HOME+x}" ]; then export VK_HOME="$HIFABU_HOME"; fi
+    export VERSEKIT_PREFIX="$PREFIX"
+    export VERSEKIT_SERVICE_LABEL="${HIFABU_SERVICE_LABEL:-}"
+    export VERSEKIT_SERVICE_MANAGER="${HIFABU_SERVICE_MANAGER:-}"
+    export VERSEKIT_OFFLINE="${HIFABU_OFFLINE:-}"
+    "$@"
+  )
+
   # 失败时回到安装前：旧程序放回去（升级）或把服务卸掉（首次），绝不留下半启动的服务。
   rollback() {
     [ "$SERVICE_TOUCHED" = 1 ] || [ "$SWAPPED" = 1 ] || return 0
@@ -81,8 +117,8 @@ main() {
       if [ "$HAD_APP" = 1 ] && [ -d "$PREFIX/app.prev" ]; then
         mv "$PREFIX/app.prev" "$PREFIX/app"
         if [ -x "$cli" ] && [ -n "${OLD_PORT:-}" ]; then
-          local extra=(); [ "${VERSEKIT_OFFLINE:-}" = 1 ] && extra=(--offline)
-          "$cli" service install --port "$OLD_PORT" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || true
+          local extra=(); [ "${HIFABU_OFFLINE:-}" = 1 ] && extra=(--offline)
+          previous_cli "$cli" service install --port "$OLD_PORT" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || true
           printf '  已回到升级前的版本并尝试恢复旧服务。\n' >&2
         fi
       fi
@@ -139,9 +175,9 @@ main() {
     OLD_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PREFIX/app/package.json" | head -1)"
     OLD_COMMIT="$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' "$PREFIX/app/.versekit-build.json" 2>/dev/null | head -1 || true)"
   fi
-  local META="${VK_HOME:-$HOME}/.local/state/versekit/service.json"
+  local META="${HIFABU_HOME:-$HOME}/.local/state/versekit/service.json"
   if [ -f "$META" ]; then OLD_PORT="$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$META" | head -1)"; fi
-  WANT_PORT="${VERSEKIT_PORT:-${OLD_PORT:-8787}}"
+  WANT_PORT="${HIFABU_PORT:-${OLD_PORT:-8787}}"
 
   # ------------------------------------------------------------ 1. 私有 Node
   STEP="下载 Node"
@@ -149,7 +185,7 @@ main() {
   fetch "$NODE_URL/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
   local NODE_FILE="node-$NODE_VERSION-$NODE_PLAT.tar.gz"
   local NODE_VER="${NODE_VERSION#v}"
-  grep -q "  $NODE_FILE\$" "$TMP/SHASUMS256.txt" || die "$NODE_URL/SHASUMS256.txt 里没有 $NODE_FILE" "确认 VERSEKIT_NODE_VERSION（$NODE_VERSION）和 VERSEKIT_NODE_URL 指向同一个官方版本目录"
+  grep -q "  $NODE_FILE\$" "$TMP/SHASUMS256.txt" || die "$NODE_URL/SHASUMS256.txt 里没有 $NODE_FILE" "确认 HIFABU_NODE_VERSION（$NODE_VERSION）和 HIFABU_NODE_URL 指向同一个官方版本目录"
   local HAVE_NODE="" NODE_STAGED=0
   if [ -x "$PREFIX/node/bin/node" ]; then HAVE_NODE="$("$PREFIX/node/bin/node" -v 2>/dev/null || true)"; fi
   if [ "$HAVE_NODE" = "v$NODE_VER" ]; then
@@ -165,7 +201,7 @@ main() {
     [ "$WANT" = "$GOT" ] || die "Node 压缩包校验不通过（官方 ${WANT}，实际 ${GOT}）" "多半是下载被截断或被劫持，重新运行；反复出现就换一个网络"
     mkdir -p "$TMP/node-x"
     tar -xzf "$TMP/$NODE_FILE" -C "$TMP/node-x" --strip-components=1 || die "Node 解压失败" "重新运行；磁盘空间不足也会这样"
-    [ -x "$TMP/node-x/bin/node" ] || die "Node 包里没有 bin/node" "确认 VERSEKIT_NODE_URL 指向官方 dist 目录"
+    [ -x "$TMP/node-x/bin/node" ] || die "Node 包里没有 bin/node" "确认 HIFABU_NODE_URL 指向官方 dist 目录"
     NODE_STAGED=1 # 先放在临时目录，等所有下载校验都过了再换（下面「安装程序文件」）
   fi
 
@@ -173,34 +209,34 @@ main() {
   STEP="下载 versekit"
   say "下载 versekit 程序（约 1MB）"
   fetch "$APP_URL" "$TMP/app.tar.gz"
-  if [ -n "${VERSEKIT_APP_SHA256:-}" ]; then
+  if [ -n "${HIFABU_APP_SHA256:-}" ]; then
     STEP="校验 versekit"
-    [ "$(sha_of "$TMP/app.tar.gz")" = "$VERSEKIT_APP_SHA256" ] || die "versekit 压缩包校验不通过" "重新运行；确认 VERSEKIT_APP_SHA256 对应这个地址"
+    [ "$(sha_of "$TMP/app.tar.gz")" = "$HIFABU_APP_SHA256" ] || die "versekit 压缩包校验不通过" "重新运行；确认 HIFABU_APP_SHA256 对应这个地址"
   fi
   STEP="解压 versekit"
   say "解压 versekit……"
   mkdir -p "$TMP/app-x"
   tar -xzf "$TMP/app.tar.gz" -C "$TMP/app-x" --strip-components=1 || die "versekit 压缩包解压失败" "重新运行"
   [ -f "$TMP/app-x/packages/cli/src/vk.mjs" ] && [ -f "$TMP/app-x/package.json" ] ||
-    die "下载下来的不是 versekit（没有 packages/cli/src/vk.mjs）" "确认 VERSEKIT_APP_URL 指向仓库的源码 tarball"
+    die "下载下来的不是 versekit（没有 packages/cli/src/vk.mjs）" "确认 HIFABU_APP_URL 指向仓库的源码 tarball"
   local NEW_VERSION
   NEW_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$TMP/app-x/package.json" | head -1)"
   # 程序知道自己是哪个提交（ACC-update-01）：写进程序目录，hifabu version / 系统页读它。
-  local APP_COMMIT="${VERSEKIT_APP_COMMIT:-}"
+  local APP_COMMIT="${HIFABU_APP_COMMIT:-}"
   [ -n "$APP_COMMIT" ] || APP_COMMIT="$(sed -n "s/^APP_COMMIT_STAMP='\([0-9a-f]\{40\}\)'.*/\1/p" "$TMP/app-x/install.sh" 2>/dev/null | head -1 || true)"
   printf '{\n  "commit": "%s",\n  "version": "%s",\n  "installed_at": "%s"\n}\n' "$APP_COMMIT" "$NEW_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMP/app-x/.versekit-build.json"
 
   # ------------------------------------------------------------ 3. biliup
   STEP="下载 biliup"
   say "下载 biliup（约 5MB，装在 $PREFIX/bin）"
-  local BILIUP_URL="${VERSEKIT_BILIUP_URL:-https://github.com/biliup/biliup-rs/releases/download/$BILIUP_VERSION/biliupR-$BILIUP_VERSION-$BILIUP_PLAT.tar.xz}"
+  local BILIUP_URL="${HIFABU_BILIUP_URL:-https://github.com/biliup/biliup-rs/releases/download/$BILIUP_VERSION/biliupR-$BILIUP_VERSION-$BILIUP_PLAT.tar.xz}"
   fetch "$BILIUP_URL" "$TMP/biliup.pkg"
   STEP="解压 biliup"
   mkdir -p "$TMP/biliup-x"
   tar -xf "$TMP/biliup.pkg" -C "$TMP/biliup-x" || die "biliup 压缩包解压失败（.tar.xz 需要系统带 xz）" "重新运行；Linux 上先装 xz-utils"
   local BILIUP_BIN
   BILIUP_BIN="$(find "$TMP/biliup-x" -type f -name biliup | head -1)"
-  [ -n "$BILIUP_BIN" ] || die "biliup 压缩包里没有 biliup 可执行文件" "确认 VERSEKIT_BILIUP_URL 指向 biliup-rs 的发布包"
+  [ -n "$BILIUP_BIN" ] || die "biliup 压缩包里没有 biliup 可执行文件" "确认 HIFABU_BILIUP_URL 指向 biliup-rs 的发布包"
 
   # ------------------------------------------------------------ 3b. 飞书组件 lark-cli
   # 装在 $PREFIX/bin（不碰系统里已有的 lark-cli）。已经是这个版本就跳过；先下载校验、暂存，换程序时才落盘。
@@ -237,7 +273,7 @@ main() {
   # 下载和校验都过了才动已安装的东西：任何一步失败都不会破坏现有版本。
   local OLD_CLI
   OLD_CLI="$(installed_cli)"
-  if [ -x "$OLD_CLI" ] && [ -d "$PREFIX/app" ]; then "$OLD_CLI" service stop >/dev/null 2>&1 || true; fi
+  if [ -x "$OLD_CLI" ] && [ -d "$PREFIX/app" ]; then previous_cli "$OLD_CLI" service stop >/dev/null 2>&1 || true; fi
   if [ "$NODE_STAGED" = 1 ]; then rm -rf "$PREFIX/node"; mv "$TMP/node-x" "$PREFIX/node"; fi
   local NODE="$PREFIX/node/bin/node"
   cp "$BILIUP_BIN" "$PREFIX/bin/biliup.new" && chmod +x "$PREFIX/bin/biliup.new" && mv "$PREFIX/bin/biliup.new" "$PREFIX/bin/biliup"
@@ -274,17 +310,17 @@ EOF
       n=$((n + 1)); cand=$((WANT_PORT + n))
       if port_free "$cand"; then PORT="$cand"; break; fi
     done
-    [ -n "$PORT" ] || die "端口 $WANT_PORT 被占用，附近也没有空闲端口" "用 VERSEKIT_PORT=<空闲端口> 重新运行"
+    [ -n "$PORT" ] || die "端口 $WANT_PORT 被占用，附近也没有空闲端口" "用 HIFABU_PORT=<空闲端口> 重新运行"
     say "端口 $WANT_PORT 被别的程序占用，改用 $PORT"
   fi
 
   STEP="注册后台服务"
   say "注册后台服务并启动（端口 ${PORT}）"
-  local extra=(); [ "${VERSEKIT_OFFLINE:-}" = 1 ] && extra=(--offline)
+  local extra=(); [ "${HIFABU_OFFLINE:-}" = 1 ] && extra=(--offline)
   SERVICE_TOUCHED=1
   local SVC_OUT
   if ! SVC_OUT="$("$HIFABU" service install --port "$PORT" ${extra[@]+"${extra[@]}"} --human 2>&1)"; then
-    local LOGF="${VK_HOME:-$HOME}/.local/state/versekit/vk.log"
+    local LOGF="${HIFABU_HOME:-$HOME}/.local/state/versekit/vk.log"
     printf '%s\n' "$SVC_OUT" >&2
     [ -f "$LOGF" ] && { printf '  日志最后几行（%s）：\n' "$LOGF" >&2; tail -n 8 "$LOGF" >&2 || true; }
     die "后台服务没能在 30 秒内起来（端口 ${PORT}）" "看上面的日志；修好后重新运行安装命令即可，没有留下半启动的服务"
@@ -303,7 +339,7 @@ EOF
 
   # ------------------------------------------------------------ 5. PATH 与收尾
   STEP="配置 PATH"
-  local UPDATING=0; [ "${VERSEKIT_UPDATE:-}" = 1 ] && UPDATING=1
+  local UPDATING=0; [ "${HIFABU_UPDATE:-}" = 1 ] && UPDATING=1
   add_path_block() { # add_path_block <rc 文件>
     local rc="$1"
     mkdir -p "$(dirname "$rc")"
@@ -329,7 +365,7 @@ EOF
 
   STEP="打开控制台"
   local URL="http://127.0.0.1:$PORT"
-  if [ "${VERSEKIT_NO_OPEN:-}" != 1 ] && [ "$UPDATING" != 1 ]; then
+  if [ "${HIFABU_NO_OPEN:-}" != 1 ] && [ "$UPDATING" != 1 ]; then
     if [ "$OS" = darwin ]; then open "$URL" >/dev/null 2>&1 || true
     elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 || true; fi
   fi

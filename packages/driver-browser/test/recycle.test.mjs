@@ -8,13 +8,13 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-recycle-"));
-process.env.VK_HOME = HOME;
-process.env.VK_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
 // accountPort() 在 [基准, 65000) 里按账号哈希取端口；基准随机落在 40000–55000，与 isolation（20000–40000）错开，减少并行文件撞端口。
-process.env.VK_CDP_PORT = String(40000 + Math.floor(Math.random() * 15000));
-process.env.VK_BROWSER_POOL = "2";
-process.env.VK_BROWSER_IDLE_MS = "400";
-delete process.env.VK_CHROME_PROFILE;
+process.env.HIFABU_CDP_PORT = String(40000 + Math.floor(Math.random() * 15000));
+process.env.HIFABU_BROWSER_POOL = "2";
+process.env.HIFABU_BROWSER_IDLE_MS = "400";
+delete process.env.HIFABU_CHROME_PROFILE;
 
 const d = await import("../src/index.mjs");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -71,7 +71,7 @@ test("idleCloseMs 读环境变量，非法值回落 10 分钟", () => {
 
 test("ACC-browser-mem-01：closeAllAccounts 关掉所有账号 Chrome", async () => {
   const { readFileSync } = await import("node:fs");
-  process.env.VK_BROWSER_IDLE_MS = "60000";
+  process.env.HIFABU_BROWSER_IDLE_MS = "60000";
   await pidOf("acc_a");
   await pidOf("acc_b");
   const pids = ["acc_a", "acc_b"].map((id) => JSON.parse(readFileSync(join(d.accountProfile(id), ".vk-driver.json"), "utf8")).pid);
@@ -79,11 +79,11 @@ test("ACC-browser-mem-01：closeAllAccounts 关掉所有账号 Chrome", async ()
   assert.equal(await d.closeAllAccounts(), 2);
   await until(() => pids.every((p) => !alive(p)));
   assert.ok(pids.every((p) => !alive(p)), "进程应已退出");
-  process.env.VK_BROWSER_IDLE_MS = "400";
+  process.env.HIFABU_BROWSER_IDLE_MS = "400";
 });
 
 test("ACC-browser-mem-04：池上限 2，第 3 个排队不报错", async () => {
-  process.env.VK_BROWSER_IDLE_MS = "60000";
+  process.env.HIFABU_BROWSER_IDLE_MS = "60000";
   const tabs = [];
   for (const id of ["acc_p1", "acc_p2"]) tabs.push(await d.openAccount({ accountId: id }));
   let third = null;
@@ -94,7 +94,7 @@ test("ACC-browser-mem-04：池上限 2，第 3 个排队不报错", async () => 
   await p;
   assert.ok(third, "槽位释放后第 3 个应拿到实例");
   await d.closeAllAccounts();
-  process.env.VK_BROWSER_IDLE_MS = "400";
+  process.env.HIFABU_BROWSER_IDLE_MS = "400";
 });
 
 test("ACC-browser-mem-02：接管孤儿，空白的空闲后被关；有用户页面的不强关", async () => {
@@ -103,7 +103,7 @@ test("ACC-browser-mem-02：接管孤儿，空白的空闲后被关；有用户�
   const start = (id, port, pages) => {
     const profile = d.accountProfile(id);
     mkdirSync(profile, { recursive: true });
-    const child = spawn(process.env.VK_CHROME_BIN, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`], {
+    const child = spawn(process.env.HIFABU_CHROME_BIN, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`], {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, FAKE_CHROME_PAGES: JSON.stringify(pages) },
@@ -132,7 +132,7 @@ test("ACC-browser-mem-02：接管孤儿，空白的空闲后被关；有用户�
 
 test("closeLoginWindow：无头/未知账号不动，有头账号延时后关闭", async () => {
   assert.equal(await d.closeLoginWindow("acc_nobody"), false);
-  process.env.VK_BROWSER_IDLE_MS = "60000";
+  process.env.HIFABU_BROWSER_IDLE_MS = "60000";
   const tab = await d.openAccount({ accountId: "acc_login", headless: false });
   assert.equal(await d.closeLoginWindow("acc_login", { delayMs: 50 }), true);
   await sleep(1500);

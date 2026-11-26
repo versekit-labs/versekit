@@ -42,4 +42,4 @@ else
     exit 1
   fi
 fi
-echo "[ok] 部署完成。取 token：ssh volc1 'sudo -u versekit VK_HOME=$DATA node $SRC/packages/cli/src/vk.mjs relay token push|pull'"
+echo "[ok] 部署完成。取 token：ssh volc1 'sudo -u versekit HIFABU_HOME=$DATA node $SRC/packages/cli/src/vk.mjs relay token push|pull'"

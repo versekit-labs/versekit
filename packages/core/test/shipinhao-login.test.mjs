@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-sph-core-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-sph-core-"));
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");

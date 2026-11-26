@@ -7,6 +7,7 @@
 // 通道只做三件事：发一条卡片消息、更新一张卡片、把点按钮事件交回去。
 // 它不读数据库、不认识事件类型、不拼业务文案——那些在 core 里。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { spawn, spawnSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -15,15 +16,16 @@ import { join } from "node:path";
 import { beginRegistration, pollRegistration, RegistrationError } from "./registration.mjs";
 
 const exec = promisify(execFile);
-// 优先级：VK_LARK_BIN（显式覆盖）→ install.sh 装在 versekit 目录下的 lark-cli → PATH 里的 lark-cli。
+// 优先级：HIFABU_LARK_BIN（显式覆盖）→ install.sh 装在 versekit 目录下的 lark-cli → PATH 里的 lark-cli。
 const bin = () => {
-  if (process.env.VK_LARK_BIN) return process.env.VK_LARK_BIN;
-  const own = join(process.env.VERSEKIT_PREFIX || join(homedir(), ".versekit"), "bin", "lark-cli");
+  const configured = readEnv("HIFABU_LARK_BIN");
+  if (configured) return configured;
+  const own = join(readEnv("HIFABU_PREFIX") || join(homedir(), ".versekit"), "bin", "lark-cli");
   return existsSync(own) ? own : "lark-cli";
 };
 const LARK_TIMEOUT = 25e3;
 // 只用 versekit 自己的 profile：用户在自己的应用上配的，不碰机器上别的应用。
-const profile = () => process.env.VK_FEISHU_PROFILE ?? "versekit";
+const profile = () => readEnv("HIFABU_FEISHU_PROFILE") ?? "versekit";
 
 /** 需要喂 stdin 的命令（app secret 只能走 stdin，不能进 argv）。 */
 function runWithInput(args, input, what = "profile add") {
@@ -258,7 +260,7 @@ export default {
     // 后台等用户在飞书里扫完确认；页面只轮询状态。
     (async () => {
       try {
-        const r = await pollRegistration(begin, { signal: abort.signal, intervalScale: Number(process.env.VK_FEISHU_POLL_SCALE) || 1 });
+        const r = await pollRegistration(begin, { signal: abort.signal, intervalScale: Number(readEnv("HIFABU_FEISHU_POLL_SCALE")) || 1 });
         if (!r.openId) throw new Error("飞书没有告诉我们你是谁（没有返回 open_id），卡片没法发给你。点「重新来」再扫一次。");
         const brand = r.tenantBrand === "lark" ? "lark" : "feishu";
         await this.configure({ appId: r.clientId, appSecret: r.clientSecret, brand });
