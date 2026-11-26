@@ -16,7 +16,7 @@ const { NODE_TEST_CONTEXT: _skip, ...baseEnv } = process.env;
 // 扫描目录换成本测试自己的沙盒：不在真 /tmp 里留 vk* 目录，别的并发全量测试撞不见。
 const sandbox = mkdtempSync(join(tmpdir(), "chk-"));
 const run = (leave, entry = runner) =>
-  spawnSync(process.execPath, [entry], {
+  spawnSync(process.execPath, [entry, "--test-reporter=tap"], {
     encoding: "utf8",
     env: { ...baseEnv, HIFABU_TEST_ALL_FILES: fixture, HIFABU_TEST_ALL_SCAN: sandbox, HIFABU_LEAVE_DIR: leave },
   });
