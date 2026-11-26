@@ -186,7 +186,8 @@ async function evaluateProject(scenario) {
     const beforeFirst = fixture.deliveries.size;
     const first = await run(true);
     const firstDelivery = await monitorDelivery(fixture, beforeFirst);
-    const savedProject = convention();
+    const projectJson = existsSync(conventionPath) ? readFileSync(conventionPath, "utf8") : null;
+    const savedProject = projectJson === null ? null : JSON.parse(projectJson);
     const identity = savedProject?.id;
     const savedGroup = identity && existsSync(preferencePath(identity))
       ? JSON.parse(readFileSync(preferencePath(identity))).group : null;
@@ -196,7 +197,7 @@ async function evaluateProject(scenario) {
     const row = { project: scenario.label, questions: [first.questions, second.questions],
       modelCalls: [first.calls, second.calls], delivered: [Boolean(firstDelivery), Boolean(secondDelivery)], identity,
       confirmedBeforeWrite: first.confirmed && first.conventionWrites === 1,
-      episodes: savedProject?.episodes, groupQuestions: first.groupQuestions, savedGroup,
+      projectJson, episodes: savedProject?.episodes, groupQuestions: first.groupQuestions, savedGroup,
       final: [first.turns, second.turns] };
     console.log(JSON.stringify(row));
     assert.ok(first.questions <= 2 && second.questions === 0 && identity);
