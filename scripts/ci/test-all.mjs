@@ -9,10 +9,11 @@
 //    它们的目录和 Chrome 不能算进来，更不能误删。系统临时目录下多出来、但认不出归属的 vk* 目录只作提示（不失败、不动）。
 // 独占根目录让「同时起 3 份全量测试」互不误判；测试里写死 /tmp 的 mkdtemp 会被改到根目录里（见 test-cleanup.mjs）。
 import { readEnv } from "../../packages/core/src/env.mjs";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, readdirSync as ls, statSync } from "node:fs";
+import { findChrome } from "../../packages/driver-browser/src/index.mjs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, readdirSync as ls, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromeProcesses, chromeUnder } from "./test-cleanup.mjs";
 
@@ -50,15 +51,47 @@ function files() {
   return out;
 }
 
+function macChromeFixture(root) {
+  if (process.platform !== "darwin") return;
+  const chrome = findChrome();
+  if (!chrome) return;
+  const app = dirname(dirname(dirname(chrome)));
+  if (!app.endsWith(".app")) return;
+  const inherited = process.env.HIFABU_TEST_CHROME_BIN;
+  if (inherited) return inherited;
+
+  // Chrome's code-sign clones hard-link the installed executable. Under
+  // concurrent launches, dyld can resolve it inside a clone being removed and
+  // abort when that clone's Framework is missing. Give this run its own inode
+  // and keep short-lived fixtures from creating further code-sign clones.
+  const copy = join(root, basename(app));
+  execFileSync("/bin/cp", ["-cRp", app, copy]);
+  const launcher = join(root, "chrome-fixture");
+  const executable = join(basename(app), relative(app, chrome));
+  writeFileSync(launcher, `#!/bin/sh\nexec "\${0%/*}/${executable}" --disable-features=MacAppCodeSignClone "$@"\n`, { mode: 0o700 });
+  return launcher;
+}
+
 const preload = join(repo, "scripts", "ci", "test-cleanup.mjs");
 // HIFABU_TEST_ALL_FILES（逗号分隔）：只跑指定文件，给「残留检查本身」的测试用；平时不设。
 const only = readEnv("HIFABU_TEST_ALL_FILES")?.split(",").filter(Boolean);
 const testArgs = process.argv.slice(2);
 const args = ["--test", "--import", preload, ...testArgs, ...(only ?? files())];
+let chromeFixture;
+try {
+  chromeFixture = macChromeFixture(root);
+} catch (err) {
+  rmSync(root, { recursive: true, force: true });
+  throw err;
+}
+const chromeEnv = chromeFixture ? {
+  HIFABU_CHROME_BIN: readEnv("HIFABU_CHROME_BIN") ?? chromeFixture,
+  HIFABU_TEST_CHROME_BIN: chromeFixture,
+} : {};
 const child = spawn(process.execPath, args, {
   cwd: repo,
   stdio: "inherit",
-  env: { ...process.env, HIFABU_TEST_ALL_FILES: "", HIFABU_TEST_ALL_SCAN: "", HIFABU_TEST_SCAN_DIRS: scanDirs.join(":"), HIFABU_TEST_ROOT: root, TMPDIR: root, TMP: root, TEMP: root },
+  env: { ...process.env, ...chromeEnv, HIFABU_TEST_ALL_FILES: "", HIFABU_TEST_ALL_SCAN: "", HIFABU_TEST_SCAN_DIRS: scanDirs.join(":"), HIFABU_TEST_ROOT: root, TMPDIR: root, TMP: root, TEMP: root },
 });
 const code = await new Promise((r) => {
   child.on("exit", (c, sig) => r(c ?? (sig ? 1 : 0)));
