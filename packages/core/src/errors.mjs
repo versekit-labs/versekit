@@ -53,6 +53,12 @@ export const ERROR_CODES = {
     human: "这个文件平台不收（尺寸 / 时长 / 大小）",
     action: "replace_asset",
   },
+  component_missing: {
+    retryable: false,
+    publishState: "failed",
+    human: "B 站组件没装。到「系统 → 设备 → 组件」装上后点重试。",
+    action: "install_component",
+  },
   timeout: {
     // 超时不是「重试三次可能好」的瞬时故障：页面已经停在某一步 5 分钟，再自动重试只会
     // 让人多等三个退避周期。直接 failed，由人决定重试还是换素材（ACC-publish-05）。

@@ -445,7 +445,7 @@ async function qrStatus(accountId, account, session, log = () => {}) {
   return { mode: "qr", state: "waiting", qr: session.qr, ...(refreshed ? { refreshed: true } : {}), note: "等待用手机小红书扫码…" };
 }
 
-function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
+function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offline }) {
   const core = createCoreHandlers({
     adapters,
     log,
@@ -455,6 +455,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
     loginsOpen: activeLogins,
     uploadQueue,
     machineRelay,
+    offline,
   });
   // 登录也按适配器分派：有 login() 的平台自己决定怎么登录（B站=页面扫码），
   // 没有的继续走下面写死的网页登录地址。命令定义不新增，复用 account.login.* / account.reauth。
@@ -947,7 +948,7 @@ async function cmdServe() {
       emit({ type: "delivery.failed", severity: "warn", payload: { id, errorCode, message: reason, nextStep }, dedupeKey: `delivery:${id}:failed` });
     },
   });
-  const handlers = daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue });
+  const handlers = daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offline });
   const port = Number(val("--port") ?? 8787);
   const host = has("--lan") ? "0.0.0.0" : "127.0.0.1";
   updateConfig({ server: { port, host } });
@@ -1461,6 +1462,21 @@ async function cmdWork() {
     return data;
   }
   throw new Error(usage);
+}
+
+async function cmdComponent() {
+  const command = findCommand(`component.${pos[1] ?? ""}`);
+  if (!command) throw new Error(COMMANDS.filter(({ name }) => name.startsWith("component.")).map(({ cli }) => cli.usage).join("\n"));
+  const takesName = Object.hasOwn(command.args, "name");
+  if (pos.length !== (takesName ? 3 : 2)) throw new Error(command.cli.usage);
+  const data = await send(command.name, takesName ? { name: pos[2] } : {}, { timeout: 120_000 });
+  if (!human) out(data);
+  else if (data.components) {
+    for (const item of data.components) {
+      console.log(`${item.name} · ${item.installed ? `已安装 ${item.installedVersion ?? "（版本未知）"}` : "未安装"} · 发版锁定 ${item.lockedVersion ?? "未知"}${item.size ? ` · ${formatBytes(item.size)}` : ""} · ${item.source}`);
+    }
+  } else if (command.name === "component.install") console.log(`${data.name} ${data.already ? "已安装，无需重复安装" : "安装完成"}`);
+  else console.log(`${data.name} ${data.removed ? "已移除私有组件" : "未安装"}`);
 }
 
 async function cmdCloud() {
@@ -2300,6 +2316,7 @@ function usage() {
       "  hifabu setup [--json] | hifabu channel bind feishu | test feishu",
       "  hifabu version [--json]                                     版本号 + 提交号 + 安装时间 + 自动更新状态",
       "  hifabu update [--check] [--auto on|off] [--now]             更新程序：--check 只看有没有新版本；--auto 开关后台自动更新（空闲时更新，失败自动退回）",
+      ...COMMANDS.filter(({ name }) => name.startsWith("component.")).map(({ cli }) => `  ${cli.usage}`),
       "  hifabu --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
@@ -2324,6 +2341,7 @@ try {
   else if (cmd === "service") await cmdService();
   else if (cmd === "version") await cmdVersion();
   else if (cmd === "update") await cmdUpdate();
+  else if (cmd === "component") await cmdComponent();
   else if (cmd === "group") await cmdGroup();
   else if (cmd === "today") await cmdToday();
   else if (cmd === "work") await cmdWork();
