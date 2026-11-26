@@ -1,7 +1,7 @@
 {
   "name": "hifabu",
   "displayName": "Hifabu",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Hand finished videos from Claude Code to your Hifabu publishing computer for confirmation.",
   "author": { "name": "Hifabu", "url": "https://hifabu.com" },
   "homepage": "https://hifabu.com/plugin/",
