@@ -9,7 +9,7 @@
 
 import { readEnv } from "../../core/src/env.mjs";
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync, mkdtempSync, renameSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync, mkdtempSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,6 +30,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
 
 export const labelOf = (env = process.env) => readEnv("HIFABU_SERVICE_LABEL", env) || DEFAULT_LABEL;
+
+export function describeInstall() {
+  return `后台服务 ${labelOf()}：运行本地控制台、处理已确认的排期并采集发布数据。日志：${paths().log}`;
+}
+
+export function recordReleaseTransition() {
+  const message = "已改为从 hifabu.com 获取正式版本";
+  appendFileSync(paths().log, `[${new Date().toISOString()}] [release.transition] ${message}\n`, { mode: 0o600 });
+  return message;
+}
 
 /**
  * 安装前缀：`<prefix>/app` 是程序，`<prefix>/node` 私有 Node，`<prefix>/bin` 放 hifabu、vk 别名与 biliup。

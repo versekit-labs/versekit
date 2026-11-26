@@ -231,6 +231,18 @@ test("ACC-release-01 拒绝无对应 tag、HEAD 已移动，以及未提交的�
   assert.ok(!existsSync(f.calls));
 });
 
+test("ACC-release-02 发布脚本将完整锁定清单嵌入实际安装模板", (t) => {
+  const f = fixture(t);
+  const output = join(f.root, "release");
+  const inputs = f.inputs.map((arg) => arg === f.template ? join(repository, "deploy/hifabu/install-template.sh") : arg);
+  success(f.invoke(["--dry-run", "--output-dir", output, ...inputs]));
+  const script = readFileSync(join(output, version, "install.sh"), "utf8");
+  const inspect = script.replace(/\nmain "\$@"\n$/, "\nprintf '%s' \"$HIFABU_RELEASE_MANIFEST\"\n");
+  assert.notEqual(inspect, script);
+  const embedded = JSON.parse(execFileSync("bash", [], { input: inspect, encoding: "utf8" }));
+  assert.deepEqual(embedded, json(join(output, version, "manifest.json")));
+});
+
 test("ACC-release-01 缺发版说明、缺安装模板或占位符不正确时退出", (t) => {
   const f = fixture(t);
   for (const flag of ["--changelog", "--installer-template"]) {

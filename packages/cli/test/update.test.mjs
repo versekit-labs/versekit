@@ -12,15 +12,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync
 import { tmpdir, platform, arch } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakeRelease, NODE_VERSION } from "../../core/test/install-fixtures.mjs";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const INSTALL_SH = join(ROOT, "install.sh");
 const WORK = mkdtempSync(join(platform() === "darwin" ? "/tmp" : tmpdir(), "vk-upd-"));
 const OS = platform() === "darwin" ? "darwin" : "linux";
 const CPU = arch() === "arm64" ? "arm64" : "x64";
-const BILIUP_PLAT = `${CPU === "arm64" ? "aarch64" : "x86_64"}-${OS === "darwin" ? "macos" : "linux"}`;
-const NODE_VER = /HIFABU_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"))?.[1] ?? "0.0.0";
-const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
+const PLATFORM = `${OS}-${CPU}`;
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -33,6 +32,7 @@ let base;
 let appTarball = "app-1";
 let latest = B;
 let titles = ["修了一处", "加了一个功能"];
+let releases;
 
 const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const tar = (args) => {
@@ -61,9 +61,9 @@ async function waitFor(predicate, message) {
 function buildFakeNode() {
   const dir = join(WORK, "node-pkg", "node");
   mkdirSync(join(dir, "bin"), { recursive: true });
-  writeFileSync(join(dir, "bin", "node"), `#!/bin/sh\n[ "$1" = "-v" ] && { echo v${NODE_VER}; exit 0; }\nexec "${process.execPath}" "$@"\n`);
+  writeFileSync(join(dir, "bin", "node"), `#!/bin/sh\n[ "$1" = "-v" ] && { echo ${NODE_VERSION}; exit 0; }\nexec "${process.execPath}" "$@"\n`);
   chmodSync(join(dir, "bin", "node"), 0o755);
-  tar(["-czf", join(WORK, NODE_FILE), "-C", join(WORK, "node-pkg"), "node"]);
+  tar(["-czf", join(WORK, "node.tar.gz"), "-C", join(WORK, "node-pkg"), "node"]);
 }
 
 /** 假 versekit：当前仓库的程序文件（含 install.sh）打成 tarball；patch 可以把它改坏。 */
@@ -77,16 +77,10 @@ function buildApp(name, version, patch = null) {
   cpSync(join(ROOT, "packages"), join(dir, "packages"), { recursive: true, filter: skip });
   cpSync(join(ROOT, "scripts"), join(dir, "scripts"), { recursive: true, filter: skip });
   cpSync(INSTALL_SH, join(dir, "install.sh"));
+  mkdirSync(join(dir, "deploy/hifabu"), { recursive: true });
+  cpSync(join(ROOT, "deploy/hifabu/install-template.sh"), join(dir, "deploy/hifabu/install-template.sh"));
   patch?.(dir);
   tar(["-czf", join(WORK, `${name}.tar.gz`), "-C", join(WORK, `${name}-src`), "versekit-main"]);
-}
-
-function buildBiliup() {
-  const dir = join(WORK, "biliup-pkg", `biliupR-v0.0.0-${BILIUP_PLAT}`);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "biliup"), "#!/bin/sh\necho biliup-fake\n");
-  chmodSync(join(dir, "biliup"), 0o755);
-  tar(["-czf", join(WORK, "biliup.tar.gz"), "-C", join(WORK, "biliup-pkg"), `biliupR-v0.0.0-${BILIUP_PLAT}`]);
 }
 
 before(async () => {
@@ -104,25 +98,34 @@ before(async () => {
   buildApp("app-init-bad", "8.8.8", (dir) => {
     writeFileSync(join(dir, "packages/core/src/schema.sql"), "injected init failure");
   });
-  buildBiliup();
   server = createServer((req, res) => {
     const url = req.url ?? "";
-    if (url === "/node/SHASUMS256.txt") res.end(`${sha(join(WORK, NODE_FILE))}  ${NODE_FILE}\n`);
-    else if (url === `/node/${NODE_FILE}`) res.end(readFileSync(join(WORK, NODE_FILE)));
-    else if (url === "/app.tar.gz") {
-      if (appTarball === "404") { res.statusCode = 404; return res.end("no"); }
+    if (url === "/app.tar.gz" && appTarball !== "404") {
       res.end(readFileSync(join(WORK, `${appTarball}.tar.gz`)));
-    } else if (url === "/biliup.tar.gz") res.end(readFileSync(join(WORK, "biliup.tar.gz")));
-    else if (url === "/api/commits/main") res.end(JSON.stringify({ sha: latest }));
+    } else if (url === "/api/commits/main") res.end(JSON.stringify({ sha: latest }));
     else if (url.startsWith("/api/compare/")) {
       res.end(JSON.stringify({ status: "ahead", ahead_by: titles.length, commits: titles.slice().reverse().map((t) => ({ commit: { message: `${t}\n\n正文` } })) }));
     } else {
-      res.statusCode = 404;
-      res.end("no");
+      const body = releases[appTarball]?.[url];
+      if (body !== undefined) return res.end(body);
+      res.writeHead(404).end("no");
     }
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
+  releases = Object.fromEntries([
+    ["app-1", "0.1.0", A],
+    ["app-2", "9.9.9", B],
+    ["app-bad", "8.8.8", C],
+    ["app-init-bad", "8.8.8", C],
+  ].map(([name, version, commit]) => [
+    name,
+    fakeRelease(base, {
+      version, commit, platform: PLATFORM,
+      app: readFileSync(join(WORK, `${name}.tar.gz`)),
+      node: readFileSync(join(WORK, "node.tar.gz")),
+    }),
+  ]));
 });
 
 after(() => {
@@ -147,10 +150,9 @@ async function newHome(extra = {}) {
     HIFABU_SERVICE_MANAGER: "detach",
     HIFABU_OFFLINE: "1",
     HIFABU_NO_OPEN: "1",
-    HIFABU_NODE_URL: `${base}/node`,
+    HIFABU_INSTALL_TEST: "1",
+    HIFABU_DOWNLOAD_URL: base,
     HIFABU_APP_URL: `${base}/app.tar.gz`,
-    HIFABU_BILIUP_URL: `${base}/biliup.tar.gz`,
-    HIFABU_LARK_URL: `${base}/lark`,
     HIFABU_UPDATE_API: `${base}/api`,
     HIFABU_UPDATE_HEALTH_TIMEOUT_MS: "4000",
     ...extra,
@@ -290,9 +292,9 @@ async function measureDowntime(port, operation) {
   }
 }
 
-async function installV1(h, commit = A) {
+async function installV1(h) {
   appTarball = "app-1";
-  const r = await sh(h, "bash", [INSTALL_SH], { env: { HIFABU_APP_COMMIT: commit } });
+  const r = await sh(h, "bash", [INSTALL_SH]);
   assert.equal(r.code, 0, r.stdout + r.stderr);
 }
 
