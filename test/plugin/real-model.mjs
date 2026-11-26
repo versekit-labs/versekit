@@ -178,7 +178,7 @@ async function evaluateProject(scenario) {
           if (tool_name === "Bash") return /\b(?:curl|wget|ssh)\b|~\/|\/Users\//.test(input.command) ? deny : allow(input);
           return deny;
         },
-        answer: ({ result = "" }) => /[？?]|请(?:选|确认|告诉)|是否|要不要|你希望|可以吗/.test(result)
+        answer: ({ result = "" }) => /[？?]|^\s*(?:请(?:选|确认|告诉)|是否|要不要|你希望)/m.test(result)
           ? questionReply(result) : null,
       });
       return { questions, confirmed, groupQuestions, conventionWrites, ...observed };
