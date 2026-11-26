@@ -53,7 +53,15 @@ function files() {
 const preload = join(repo, "scripts", "ci", "test-cleanup.mjs");
 // HIFABU_TEST_ALL_FILES（逗号分隔）：只跑指定文件，给「残留检查本身」的测试用；平时不设。
 const only = readEnv("HIFABU_TEST_ALL_FILES")?.split(",").filter(Boolean);
-const args = ["--test", "--import", preload, ...process.argv.slice(2), ...(only ?? files())];
+const testArgs = process.argv.slice(2);
+// 已发布的 0.1.0 插件入口只认旧变量。它追加的默认测试不应覆盖新版入口的文件筛选。
+const pluginTestDir = join(repo, "plugins", "hifabu", "test");
+if (only?.length && process.argv[1] === join(pluginTestDir, "run-tests.mjs") &&
+    testArgs.at(-2) === join(pluginTestDir, "handoff.test.mjs") &&
+    testArgs.at(-1) === join(pluginTestDir, "version.test.mjs")) {
+  testArgs.splice(-2);
+}
+const args = ["--test", "--import", preload, ...testArgs, ...(only ?? files())];
 const child = spawn(process.execPath, args, {
   cwd: repo,
   stdio: "inherit",
