@@ -25,6 +25,12 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const DEFAULT_CDP_PORT = 9333;
 const PORT_TOP = 65000;
+// Fetch rejects these ports even when Chrome can bind them.
+// https://fetch.spec.whatwg.org/#port-blocking (only ports above 1023)
+const FETCH_BLOCKED_PORTS = new Set([
+  1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566,
+  6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+]);
 
 /** 旧的固定端口仍是默认账号的端口；其余账号从它后面按摘要分配。 */
 function resolveBasePort() {
@@ -354,7 +360,7 @@ async function pickPort(accountId, profile, rejectedPorts) {
   const span = PORT_TOP - BASE_PORT;
   for (let i = 0; i < 64; i++) {
     const port = BASE_PORT + ((preferred - BASE_PORT + i) % span);
-    if (claimedPorts.has(port) || rejectedPorts.has(port)) continue;
+    if (FETCH_BLOCKED_PORTS.has(port) || claimedPorts.has(port) || rejectedPorts.has(port)) continue;
     const status = await probeVersion(port);
     if (status === "ok") {
       if (claimedPorts.has(port)) continue;

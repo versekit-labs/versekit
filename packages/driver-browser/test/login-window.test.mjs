@@ -15,6 +15,21 @@ delete process.env.HIFABU_CHROME_PROFILE;
 const d = await import("../src/index.mjs");
 after(() => d.closeAllAccounts?.());
 
+test("登录窗口：首选 CDP 端口被 Fetch 禁用时，选择可用端口", async (t) => {
+  const preferred = 10080;
+  const originalPort = process.env.HIFABU_CDP_PORT;
+  process.env.HIFABU_CDP_PORT = String(preferred);
+  const driver = await import("../src/index.mjs?blocked-port").finally(() => {
+    process.env.HIFABU_CDP_PORT = originalPort;
+  });
+  t.after(() => driver.closeAccount(driver.DEFAULT_ACCOUNT));
+  assert.equal(driver.accountPort(driver.DEFAULT_ACCOUNT), preferred);
+  const tab = await driver.openAccount({
+    accountId: driver.DEFAULT_ACCOUNT, url: "https://creator.example.test/", loginWindow: true, gotoTimeout: 300,
+  });
+  assert.ok(tab.port > preferred && tab.port < preferred + 64);
+});
+
 test("登录窗口：页面永不触发 load/DOM 事件也打开成功，不报错、不关窗口", async () => {
   const t0 = Date.now();
   const tab = await d.openAccount({ accountId: "acc_login_slow", url: "https://creator.example.test/", loginWindow: true, gotoTimeout: 300 });
