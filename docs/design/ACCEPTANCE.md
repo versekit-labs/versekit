@@ -714,6 +714,58 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-plugin-v2-07] 不装发布机：技能里没有任何安装 VerseKit、Hifabu 完整版、biliup、lark-cli 的步骤，也没有 `curl | bash`。找不到 Node 时，走 ACC-maker-10 的运行时流程。没登录、或者没开通传片时，按 `references/setup.md` 的说法引导用户去 hifabu.com。发布机不在线、或者版本太旧时，告诉用户「到发布机那台电脑上打开或更新 Hifabu，下载地址 hifabu.com」。对外只出现 Hifabu 这个名字，不出现 VerseKit、vk。
 - [ACC-plugin-v2-08] 端到端离线评测：在临时 HOME 里，从本地生成的市场安装 0.2.0，用本地假云端和假中转跑完整流程，覆盖以下情况：第一次使用（扫描并确认约定、选账号组、打开自动更新）、预览、交付、关掉会话后上传继续、问「到了吗」、多个候选文件、没有封面、没有文案（起草后先给用户看）、上传途中断网。PR 里附上评测记录。发布到 hifabu.com 由协调器在合并后执行；0.1.0 的 zip 保留，市场清单只指向 0.2.0。
 
+### 发布机下载与正式发版（2026-11-26）
+
+设计依据：`docs/design/download/DESIGN.md`。所有者 11-26 定（原话「按照你的建议来」）：
+- 测试期用锁定版本的一行安装脚本，不出未签名的 .pkg；
+- 在 hifabu.com 镜像 Node、biliup、lark-cli，sha256 以上游为准；
+- 所有者的发布机改为跟正式发版走，不再跟 main；
+- 新的更新逻辑上线前，发布机先关掉自动更新。
+
+本节取代 ACC-update-02、ACC-update-03 中「比较 main 最新提交」「从 GitHub main 下载」的写法，以及 ACC-install-01 中「从 GitHub main `curl | bash`」的写法；空闲判断、自检、退回仍按原口径。凡是改到命令、文件、服务、更新的单，都要附 ACC-arch-09。
+
+- [ACC-release-01] P1 发布脚本与版本清单：`deploy/hifabu/publish-release.mjs` 加 `schemas/release-v1.json`，`docs/deploy-cloud.md` 新增「发版」一节。要求：
+  - 同一个 tag 打两次包，程序包 sha256 相同；
+  - 程序包按白名单装文件，体积小于 5MB；
+  - 工作区不干净或不在 tag 上时拒绝运行；
+  - `--dry-run` 不连网，列出文件和 sha256；
+  - 已存在的版本文件，内容不同时拒绝覆盖，文件只增不改，`latest.json` 最后原子替换；
+  - 上游文件（Node、biliup、lark-cli）的 sha256 与上游校验和一致，才写进清单和镜像；
+  - 核对 biliup-rs、lark-cli 的许可证是否允许再分发，不允许的只记上游地址、不镜像，结论写进 PR。
+- [ACC-release-02] P2 安装脚本改为「锁定清单，只装核心」：`hifabu.com/download/<版本>/install.sh` 写死所有文件的 sha256。要求：
+  - 在全新的临时 HOME 里，用本地假下载源安装，装完只有 Node 和程序，没有 biliup、lark-cli；
+  - 任何一个文件 sha256 不符就停下，说明是哪个文件，不留下半截安装；
+  - 注册后台服务前，先打印服务名、它做什么、日志在哪；
+  - 在已有安装上升级（带 biliup、lark-cli 和数据），数据和组件都保留，版本按清单；
+  - 在 macOS 14、15 真机上各装一次，没有被 Gatekeeper 拦截，结果写进 PR；
+  - 从 main 上旧的 install.sh 地址运行，装到的是 `latest.json` 指定的版本；
+  - 模拟旧更新程序（`VERSEKIT_UPDATE=1` 加 `VERSEKIT_APP_URL=file://…`）调用 main 上的 install.sh，升级后 `app.prev` 还在，旧更新程序的自检和退回照常可用。
+- [ACC-release-03] P3 自动更新跟着发版走：`update.mjs` 改为读 `https://hifabu.com/download/latest.json`。要求：
+  - 下载的 install.sh 的 sha256 对不上时不升级，并留事件；
+  - 空闲判断、自检、退回保持不变，沿用 ACC-update-03、ACC-update-04 的测试；
+  - 系统页显示这个版本的 CHANGELOG；
+  - 请求里不带任何个人信息；
+  - 没有「跟 main 走」的配置项。
+- [ACC-release-04] P4 组件用到时才装：在 `commands.mjs` 新增 `component.list`、`component.install`、`component.remove`。要求：
+  - 没装 biliup 时，添加 B 站账号会先出现「安装并继续」这一步，装完直接进入扫码；接飞书同理；
+  - 下载按清单校验，sha256 不符就不装；
+  - biliup 被删后，到点要发 B 站时，这一条进入「出了问题」，带 `error_code: component_missing` 和事件，不能静默跳过；
+  - 已经装好的组件不动；
+  - 网页上不出现命令行；
+  - 三端一致测试覆盖这几条新命令。
+- [ACC-release-05] P5 下载页 `hifabu.com/download`：要求：
+  - 版本号、大小、sha256 都取自清单，不手写；
+  - 设计稿 §3.1 的 9 块内容都有，第一块讲「发布机要和发布用的手机在同一个网络」；
+  - 浅色、深色、手机宽度三种截图，都没有横向溢出；
+  - 「先校验再运行」的三行命令在真机上跑通；
+  - 页面上不出现 VerseKit 和 vk；
+  - 页头导航、首页、「我的 Hifabu」都能链到这一页。
+- [ACC-release-06] P6 第一个正式版本，以及所有者那台机器的升级：发布 `0.3.0`。要求：
+  - 先演练：在临时 HOME 里用真机数据的副本，从所有者机器当前的版本模拟点「现在更新」升级到 0.3.0，前后账号数、作品数、排期数、登录状态文件都一致；
+  - 所有者在系统页点一次「现在更新」，协调器陪同，挑接下来 1 小时内没有要发的时段；升级后系统页显示 0.3.0，后台服务只剩 `com.hifabu.daemon`；
+  - 升级后 24 小时内，到点的发布照常执行；
+  - 核对通过后再打开自动更新，之后只装 `latest.json` 指定的版本。
+
 ### 改名 Hifabu（2026-11-26）
 
 所有者定：产品名改为 Hifabu，遗留的 versekit、vk 命令都改成 hifabu 体系。GitHub 仓库 `versekit-labs/versekit` 和 Orca 流程（orca-flow、worktree 路径、协调器脚本）这次不改。计划见 `docs/design/RENAME-HIFABU.md`，分 R1–R8 八步串行做。
