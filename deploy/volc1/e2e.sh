@@ -22,7 +22,7 @@ cleanup() {
   if [ -n "$DELIVERY" ]; then
     ssh "$HOST" "bash -s" -- "$DELIVERY" <<'REMOTE'
 set -e
-d=/var/lib/versekit-relay/.local/state/versekit/relay
+d=/var/lib/hifabu-relay/.local/state/versekit/relay
 id="$1"
 case "$id" in dl_*) ;; *) exit 0;; esac
 f="$d/deliveries/$id.json"
@@ -36,7 +36,7 @@ REMOTE
 }
 trap cleanup EXIT
 
-tok() { ssh "$HOST" "runuser -u versekit -- env HIFABU_HOME=/var/lib/versekit-relay node /opt/versekit/packages/cli/src/vk.mjs relay token $1"; }
+tok() { ssh "$HOST" "runuser -u versekit -- env HIFABU_HOME=/var/lib/hifabu-relay node /opt/hifabu/packages/cli/src/vk.mjs relay token $1"; }
 
 echo "[1/6] 测试视频"
 ffmpeg -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=15 -pix_fmt yuv420p "$T/e2e-test.mp4"

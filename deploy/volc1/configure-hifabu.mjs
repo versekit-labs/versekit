@@ -35,7 +35,7 @@ function configure(configFile, keyFile) {
 try {
   if (process.argv.length !== 4) throw new Error("用法：node configure-hifabu.mjs <config.json> <Hifabu 公钥 PEM>");
   configure(...process.argv.slice(2));
-  console.log("Hifabu 公钥已写入中转配置。请重启 versekit-relay。");
+  console.log("Hifabu 公钥已写入中转配置。请重启 hifabu-relay。");
 } catch (error) {
   // JSON parsing errors may contain excerpts of config.json, which holds fixed tokens.
   console.error(error instanceof SyntaxError ? "中转配置不是有效 JSON，请检查 config.json。" : error.message);

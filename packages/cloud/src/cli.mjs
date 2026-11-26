@@ -5,17 +5,19 @@ import { sessionCookieName } from "./server.mjs";
 import { callCloud, cloudTextArgs, publicOrigin } from "./transport.mjs";
 
 const args = process.argv.slice(2);
+// The registry remains the source for arguments. This CLI presents the new executable name.
+const usage = (cli) => cli.usage.replace(/^vk-cloud\b/, "hifabu-cloud");
 try {
   if (!args.length || (args.length === 1 && args[0] === "--help")) {
-    console.log(["vk-cloud serve", ...CLOUD_COMMANDS.map(({ cli, summary }) => `${cli.usage}  ${summary}`)].join("\n"));
+    console.log(["hifabu-cloud serve", ...CLOUD_COMMANDS.map(({ cli, summary }) => `${usage(cli)}  ${summary}`)].join("\n"));
   } else if (args.length === 1 && args[0] === "serve") {
     await import("./serve.mjs");
   } else {
     const command = CLOUD_COMMANDS.find(({ name }) => name === args.slice(0, name.split(".").length).join("."));
-    if (!command) throw new Error("未知 Hifabu 命令。请运行 vk-cloud --help。");
+    if (!command) throw new Error("未知 Hifabu 命令。请运行 hifabu-cloud --help。");
     const values = args.slice(command.name.split(".").length);
     const keys = Object.keys(command.args);
-    if (values.length > keys.length || (command.cli.browserPath && values.length)) throw new Error(command.cli.usage);
+    if (values.length > keys.length || (command.cli.browserPath && values.length)) throw new Error(usage(command.cli));
     const origin = publicOrigin(process.env.HIFABU_ORIGIN);
     if (command.cli.browserPath) {
       console.log(JSON.stringify({ loginUrl: new URL(command.cli.browserPath, origin).href }));

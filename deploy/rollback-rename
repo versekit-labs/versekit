@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source_dir="$(cd "$(dirname "$0")" && pwd)"
+if [[ $# == 1 && $1 == --dry-run ]]; then
+  exec node "$source_dir/volc1/rename-relay.mjs" rollback "$@"
+fi
+[[ $# == 0 && $EUID == 0 ]] || { echo "用法：rollback-rename [--dry-run]；实际回滚在中转服务器以 root 执行。" >&2; exit 1; }
+exec 9>/run/lock/hifabu-relay-rename.lock
+flock --nonblock 9 || { echo "中转正在切换或部署，请稍后重试。" >&2; exit 1; }
+exec /usr/local/bin/node "$source_dir/volc1/rename-relay.mjs" rollback

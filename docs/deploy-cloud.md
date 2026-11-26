@@ -25,11 +25,17 @@ systemd 以 `hifabu-cloud` 用户运行 `packages/cloud`，在 `127.0.0.1:8791` 
 
 **回退。** 脚本失败会尝试还原原来的 nginx 文件和服务。首次部署后需要回退时，从脚本输出的 `hifabu.conf.pre-hifabu.*` 备份还原原站点配置，跑 `nginx -t && systemctl reload nginx`，再执行 `systemctl disable --now hifabu-cloud.service`。升级后回退时，优先用原 Git 提交重新执行部署脚本，或将 `/opt/hifabu-cloud/current` 原子切回原发布目录并重启服务。回退后复核两个首页都返回 200。保留数据目录、环境文件和签名私钥。
 
+### R7 部署窗口
+
+seoul-vps 的 `hifabu-cloud.service`、`/opt/hifabu-cloud`、`/var/lib/hifabu-cloud` 与 nginx 的 Hifabu 站点沿用现有部署。协调器在 volc1 切换之前和之后，从 seoul-vps 上的 R7 checkout 运行 `deploy/hifabu/check-rename.sh`。命令只检查本机服务和登录页、公开 HTTPS 登录页、中转鉴权入口及 assurelane 首页。切换步骤、投递和 blob 数量核对表见[中转运维手册](deploy-relay.md#r7-服务器改名)。
+
+服务器管理命令的新名称为 `hifabu-cloud`，从仓库可运行 `node packages/cloud/src/cli.mjs --help`。已安装 workspace bin 时，`vk-cloud` 在两个小版本内仍可调用，并在 stderr 提示改名。
+
 ## 2. volc1 接入中转
 
 按 [中转部署和 Hifabu 迁移](deploy-relay.md#hifabu-机器令牌与迁移) 更新中转与验签配置。核对服务器时钟同步，且 `relay.allow_legacy_tokens` 为 `true`。在所有者账号的「我的 Hifabu」核对传片用量可读，确认已登录的所有者可以在「管理」看到该账号的开通状态和用量。验证管理查询即可。
 
-**回退。** 暂停账号令牌投递后，还原更新前的中转配置备份并重启 `versekit-relay`。需要回退中转代码时，使用上一个已知正常的提交重跑中转部署。不清理原固定令牌队列或新增的按账号目录。
+**回退。** 暂停账号令牌投递后，还原更新前的中转配置备份并重启 `hifabu-relay`。需要回退中转代码时，使用上一个已知正常的提交重跑中转部署。不清理原固定令牌队列或新增的按账号目录。
 
 ## 3. 制作机、发布机在系统页登录
 
