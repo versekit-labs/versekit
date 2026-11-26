@@ -14,6 +14,8 @@ const serverLocation = /^(?:deploy\/|docs\/deploy[-.])|(?:^|\/)server\//;
 const sourceFile = /\.(?:[cm]?[jt]sx?|css|json|ya?ml|toml|sh|sql)$/;
 const internalName = /@versekit[-/]|[\w.-]+[-_]versekit\b|\bversekit[-_][\w-]+/i;
 const visibleSource = /^(?:packages\/web\/public\/|site\/|docs\/design\/|\.impeccable\/surfaces\/)|\/(?:cards?|messages?|status)\.[cm]?js$/;
+const commentSource = /\.(?:[cm]?[jt]sx?|css|html)$/;
+const leadingComment = /^\s*(?:\/\/.*|\/\*.*?(?:\*\/|$)|\*\s.*|<!--.*?(?:-->|$))/;
 
 function loadAllowlist() {
   return readFileSync(join(root, allowlistPath), "utf8").split(/\r?\n/).flatMap((line, index) => {
@@ -63,6 +65,8 @@ function classify(file, line, match) {
   if (serverLocation.test(file) || /(?:^|\/)(?:opt|var\/lib|etc\/systemd)\/.*versekit|versekit[\w-]*\.service\b/i.test(word)) return "服务器";
   if (!word.startsWith("@") && brandInPath.test(word)) return "本机路径";
   if (internalName.test(word) || /\b(?:name|profile)\s*[:=]\s*["']$/i.test(line.slice(0, match.index))) return "内部名字";
+  // 源码注释归 R6，注释之后同一行的可见文字仍照常检查。
+  if (commentSource.test(file) && match.index < (leadingComment.exec(line)?.[0].length ?? 0)) return "内部名字";
   if (visibleSource.test(file) || /^\s*(?:<|.*\b(?:title|message|summary|hint|label|content|description)\s*:)/.test(line)) return "用户看得见的字";
   if (sourceFile.test(file)) return "内部名字";
   return "其他";

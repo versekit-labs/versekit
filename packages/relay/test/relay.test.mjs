@@ -288,7 +288,7 @@ test("ACC-deliver-04 发布机下载进度与六小时离线文案，记住最�
     const offline = await show();
     assert.equal(offline.lastPullAt, lastPullAt, "制作机多次看状态也不算发布机来取");
     assert.equal(offline.offline, true);
-    assert.match(offline.message, /已到中转，但发布机 6 小时没来取。打开那台电脑上的 versekit 就会自动下载/);
+    assert.match(offline.message, /已到中转，但发布机 6 小时没来取。打开那台电脑上的 Hifabu 就会自动下载/);
 
     await listDeliveries(publisher());
     await reportState({ ...publisher(), id, state: "downloading", progress: { received: 400, bytesPerSecond: 12 } });

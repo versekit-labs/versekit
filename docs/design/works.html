@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>作品 · versekit</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>作品 · Hifabu</title>
 <link rel="stylesheet" href="app.css">
 <style>
 .bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
@@ -50,7 +50,7 @@
   .cal.month .ev .ti,.cal.month .ev .cnt{display:none}.cal.month .dc{min-height:72px;padding:2px}.cal.month .dh{padding:6px 2px;justify-content:center}}
 </style></head>
 <body><div class="app">
-<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>Hifabu</div>
 <a class="nv" href="today.html">今天<b data-todo hidden></b></a>
 <a class="nv" href="works.html" aria-current="page">作品</a>
 <a class="nv" href="data.html">数据</a>
@@ -64,7 +64,7 @@
 <script src="app.js"></script>
 <script>
 initShell();
-const SAY = '帮我接入 versekit：https://vk.example.com/claude';
+const SAY = '帮我接入 Hifabu：https://vk.example.com/claude';
 const FIL = [['all', '全部'], ['wait', '等你确认'], ['sched', '排着要发'], ['pub', '都发完了'], ['bad', '有问题']];
 let fil = 'all', q = '';
 // 视图：列表 / 周 / 月（#view=week|month，#off=±N 往前往后翻）
@@ -128,7 +128,7 @@ function draw() {
   document.getElementById('seg').innerHTML = FIL.map(([k, n]) => { const c = k === 'all' ? WORKS.length : WORKS.filter((w) => workState(w)[0] === k).length; return `<button data-f="${k}" aria-pressed="${k === fil}">${n}${c && k !== 'all' ? ' ' + c : ''}</button>`; }).join('');
   if (HASH.empty) { document.getElementById('count').textContent = `${GROUP.name} · 还没有作品`; document.querySelector('.bar').hidden = true; document.querySelector('.legend').hidden = true;
     document.getElementById('list').innerHTML = HASH.empty === 'new'
-      ? `<div class="panel first"><h3>让 Claude 把做好的内容送进来</h3><p class="sub">versekit 不做内容，只管把做好的发出去。把下面这句话发给你做视频的那个 Claude，它会自己接好，中间让你在浏览器里点一次「允许」。</p><div class="say"><span>${SAY}</span><button class="btn" data-copy>复制</button></div><p class="sub">接好以后，在 Claude 里说「把这期入库」，做好的内容就会出现在这里，等你确认。</p></div>`
+      ? `<div class="panel first"><h3>让 Claude 把做好的内容送进来</h3><p class="sub">Hifabu 不做内容，只管把做好的发出去。把下面这句话发给你做视频的那个 Claude，它会自己接好，中间让你在浏览器里点一次「允许」。</p><div class="say"><span>${SAY}</span><button class="btn" data-copy>复制</button></div><p class="sub">接好以后，在 Claude 里说「把这期入库」，做好的内容就会出现在这里，等你确认。</p></div>`
       : `<div class="panel first"><h3>还没有作品</h3><p class="sub">Claude 已经接好了（Mac mini 上的 Claude）。在 Claude 里说「把这期入库」，做好的内容就会出现在这里，等你确认。</p></div>`;
     return; }
   const up = fil === 'all' && !q && !SIMPLE && HASH.up !== 'no' ? `<tr><td><span class="wcell"><span class="cv ph" role="img" aria-label="还没有封面"></span><span><b>GDPR 罚单是怎么算出来的？</b><span class="sub">正在从「Mac mini 上的 Claude」上传 · 3 / 5 个文件</span></span></span></td><td><span class="st">传完才能确认</span></td><td></td><td><span class="sub">还没有结果</span></td><td class="n sub">今天</td></tr>` : '';

@@ -92,6 +92,19 @@ test("首批白名单只豁免指定路径或命中片段，严格模式接受�
   assert.match(remaining.stdout, /deploy\/example.service:1/);
 });
 
+test("可见文案和同一文件中的代码注释分别归类", (t) => {
+  const repo = fixture(t);
+  repo.write("packages/web/public/app.css", "/* VerseKit shared styles */");
+  repo.write("packages/web/public/app.js", '// VerseKit data layer\nconst error = { message: "VerseKit is offline" };');
+  repo.write("docs/design/demo.html", "<!-- VerseKit design note --><title>VerseKit</title>");
+
+  const report = repo.run();
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(report.stdout, /用户看得见的字：2 处（docs\/design\/demo.html:1、packages\/web\/public\/app.js:2）/);
+  assert.match(report.stdout, /内部名字：3 处（docs\/design\/demo.html:1、packages\/web\/public\/app.css:1、packages\/web\/public\/app.js:1）/);
+  assert.match(report.stdout, /总计：5 处白名单外残留/);
+});
+
 test("白名单缺少一句话理由时，两种模式都报错并定位行号", (t) => {
   const repo = fixture(t);
   repo.write(allowlist, "# 格式说明\nexempt.txt\t-\t历史文档\t   \n");

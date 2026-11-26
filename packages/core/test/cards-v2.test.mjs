@@ -502,7 +502,7 @@ test("旧按钮（重试等）行为不变：照旧执行并原地更新成一�
   });
   assert.equal(res.ok, true);
   assert.equal(ch.updates().length, 1);
-  assert.equal(ch.updates()[0].card.header.title.content, "versekit · 已处理");
+  assert.equal(ch.updates()[0].card.header.title.content, "Hifabu · 已处理");
 });
 
 test("ACC-v2-copy-04：确认卡片显示正文前几行与话题；为空时写「没有正文」「没有话题」", () => {

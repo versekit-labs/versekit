@@ -131,7 +131,7 @@ export function renderUnit({ port, offline, env = process.env }) {
   const log = paths().log;
   const q = (s) => `"${String(s).replace(/"/g, '\\"')}"`;
   return `[Unit]
-Description=versekit 控制台与后台守护进程
+Description=Hifabu 控制台与后台守护进程
 
 [Service]
 ExecStart=${[process.execPath, ...serveArgs({ port, offline })].map(q).join(" ")}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>作品详情 · versekit</title>
+<title>作品详情 · Hifabu</title>
 <link rel="stylesheet" href="/app.css">
 <style>
 .wh{display:flex;gap:12px;align-items:center;margin:2px 0 20px;flex-wrap:wrap}
@@ -21,7 +21,7 @@
 </head>
 <body data-page="works">
 <div class="app">
-  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>Hifabu</div>
     <a class="nv" href="today.html" data-key="today">今天<b data-todo hidden></b></a>
     <a class="nv" href="works.html" data-key="works" aria-current="page">作品</a>
     <a class="nv" href="data.html" data-key="data">数据</a>
@@ -115,7 +115,7 @@
   function render() {
     const work = state.work;
     const cut = work.cuts.find((c) => c.id === state.cutId) ?? work.cuts[0];
-    document.title = `${work.title} · 作品详情 · versekit`;
+    document.title = `${work.title} · 作品详情 · Hifabu`;
     if (!cut) {
       main.innerHTML = `<a class="crumb" href="/works">← 作品</a><div class="wh"><h1>${esc(work.title)}</h1></div>` +
         `<div class="panel empty">这个作品还没有成片。</div>`;

@@ -260,7 +260,7 @@ export const COMMANDS = [
   },
   {
     name: "account.rename",
-    summary: "给账号改个名字（只改 VerseKit 里的名字，不影响平台；id、登录、凭据、平台稿都不动）",
+    summary: "给账号改个名字（只改 Hifabu 里的名字，不影响平台；id、登录、凭据、平台稿都不动）",
     remote: false,
     localOnly: true,
     args: { accountId: "string", name: "string" },

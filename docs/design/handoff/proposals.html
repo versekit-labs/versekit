@@ -158,14 +158,14 @@ th{color:var(--ink2);font-weight:600;font-size:12px}
     </div>
     <div class="term" aria-label="方案 B 对话示例"><span class="you">❯ 交给发布机</span>
 
-<span class="dim">⏺ versekit · handoff_preview (episode: "01")</span>
+<span class="dim">⏺ Hifabu · handoff_preview (episode: "01")</span>
 <span class="dim">  ⎿  成片 52MB · 封面 1 · 文案齐 · 小红书 / 抖音 / B站 都能建 · 预计 8 分钟</span>
-<span class="dim">⏺ versekit · handoff_send (episode: "01")</span>
+<span class="dim">⏺ Hifabu · handoff_send (episode: "01")</span>
 <span class="ok">  ⎿  投递 dl_7f3a… 已登记，后台上传中</span>
 
 <span class="you">❯ 到了吗</span>
 
-<span class="dim">⏺ versekit · handoff_status (delivery: "dl_7f3a…")</span>
+<span class="dim">⏺ Hifabu · handoff_status (delivery: "dl_7f3a…")</span>
 <span class="ok">  ⎿  等你确认 · 小红书 11-25 20:00 · 抖音 11-25 21:00 · B站 11-26 12:00</span></div>
     <p class="note">对你来说和 A 看起来几乎一样，区别在里面：参数是结构化的，不需要会话有执行命令的权限，以后给 SaaS 用户、给只有桌面版 Claude 的人也能用（ADR-0005 §9）。现在只有你一个人用，建议先 A，等要给别人用时把同一组命令再派生成 MCP 工具，技能不用重写。</p>
   </div>
@@ -209,7 +209,7 @@ th{color:var(--ink2);font-weight:600;font-size:12px}
   </div>
   <div class="errs">
     <div class="err"><h3>中转连不上</h3><p class="when">上传时</p><p class="say">中转连不上，已经排队。网通了会自动接着传，不用再说一遍。</p><span class="pill wait">排队中</span></div>
-    <div class="err"><h3>发布机离线</h3><p class="when">在中转上等太久</p><p class="say">已到中转，但发布机 6 小时没来取。打开那台电脑上的 versekit 就会自动下载。</p><span class="pill wait">等发布机</span></div>
+    <div class="err"><h3>发布机离线</h3><p class="when">在中转上等太久</p><p class="say">已到中转，但发布机 6 小时没来取。打开那台电脑上的 Hifabu 就会自动下载。</p><span class="pill wait">等发布机</span></div>
     <div class="err"><h3>文件大</h3><p class="when">交之前预览时</p><p class="say">188MB，到发布机约 28 分钟。后台传，不用等。</p><span class="pill">只提示，不拦</span></div>
     <div class="err"><h3>中转空间不够</h3><p class="when">上传时</p><p class="say">中转只剩 1.6GB，放不下这一期（188MB 之外还要留 2GB）。等已入库的旧期满 7 天自动清掉，或者先清理中转。</p><span class="pill bad">没交成</span></div>
     <div class="err"><h3>文案超限</h3><p class="when">交之前预览时</p><p class="say">小红书标题 24 字，限 20 字。改成「李白：一生都在出发」（9 字）？</p><span class="pill wait">问你一句</span></div>

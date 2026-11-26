@@ -48,7 +48,7 @@ export function deliveryStatusView(row, { lastPullAt = null, downloadBytesPerSec
   }
   const age = now - (lastPullAt ?? row.created_at);
   const offline = age >= OFFLINE_AFTER_MS;
-  const message = offline ? "已到中转，但发布机 6 小时没来取。打开那台电脑上的 versekit 就会自动下载。"
+  const message = offline ? "已到中转，但发布机 6 小时没来取。打开那台电脑上的 Hifabu 就会自动下载。"
     : lastPullAt == null ? "已到中转。发布机还没来取。"
       : `已到中转。发布机上次来取是 ${formatDuration(Math.max(0, Math.floor(age / 1000)))}前。`;
   return { ...meta, state: "waiting", label: "等发布机来取", offline, message };

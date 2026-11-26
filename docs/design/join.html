@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>接受邀请 · versekit</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>接受邀请 · Hifabu</title>
 <link rel="stylesheet" href="app.css">
 <style>
 .stp{border-top:1px solid var(--line);padding:14px 0;display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 10px;align-items:start}
@@ -23,7 +23,7 @@ const HASH = Object.fromEntries(location.hash.slice(1).split('&').filter(Boolean
 const main = document.getElementById('main'); let cur = HASH.s === 'old' ? 0 : +HASH.s || 1; let slow = !!HASH.slow; let pw = '';
 const res = { 2: null, 3: null, 4: null }; const skipped = new Set(HASH.s === '5' ? [4] : []); const MLOC = '书房的 Mac · 美国 洛杉矶 203.0.113.24 · 家庭宽带'; let qr = 'qr'; let pf = '小红书';
 if (cur > 2) res[2] = MLOC; if (cur > 3) res[3] = '小红书 · 林夏的日常'; if (cur > 4) res[4] = '没接，以后在「系统」里接';
-const SAY = '帮我接入 versekit：https://vk.example.com/claude';
+const SAY = '帮我接入 Hifabu：https://vk.example.com/claude';
 // 做完一步后去哪：还没到过的下一步；都到过了就回到总结
 let far = cur; const nextCur = (n) => { far = Math.max(far, n + 1); return far > 4 ? 5 : n + 1; };
 const T = ['', '设一个密码', '接一台发布机', '登录第一个平台账号', '接上 Claude'];
@@ -43,14 +43,14 @@ function body(n) {
     <div class="qrrow"><button class="qr" data-scan title="原型里点一下，当作扫了码">${qr === 'qr' ? '二维码<br>（原型里点一下当作扫了码）' : '已扫码<br>（再点一下当作点了确认）'}</button>
     <div><b style="font-weight:600">${qr === 'qr' ? `用${pf} App 扫这个码` : '在手机上点「确认登录」'}</b><div class="sub">二维码是发布机「书房的 Mac」取回来的。登录数据只存在那台电脑上。</div></div></div>
     <div class="row"><button class="link" data-skip="3">先跳过，以后在「系统」里登录</button></div>`;
-  return `<p>versekit 不做内容。把下面这句话发给你做内容的那个 Claude，它会自己接好，中间让你在浏览器里点一次「允许」。</p>
+  return `<p>Hifabu 不做内容。把下面这句话发给你做内容的那个 Claude，它会自己接好，中间让你在浏览器里点一次「允许」。</p>
     <div class="say"><span>${SAY}</span><button class="btn pri" data-copy>复制</button></div>
     <div class="row"><span class="st wait">等 Claude 接上来…</span><button class="link" data-n="4">原型里点这里当作接上了</button><button class="link" data-skip="4">先跳过</button></div>`;
 }
 function draw() {
-  if (!cur) { main.innerHTML = `<div class="brand"><i></i>versekit</div><h1>这条邀请不能用了</h1><div class="panel"><div>它已经过期，或者已经用过一次。</div><div class="sub">请发邀请的人再发一次。已经设过密码的话，直接登录。</div><div class="go"><a class="btn" href="login.html">去登录</a></div></div>`; return; }
-  main.innerHTML = `<div class="brand"><i></i>versekit</div>
-  <h1>${cur > 4 ? (skipped.size ? `还差 ${skipped.size} 步才能发第一条` : '都接好了') : '你好，林夏'}</h1><div class="sub" style="margin-bottom:22px">${cur > 4 ? (skipped.size ? '跳过的可以现在接，也可以以后在「系统」里接。接好之前，还发不出去。' : '以后打开就是「今天」：有要你确认的会在那里等你。想在手机上确认，到「系统」的「通知」里接飞书。') : '陈默邀请你用 versekit。四步接好，中途关掉也没关系，下次登录接着来。'}</div>
+  if (!cur) { main.innerHTML = `<div class="brand"><i></i>Hifabu</div><h1>这条邀请不能用了</h1><div class="panel"><div>它已经过期，或者已经用过一次。</div><div class="sub">请发邀请的人再发一次。已经设过密码的话，直接登录。</div><div class="go"><a class="btn" href="login.html">去登录</a></div></div>`; return; }
+  main.innerHTML = `<div class="brand"><i></i>Hifabu</div>
+  <h1>${cur > 4 ? (skipped.size ? `还差 ${skipped.size} 步才能发第一条` : '都接好了') : '你好，林夏'}</h1><div class="sub" style="margin-bottom:22px">${cur > 4 ? (skipped.size ? '跳过的可以现在接，也可以以后在「系统」里接。接好之前，还发不出去。' : '以后打开就是「今天」：有要你确认的会在那里等你。想在手机上确认，到「系统」的「通知」里接飞书。') : '陈默邀请你用 Hifabu。四步接好，中途关掉也没关系，下次登录接着来。'}</div>
   ${[1, 2, 3, 4].map((n) => `<section class="stp ${skipped.has(n) && n !== cur ? 'skip' : n < cur ? 'done' : n === cur ? 'cur' : 'todo'}"><span class="no" aria-hidden="true">${n < cur && !skipped.has(n) ? '✓' : n}</span><div><h2>${T[n]}</h2>${skipped.has(n) && n !== cur ? `<div class="res">跳过了 <button class="link" data-redo="${n}">现在接</button></div>` : n < cur ? `<div class="res">${R()[n]}</div>` : ''}</div>${n === cur ? `<div class="bd">${body(n)}</div>` : ''}</section>`).join('')}
   ${cur > 4 ? `<div class="go" style="margin-top:22px"><a class="btn ${skipped.size ? '' : 'pri'} lg" href="today.html">${skipped.size ? '先进去看看' : '进入今天'}</a></div>` : ''}`;
 }
