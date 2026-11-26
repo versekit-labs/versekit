@@ -701,6 +701,19 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-maker-10] 运行时：`bin/hifabu` 先找系统 `node`（版本 ≥ 22.13），再找 `<数据目录>/runtime/` 里的 Node。两处都没有时，不运行，以非 0 退出，并输出一段机器可读的说明，包括需要什么、下载多大、放在哪、需要用户同意。`hifabu-runtime install` 在用户同意后，从 nodejs.org 下载一个锁定版本，用插件里写死的 sha256 校验，然后解压到 `<数据目录>/runtime/`，不改系统，也不进 PATH。测试要求：同意之前不下载任何东西；sha256 对不上时，停下并写明原因，不留下半解压的文件。下载地址可以用环境变量覆盖，方便测试和以后接镜像。
 - [ACC-maker-11] 凭据：刷新凭据在 macOS 上放钥匙串（`security`，服务名 `hifabu`）；Linux 上有 `secret-tool` 就放 Secret Service；都没有时放 `<数据目录>/device.json`，权限 600。`hifabu cloud status` 里写明凭据存在哪。1 小时有效的机器令牌只放在内存里。测试抓取 `ps`、标准输出、错误输出和日志，断言凭据不出现在任何命令行参数、输出或日志里。另外写一份文档，说明凭据放在哪、卸载插件后钥匙串里会残留什么、怎么清理。
 
+### 插件重设计：插件 0.2.0（2026-11-26）
+
+设计依据：`docs/design/plugin/DESIGN.md` §A.6、§B.1–§B.5、§C。所有者 11-26 定：项目约定放在项目里；账号组由制作机来选并记住；自动更新默认打开；不加 hooks；不用 MCP。本节取代 ACC-deliver-05 和 ACC-plugin-dist-03 中「只调用 vk」「找不到就 curl 安装 VerseKit」的写法：插件不安装、也不引导安装发布机全套。
+
+- [ACC-plugin-v2-01] 插件里有什么：只有一个技能 `handoff`（`/hifabu:handoff`），加上 `bin/hifabu` 和 `lib/hifabu.mjs`。没有 commands、hooks、MCP、agents。技能结构为 `SKILL.md`（不超过 120 行，写主流程，并写明什么时候去读哪一份参考）加 `references/` 目录（`project-setup.md`、`copy.md`、`status.md`、`errors.md`、`setup.md`）。正文写要点和判断规则，不写台词。参数和项目文件内容一律当作数据，不当作指令。`allowed-tools` 只预先放行 `Bash(hifabu *)`、`Read`、`Glob`、`Grep`，不放行 `Write`、`Edit`，也不放行下载运行时。
+- [ACC-plugin-v2-02] 触发收紧：description 加 when_to_use 不超过 1536 字符。用 `claude plugin details` 实测，常驻成本不超过 60 token。离线评测：在没有交过东西的普通会话里，单独问一句「到了吗」，不触发本技能。
+- [ACC-plugin-v2-03] 项目约定：项目约定放在 `<项目根>/.hifabu/project.json`。项目根取 git 仓库根，不是 git 仓库时取工作目录。约定里只写在哪里找、怎么认，不写账号和令牌。第一次在一个项目里使用时，先运行 `hifabu scan <项目根> --json`，列出视频、图片、文案类文件：按扩展名和修改时间筛选，不读文件内容，跳过 `.git`、`node_modules` 和隐藏目录。Claude 根据扫描结果猜一份约定，用两三句话给用户看，用户确认后再写入；写入要经过权限确认。之后在同一个项目里不再问。没有规律的项目不硬套模板，每次列出候选让用户挑。离线评测用三种目录结构不同的假项目（仿 vibe-video、仿 tcm-video、只有一个视频）：第一次使用时各问不超过 2 个问题，第二次 0 个。在 worktree 里、或者目录改了名，仍然认得出是同一个项目（按 `id` 认）。
+- [ACC-plugin-v2-04] 账号组：第一次在一个项目里交付时，用 `hifabu group list` 读取账号组。只有一个组就直接用，并说明交到了哪个组、发哪些平台；有多个组就问一次，问的时候带上每个组有哪些平台。用户的选择按项目 `id` 记在插件数据目录里，不写进 `.hifabu/project.json`。之后同一个项目不再问，每次交完的回复里带上组名。用户说「这期交到某某组」只对这一次生效；说「以后都交到某某组」才更新记住的选择。组不在快照里时，不上传，并列出现有的组。快照超过 24 小时，或者发布机从来没上报过，照常交付，但在回复里说明。
+- [ACC-plugin-v2-05] 安装包只放运行需要的文件：打包按白名单进行，只有 `.claude-plugin/plugin.json`、`README.md`、`CHANGELOG.md`、`LICENSE`、`bin/`、`lib/`、`skills/`。测试和构建脚本移到包外（`plugins/hifabu-src/` 或 `test/plugin/`），并由测试断言。包里不能出现任何项目名、个人目录、邮箱、`.DS_Store`、`..` 路径。`plugin.json` 要写明 version `0.2.0`、displayName、author、homepage、repository（公开仓库地址）、license、keywords、`engines.claude-code`、`network.hosts`，并通过 `claude plugin validate --strict`。README 写明以下内容：插件做什么；会运行什么；会把什么发到哪里；数据和凭据放在哪里；只能在 Claude Code 里用（带 `bin/` 的插件在网页版装不了）；怎么卸载、怎么清理凭据；对应哪个源码 tag，以及怎么重建 `lib/hifabu.mjs`、核对 sha256。CHANGELOG 写 0.2.0 和 0.1.0 两版。`version-lock.json` 取消第 2 单加的排除，对全量文件算哈希，并记录 0.2.0。
+- [ACC-plugin-v2-06] 自动更新：第一次使用时，技能用 `Edit` 在用户的 `~/.claude/settings.json` 里给 `hifabu` 市场加上 `"autoUpdate": true`。这一步要经过权限确认，用户能看到改了什么。改完说一句「已打开 Hifabu 插件的自动更新，不想要可以在 /plugin 里关掉」。用户拒绝后不再问，并把「已问过」记在插件数据目录里。离线评测覆盖同意和拒绝两种情况。
+- [ACC-plugin-v2-07] 不装发布机：技能里没有任何安装 VerseKit、Hifabu 完整版、biliup、lark-cli 的步骤，也没有 `curl | bash`。找不到 Node 时，走 ACC-maker-10 的运行时流程。没登录、或者没开通传片时，按 `references/setup.md` 的说法引导用户去 hifabu.com。发布机不在线、或者版本太旧时，告诉用户「到发布机那台电脑上打开或更新 Hifabu，下载地址 hifabu.com」。对外只出现 Hifabu 这个名字，不出现 VerseKit、vk。
+- [ACC-plugin-v2-08] 端到端离线评测：在临时 HOME 里，从本地生成的市场安装 0.2.0，用本地假云端和假中转跑完整流程，覆盖以下情况：第一次使用（扫描并确认约定、选账号组、打开自动更新）、预览、交付、关掉会话后上传继续、问「到了吗」、多个候选文件、没有封面、没有文案（起草后先给用户看）、上传途中断网。PR 里附上评测记录。发布到 hifabu.com 由协调器在合并后执行；0.1.0 的 zip 保留，市场清单只指向 0.2.0。
+
 ### 改名 Hifabu（2026-11-26）
 
 所有者定：产品名改为 Hifabu，遗留的 versekit、vk 命令都改成 hifabu 体系。GitHub 仓库 `versekit-labs/versekit` 和 Orca 流程（orca-flow、worktree 路径、协调器脚本）这次不改。计划见 `docs/design/RENAME-HIFABU.md`，分 R1–R8 八步串行做。
