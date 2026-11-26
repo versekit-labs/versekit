@@ -196,7 +196,7 @@ test("ACC-v3-fid-03/04/05/06 封面、侧栏按平台、墨色主按钮、发布
   // 而且这些都在各自的行内展开里，同一行同时只有一步；Connect TikTok、再试一次、现在更新都是描边
   const sysInk = [...system.matchAll(/"([^"]{1,12})", "btn pri"/g)].map((m) => m[1]).sort();
   // 通知分段的每个步骤和「登录 Hifabu」各有自己的主按钮。平台登录需要操作时，Hifabu 登录按钮改用描边。
-  assert.deepEqual(sysInk, ["保存", "发验证码", "我登录好了", "登录", "接入", "接飞书", "去飞书里开通", "登录 Hifabu"].sort());
+  assert.deepEqual(sysInk, ["保存", "发验证码", "安装并继续", "我登录好了", "登录", "接入", "接飞书", "去飞书里开通", "登录 Hifabu"].sort());
   assert.match(system, /connected\(a\) \? "link" : "btn"/);
   assert.match(system, /<button class="btn" data-retry=/);
   // 已发布的行，时间列是发布时间；竖版成片视频框 360px

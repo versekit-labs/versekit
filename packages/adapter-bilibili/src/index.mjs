@@ -8,44 +8,26 @@
 //   · 工厂用一句 `notes` 字符串告诉人"还要去勾 AI 声明 / 传字幕 / 进合集"，
 //     这里改成三条 followup：可追踪、可核实、可关闭
 
-import { readEnv } from "../../core/src/env.mjs";
 import { execFile } from "node:child_process";
-import { readFileSync, existsSync, accessSync, constants } from "node:fs";
-import { delimiter, join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
 import { open } from "../../core/src/index.mjs";
 import { AdapterError } from "../../core/src/errors.mjs";
+import { componentBinary } from "../../core/src/components.mjs";
 import { resolvePublishAsset, resolvePublishCopy } from "../../core/src/publish-flow.mjs";
 import { login, loginStatus, clearCredentials } from "./login.mjs";
 
-const BILIUP = () => readEnv("HIFABU_BILIUP_BIN") ?? "biliup";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 const ARCHIVES = "https://member.bilibili.com/x/web/archives";
-
-/**
- * biliup 在不在。不能只 existsSync("biliup")：那查的是 cwd 下的相对路径，
- * 而用户装在哪都有可能。先看显式配置，再按 PATH 找可执行文件。
- */
-function hasBiliup() {
-  const configured = readEnv("HIFABU_BILIUP_BIN");
-  if (configured) return existsSync(configured);
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    try {
-      accessSync(join(dir, "biliup"), constants.X_OK);
-      return true;
-    } catch {
-      /* not here */
-    }
-  }
-  return false;
-}
 
 /** 平台怪癖写在这里，不进业务逻辑：延时发布必须 ≥4 小时，否则立即发。 */
 const MIN_SCHEDULE_MS = 4.2 * 3600e3;
 
 function biliup(args, { timeout = 3600e3 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(BILIUP(), args, { timeout, maxBuffer: 64 << 20, encoding: "utf8" }, (err, stdout, stderr) => {
+    const binary = componentBinary("biliup");
+    if (!binary) return reject(new AdapterError("component_missing"));
+    execFile(binary, args, { timeout, maxBuffer: 64 << 20, encoding: "utf8" }, (err, stdout, stderr) => {
+      if (err?.code === "ENOENT") return reject(new AdapterError("component_missing", null, { cause: err }));
       if (err) {
         err.message = `${err.message}\n${String(stdout ?? "").slice(-800)}${String(stderr ?? "").slice(-800)}`;
         return reject(err);
@@ -237,7 +219,7 @@ export default {
     minScheduleLeadMs: MIN_SCHEDULE_MS,
   },
   ready() {
-    if (!hasBiliup()) return "B站 未配置：这台电脑上没有装 B站 的投稿组件";
+    if (!componentBinary("biliup")) return "B站 未配置：这台电脑上没有装 B站 的投稿组件";
     return null;
   },
   // 页面扫码：开有头窗口 → 人扫码 → 适配器把 cookie 写成 biliup 的 cookies 文件。

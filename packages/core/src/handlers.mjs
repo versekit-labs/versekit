@@ -26,6 +26,7 @@ import * as overview from "./overview.mjs";
 import { checkAccount, notifyLogin } from "./adapters.mjs";
 import * as updates from "./update.mjs";
 import * as egress from "./egress.mjs";
+import { installComponent, listComponents, removeComponent } from "./components.mjs";
 import { LOGIN_TRACKED, loginCheckTime, normaliseClock, queueLoginChecks, rearmLoginChecker, DEFAULT_LOGIN_CHECK_TIME } from "./scheduler.mjs";
 
 /** 设备名：config.json 的 device.name；没起名叫「发布机」。主机名（xxx.local）不是给人看的。 */
@@ -180,8 +181,20 @@ export function loginHint(platform, accountId) {
  * `updater`：{ apply({ now }) } 由 CLI 那一层给（更新要动服务和程序目录，不在内核里）；
  * `loginsOpen()`：守护进程里还开着的登录窗口数。
  */
-export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0, uploadQueue = null, machineRelay = () => null } = {}) {
+export function createCoreHandlers({ adapters = [], log = () => {}, doctor = null, updater = null, loginsOpen = () => 0, uploadQueue = null, machineRelay = () => null, offline = false } = {}) {
   const byPlatform = new Map(adapters.map((a) => [a.platform, a]));
+
+  async function changeComponent(name, action) {
+    try {
+      return action === "install" ? await installComponent(name, { offline }) : await removeComponent(name);
+    } catch (err) {
+      emit({
+        type: "component.failed", severity: "warn",
+        payload: { component: name, action, error_code: err.code, message: err.message },
+      });
+      throw err;
+    }
+  }
   /** 方案里能选的平台：已安装的适配器；离线模式不装适配器，退回矩阵里的平台名，方案照样能看能改。 */
   const knownPlatforms = () => (byPlatform.size ? [...byPlatform.keys()] : overview.MATRIX_COLUMNS.map((c) => c.platform));
 
@@ -643,6 +656,10 @@ export function createCoreHandlers({ adapters = [], log = () => {}, doctor = nul
     "relay.pull": () => pullRound(),
 
     "update.status": () => updates.statusView(),
+
+    "component.list": () => listComponents(),
+    "component.install": ({ name }) => changeComponent(name, "install"),
+    "component.remove": ({ name }) => changeComponent(name, "remove"),
 
     update: async ({ check = false, auto = null, now = false } = {}) => {
       if (auto != null && auto !== "") {

@@ -116,6 +116,8 @@ bash install.sh
 - `component.install <biliup|lark-cli>`：从发版清单里锁定的地址下载，按清单里的 sha256 校验，装到 `bin/`。
 - `component.remove <名字>`。
 
+安装程序把本版本清单原样保存为程序目录下的 `release-manifest.json`，与 `packages/` 同级。组件命令从这份文件读取锁定版本。开发与离线验证可用 `HIFABU_RELEASE_MANIFEST` 指定本地清单路径；离线模式的下载地址仅限本机 HTTP 测试源。
+
 ### 4.2 什么时候触发，用户看到什么
 
 | 组件 | 触发点 | 用户看到 |

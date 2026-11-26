@@ -188,9 +188,13 @@ export function applyPublishError(publishId, err) {
     return { terminal: false, retryable: false, code: error.code };
   }
 
-  if (error.code === "asset_invalid") {
+  if (error.code === "asset_invalid" || error.code === "component_missing") {
     if (["queued", "auto_running", "draft_running"].includes(row.state)) {
-      transitionPublish(publishId, "failed", { reason: "asset_invalid" });
+      transitionPublish(publishId, "failed", { reason: error.code });
+      if (error.code === "component_missing") emit({
+        type: "component_missing", severity: "warn", publishId,
+        payload: { component: "biliup", error_code: error.code, message: error.message },
+      });
     }
     return { terminal: true, retryable: false, code: error.code };
   }
