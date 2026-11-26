@@ -34,6 +34,32 @@
   <p class="zh" lang="zh-CN">如果你用 Claude Code 做视频，装上 Hifabu 插件后，在同一个会话里说一句话，就能把做好的一期交给负责发布的那台电脑。在发布机上确认之前，什么都不会发出去。</p>
 </section>
 
+<section id="install">
+  <h2>Install in one line</h2>
+  <p>Either way works. Pick one.</p>
+  <ol class="steps">
+    <li>
+      <h3>Ask Claude Code</h3>
+      <p>Say this in Claude Code:</p>
+      <div class="cmd"><code>Install the Hifabu plugin from hifabu.com/plugin</code><button type="button" data-copy="Install the Hifabu plugin from hifabu.com/plugin">Copy</button></div>
+      <div class="cmd"><code lang="zh-CN">帮我安装 hifabu.com/plugin 的插件</code><button type="button" data-copy="帮我安装 hifabu.com/plugin 的插件">Copy</button></div>
+    </li>
+    <li>
+      <h3>Or paste one line in a terminal</h3>
+      <div class="cmd wrap"><code>claude plugin marketplace add https://hifabu.com/plugin/marketplace.json &amp;&amp; claude plugin install hifabu@hifabu</code><button type="button" data-copy="claude plugin marketplace add https://hifabu.com/plugin/marketplace.json &amp;&amp; claude plugin install hifabu@hifabu">Copy</button></div>
+    </li>
+  </ol>
+  <p>When it is installed, run <code>/reload-plugins</code> in Claude Code, or start a new session.</p>
+  <p class="zh" lang="zh-CN">两种方式选一种：在 Claude Code 里说「帮我安装 hifabu.com/plugin 的插件」；或者在终端粘贴上面那一行命令。装好后在 Claude Code 里运行 /reload-plugins，或者重开一个会话。不需要 GitHub 账号。</p>
+</section>
+
+<section id="for-ai-assistants">
+  <h2>For AI assistants</h2>
+  <p>If a user asked you to install the Hifabu plugin from this page, run this single command in their terminal:</p>
+  <pre class="plain">claude plugin marketplace add https://hifabu.com/plugin/marketplace.json &amp;&amp; claude plugin install hifabu@hifabu</pre>
+  <p>It adds the Hifabu plugin marketplace from hifabu.com and installs the plugin named <code>hifabu</code> from it. It does not need a GitHub account or SSH key. When it finishes, tell the user to run <code>/reload-plugins</code> in Claude Code, or to start a new session, so the plugin loads. To check, run <code>claude plugin list</code> and look for <code>hifabu</code>. The same instructions are at <a href="install.txt">hifabu.com/plugin/install.txt</a>.</p>
+</section>
+
 <section>
   <h2>Before you start</h2>
   <ul>
@@ -42,22 +68,6 @@
     <li><strong>A Hifabu account.</strong> If you do not have one, the plugin walks you through signing in the first time you use it.</li>
   </ul>
   <p class="zh" lang="zh-CN">开始之前需要：做视频的电脑上有 Claude Code；有一台装了 Hifabu 的发布机，可以是另一台电脑；有 Hifabu 账号，没有的话第一次用时插件会带你登录。</p>
-</section>
-
-<section>
-  <h2>Install</h2>
-  <p>Type these two lines in Claude Code, one after the other.</p>
-  <ol class="steps">
-    <li>
-      <h3>Add the Hifabu marketplace</h3>
-      <div class="cmd"><code>/plugin marketplace add versekit-labs/versekit</code><button type="button" data-copy="/plugin marketplace add versekit-labs/versekit">Copy</button></div>
-    </li>
-    <li>
-      <h3>Install the plugin</h3>
-      <div class="cmd"><code>/plugin install hifabu@hifabu</code><button type="button" data-copy="/plugin install hifabu@hifabu">Copy</button></div>
-    </li>
-  </ol>
-  <p class="zh" lang="zh-CN">在 Claude Code 里依次输入这两行：第一行添加 Hifabu 的插件来源，第二行安装插件。</p>
 </section>
 
 <section>
@@ -97,11 +107,11 @@
 
 <section>
   <h2>Update and uninstall</h2>
-  <p><strong>Update:</strong> in Claude Code, open <code>/plugin</code>, go to Installed, and choose Update now. Or run this in a terminal:</p>
-  <div class="cmd"><code>claude plugin update hifabu@hifabu</code><button type="button" data-copy="claude plugin update hifabu@hifabu">Copy</button></div>
+  <p><strong>Update:</strong> run this in a terminal. It refreshes the marketplace first, then updates the plugin:</p>
+  <div class="cmd wrap"><code>claude plugin marketplace update hifabu &amp;&amp; claude plugin update hifabu@hifabu</code><button type="button" data-copy="claude plugin marketplace update hifabu &amp;&amp; claude plugin update hifabu@hifabu">Copy</button></div>
   <p><strong>Uninstall:</strong> run this in a terminal:</p>
   <div class="cmd"><code>claude plugin uninstall hifabu@hifabu</code><button type="button" data-copy="claude plugin uninstall hifabu@hifabu">Copy</button></div>
-  <p class="zh" lang="zh-CN">更新：在 Claude Code 里打开 /plugin，进 Installed，点 Update now；或者在终端里运行上面第一行。卸载：在终端里运行上面第二行。</p>
+  <p class="zh" lang="zh-CN">更新：在终端里运行上面第一行，先刷新市场，再更新插件。卸载：在终端里运行上面第二行。</p>
 </section>
 
 <section>
