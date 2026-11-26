@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createServer as netServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir, platform, arch } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,6 +34,7 @@ let releases;
 const requests = [];
 const overrides = new Map();
 
+const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const tar = (args) => {
   const r = spawnSync("tar", args, { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
