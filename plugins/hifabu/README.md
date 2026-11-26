@@ -28,7 +28,7 @@ claude plugin install hifabu --marketplace https://hifabu.com/plugin/marketplace
 
 ## 源码与校验
 
-此版本对应源码标签 [hifabu--v0.2.0](https://github.com/versekit-labs/versekit/tree/hifabu--v0.2.0)，发布时建立。检出该标签，在仓库根目录运行：
+此版本对应源码标签 [hifabu--v0.2.1](https://github.com/versekit-labs/versekit/tree/hifabu--v0.2.1)，发布时建立。检出该标签，在仓库根目录运行：
 
 ```sh
 node scripts/build-maker-client.mjs --out-dir ./rebuild
