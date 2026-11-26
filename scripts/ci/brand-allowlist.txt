@@ -1,0 +1,30 @@
+# 四列用制表符分隔：路径、行内正则、理由类别、理由。
+# 路径可写文件、以 / 结尾的目录或 *。正则写 - 时豁免整条路径，否则只豁免正则覆盖的命中。
+*	(?<![\w-])versekit-labs/versekit(?![\w-]|\.(?!git\b)[\w])	仓库地址	本轮保留 GitHub 组织和仓库名，下载地址、API 地址和永久链接也沿用它们。
+packages/cloud/src/machine-token.mjs	"versekit-relay"	协议常量	已部署的云端和中转按此 audience 签发和验证机器令牌。
+packages/cloud/test/machine-token.test.mjs	"versekit-relay"	协议常量	令牌测试锁定已部署的 audience。
+packages/cloud/src/relay-control.mjs	versekit relay account control v1\\0	协议常量	签名与验签共用这个已部署的 v1 签名串前缀。
+.orca-kit/	-	Orca 流程	项目配置和派工口径继续使用现有 Orca 项目身份。
+bin/orca-flow.mjs	-	Orca 流程	派工脚本继续使用现有项目名、任务前缀和工作树路径。
+bin/agentctl.mjs	-	Orca 流程	协调工具沿用现有 Orca 状态目录和锁。
+bin/dsh-model.sh	-	Orca 流程	协调器模型配置沿用现有 Orca 状态目录。
+bin/worker-channel.sh	-	Orca 流程	工作终端沿用现有 Orca 状态目录。
+docs/COORDINATOR.md	-	Orca 流程	协调器操作手册记录现有 Orca 项目名和工作树路径。
+docs/ORCA-TEAM-PLAYBOOK.md	-	Orca 流程	派工手册记录现有 Orca 项目及其目录约定。
+packages/core/test/agentctl.test.mjs	-	Orca 流程	协调工具测试保留现有项目身份和路径的样例。
+packages/core/test/orca-flow.test.mjs	-	Orca 流程	派工测试验证现有项目名和任务前缀。
+docs/adr-0001-reuse.md	-	历史文档	保留 2026-10 的代码复用决策记录。
+docs/adr-0002-sau-backend.md	-	历史文档	保留 2026-11 的发布后端决策记录。
+docs/adr-0003-distributed.md	-	历史文档	保留 2026-11 的分布式部署决策记录。
+docs/adr-0004-multi-user.md	-	历史文档	保留 2026-11 的多用户架构决策记录。
+docs/adr-0005-saas-architecture.md	-	历史文档	保留 2026-11 的云端架构决策记录。
+docs/research/	-	历史文档	保留账号、平台规则及发布风险调研中的原名以供追溯。
+docs/design/ARCH-RETRO-2026-11-21.md	-	历史文档	保留 2026-11-21 的架构复盘和当时的永久链接。
+docs/design/DESIGN-HANDBACK-2026-11-17.md	-	历史文档	保留 2026-11-17 交回时的设计和实现差异。
+docs/design/DESIGN-HANDBACK-2026-11-18.md	-	历史文档	保留 2026-11-18 交回时的设计和实现差异。
+docs/design/DESIGN-TODO-2026-11-17.md	-	历史文档	保留 2026-11-17 记录的设计差异和后续决定。
+docs/design/HANDOFF.md	-	历史文档	保留 2026-11-15 定稿的 v2 交接记录。
+docs/design/HANDOFF-v3.md	-	历史文档	保留 2026-11-18 整理的 v3 交接记录。
+scripts/ci/check-brand.mjs	-	迁移代码	检查器必须引用旧名称来识别改名残留。
+packages/core/test/check-brand.test.mjs	-	迁移代码	品牌检查测试使用旧名称构造受控样例。
+scripts/ci/brand-allowlist.txt	-	白名单本身	豁免规则必须引用要保留的旧名称。
