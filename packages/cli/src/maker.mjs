@@ -239,15 +239,15 @@ async function uploadJob(job, cfg, { state, signal, checkOwnership, progress }) 
   }
 }
 
-async function runUploader({ state, queue, lockPath, credentialPath, connection }) {
-  const credential = statIfPresent(credentialPath);
+async function runUploader({ state, queue, lockPath, connection }) {
   const cfg = connection();
   if (!cfg || !queue.matching(cfg).length) return;
   const lock = await acquireLock(lockPath);
   if (!lock) return;
   const controller = new AbortController();
   const checkOwnership = () => {
-    if (!lock.owns() || !sameFile(credential, statIfPresent(credentialPath))) controller.abort();
+    const current = connection();
+    if (!lock.owns() || !current || current.url !== cfg.url || current.accountId !== cfg.accountId) controller.abort();
     controller.signal.throwIfAborted();
   };
   const secured = { ...cfg, async token() {
@@ -295,6 +295,7 @@ async function runUploader({ state, queue, lockPath, credentialPath, connection 
     }
   } catch (err) {
     if (err.name !== "AbortError") throw err;
+    return true;
   } finally {
     clearInterval(timer);
     awake?.kill();
@@ -384,12 +385,12 @@ try {
   const dataDir = resolve(flags["--data"] ?? join(homedir(), ".local", "state", "hifabu", "maker"));
   const offline = Boolean(flags["--offline"]);
   const lockPath = join(dataDir, "uploader.lock");
-  const credentialName = "device.json";
   const log = (message) => console.error(message);
-  const cloud = createCloudHandlers({
+  const makeCloud = () => createCloudHandlers({
     offline, openBrowser, log, credentialsDir: dataDir,
-    credentialName, persistMachineToken: false, defaultRole: "maker",
+    credentialName: "device.json", persistMachineToken: false, defaultRole: "maker",
   });
+  const cloud = makeCloud();
   const makerConnection = () => {
     const cfg = cloud.relayConnection();
     if (!cfg) throw Object.assign(new Error("这台电脑还没登录 Hifabu。"), { code: "cloud_login_required", hint: "hifabu cloud login" });
@@ -401,8 +402,8 @@ try {
     }
     return cfg;
   };
-  const connection = () => {
-    const cfg = cloud.relayConnection();
+  const connection = (api = cloud) => {
+    const cfg = api.relayConnection();
     if (cfg?.role === "maker" && cfg.url && (!offline || isLoopback(new URL(cfg.url)))) return cfg;
   };
   const state = fileUploadState(join(dataDir, "queue"));
@@ -420,7 +421,7 @@ try {
   }
 
   if (pos.length === 1 && pos[0] === "_uploader") {
-    const options = { state, queue: uploadQueue, lockPath, credentialPath: join(dataDir, credentialName), connection };
+    const options = { state, queue: uploadQueue, lockPath, connection: () => connection(makeCloud()) };
     // Recheck after releasing the lock in case a foreground command saw the
     // live worker while it was finishing and queued another job.
     while (await runUploader(options)) {}
