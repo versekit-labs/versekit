@@ -741,3 +741,21 @@ test("tick：s:queued 口径/依赖不合格会标「补口径」，合格的等
   assert.match(by[8].why, /依赖 #7 未完成/);
   assert.equal(by[9].blocked, true);
 });
+
+test("涉及段：改/不动下面缩进的子条目继承归属（ACC-harness-scope-01）", async () => {
+  const { issueTouchedFiles } = await import("../../../bin/agentctl.mjs");
+  const body = [
+    "## 涉及与不可动",
+    "- 改：",
+    "  - `packages/cli/src/maker.mjs`",
+    "  - 新增 `schemas/release-v1.json` 和相关测试",
+    "- 不动：",
+    "  - `packages/core/`",
+    "  - `site/`（属于 P5）",
+    "",
+    "**依赖**：无",
+  ].join("\n");
+  assert.deepEqual(issueTouchedFiles(body), ["packages/cli/src/maker.mjs", "schemas/release-v1.json"]);
+  const inline = "## 涉及与不可动\n- 改：`bin/agentctl.mjs`\n- 不动：`packages/`\n";
+  assert.deepEqual(issueTouchedFiles(inline), ["bin/agentctl.mjs"]);
+});
