@@ -231,18 +231,18 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   await relay.close();
   const queued = JSON.parse((await runMaker("work", "push", manifest)).stdout);
   assert.equal(queued.state, "pending");
-  assert.equal(queued.warning.code, "unreachable");
   const jobFile = join(dataDir, "queue", queued.id + ".json");
   assert.equal(statSync(jobFile).mode & 0o777, 0o600);
-  assert.equal(JSON.parse(readFileSync(jobFile, "utf8")).job.errorCode, "unreachable");
+  await eventually(() => JSON.parse(readFileSync(jobFile, "utf8")).job.errorCode === "unreachable");
   const queuedView = JSON.parse((await runMaker("delivery", "show", queued.id)).stdout);
   assert.equal(queuedView.state, "queued");
-  assert.match(queuedView.message, /下次交付时会接着传/);
+  assert.match(queuedView.message, /网通了会自动接着传/);
   await startRelay();
-  const sent = JSON.parse((await runMaker("work", "push", manifest)).stdout);
-  assert.equal(sent.id, queued.id);
-  assert.deepEqual((await pull()).map(({ id }) => id), [sent.id]);
-  assert.equal(JSON.parse((await runMaker("delivery", "list")).stdout).deliveries[0].id, sent.id);
+  assert.deepEqual(await eventually(async () => {
+    const rows = await pull();
+    return rows.length ? rows.map(({ id }) => id) : null;
+  }), [queued.id]);
+  assert.equal(JSON.parse((await runMaker("delivery", "list")).stdout).deliveries[0].id, queued.id);
   assert.throws(() => statSync(jobFile), { code: "ENOENT" });
 
   const loggedOut = JSON.parse((await runMaker("cloud", "logout")).stdout);

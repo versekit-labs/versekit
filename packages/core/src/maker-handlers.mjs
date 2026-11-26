@@ -22,6 +22,17 @@ export function deliveryWorkPlan(manifest, pathOf, defaultLanguage = "default") 
   return { title, cuts };
 }
 
+export async function deliveryTargetPlatforms(cfg, group) {
+  const snapshot = await getGroupSnapshot(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
+  if (!snapshot) return;
+  const target = snapshot.groups.find(({ name }) => name === group);
+  if (!target) {
+    throw Object.assign(new Error("发布机上没有「" + group + "」组，现在有：" +
+      (snapshot.groups.map(({ name }) => name).join("、") || "没有账号组") + "。"), { code: "group_not_found" });
+  }
+  return [...new Set(target.accounts.map(({ platform }) => platform))];
+}
+
 /** Shared delivery commands. The caller supplies its connection and upload state backend. */
 export function createDeliveryHandlers({ makerConnection, state, uploadQueue, defaultGroupOf = () => null, onFailure = () => {}, log = () => {} }) {
   const uploading = new Map();
@@ -29,7 +40,7 @@ export function createDeliveryHandlers({ makerConnection, state, uploadQueue, de
   const makerFailures = (cfg) => state.failures().filter((row) => sameMaker(row, cfg) && Date.now() - row.updatedAt < RETENTION_MS);
   const localStatus = (row, lastPullAt = null) => {
     const elapsed = (Date.now() - row.createdAt) / 1000;
-    const speed = elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
+    const speed = !row.uploaderPid && elapsed >= 1 && row.sent ? row.sent / elapsed : row.uploadBytesPerSecond;
     const progress = deliveryProgress(row.sent, row.totalBytes, speed);
     const state = row.queued ? "queued" : row.errorCode ? "failed" : "uploading";
     const { id, title, group, totalBytes, createdAt, updatedAt } = row;
@@ -108,15 +119,12 @@ export function createDeliveryHandlers({ makerConnection, state, uploadQueue, de
       }
       const unique = uniqueBlobs(files);
       const bytes = unique.reduce((n, f) => n + f.size, 0);
-      let targetPlatforms;
-      if (deliveryV1) {
-        const snapshot = await getGroupSnapshot(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
-        if (snapshot) {
-          const target = snapshot.groups.find(({ name }) => name === groupName);
-          if (!target) fail("发布机上没有「" + groupName + "」组，现在有：" + (snapshot.groups.map(({ name }) => name).join("、") || "没有账号组") + "。");
-          targetPlatforms = [...new Set(target.accounts.map(({ platform }) => platform))];
-        }
-      }
+      // The maker worker checks the live group snapshot before sending any bytes.
+      const targetPlatforms = deliveryV1 && (dryRun || !uploadQueue?.background)
+        ? await deliveryTargetPlatforms(cfg, groupName).catch((err) => {
+          if (err.code === "group_not_found" && !uploadQueue?.background) fail(err.message);
+          throw err;
+        }) : undefined;
       if (dryRun) {
         // 有快照时只报告目标组的平台；旧清单继续按全部平台预检。
         const platforms = targetPlatforms ?? Object.keys(COPY_LIMITS);
@@ -164,7 +172,7 @@ export function createDeliveryHandlers({ makerConnection, state, uploadQueue, de
       const upload = { id, url: cfg.url, connectionKey: relayConnectionKey(cfg), title: checked.t, group: groupName, totalBytes: bytes, createdAt, updatedAt: createdAt, sent: 0,
         uploadBytesPerSecond: BASELINE_TRANSFER.uploadBytesPerSecond };
       if (uploadQueue) {
-        if (deliveryV1) {
+        if (deliveryV1 && !uploadQueue.background) {
           const info = await ping(cfg).catch((err) => { if (!err.retryable) throw err; return null; });
           if (info) assertPublisherAccepts(info, raw.schema);
         }
