@@ -232,16 +232,33 @@ function issueTouchedFiles(body, { allowPlainPaths = false } = {}) {
 
   let inSection = false;
   let sawSection = false;
+  // 「- 改：」「- 不动：」下面缩进的子条目继承上一行的归属（ACC-harness-scope-01）。
+  let parent = null;
   for (const line of lines) {
     const heading = isScopeHeading(line);
     if (heading !== null) {
       inSection = heading;
       if (inSection) sawSection = true;
+      parent = null;
       continue;
     }
     if (!inSection) continue;
-    if (isExcludedScopeLine(line) || (!allowPlainPaths && !isChangeScopeLine(line))) continue;
-    addFromLine(line);
+    const nested = /^\s{2,}[-*+]\s/.test(line);
+    if (nested && parent) {
+      if (parent === "change") addFromLine(line);
+      continue;
+    }
+    if (isExcludedScopeLine(line)) {
+      parent = "exclude";
+      continue;
+    }
+    if (isChangeScopeLine(line)) {
+      parent = "change";
+      addFromLine(line);
+      continue;
+    }
+    parent = null;
+    if (allowPlainPaths) addFromLine(line);
   }
 
   // 没有「## 涉及…」小节时的兼容写法：单行「涉及：`a`、`b`」。
