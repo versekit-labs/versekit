@@ -123,7 +123,7 @@ test("ACC-cloud-02: Google login over local HTTP with PKCE, verified identity, s
     assert.match(login.headers.get("Content-Security-Policy"), /frame-ancestors 'none'/);
     const publicAccount = await request("/account");
     assert.equal(publicAccount.status, 200);
-    assert.match(await publicAccount.text(), /Mac 版暂未提供/);
+    assert.match(await publicAccount.text(), /href="\/download\/">下载 Mac 版<\/a>/);
     assert.deepEqual(await (await request(sessionPath)).json(), { user: null });
     for (const url of [startPath, sessionPath, revokePath]) {
       assert.ok(!ROUTES.some((route) => route.path === url), `${url} belongs only to the cloud service`);

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Hifabu {{VERSION}} · Hi 发布</title>
+<meta name="description" content="Set up this computer as your Hifabu publishing computer. Locked release {{VERSION}} with SHA-256 verification and full component list.">
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../favicon-16.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main class="home">
+
+<header>
+  <a class="brand" href="../" aria-label="Hi 发布 (Hifabu) home">
+    <picture>
+      <source srcset="../logo-dark.svg" media="(prefers-color-scheme: dark)">
+      <img src="../logo-light.svg" width="140" height="51" alt="Hifabu (Hi 发布)">
+    </picture>
+  </a>
+  <nav aria-label="Site">
+    <a href="./" aria-current="page">Download</a>
+    <a href="../plugin/">Claude Code plugin</a>
+    <a href="../privacy/">Privacy Policy</a>
+    <a href="../terms/">Terms of Service</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <p class="kicker">Hifabu {{VERSION}} · Released {{RELEASED_AT}}</p>
+  <h1>Set up this computer as your Hifabu publishing computer.</h1>
+  <p class="lead">A publishing computer is the computer where Hifabu is installed and that publishes your confirmed videos on schedule to the platform accounts you connect. No account is needed to download.</p>
+  <p class="zh" lang="zh-CN">把这台电脑设成 Hifabu 发布机。发布机是装了 Hifabu、负责到点发布你确认过的作品的那台电脑。下载不需要登录。</p>
+</section>
+
+<section id="network" class="callout" aria-labelledby="network-heading">
+  <p class="callout-tag">Before you install · 安装前先看</p>
+  <h2 id="network-heading">Put it on a computer on the same network as your phone</h2>
+  <p>Install Hifabu on a computer that stays on the <strong>same network as the phone you use for publishing</strong> (for example, the same home broadband). Platforms treat signing in or posting from a different location or network as an account risk.</p>
+  <p class="zh" lang="zh-CN">放在哪台电脑上（先于安装）：发布机要和<strong>你发布时用的手机在同一个网络</strong>（比如同一个家里的宽带）。平台会把「手机和电脑不在一个地方」当成风险。</p>
+</section>
+
+<section id="requirements">
+  <h2>System requirements</h2>
+  <ul>
+    <li><strong>macOS 13.5 or later</strong> (Apple silicon and Intel both supported).</li>
+    <li><strong>About 300 MB</strong> of free disk space for Hifabu and its runtime, plus space for your videos.</li>
+    <li><strong>Always on and online</strong> when scheduled posts are due (closing a laptop lid pauses scheduled publishing).</li>
+    <li><strong>Linux</strong> (arm64 and x64) works and is tested, though macOS is the primary target. <strong>Windows is not supported.</strong></li>
+  </ul>
+  <p class="zh" lang="zh-CN">系统要求：macOS 13.5 或更新（Apple 芯片和 Intel 都支持）；约 300 MB 空间，另加存放视频的空间；需要保持开机联网（合上笔记本盖子会暂停排期发布）。Linux 可用，但不作为主推平台；不支持 Windows。</p>
+</section>
+
+<section id="install">
+  <h2>Install</h2>
+  <p>Open <strong>Terminal</strong> (search for "Terminal" in Spotlight or Launchpad), paste this single line, and press Return:</p>
+  <div class="cmd wrap"><code>{{INSTALL_CMD}}</code><button type="button" data-copy="{{INSTALL_CMD_ATTR}}">Copy</button></div>
+  <figure class="term-figure">
+    <svg class="term-svg" viewBox="0 0 680 208" role="img" aria-labelledby="term-title term-desc" xmlns="http://www.w3.org/2000/svg">
+      <title id="term-title">macOS Terminal installing Hifabu {{VERSION}}</title>
+      <desc id="term-desc">Paste the install command into Terminal and press Return. When finished, Hifabu opens the local console in your browser.</desc>
+      <rect width="680" height="208" rx="10" fill="#1b1c1f"/>
+      <rect width="680" height="32" rx="10" fill="#26282c"/>
+      <rect y="22" width="680" height="10" fill="#26282c"/>
+      <circle cx="20" cy="16" r="5.5" fill="#e05d53"/>
+      <circle cx="38" cy="16" r="5.5" fill="#e4b343"/>
+      <circle cx="56" cy="16" r="5.5" fill="#52b859"/>
+      <text x="340" y="20" text-anchor="middle" fill="#a8aab2" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="12">Terminal — zsh</text>
+      <text x="20" y="64" fill="#8ad895" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">%</text>
+      <text x="36" y="64" fill="#f3f3ef" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5">{{TERMINAL_CMD}}</text>
+      <text x="20" y="96" fill="#a8aab2" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5">▸ 下载 Node {{NODE_VERSION}} 并校验 SHA-256……</text>
+      <text x="20" y="120" fill="#a8aab2" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5">▸ 准备 Hifabu {{VERSION}} 并校验 SHA-256……</text>
+      <text x="20" y="144" fill="#a8aab2" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5">▸ 后台服务 com.hifabu.daemon 已启动</text>
+      <text x="20" y="176" fill="#f0c869" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12.5">装好了，控制台地址 http://127.0.0.1:8787，终端可以关了</text>
+    </svg>
+    <figcaption>Terminal illustration · 终端示意图：粘贴命令并回车，等待提示「装好了」即可关闭终端。</figcaption>
+  </figure>
+  <p>When installation finishes, your browser opens the publishing computer console automatically. Sign in to your Hifabu account on the <strong>System</strong> page if you work across two computers.</p>
+  <p class="zh" lang="zh-CN">打开「终端」（在启动台里搜「终端」），粘贴上面那一行，回车。装好后浏览器会自动打开发布机的控制台，在「系统」页登录你的 Hifabu 账号。</p>
+</section>
+
+<section id="contents">
+  <h2>What gets installed</h2>
+  <p>Core installation only downloads a private Node.js runtime and the Hifabu app. Platform components are downloaded on demand only when you first connect that service. Every file is checked against its locked SHA-256 before unpacking.</p>
+  <div class="table-wrap">
+    <table class="install-table">
+      <thead>
+        <tr>
+          <th scope="col">What · 装什么</th>
+          <th scope="col">Size · 多大</th>
+          <th scope="col">Source · 从哪来</th>
+          <th scope="col">Location · 放在哪</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Node.js runtime {{NODE_VERSION}} (official)<span class="sub-zh" lang="zh-CN">Node.js 运行时 {{NODE_VERSION}}（官方原版）</span></td>
+          <td data-label="Size · 多大">{{NODE_SIZE_EN}}<span class="sub-zh" lang="zh-CN">{{NODE_SIZE_ZH}}</span></td>
+          <td data-label="Source · 从哪来">{{NODE_SOURCE_EN}}<span class="sub-zh" lang="zh-CN">{{NODE_SOURCE_ZH}}</span></td>
+          <td data-label="Location · 放在哪"><code>~/.versekit/node</code></td>
+        </tr>
+        <tr>
+          <td>Hifabu app {{VERSION}}<span class="sub-zh" lang="zh-CN">Hifabu 程序 {{VERSION}}</span></td>
+          <td data-label="Size · 多大">{{APP_SIZE_EN}}<span class="sub-zh" lang="zh-CN">{{APP_SIZE_ZH}}</span></td>
+          <td data-label="Source · 从哪来">{{APP_SOURCE_HOST}}</td>
+          <td data-label="Location · 放在哪"><code>~/.versekit/app</code></td>
+        </tr>
+        <tr>
+          <td>Bilibili uploader <code>biliup</code> {{BILIUP_VERSION}} <span class="opt">on demand</span><span class="sub-zh" lang="zh-CN">B 站上传组件 biliup（用到才装）</span></td>
+          <td data-label="Size · 多大">{{BILIUP_SIZE_EN}}<span class="sub-zh" lang="zh-CN">{{BILIUP_SIZE_ZH}}</span></td>
+          <td data-label="Source · 从哪来">{{BILIUP_SOURCE_EN}}<span class="sub-zh" lang="zh-CN">{{BILIUP_SOURCE_ZH}}</span></td>
+          <td data-label="Location · 放在哪"><code>~/.versekit/bin</code></td>
+        </tr>
+        <tr>
+          <td>Feishu component <code>lark-cli</code> {{LARK_VERSION}} <span class="opt">on demand</span><span class="sub-zh" lang="zh-CN">飞书组件 lark-cli（用到才装）</span></td>
+          <td data-label="Size · 多大">{{LARK_SIZE_EN}}<span class="sub-zh" lang="zh-CN">{{LARK_SIZE_ZH}}</span></td>
+          <td data-label="Source · 从哪来">{{LARK_SOURCE_EN}}<span class="sub-zh" lang="zh-CN">{{LARK_SOURCE_ZH}}</span></td>
+          <td data-label="Location · 放在哪"><code>~/.versekit/bin</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="zh" lang="zh-CN">核心安装只装私有 Node 和 Hifabu 程序；不用 B 站和飞书的话，电脑上不会出现 biliup 和 lark-cli。目录名 <code>~/.versekit</code> 为旧名，之后会改，这次不搬动本机数据目录。</p>
+</section>
+
+<section id="background-service">
+  <h2>What runs in the background</h2>
+  <p>Hifabu registers <strong>1</strong> user background service, <code>com.hifabu.daemon</code>. It starts when you sign in to macOS and restarts automatically if it crashes. Specifically, it:</p>
+  <ul>
+    <li>Serves the local web console on <code>127.0.0.1</code> only (not reachable from other devices).</li>
+    <li>Checks Hifabu every 5 minutes for new finished videos sent from your editing computer.</li>
+    <li>Publishes <strong>only the posts you have confirmed</strong> when their scheduled time arrives.</li>
+    <li>Checks every 6 hours for a new official release and updates while idle (you can turn auto-update off on the System page).</li>
+  </ul>
+  <p>Service logs are written inside <code>~/.local/state/versekit/</code> (legacy folder name, will be renamed later). Beyond this single service, Hifabu does not change system settings, does not install browser extensions, and never asks for your administrator password.</p>
+  <p class="zh" lang="zh-CN">后台只常驻 <strong>1 个</strong>用户服务 <code>com.hifabu.daemon</code>，开机自动启动、崩溃自动拉起，负责：在本机 127.0.0.1 提供控制台；每 5 分钟取一次新作品；到点发布你确认过的作品；每 6 小时检查一次正式版本并在空闲时自动更新（可在系统页关掉）。日志放在 <code>~/.local/state/versekit/</code>（旧名，之后会改）。除此之外，不改系统设置，不装浏览器插件，不要管理员密码。</p>
+</section>
+
+<section id="release">
+  <h2>This release</h2>
+  <dl class="release-meta">
+    <dt>Version · 版本</dt>
+    <dd><code>{{VERSION}}</code></dd>
+    <dt>Released · 发布日期</dt>
+    <dd><time datetime="{{RELEASED_AT}}">{{RELEASED_AT}}</time></dd>
+    <dt><code>install.sh</code> SHA-256</dt>
+    <dd><code>{{INSTALL_SHA256}}</code></dd>
+    <dt>Verification · 校验与源码</dt>
+    <dd class="release-links">
+      <a href="{{SHA256SUMS_HREF}}">SHA256SUMS</a>
+      <a href="{{MANIFEST_HREF}}">manifest.json</a>
+      <a href="{{TAG_HREF}}">Source tag {{TAG_NAME}}</a>
+    </dd>
+  </dl>
+  <div class="notes-box" aria-label="Release notes">
+    {{NOTES_HTML}}
+  </div>
+  <details class="verify">
+    <summary>Verify first, then run · 先校验再运行</summary>
+    <div class="verify-body">
+      <p>Download <code>install.sh</code>, check its SHA-256 against the value above, inspect it if you like, and then run it:</p>
+      <div class="cmd-stack">
+        <pre id="verify-commands">{{VERIFY_LINES}}</pre>
+        <div class="cmd-bar"><button type="button" data-copy="{{VERIFY_LINES_ATTR}}">Copy</button></div>
+      </div>
+      <p class="zh" lang="zh-CN">依次下载安装脚本、用 <code>shasum</code> 核对 SHA-256、确认无误后再运行。脚本内嵌了本版全部文件的锁定校验值。</p>
+    </div>
+  </details>
+</section>
+
+<section id="uninstall">
+  <h2>How to uninstall</h2>
+  <p>Open the publishing computer console and go to <strong>System → Uninstall Hifabu</strong>. By default, Hifabu removes the background service and app files while keeping your data (platform logins, videos, and schedule). You can also choose to remove data together.</p>
+  <p>If you want to remove local files manually, Hifabu stores files in these folders (legacy folder names, will be renamed later):</p>
+  <ul>
+    <li>Program &amp; private runtime: <code>~/.versekit</code></li>
+    <li>Config &amp; credentials: <code>~/.config/versekit</code></li>
+    <li>Database, browser logins &amp; logs: <code>~/.local/state/versekit</code></li>
+  </ul>
+  <p>After uninstalling, open <a href="../account">My Hifabu</a> and remove this computer from your connected devices.</p>
+  <p class="zh" lang="zh-CN">在发布机控制台打开「系统 → 卸载 Hifabu」，默认保留数据（账号登录、作品、排期），也可以选「连数据一起删」。手动清理可删除上面三个目录（旧名，之后会改）。卸载后别忘了到<a href="../account">「我的 Hifabu」</a>把这台机器移除。</p>
+</section>
+
+<section id="versions">
+  <h2>Previous versions</h2>
+  <p>All published versions are kept so you can inspect older manifests or roll back if needed: <a class="more" href="versions/">Browse previous versions</a>.</p>
+  <p class="zh" lang="zh-CN">以前发布过的版本都会保留，需要退回时可以查看<a href="versions/">历史版本列表</a>。</p>
+</section>
+
+<footer>
+  <a href="../">Home</a>
+  <a href="./" aria-current="page">Download</a>
+  <a href="../plugin/">Claude Code plugin</a>
+  <a href="../privacy/">Privacy Policy</a>
+  <a href="../terms/">Terms of Service</a>
+  <a href="mailto:creator.omnikit@gmail.com">Contact</a>
+  <span>© 2026 Hifabu</span>
+</footer>
+
+</main>
+<script>
+document.addEventListener('click', function (e) {
+  var b = e.target.closest('button[data-copy]');
+  if (!b || !navigator.clipboard) return;
+  navigator.clipboard.writeText(b.dataset.copy).then(function () {
+    b.textContent = 'Copied';
+    setTimeout(function () { b.textContent = 'Copy'; }, 1600);
+  });
+});
+</script>
+</body>
+</html>

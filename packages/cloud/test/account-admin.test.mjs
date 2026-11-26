@@ -85,7 +85,9 @@ test("ACC-cloud-05/06: 公开下载、传片申请、按账号统计、所有者
 
   await t.test("下载链接可匿名打开，账号专属内容需先登录", async () => {
     const page = await html("/account");
+    assert.ok(page.includes('href="/download/">下载</a>'));
     assert.ok(page.includes(`href="${downloadUrl}"`));
+    assert.doesNotMatch(page, /第一次打开会被系统拦一下|仍要打开/);
     assert.doesNotMatch(page, /给 Claude 装插件|我的机器|申请开通/);
     assert.equal(await (await fetch(downloadUrl)).text(), "local Mac installer");
     const signedIn = await html("/account", account);
@@ -278,4 +280,24 @@ test("ACC-cloud-05/06: 公开下载、传片申请、按账号统计、所有者
     assert.match(await missingRelay.text(), /账号已保留/);
     assert.equal((await cmd("session.get", {}, cookie(other.token))).user.email, other.user.email);
   });
+});
+
+test("ACC-release-05: 未配置 HIFABU_MAC_DOWNLOAD_URL 时「我的 Hifabu」默认链到 /download/", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "hifabu-account-dl-"));
+  const google = await fakeGoogle(Date.now);
+  const listener = createServer();
+  const origin = await listen(listener);
+  const cloud = createCloudServer({ origin, dataDir: join(root, "cloud"), google: google.config });
+  listener.on("request", (req, res) => cloud.emit("request", req, res));
+  listener.once("close", () => cloud.emit("close"));
+  t.after(async () => {
+    await Promise.all([close(listener), close(google.server)]);
+    rmSync(root, { recursive: true, force: true });
+  });
+  const res = await fetch(new URL("/account", origin), { headers: { Accept: "text/html" } });
+  assert.equal(res.status, 200);
+  const page = await res.text();
+  assert.ok(page.includes('href="/download/">下载</a>'));
+  assert.ok(page.includes('href="/download/">下载 Mac 版</a>'));
+  assert.doesNotMatch(page, /暂未提供|第一次打开会被系统拦一下|仍要打开/);
 });

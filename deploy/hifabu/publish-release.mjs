@@ -344,6 +344,16 @@ ${rows.join("\n")}
 `;
 }
 
+async function loadDownloadRenderer() {
+  return import(new URL("../../site/download/render.mjs", import.meta.url));
+}
+
+function renderDownloadForVersion(root, version, renderer) {
+  const manifest = JSON.parse(localFile(join(root, version, "manifest.json")));
+  const installSha256 = digest(localFile(join(root, version, "install.sh")));
+  return renderer.renderDownloadPage({ manifest, installSha256, publicUrl });
+}
+
 function latestPointer(root, version) {
   const manifest = `${version}/manifest.json`;
   return { version, manifest, sha256: digest(localFile(join(root, manifest))) };
@@ -379,17 +389,18 @@ function replacePublicFile(stage, destination, name, content) {
   renameSync(source, join(destination, name));
 }
 
-function activateVersion(stage, destination, version) {
+function activateVersion(stage, destination, version, downloadPage) {
   const versions = join(destination, "versions");
   requireDirectory(versions);
   const withdrawals = readJsonIfPresent(join(versions, "withdrawn.json"), {});
   if (withdrawals[version]) fail("release_withdrawn", `版本 ${version} 已撤回。请提升版本号。`);
   const latest = latestPointer(destination, version);
   replacePublicFile(stage, destination, "versions/index.html", versionsPage(releasesIn(destination), withdrawals));
+  if (downloadPage) replacePublicFile(stage, destination, "index.html", downloadPage);
   replacePublicFile(stage, destination, "latest.json", json(latest));
 }
 
-function publish(stage, destination, manifest, activate) {
+function publish(stage, destination, manifest, activate, downloadPage) {
   const { version } = manifest;
   const candidate = join(stage, version);
   const target = join(destination, version);
@@ -422,7 +433,7 @@ function publish(stage, destination, manifest, activate) {
     renameSync(candidate, target);
   }
   if (activate) {
-    activateVersion(stage, destination, version);
+    activateVersion(stage, destination, version, downloadPage);
   } else {
     console.log(`候选版本 ${version} 已就位。完成全新安装和升级验证后，使用 --activate 切换 latest.json。`);
   }
@@ -464,7 +475,7 @@ function releaseFiles(root, version) {
 const remoteStageName = /^\.publish-release\.[a-zA-Z0-9]{8}$/;
 const shellQuote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-function receiveRelease({ destination, upload, version, expected, activate }) {
+function receiveRelease({ destination, upload, version, expected, activate, downloadPage }) {
   if (!semver.test(version) || (!activate && (dirname(upload) !== destination || !remoteStageName.test(basename(upload))))) {
     fail("release_upload", "远端暂存路径或版本无效。");
   }
@@ -488,12 +499,19 @@ function receiveRelease({ destination, upload, version, expected, activate }) {
     if (manifest.schema !== "hifabu.release/1" || version !== manifest.version) {
       fail("release_upload", "远端清单版本不匹配。");
     }
-    if (activate) activateVersion(stage, destination, version);
-    else publish(upload, destination, manifest, false);
+    if (activate) {
+      const installSha = digest(localFile(join(source, version, "install.sh")));
+      if (typeof downloadPage !== "string" || !downloadPage.includes(version) || !downloadPage.includes(installSha)) {
+        fail("release_upload", "远端下载页内容与版本清单或安装脚本校验值不匹配。");
+      }
+      activateVersion(stage, destination, version, downloadPage);
+    } else {
+      publish(upload, destination, manifest, false);
+    }
   });
 }
 
-function uploadRelease(host, stage, { version }, activate) {
+function uploadRelease(host, stage, { version }, activate, downloadPage) {
   const ssh = (command, input) => {
     try {
       return execFileSync("ssh", ["--", host, command], { encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"] });
@@ -513,7 +531,9 @@ function uploadRelease(host, stage, { version }, activate) {
   }
   try {
     if (upload) execFileSync("scp", ["-r", "--", join(stage, version), join(stage, "deps"), `${host}:${upload}/`]);
-    const request = shellQuote(JSON.stringify({ destination, upload, version, expected, activate }));
+    const payload = { destination, upload, version, expected, activate };
+    if (activate) payload.downloadPage = downloadPage;
+    const request = shellQuote(JSON.stringify(payload));
     const output = ssh(`node --input-type=module - --receive-release ${request}`, script);
     if (output) process.stdout.write(output);
   } finally {
@@ -527,16 +547,17 @@ function uploadRelease(host, stage, { version }, activate) {
   }
 }
 
-function preview(stage, options, manifest) {
+function preview(stage, options, manifest, downloadPage) {
   const { version } = manifest;
   const target = options["publish-dir"];
   const releases = target && lstatSync(target, { throwIfNoEntry: false }) ? releasesIn(target) : [];
   const withdrawals = target ? readJsonIfPresent(join(target, "versions", "withdrawn.json"), {}) : {};
   mkdirSync(join(stage, "versions"));
   const versions = sortReleases([manifest, ...releases.filter((item) => item.version !== version)]);
+  writeFileSync(join(stage, "index.html"), downloadPage);
   writeFileSync(join(stage, "versions", "index.html"), versionsPage(versions, withdrawals));
   writeFileSync(join(stage, "latest.json"), json(latestPointer(stage, version)));
-  const files = [...releaseFiles(stage, version), "versions/index.html", "latest.json"];
+  const files = [...releaseFiles(stage, version), "index.html", "versions/index.html", "latest.json"];
   printPlan(stage, files);
   if (options["output-dir"]) {
     const output = resolve(options["output-dir"]);
@@ -577,7 +598,7 @@ function prune(destination, confirmation) {
   for (const { name } of stale) rmSync(join(deps, name));
 }
 
-function withdraw(stage, destination, { withdraw: version, reason, replacement }) {
+function withdraw(stage, destination, { withdraw: version, reason, replacement }, renderer) {
   const releases = releasesIn(destination);
   const versions = join(destination, "versions");
   requireDirectory(versions);
@@ -596,14 +617,16 @@ function withdraw(stage, destination, { withdraw: version, reason, replacement }
   replacePublicFile(stage, destination, "versions/withdrawn.json", json(withdrawals));
   replacePublicFile(stage, destination, "versions/index.html", versionsPage(releases, withdrawals));
   if (replacement) {
+    replacePublicFile(stage, destination, "index.html", renderDownloadForVersion(destination, replacement, renderer));
     replacePublicFile(stage, destination, "latest.json", json(latestPointer(destination, replacement)));
   } else if (isLatest) {
+    replacePublicFile(stage, destination, "index.html", renderer.renderUnavailablePage());
     renameSync(join(destination, "latest.json"), join(stage, "withdrawn-latest.json"));
   }
   console.log(`已撤回 ${version}，保留版本文件。`);
 }
 
-function main() {
+async function main() {
   const { values: args } = parseArgs({
     options: {
       help: { type: "boolean", short: "h" },
@@ -656,9 +679,10 @@ function main() {
       fail("release_input", "撤回需要语义化版本和非空的 --reason。");
     }
     requireDirectory(destination);
+    const renderer = args.withdraw ? await loadDownloadRenderer() : null;
     withPublishLock(destination, (stage) => {
       if (args.prune) prune(destination, args["confirm-prune"]);
-      else withdraw(stage, destination, args);
+      else withdraw(stage, destination, args, renderer);
     });
     return;
   }
@@ -671,14 +695,16 @@ function main() {
   if (realpathSync(args["deps-dir"]) === realpathSync(args["biliup-second-dir"])) {
     fail("release_input", "biliup 的第二份下载必须来自另一个本地目录。");
   }
+  const renderer = dry || args.activate ? await loadDownloadRenderer() : null;
   if (dry || host) {
     const stage = mkdtempSync(join(tmpdir(), "hifabu-release-"));
     try {
       const manifest = build(stage, release, args, !dry);
-      if (dry) preview(stage, args, manifest);
+      const downloadPage = renderer ? renderDownloadForVersion(stage, manifest.version, renderer) : null;
+      if (dry) preview(stage, args, manifest, downloadPage);
       else {
         printPlan(stage, releaseFiles(stage, manifest.version));
-        uploadRelease(host, stage, manifest, Boolean(args.activate));
+        uploadRelease(host, stage, manifest, Boolean(args.activate), downloadPage);
       }
     } finally {
       rmSync(stage, { recursive: true, force: true });
@@ -687,14 +713,15 @@ function main() {
   }
   withPublishLock(destination, (stage) => {
     const manifest = build(stage, release, args, true);
+    const downloadPage = renderer ? renderDownloadForVersion(stage, manifest.version, renderer) : null;
     printPlan(stage, releaseFiles(stage, manifest.version));
-    publish(stage, destination, manifest, Boolean(args.activate));
+    publish(stage, destination, manifest, Boolean(args.activate), downloadPage);
   });
 }
 
 try {
   if (process.argv[1] === "-" && process.argv[2] === "--receive-release") receiveRelease(JSON.parse(process.argv[3]));
-  else main();
+  else await main();
 } catch (error) {
   console.error(`[${error.code ?? "release_failed"}] 发版失败：${error.message}`);
   process.exitCode = 1;
