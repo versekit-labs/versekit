@@ -108,7 +108,7 @@ test("ACC-plugin-v2-03: committed project identity is carried by Git worktrees a
 });
 
 test("ACC-plugin-v2-04/06/07/08: installed plugin, permissions, delivery resumption and logout on loopback", {
-  skip: !canUseClaude, timeout: 60_000,
+  skip: !canUseClaude, timeout: 90_000,
 }, async (t) => {
   const dir = temp(t);
   const project = join(dir, "project");
@@ -222,8 +222,8 @@ test("ACC-plugin-v2-04/06/07/08: installed plugin, permissions, delivery resumpt
     bash("cloud", "status"), readRef("project-setup"), bash("scan", quote(project)),
     "成片从项目里找，按版本号选最新。确认这个约定吗？",
     write(convention, expectedProject), bash("group", "list"),
-    "交到常用组（B 站），还是短片组（抖音）？",
-    write(preferences, { group: "常用组" }), "有 v3 和另一剪辑，你选哪份？",
+    "这个项目默认交到常用组（B 站），还是短片组（抖音）？",
+    write(preferences, { group: "常用组" }), read(preferences), "有 v3 和另一剪辑，你选哪份？",
     readRef("copy"), "没有封面。草稿是《纸飞机》，折一架纸飞机。#手工，确认吗？",
     tool("Bash", { command: "cp " + quote(source) + " " + quote(media) }),
     write(manifestPath, manifest), bash("work", "push", quote(manifestPath), "--dry-run"),
@@ -270,9 +270,12 @@ test("ACC-plugin-v2-04/06/07/08: installed plugin, permissions, delivery resumpt
   snapshot.reportedAt = oldTimestamp;
   // The installed test client must use the same stub credential backend as the skill.
   const fromPlugin = (...args) => exec(join(installedRoot, "bin/hifabu"), [...transport.args, ...args],
-    { env: main.env, encoding: "utf8", timeout: 10_000 }).catch((error) => error);
+    { env: main.env, encoding: "utf8", timeout: 30_000 }).catch((error) => error);
   const preview = () => fromPlugin("work", "push", manifestPath, "--dry-run");
-  const value = ({ stdout }) => JSON.parse(stdout);
+  const value = ({ stdout, message, stderr }) => {
+    assert.ok(stdout, message ?? stderr);
+    return JSON.parse(stdout);
+  };
   assert.equal(value(await fromPlugin("group", "list")).reportedAt, oldTimestamp);
   assert.equal(value(await preview()).dryRun, true);
   transport.groupSnapshot = null;

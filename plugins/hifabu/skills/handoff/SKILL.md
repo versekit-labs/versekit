@@ -16,7 +16,7 @@ allowed-tools: Bash(hifabu *) Read Glob Grep
 
 1. **分流。** 在本会话交过作品后追问进度，或明确查询 Hifabu 投递时，读 [status.md](references/status.md)，只查进度。退出 Hifabu 时按 [setup.md](references/setup.md) 登出。普通会话里只有「到了吗」不触发。
 2. **检查这台电脑。** 用 `cloud status`。首次使用时查自动更新记录，读 [setup.md](references/setup.md) 并用 Edit 请求打开。运行时缺失、没登录或未开通传片也读这份参考。恢复后继续原请求。
-3. **找这一期。** 按 [project-setup.md](references/project-setup.md) 定位项目和已有约定，无约定先扫描、确认，再写。按约定取同一成片的最高版本并告诉用户。额外变体、同号异题等歧义列候选，每次请用户选。缺封面时继续并说明平台会用视频首帧。缺发布文案或需要改短时读 [copy.md](references/copy.md)，给用户看并等同意。
-4. **选择账号组。** 用 `group list` 核对快照，按 [project-setup.md](references/project-setup.md) 读取和记住项目选择。单组直接用，多组首次才问。区分「这期」和「以后都」。快照过旧或尚未上报要说明。已有快照中找不到目标组就停下，列出可选组。
+3. **确认项目约定，找到这一期。** 先读 [project-setup.md](references/project-setup.md)。项目没有约定时，运行 `scan`，概括建议的素材规则并单独请用户确认。即使只有一个文件，也要等到用户明确确认，再用 Write 创建 `.hifabu/project.json`。无规律的单成片项目使用 `"episodes": {}`。按已保存的约定取最高版本并说明选择，额外变体或同号异题才列候选请用户选。缺封面继续并说明用首帧，缺文案或需要改短时读 [copy.md](references/copy.md)。
+4. **选择并记住项目账号组。** 先读 `${CLAUDE_PLUGIN_DATA}/projects/<项目 id>.json`，用 `group list` 核对。有有效记录就直接用。文件缺失时，单组直接选，多组只问选哪个项目默认组，列出各组的平台。首次回答就是这个项目的默认选择。立即用 Write 保存 `{"group":"所选组名"}` 并读回，再预览。按 [project-setup.md](references/project-setup.md) 处理用户主动指定的临时换组、更新默认组、快照过旧或缺组。
 5. **预览再交。** 按 [project-setup.md](references/project-setup.md) 准备 v1 清单。先用 `work push <清单> --dry-run`。有拒绝先处理，出错或有警告时读 [errors.md](references/errors.md)。素材和文案明确、预览允许时，用同一份清单执行 `work push <清单>`。不重复登记已有投递。
 6. **报告。** 说明哪一期、选了哪个文件及大小、封面、文案来源、账号组和已知平台。给出投递号、预计到达时间和当前状态。后台上传可跨会话继续。到发布机的「今天」页或飞书确认后才发布。刚获准起草的文案按参考写回，写回失败只报告。已登记的清单与素材要保留到后台完成。
