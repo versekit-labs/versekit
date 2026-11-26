@@ -97,18 +97,18 @@ function render(title, content, { session, owner, admin = false, copy = false } 
   const identity = session ? `<div class="who"><span class="avatar" aria-hidden="true">${escapeHtml([...session.email][0].toUpperCase())}</span>${escapeHtml(session.email)}
     <form method="post" action="${cloudRoute("session.revoke").path}"><button class="link-text" type="submit">退出</button></form></div>` : "";
   const header = `<header class="top"><div class="brand">Hifabu</div>
-    <nav aria-label="Hifabu">${owner ? `<a class="link-text" href="/account"${current(!admin)}>我的 Hifabu</a>
+    <nav aria-label="Hifabu"><a class="link-text" href="/download/">下载</a>${owner ? `<a class="link-text" href="/account"${current(!admin)}>我的 Hifabu</a>
     <a class="link-text" href="/admin"${current(admin)}>管理</a>` : ""}
     ${session ? identity : '<a href="/login" class="link-text">登录</a>'}</nav></header>`;
   return page(title, content, { header, extraStyle: style, mainClass: admin ? "wide admin" : "wide", script: copy ? copyScript : "" });
 }
 
 function downloadPanel(downloadUrl) {
+  const href = downloadUrl || "/download/";
   return `<section class="panel"><h2>下载发布机</h2>
     <p class="sub">装在和你手机同一个网络的那台电脑上。平台账号只在这台电脑上登录。</p>
-    <div class="actions">${downloadUrl ? `<a class="primary" href="${escapeHtml(downloadUrl)}">下载 Mac 版</a>`
-    : '<span class="sub">Mac 版暂未提供</span>'}<span class="sub">Windows 版还没有</span></div>
-    ${downloadUrl ? '<p class="sub">第一次打开会被系统拦一下。在「系统设置 → 隐私与安全性」，点「仍要打开」。</p>' : ""}</section>`;
+    <div class="actions"><a class="primary" href="${escapeHtml(href)}">下载 Mac 版</a><span class="sub">Windows 版还没有</span></div>
+    <p class="sub">打开下载页查看当前版本、校验值和安装步骤。</p></section>`;
 }
 
 function pluginPanel() {

@@ -54,3 +54,57 @@ nav{gap:0 20px}
 @media (max-width:520px){.cmd code{white-space:normal;overflow-wrap:anywhere}}
 .cmd.wrap code{white-space:normal;overflow-wrap:anywhere}
 .plain{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:8px 0 12px}
+
+/* 下载页专用组件（沿用官网色板与单栏节奏） */
+.callout{border:1px solid var(--line);border-radius:8px;padding:18px 20px;background:color-mix(in srgb,var(--fg) 4%,transparent)}
+.callout .callout-tag{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--accent)}
+.callout h2{margin:0 0 10px;font-size:20px}
+.callout p:last-child{margin-bottom:0}
+.table-wrap{overflow-x:auto;max-width:100%;margin:14px 0 12px;-webkit-overflow-scrolling:touch}
+.install-table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.5}
+.install-table th,.install-table td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--line)}
+.install-table th{color:var(--muted);font-weight:600;white-space:nowrap}
+.install-table td:first-child{min-width:190px}
+.install-table td:nth-child(2){white-space:nowrap}
+.install-table .sub-zh{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.install-table .opt{display:inline-block;padding:1px 6px;border:1px solid var(--line);border-radius:4px;font-size:12px;color:var(--muted);white-space:nowrap;vertical-align:1px}
+.term-figure{margin:16px 0 14px}
+.term-svg{width:100%;height:auto;display:block;border-radius:10px}
+.term-figure figcaption{margin-top:8px;font-size:13px;color:var(--muted)}
+.release-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 20px;margin:12px 0 16px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;font-size:14px}
+.release-meta dt{color:var(--muted);font-weight:500}
+.release-meta dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.release-links{display:flex;flex-wrap:wrap;gap:8px 18px}
+.release-links a{padding:4px 0;display:inline-flex;align-items:center;min-height:32px}
+.notes-box{border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:12px 0 16px;font-size:15px}
+.notes-box h3{margin:0 0 8px;font-size:17px}
+.notes-box p{margin:0 0 8px}
+.notes-box p:last-child,.notes-box ul:last-child{margin-bottom:0}
+.notes-box ul{margin:0 0 8px;padding-left:20px}
+.verify{border:1px solid var(--line);border-radius:8px;padding:6px 16px;margin:16px 0 0}
+.verify summary{min-height:40px;display:flex;align-items:center;cursor:pointer;font-weight:600;list-style:none}
+.verify summary::-webkit-details-marker{display:none}
+.verify summary::before{content:"▸";margin-right:8px;color:var(--muted);transition:transform .15s}
+.verify[open] summary::before{transform:rotate(90deg)}
+.verify summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.verify-body{padding:4px 0 12px}
+.cmd-stack{display:grid;gap:10px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0 12px;background:color-mix(in srgb,var(--fg) 4%,transparent)}
+.cmd-stack pre{margin:0;font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
+.cmd-stack .cmd-bar{display:flex;justify-content:flex-end}
+.cmd-stack button{min-width:72px;min-height:36px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit;font-size:14px;cursor:pointer;padding:0 12px}
+.cmd-stack button:hover{border-color:var(--fg)}
+.cmd-stack button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:580px){
+  .install-table thead{display:none}
+  .install-table,.install-table tbody,.install-table tr,.install-table td{display:block;width:100%}
+  .install-table tr{padding:12px 0;border-bottom:1px solid var(--line)}
+  .install-table tr:first-child{border-top:1px solid var(--line)}
+  .install-table td{padding:3px 0;border:0;min-width:0;white-space:normal;overflow-wrap:anywhere}
+  .install-table td:first-child{min-width:0;padding-bottom:6px;font-weight:500}
+  .install-table td:first-child .sub-zh{font-weight:400}
+  .install-table td[data-label]::before{content:attr(data-label) "：";color:var(--muted);font-size:13px}
+  .install-table td[data-label] .sub-zh{display:inline;margin-left:6px}
+  .release-meta{grid-template-columns:1fr;gap:4px}
+  .release-meta dd{margin-bottom:8px}
+  .release-meta dd:last-child{margin-bottom:0}
+}

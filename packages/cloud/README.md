@@ -12,7 +12,7 @@
 | `HIFABU_SIGNING_KEY_FILE` | 机器接入使用的 Ed25519 PEM 私钥文件，权限必须为 600。没有配置时，Google 登录仍可用。 |
 | `HIFABU_RELAY_URL` | 随机器登录和刷新返回的传片服务 HTTPS 来源。回环测试可用 HTTP。 |
 | `HIFABU_OWNER_EMAIL` | 可以访问 `/admin` 和管理命令的所有者邮箱。邮箱必须与已验证的 Hifabu 账号匹配。留空时所有人均无管理权限。 |
-| `HIFABU_MAC_DOWNLOAD_URL` | 公开的 Mac 发布机安装包 HTTPS 地址。留空时 `/account` 显示 Mac 版暂未提供。回环测试可用 HTTP。 |
+| `HIFABU_MAC_DOWNLOAD_URL` | 公开的 Mac 发布机下载页或安装包 HTTPS 地址。留空时 `/account` 默认链到 `/download/`。回环测试可用 HTTP。 |
 
 账号服务的日志只记录时间、固定事件、错误码和说明。HTTPS 入口也需关闭原始请求日志，或过滤查询字符串、请求头和请求体，并采用同样的保留期。回调查询字符串含一次性授权码。网站的 `/privacy/` 由 HTTPS 入口路由到静态站点，隐私政策在账号服务上线时更新。
 
