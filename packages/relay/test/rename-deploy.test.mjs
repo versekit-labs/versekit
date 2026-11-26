@@ -104,9 +104,9 @@ test("ACC-brand-08 Seoul check only reads service status and HTTP endpoints", (t
 [[ "$3" == hifabu-cloud.service || "$3" == nginx.service ]]
 `, { mode: 0o700 });
   writeFileSync(join(dir, "curl"), `#!/bin/bash
-case "${!#}" in
+case "\${!#}" in
   http://127.0.0.1:8791/login|https://hifabu.com/login|https://assurelane.ai/) printf 200 ;;
-  https://vk.fangyouxi.cn/v1/ping) printf '%s' "${RELAY_STATUS:-401}" ;;
+  https://vk.fangyouxi.cn/v1/ping) printf '%s' "\${RELAY_STATUS:-401}" ;;
   *) exit 2 ;;
 esac
 `, { mode: 0o700 });
