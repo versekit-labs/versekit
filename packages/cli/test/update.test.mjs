@@ -8,9 +8,9 @@ import { createServer, request } from "node:http";
 import { createServer as netServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir, platform, arch } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -25,6 +25,8 @@ const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
+const OLD_SERVICE = "com.versekit.daemon";
+const NEW_SERVICE = "com.hifabu.daemon";
 const homes = [];
 let server;
 let base;
@@ -98,6 +100,9 @@ before(async () => {
     const patched = src.replace("now: () => ({ ...store.statusSnapshot() }),", 'now: () => { throw new Error("故意坏掉"); },');
     assert.notEqual(patched, src, "坏包补丁没打上：handlers.mjs 里的 now 写法变了，这条测试要跟着改");
     writeFileSync(f, patched);
+  });
+  buildApp("app-init-bad", "8.8.8", (dir) => {
+    writeFileSync(join(dir, "packages/core/src/schema.sql"), "injected init failure");
   });
   buildBiliup();
   server = createServer((req, res) => {
@@ -183,10 +188,220 @@ const status = (port, path = "/today") =>
   });
 const appVersion = (h) => JSON.parse(readFileSync(join(h.prefix, "app/package.json"), "utf8")).version;
 
+// 只替换系统服务管理器。注册表与定义都在临时 HOME，受管进程是真实的离线 Hifabu。
+function fakeServiceManager(h, manager) {
+  const bin = join(h.home, "manager-bin");
+  mkdirSync(bin);
+  h.env.PATH = `${bin}:${h.env.PATH}`;
+  h.env.XDG_CONFIG_HOME = join(h.home, ".config");
+  h.env.HIFABU_SERVICE_MANAGER = manager;
+  const command = manager === "launchd" ? "launchctl" : "systemctl";
+  writeFileSync(join(bin, command), `#!${process.execPath}\n` + String.raw`
+const { existsSync, readFileSync, writeFileSync, rmSync, appendFileSync } = require("node:fs");
+const { spawn } = require("node:child_process");
+const { basename, join } = require("node:path");
+const home = process.env.HOME;
+const args = process.argv.slice(2).filter((arg) => arg !== "--user");
+const [action, target, plist] = args;
+const systemd = basename(process.argv[1]) === "systemctl";
+const unit = args.find((arg) => arg.endsWith(".service")) ?? "";
+const label = systemd ? unit.replace(/\.service$/, "") : (plist ? basename(plist, ".plist") : basename(target ?? ""));
+const pidFile = join(home, label + ".manager-pid");
+const enabled = join(home, label + ".manager-enabled");
+const failFile = join(home, "manager-failure");
+const step = [action, label].join(" ");
+appendFileSync(join(home, "manager-log"), step + "\n");
+if (existsSync(failFile) && readFileSync(failFile, "utf8") === step) {
+  rmSync(failFile);
+  if (action === "disable") rmSync(enabled, { force: true });
+  console.error("故意失败 " + step);
+  process.exit(1);
+}
+const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
+if (action === "print" || action === "show") {
+  if (systemd) console.log("ActiveState=" + (pid ? "active" : "inactive") + "\nMainPID=" + pid);
+  else if (pid) console.log("state = running\npid = " + pid);
+  else process.exit(1);
+}
+if (action === "is-enabled") {
+  console.log(existsSync(enabled) ? "enabled" : "disabled");
+  process.exit(existsSync(enabled) ? 0 : 1);
+}
+if (action === "disable") rmSync(enabled, { force: true });
+if (action === "enable") writeFileSync(enabled, "");
+if ((action === "stop" || action === "bootout" || (action === "disable" && args.includes("--now"))) && pid) {
+  try { process.kill(pid, "SIGTERM"); } catch (err) { if (err.code !== "ESRCH") throw err; }
+  rmSync(pidFile);
+}
+if (!pid && (action === "start" || action === "bootstrap" || (action === "enable" && args.includes("--now")))) {
+  const file = systemd ? join(home, ".config/systemd/user", unit) : plist;
+  const config = readFileSync(file, "utf8");
+  const argv = systemd
+    ? Array.from(config.match(/^ExecStart=(.*)$/m)[1].matchAll(/"([^"]*)"/g), ([, arg]) => arg)
+    : Array.from(config.split("<array>")[1].split("</array>")[0].matchAll(/<string>(.*?)<\/string>/g), ([, arg]) => arg);
+  if (!argv.includes("--offline")) throw new Error("测试服务必须离线");
+  const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: "ignore" });
+  child.unref();
+  writeFileSync(pidFile, String(child.pid));
+}
+`, { mode: 0o755 });
+}
+
+async function dataSnapshot(h, loginFiles) {
+  const read = async (path) => {
+    const res = await fetch(`http://127.0.0.1:${h.port}${path}`);
+    assert.equal(res.status, 200, path);
+    return res.json();
+  };
+  const { accounts } = await read("/api/accounts");
+  const { works } = await read("/api/works");
+  return {
+    accounts: accounts.map(({ id, state }) => ({ id, state })),
+    works: works.map(({ id }) => id),
+    files: loginFiles.map(sha),
+  };
+}
+
+async function measureDowntime(port, operation) {
+  let lastHealthy = performance.now();
+  let unavailableAt;
+  let downtimeMs = 0;
+  let done = false;
+  const monitor = (async () => {
+    while (!done) {
+      const healthy = await status(port, "/api/now") === 200;
+      const now = performance.now();
+      if (!healthy) unavailableAt ??= lastHealthy;
+      else {
+        if (unavailableAt !== undefined) downtimeMs += now - unavailableAt;
+        unavailableAt = undefined;
+        lastHealthy = now;
+      }
+      await sleep(25);
+    }
+  })();
+  try {
+    const result = await operation();
+    await waitFor(() => unavailableAt === undefined, () => "升级结束时 /api/now 仍未恢复");
+    return { ...result, downtimeMs };
+  } finally {
+    done = true;
+    await monitor;
+  }
+}
+
 async function installV1(h, commit = A) {
   appTarball = "app-1";
   const r = await sh(h, "bash", [INSTALL_SH], { env: { HIFABU_APP_COMMIT: commit } });
   assert.equal(r.code, 0, r.stdout + r.stderr);
+}
+
+for (const manager of ["launchd", "systemd"]) {
+  test(`ACC-brand-06 ${manager}：自检失败恢复旧服务，通过后只保留新服务和原数据`, { timeout: 120000 }, async (t) => {
+    const h = await newHome({ HIFABU_SERVICE_LABEL: OLD_SERVICE });
+    fakeServiceManager(h, manager);
+    h.env.HIFABU_HOME = h.home;
+    latest = A;
+    await installV1(h);
+    delete h.env.HIFABU_SERVICE_LABEL;
+    const initial = json(await hifabu(h, "service", "status"));
+    assert.equal(initial.label, OLD_SERVICE);
+    assert.equal(initial.running && initial.reachable, true);
+    const asset = join(h.home, "migration-fixture.mp4");
+    writeFileSync(asset, "migration fixture");
+    for (const args of [
+      ["group", "add", "迁移验收"],
+      ["account", "add", "bilibili", "--group", "迁移验收", "--name", "测试 B 站"],
+      ["account", "add", "tiktok", "--group", "迁移验收", "--name", "测试 TikTok"],
+      ["work", "add", asset],
+    ]) {
+      const seeded = await hifabu(h, ...args);
+      assert.equal(seeded.code, 0, seeded.stdout + seeded.stderr);
+    }
+
+    const loginFiles = [
+      join(h.home, ".config/versekit/credentials/test-session.json"),
+      join(h.home, ".local/state/versekit/browser/test-account/Default/Cookies"),
+    ];
+    loginFiles.forEach((file, i) => {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `fixture-login-state-${i}`);
+    });
+    const before = await dataSnapshot(h, loginFiles);
+    assert.equal(before.accounts.length, 2);
+    assert.equal(before.works.length, 1);
+    const defs = manager === "launchd" ? "Library/LaunchAgents" : ".config/systemd/user";
+    const ext = manager === "launchd" ? ".plist" : ".service";
+    const definitionFiles = () => readdirSync(join(h.home, defs)).sort();
+    const runningLabels = () => readdirSync(h.home).filter((file) => file.endsWith(".manager-pid"))
+      .map((file) => file.replace(/\.manager-pid$/, ""));
+    const oldDefinition = readFileSync(join(h.home, defs, OLD_SERVICE + ext), "utf8");
+
+    const assertRestored = async () => {
+      assert.equal(appVersion(h), "0.1.0");
+      const restored = json(await hifabu(h, "service", "status"));
+      assert.equal(restored.label, OLD_SERVICE);
+      assert.equal(restored.running && restored.reachable, true);
+      assert.equal(await status(h.port, "/api/now"), 200);
+      assert.deepEqual(runningLabels(), [OLD_SERVICE]);
+      assert.deepEqual(definitionFiles(), [OLD_SERVICE + ext]);
+      assert.equal(readFileSync(join(h.home, defs, OLD_SERVICE + ext), "utf8"), oldDefinition);
+      assert.deepEqual(await dataSnapshot(h, loginFiles), before);
+    };
+
+    latest = B;
+    appTarball = "app-bad";
+    const unhealthy = await measureDowntime(h.port, () => hifabu(h, "update", "--now"));
+    assert.equal(unhealthy.code, 1, unhealthy.stdout + unhealthy.stderr);
+    assert.match(json(unhealthy).reason, /com\.hifabu\.daemon 没通过自检/, unhealthy.stderr);
+    assert.equal(json(unhealthy).rolledBack, true);
+    await assertRestored();
+    const events = json(await hifabu(h, "events"));
+    const event = (events.events ?? events.rows ?? events).find((row) => row.type === "update.failed");
+    assert.equal(event?.payload.error_code, "update_failed");
+    assert.match(event.payload.reason, /没通过自检/);
+
+    if (manager === "launchd") {
+      appTarball = "app-init-bad";
+      const result = await sh(h, "bash", [INSTALL_SH], { env: { HIFABU_APP_COMMIT: B } });
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /hifabu init 失败/);
+      await assertRestored();
+      const log = json(await hifabu(h, "events"));
+      const failed = (log.events ?? log.rows ?? log).find((row) => row.payload?.error_code === "install_update_failed");
+      assert.match(failed?.payload.reason, /hifabu init 失败/);
+    }
+
+    appTarball = "app-2";
+    if (manager === "systemd") {
+      const fail = join(h.home, "manager-failure");
+      for (const step of [`stop ${OLD_SERVICE}`, `enable ${NEW_SERVICE}`, `disable ${OLD_SERVICE}`]) {
+        writeFileSync(fail, step);
+        const result = await hifabu(h, "update", "--now");
+        assert.equal(result.code, 1, result.stdout + result.stderr);
+        assert.match(json(result).reason, /故意失败/);
+        await assertRestored();
+        assert.ok(existsSync(join(h.home, OLD_SERVICE + ".manager-enabled")));
+        assert.ok(!existsSync(join(h.home, NEW_SERVICE + ".manager-enabled")));
+      }
+    }
+
+    const updated = await measureDowntime(h.port, () => manager === "launchd"
+      // 旧更新器会把已安装的标签传给新版安装脚本。
+      ? sh(h, "bash", [INSTALL_SH], { env: { HIFABU_SERVICE_LABEL: OLD_SERVICE, HIFABU_UPDATE: "1", HIFABU_APP_COMMIT: B } })
+      : hifabu(h, "update", "--now"));
+    assert.equal(updated.code, 0, updated.stdout + updated.stderr);
+    assert.equal(appVersion(h), "9.9.9");
+    const service = json(await hifabu(h, "service", "status"));
+    assert.equal(service.label, NEW_SERVICE);
+    assert.equal(service.port, h.port);
+    assert.equal(service.running && service.reachable, true);
+    assert.deepEqual(runningLabels(), [NEW_SERVICE]);
+    assert.deepEqual(definitionFiles(), [NEW_SERVICE + ext]);
+    assert.deepEqual(await dataSnapshot(h, loginFiles), before);
+    if (manager === "systemd") assert.ok(!existsSync(join(h.home, OLD_SERVICE + ".manager-enabled")));
+    t.diagnostic(`${manager}: accounts ${before.accounts.length} → ${before.accounts.length}, works ${before.works.length} → ${before.works.length}, unchanged login files: ${loginFiles.length}; /api/now outage: upgrade ${(updated.downtimeMs / 1000).toFixed(2)}s, rollback after failed health check ${(unhealthy.downtimeMs / 1000).toFixed(2)}s (25ms polling)`);
+  });
 }
 
 let main;

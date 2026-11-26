@@ -40,7 +40,7 @@
 | `~/.versekit` | 以后改为 `~/.hifabu`，**这次不改** | 迁移步骤见 §3，留到发布机新安装器上线时做 |
 | `~/.config/versekit`、`~/.local/state/versekit` | 以后改为 `~/.config/hifabu`、`~/.local/state/hifabu`，**这次不改** | 同上 |
 | `vk.db` | 以后改为 `hifabu.db`，**这次不改** | 同上 |
-| `com.versekit.daemon` | `com.hifabu.daemon` | 更新时卸载旧服务、注册新服务（R5），数据目录不动 |
+| launchd `com.versekit.daemon`、systemd user `com.versekit.daemon.service` | launchd `com.hifabu.daemon`、systemd user `com.hifabu.daemon.service` | R5 停止旧进程并保留旧定义，启动新服务并确认 `/api/now` 和 `/today` 都返回 200，再移除旧定义。失败时恢复旧程序和旧服务。 |
 | lark-cli profile `versekit` | 以后改为 `hifabu`，**这次不改** | 跟本机路径一起迁 |
 | `versekit-relay.service`、`/var/lib/versekit-relay`、`/opt/versekit` | `hifabu-relay.service`、`/var/lib/hifabu-relay`、`/opt/hifabu` | 协调器在部署窗口切换，数据目录 `mv` 后保留旧路径链接一周 |
 | 根包 `versekit`、`@versekit-app/*` | `hifabu`、`@hifabu/*` | 包都是私有的、不发 npm，包之间只有 1 处按包名引用，直接改 |
@@ -104,7 +104,7 @@
 | R2 | 用户看得见的字 | Web 页面、飞书卡片、中转和投递状态文案、错误信息、官网、`docs/design` 里的现行设计稿和 `.impeccable` 任务书 | ① 本地控制台每页标题和侧栏是「Hifabu」；② 「打开那台电脑上的 Hifabu」；③ 截图核对浅色和深色；④ `npm run design:check` 通过 |
 | R3 | 命令 `hifabu` + `vk` 别名 | `packages/cli`、`commands.mjs` 的 `cli.usage`、`package.json` 的 bin 和 scripts、AGENTS.md §5、技能和文档里的命令示例、`install.sh` | ① `hifabu --help` 和旧 `vk --help` 命令集合相同；② `vk` 能用，且 stderr 提示改名；③ 完整版 `hifabu` 接受 `--data`（§2.1）；④ 三端一致测试仍通过 |
 | R4 | 环境变量 | 所有 `VERSEKIT_*` → `HIFABU_*`，所有 `VK_*` → `HIFABU_*` | ① 只设旧名时照样生效，并提示一次；② 新旧都设时新名优先；③ 测试改用新名 |
-| R5 | 后台服务改名（数据目录不动） | `packages/cli/src/service.mjs`、更新流程 | ① 更新后 `launchctl list` 里只有 `com.hifabu.daemon`，没有 `com.versekit.daemon`；② 新服务读的仍是原来的数据目录，更新前后账号数、作品数、平台登录状态一致；③ 更新中途失败时旧服务照常运行；④ 先在临时 HOME 测，再由所有者在自己的发布机上点更新 |
+| R5 | 后台服务改名（数据目录不动） | `packages/cli/src/service.mjs`、更新流程 | ① 更新后只保留 `com.hifabu.daemon` LaunchAgent 或 `com.hifabu.daemon.service` systemd user unit。② 更新前后账号数、作品数、平台登录状态一致。③ 更新中途失败时恢复旧服务并记录原因。④ 在临时 HOME 测，发布机真机升级见 P6。 |
 | R6 | 内部名字 | 包名、`vk.mjs` 等文件名、`.claude/skills/versekit-ingest`、品牌图标文件名、代码注释 | ① `npm test` 全绿；② `check:brand` 报告里这一类归零 |
 | R7 | 服务器 | volc1 / seoul 的 systemd 单元、数据目录、`/opt` 目录、Caddy 片段、`deploy/` 脚本和文档 | ① 切换前后，中转上的投递和 blob 数一致；② 0.1.0 插件和旧版发布机切换后仍能拉取（协议常量没改）；③ 不动同机的其他服务（assurelane 等） |
 | R8 | 闸门切成拦截 | `check:brand` | ① 白名单外剩余为 0；② CI 拦截新增的 `versekit` / `vk` |
