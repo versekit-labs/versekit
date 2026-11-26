@@ -2,15 +2,31 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  rmSync, statSync, utimesSync, writeFileSync,
+  chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
+  rmSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { checkVersion } from "../../plugins/hifabu-src/version.mjs";
 
 const pluginDir = fileURLToPath(new URL("../../plugins/hifabu/", import.meta.url));
+const packageFiles = [
+  ".claude-plugin/plugin.json",
+  "CHANGELOG.md",
+  "LICENSE",
+  "README.md",
+  "bin/hifabu",
+  "bin/hifabu-runtime",
+  "lib/hifabu.mjs",
+  "skills/handoff/SKILL.md",
+  "skills/handoff/references/copy.md",
+  "skills/handoff/references/errors.md",
+  "skills/handoff/references/project-setup.md",
+  "skills/handoff/references/setup.md",
+  "skills/handoff/references/status.md",
+];
 const publicUrl = "https://hifabu.com/plugin/";
 const destination = "/var/www/hifabu/plugin";
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*))*)?(?:\+[\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*)?$/;
@@ -23,27 +39,22 @@ function sha256(path) {
 function build(root) {
   const content = join(root, "content");
   mkdirSync(content);
-  const files = [];
+  checkVersion(pluginDir);
+  const pluginRoot = realpathSync(pluginDir);
   const timestamp = new Date("2000-01-01T00:00:00Z");
-  for (const entry of readdirSync(pluginDir, { recursive: true, withFileTypes: true })) {
-    if (entry.isDirectory()) continue;
-    const source = join(entry.parentPath, entry.name);
-    const name = relative(pluginDir, source);
-    if (!entry.isFile() || /[\r\n\\]/.test(name)) {
+  for (const name of packageFiles) {
+    const source = join(pluginRoot, name);
+    const info = lstatSync(source);
+    if (!info.isFile() || realpathSync(source) !== source) {
       throw new Error(`插件包含无法打包的条目：${name}`);
     }
     const target = join(content, name);
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(source, target);
-    chmodSync(target, statSync(source).mode & 0o111 ? 0o755 : 0o644);
+    chmodSync(target, info.mode & 0o111 ? 0o755 : 0o644);
     utimesSync(target, timestamp, timestamp);
-    files.push(name);
   }
 
-  // 校验暂存内容，确保实际打包的字节符合已登记的版本。
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  execFileSync(process.execPath, ["--test", join(content, "test/version.test.mjs")], { env });
   const { name, version, description, author, homepage, license } =
     JSON.parse(readFileSync(join(content, ".claude-plugin/plugin.json"), "utf8"));
   if (name !== "hifabu" || typeof version !== "string" || !semver.test(version)) {
@@ -53,7 +64,7 @@ function build(root) {
   execFileSync("zip", ["-q", "-X", "-D", join(root, archive), "-@"], {
     cwd: content,
     env: { ...process.env, TZ: "UTC", ZIPOPT: "" },
-    input: files.sort().join("\n") + "\n",
+    input: packageFiles.join("\n") + "\n",
   });
 
   const marketplace = {

@@ -1,8 +1,13 @@
 {
   "name": "hifabu",
-  "version": "0.1.0",
-  "description": "从制作会话把成片、封面和发布文案交给发布机，并查看投递进度。",
-  "author": { "name": "Hifabu" },
+  "displayName": "Hifabu",
+  "version": "0.2.0",
+  "description": "Hand finished videos from Claude Code to your Hifabu publishing computer for confirmation.",
+  "author": { "name": "Hifabu", "url": "https://hifabu.com" },
   "homepage": "https://hifabu.com/plugin/",
-  "license": "MIT"
+  "repository": "https://github.com/versekit-labs/versekit",
+  "license": "MIT",
+  "keywords": ["video", "publishing", "handoff"],
+  "engines": { "claude-code": ">=2.1.292" },
+  "network": { "hosts": ["hifabu.com", "nodejs.org"] }
 }
