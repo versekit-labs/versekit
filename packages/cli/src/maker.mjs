@@ -349,8 +349,13 @@ function commandArgs(command, target, flags) {
 
 function printHuman(name, data) {
   if (name.startsWith("cloud.")) {
-    if (data.loggedIn) console.log(`${data.email} · ${data.role === "maker" ? "制作机" : "发布机"} · 传片${data.relayEnabled ? "已开通" : "未开通"}`);
-    else console.log(data.message ?? "这台机器未登录 Hifabu。");
+    if (data.loggedIn) {
+      console.log(`${data.email} · ${data.role === "maker" ? "制作机" : "发布机"} · 传片${data.relayEnabled ? "已开通" : "未开通"}`);
+      if (name === "cloud.status") {
+        const storage = { keychain: "macOS 钥匙串", "secret-service": "Secret Service", file: "device.json（权限 600）" };
+        console.log(`刷新凭据存于${storage[data.credentialStorage]}。`);
+      }
+    } else console.log(data.message ?? "这台机器未登录 Hifabu。");
   } else if (name === "group.list") {
     if (data.reportedAt == null) console.log("发布机还没同步账号组。");
     else if (!data.groups.length) console.log("发布机上还没有账号组。");

@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { openControlStore } from "../../cloud/src/control-store.mjs";
 import { createCloudServer, sessionCookieName } from "../../cloud/src/server.mjs";
-import { callCloud } from "../../cloud/src/transport.mjs";
+import { callCloud, cloudRoute } from "../../cloud/src/transport.mjs";
 import { close, fakeGoogle, listen } from "../../cloud/test/fake-google.mjs";
 import { COMMANDS } from "../../core/src/commands.mjs";
 import { listDeliveries } from "../../relay/src/client.mjs";
@@ -21,6 +22,7 @@ import { createRelayServer } from "../../relay/src/server.mjs";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const artifact = join(root, "plugins/hifabu");
 const maker = join(artifact, "bin/hifabu");
+const runtime = join(artifact, "bin/hifabu-runtime");
 const full = join(root, "packages/cli/src/vk.mjs");
 const build = join(root, "scripts/build-maker-client.mjs");
 const exec = promisify(execFile);
@@ -34,6 +36,16 @@ function temp(t) {
   return directory;
 }
 
+function isolatedPath(directory, commands) {
+  const bin = join(directory, "isolated-bin");
+  mkdirSync(bin);
+  for (const command of commands) {
+    const target = command === "node" ? process.execPath : execFileSync("/bin/sh", ["-c", 'command -v "$1"', "sh", command], { encoding: "utf8" }).trim();
+    symlinkSync(target, join(bin, command));
+  }
+  return bin;
+}
+
 test("ACC-maker-01/03: maker --help parity, reproducible standalone bundle and export audit", (t) => {
   const directory = temp(t);
   const a = join(directory, "first");
@@ -41,7 +53,7 @@ test("ACC-maker-01/03: maker --help parity, reproducible standalone bundle and e
   const stdout = [a, b].map((output) => execFileSync(process.execPath, [build, "--out-dir", output], { encoding: "utf8" }));
   assert.equal(stdout[0], stdout[1]);
   evidence("BUILD 1\n" + stdout[0] + "BUILD 2\n" + stdout[1]);
-  for (const filename of ["bin/hifabu", "lib/hifabu.mjs"]) {
+  for (const filename of ["bin/hifabu", "bin/hifabu-runtime", "lib/hifabu.mjs"]) {
     assert.deepEqual(readFileSync(join(a, filename)), readFileSync(join(b, filename)));
     assert.deepEqual(readFileSync(join(a, filename)), readFileSync(join(artifact, filename)));
   }
@@ -57,6 +69,78 @@ test("ACC-maker-01/03: maker --help parity, reproducible standalone bundle and e
   assert.equal(registered.length, 7);
   assert.deepEqual(listed, registered);
   assert.ok(!listed.includes("device.revoke.self"));
+});
+
+test("ACC-maker-10: a Node-free HOME requires consent and rejects a bad checksum before extraction", {
+  skip: !["darwin", "linux"].includes(process.platform) || !["arm64", "x64"].includes(process.arch),
+}, (t) => {
+  const directory = temp(t);
+  const home = join(directory, "empty-home");
+  const data = join(directory, '插件 "data"\nfolder');
+  const requests = join(directory, "curl.log");
+  const source = join(directory, "download-fixture");
+  const bin = isolatedPath(directory, ["awk", "dirname", "mkdir", "mktemp", "mv", "rm", "tar", "uname",
+    process.platform === "darwin" ? "shasum" : "sha256sum"]);
+  mkdirSync(home);
+  writeFileSync(source, "corrupt archive fixture");
+  writeFileSync(join(bin, "curl"), `#!/bin/sh
+for arg; do
+  if [ "\${previous:-}" = --output ]; then archive=$arg; fi
+  previous=$arg
+done
+printf '%s\n' "$previous" >> "$HIFABU_TEST_REQUESTS"
+/bin/cat "$HIFABU_TEST_SOURCE" > "$archive"
+`, { mode: 0o700 });
+  const env = { HOME: home, PATH: bin, HIFABU_TEST_REQUESTS: requests, HIFABU_TEST_SOURCE: source,
+    HIFABU_RUNTIME_URL: "http://127.0.0.1:9/custom-node.tar.gz" };
+  const run = (script, args, input) => spawnSync(script, args, { env, input, encoding: "utf8", timeout: 15_000 });
+  assert.notEqual(run("/bin/sh", ["-c", "command -v node"]).status, 0);
+  const missing = run(maker, ["--data", data, "--help"]);
+  assert.equal(missing.status, 1);
+  const { error: info } = JSON.parse(missing.stdout);
+  assert.equal(info.code, "runtime_required");
+  assert.equal(info.directory, join(data, "runtime"));
+  assert.equal(info.required, "Node.js >=22.13");
+  assert.ok(info.downloadBytes > 0);
+  assert.ok(info.consentRequired);
+  assert.deepEqual(info.installCommand, [runtime, "install", "--data", data, "--yes"]);
+  const refused = run(runtime, ["install", "--data", data], "no\n");
+  assert.equal(refused.status, 1);
+  assert.equal(JSON.parse(refused.stdout).error.code, "runtime_consent_required");
+  assert.equal(existsSync(requests), false);
+  assert.equal(existsSync(data), false);
+  assert.deepEqual(readdirSync(home), []);
+  evidence(`Node-free HOME, launch exit=${missing.status} (${info.code}), declined install exit=${refused.status} (${JSON.parse(refused.stdout).error.code}), curl calls=0`);
+
+  const mismatch = run(runtime, ["install", "--data", data], "yes\n");
+  assert.equal(mismatch.status, 1);
+  assert.equal(JSON.parse(mismatch.stdout).error.code, "runtime_checksum_mismatch");
+  assert.equal(readFileSync(requests, "utf8"), `${env.HIFABU_RUNTIME_URL}\n`);
+  assert.deepEqual(readdirSync(data), []);
+  evidence(`Consented install exit=${mismatch.status}, curl calls=1, staging/runtime entries=0\n${mismatch.stdout.trim()}`);
+
+  // Use a local tarball and a test-only copy of the installer with its checksum.
+  const target = `${process.platform}-${process.arch}`;
+  const release = `node-${info.version}-${target}`;
+  const fakeNode = join(directory, release, "bin", "node");
+  mkdirSync(join(directory, release, "bin"), { recursive: true });
+  writeFileSync(fakeNode, '#!/bin/sh\nif [ "$1" = --version ]; then printf "%s\\n" ' + info.version + '\nelse exec ' +
+    `'${process.execPath.replaceAll("'", "'\\''")}' "$@"\nfi\n`, { mode: 0o700 });
+  execFileSync("tar", ["-czf", source, "-C", directory, release]);
+  const testInstaller = join(directory, "hifabu-runtime");
+  const body = readFileSync(runtime, "utf8").replaceAll(/sha256=[a-f0-9]{64}/g, `sha256=${hash(readFileSync(source))}`);
+  writeFileSync(testInstaller, body, { mode: 0o700 });
+  const installed = run(testInstaller, ["install", "--data", data, "--yes"]);
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+  assert.equal(JSON.parse(installed.stdout).state, "installed");
+  assert.deepEqual(readdirSync(data), ["runtime"]);
+  const oldNode = join(bin, "node");
+  writeFileSync(oldNode, '#!/bin/sh\nprintf "v22.12.0\\n"\n', { mode: 0o700 });
+  const fallback = run(maker, ["--data", data, "--help"]);
+  assert.equal(fallback.status, 0);
+  assert.match(fallback.stdout, /Hifabu 制作机/);
+  writeFileSync(oldNode, '#!/bin/sh\nif [ "$1" = --version ]; then printf "v22.13.0\\n"; else printf "system node\\n"; fi\n');
+  assert.equal(run(maker, ["--data", data, "--help"]).stdout.trim(), "system node");
 });
 
 async function freePort() {
@@ -76,6 +160,117 @@ async function eventually(probe) {
   }
   assert.fail("等待本机测试服务超时");
 }
+
+test("ACC-maker-11: secret stores keep credentials out of ps, command output and logs", {
+  skip: process.platform === "win32", timeout: 45_000,
+}, async (t) => {
+  const deviceId = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+  const accountId = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  const machineToken = `machine.${Buffer.from(JSON.stringify({ sub: accountId, deviceId })).toString("base64url")}.signature`;
+  const refreshToken = "R".repeat(43);
+  const pollToken = "P".repeat(43);
+  const secrets = [refreshToken, machineToken, pollToken];
+  const route = (name) => cloudRoute(name).path;
+  const machine = () => ({ email: "maker@example.test", role: "maker", relayEnabled: false,
+    machineToken, expiresAt: Date.now() + 3600_000 });
+  let origin;
+  let revoked = 0;
+  const server = createHttpServer((req, res) => {
+    req.resume();
+    const auth = req.headers.authorization;
+    let payload;
+    if (req.url === route("device.link.start")) {
+      payload = { url: `${origin}/link?code=${"L".repeat(32)}`, code: "123456", pollToken, expiresAt: Date.now() + 10_000 };
+    } else if (req.url === route("device.link.poll") && auth === `Bearer ${pollToken}`) {
+      payload = { state: "linked", refreshToken, ...machine() };
+    } else if (req.url === route("device.refresh") && auth === `Bearer ${refreshToken}`) {
+      payload = machine();
+    } else if (req.url === route("device.revoke.self") && auth === `Bearer ${refreshToken}`) {
+      revoked++;
+      payload = { revoked: true };
+    }
+    res.writeHead(payload ? 200 : 401, { "content-type": "application/json" });
+    res.end(JSON.stringify(payload ?? { error_code: "unexpected_request" }));
+  });
+  await listen(server);
+  t.after(() => close(server));
+  origin = `http://127.0.0.1:${server.address().port}`;
+
+  for (const [platform, storage] of [["darwin", "keychain"], ["linux", "secret-service"]]) {
+    await t.test(storage, async (t) => {
+      const directory = temp(t);
+      const data = join(directory, "maker");
+      const metadata = join(data, "device.json");
+      const vault = join(directory, "fake-vault");
+      const snapshots = join(directory, "ps.log");
+      const operations = join(directory, "operations.log");
+      const locked = join(directory, "locked");
+      const bin = isolatedPath(directory, ["awk", "dirname", "node"]);
+      const preload = join(directory, "platform.mjs");
+      writeFileSync(preload, `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });\n`);
+      writeFileSync(join(bin, platform === "darwin" ? "open" : "xdg-open"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      writeFileSync(join(bin, platform === "darwin" ? "security" : "secret-tool"), `#!/usr/bin/env node
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const [operation, ...args] = process.argv.slice(2);
+const { FIXTURE_VAULT, FIXTURE_PS, FIXTURE_LOG, FIXTURE_LOCKED } = process.env;
+fs.appendFileSync(FIXTURE_PS, execFileSync("/bin/ps", ["-axww", "-o", "command="]));
+fs.appendFileSync(FIXTURE_LOG, JSON.stringify([operation, ...args]) + "\\n");
+if (operation === "-i" || operation === "store") {
+  const input = fs.readFileSync(0, "utf8");
+  const token = operation === "-i" ? input.trim().split(" ").at(-1) : input;
+  process.stdout.write(token);
+  process.stderr.write(token);
+  if (fs.existsSync(FIXTURE_LOCKED)) process.exit(1);
+  fs.writeFileSync(FIXTURE_VAULT, token, { mode: 0o600 });
+} else if (operation === "find-generic-password" || operation === "lookup") {
+  if (!fs.existsSync(FIXTURE_VAULT)) process.exit(operation === "lookup" ? 1 : 44);
+  process.stdout.write(fs.readFileSync(FIXTURE_VAULT));
+} else if (operation === "delete-generic-password" || operation === "clear") {
+  fs.rmSync(FIXTURE_VAULT, { force: true });
+} else process.exit(1);
+`, { mode: 0o700 });
+      const env = { HOME: directory, PATH: bin, NODE_OPTIONS: `--import=${pathToFileURL(preload)}`,
+        HIFABU_ORIGIN: origin, FIXTURE_VAULT: vault, FIXTURE_PS: snapshots, FIXTURE_LOG: operations, FIXTURE_LOCKED: locked };
+      const run = (...args) => exec(maker, ["--data", data, "--offline", "cloud", ...args], { env, timeout: 15_000 });
+      const output = [];
+      const capture = ({ stdout, stderr }) => {
+        output.push(stdout, stderr);
+        return stdout;
+      };
+      assert.equal(JSON.parse(capture(await run("login", "--name", "隔离制作机"))).loggedIn, true);
+      const file = readFileSync(metadata, "utf8");
+      const saved = JSON.parse(file);
+      assert.equal(saved.credentialStorage, storage);
+      assert.equal(saved.deviceId, deviceId);
+      assert.equal(saved.deviceName, "隔离制作机");
+      assert.equal(statSync(metadata).mode & 0o777, 0o600);
+      assert.equal(readFileSync(vault, "utf8"), refreshToken);
+      assert.equal(JSON.parse(capture(await run("status"))).credentialStorage, storage);
+      assert.match(capture(await run("status", "--human")), platform === "darwin" ? /macOS 钥匙串/ : /Secret Service/);
+      const before = revoked;
+      assert.equal(JSON.parse(capture(await run("logout"))).loggedIn, false);
+      assert.equal(revoked, before + 1);
+      assert.equal(existsSync(vault), false);
+      assert.equal(existsSync(metadata), false);
+
+      writeFileSync(locked, "");
+      const failure = await run("login").then(() => assert.fail("无法写系统凭据时应返回错误"), (error) => error);
+      assert.equal(JSON.parse(capture(failure)).error.code, "cloud_credential_store_failed");
+      assert.match(failure.stderr, /cloud_credential_store_failed/);
+      assert.equal(existsSync(metadata), false);
+      const ps = readFileSync(snapshots, "utf8");
+      const log = readFileSync(operations, "utf8");
+      assert.ok(ps.includes(platform === "darwin" ? "security -i" : "secret-tool store"), "ps captured the live credential tool");
+      assert.match(log, new RegExp(`"hifabu","${platform === "darwin" ? "-a" : "device"}","${deviceId}"`));
+      if (platform === "darwin") assert.match(log, /^\["-i"\]$/m);
+      for (const stream of [...output, ps, log, file]) {
+        assert.ok(secrets.every((secret) => !stream.includes(secret)), `${storage}: no fixture secret in captured stream`);
+      }
+      evidence(`${storage}: ps, argv, stdout, stderr, logs and device.json contained 0 secrets (refresh, poll and machine tokens); locked store emitted cloud_credential_store_failed; logout removed the item`);
+    });
+  }
+});
 
 test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential revocation", {
   skip: process.platform === "win32", timeout: 60_000,
@@ -125,7 +320,9 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   const opener = join(directory, process.platform === "darwin" ? "open" : "xdg-open");
   writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$HIFABU_TEST_BROWSER"\n', { mode: 0o700 });
   const env = { ...process.env, HIFABU_HOME: home, HIFABU_ORIGIN: origin, HIFABU_TEST_BROWSER: browserLog, PATH: `${directory}:${process.env.PATH}` };
-  const runMaker = (...args) => exec(maker, ["--data", dataDir, "--offline", ...args], { env, timeout: 20_000 });
+  const bin = isolatedPath(directory, ["awk", "dirname", "node"]);
+  const makerEnv = { ...env, PATH: `${directory}:${bin}` }; // Deliberately exclude real credential tools.
+  const runMaker = (...args) => exec(maker, ["--data", dataDir, "--offline", ...args], { env: makerEnv, timeout: 20_000 });
   const runFull = (...args) => exec(process.execPath, [full, ...args], { env, timeout: 20_000 });
 
   async function loginMaker() {
@@ -149,7 +346,10 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   assert.equal(statSync(credential).mode & 0o777, 0o600);
   assert.ok(saved.refreshToken);
   assert.ok(!Object.hasOwn(saved, "machineToken"));
-  assert.equal(JSON.parse((await runMaker("cloud", "status")).stdout).loggedIn, true);
+  const cached = JSON.parse((await runMaker("cloud", "status")).stdout);
+  assert.equal(cached.loggedIn, true);
+  assert.equal(cached.credentialStorage, "file");
+  assert.match((await runMaker("cloud", "status", "--human")).stdout, /device\.json.*600/);
   assert.deepEqual(JSON.parse((await runMaker("group", "list")).stdout), { groups: [], reportedAt: null, ok: true });
 
   const execLink = await callCloud(origin, "device.link.start", { name: "离线发布机", role: "executor" });
@@ -249,6 +449,7 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   assert.equal(loggedOut.loggedIn, false);
   assert.throws(() => statSync(credential), { code: "ENOENT" });
   await assert.rejects(callCloud(origin, "device.refresh", {}, bearer(saved.refreshToken)), { status: 401, code: "device_inactive" });
+  evidence("file: device.json mode=0600, refresh token present, machine token absent, logout removed the file and revoked the device");
   const refreshed = await callCloud(origin, "device.refresh", {}, bearer(fullDevice.refreshToken));
   assert.equal(refreshed.role, "maker", "仍可刷新同一账号的其他设备");
   await loginMaker();

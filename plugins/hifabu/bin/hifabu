@@ -1,2 +1,2 @@
 #!/bin/sh
-exec node "$(dirname "$0")/../lib/hifabu.mjs" "$@"
+exec "$(dirname "$0")/hifabu-runtime" _run "$@"

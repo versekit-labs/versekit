@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, type } from "node:os";
 import { join } from "node:path";
 import { readEnv } from "../../core/src/env.mjs";
@@ -14,7 +15,9 @@ const secretPattern = /^[A-Za-z0-9_-]{43}$/;
 const defaultOrigin = "https://hifabu.com";
 const error = (code, message) => Object.assign(new Error(message), { code });
 const accountIdPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const machineAccountId = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url")).sub;
+const machineClaims = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
+const machineAccountId = (token) => machineClaims(token).sub;
+const unreadableCredential = () => error("cloud_credential_unreadable", "无法读取这台机器的 Hifabu 登录资料。请检查凭据存储或退出后重新接入。");
 
 function removeFile(filename) {
   try {
@@ -35,34 +38,155 @@ function credentialFrom(data, origin, refreshToken, checkedAt) {
   };
 }
 
-function readCredential(filename, persistMachineToken) {
+function readCredentialFile(filename) {
   let fd;
   try {
     fd = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(fd);
     if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600)) throw new Error();
     const data = JSON.parse(readFileSync(fd, "utf8"));
-    const origin = publicOrigin(data.origin);
-    if (persistMachineToken) return credentialFrom(data, origin, data.refreshToken, data.checkedAt);
-    if (typeof data.email !== "string" || !isMachineRole(data.role) || typeof data.relayEnabled !== "boolean" ||
-        !secretPattern.test(data.refreshToken) || typeof data.accountId !== "string" || !accountIdPattern.test(data.accountId)) throw new Error();
-    return { ...data, origin, machineToken: null, expiresAt: 0 };
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw unreadableCredential();
+    return data;
   } catch (err) {
     if (err.code === "ENOENT") return null;
-    throw error("cloud_credential_unreadable", "无法读取这台机器的 Hifabu 登录资料。请退出登录后重新接入。");
+    throw unreadableCredential();
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
 }
 
-function writeCredential(filename, data) {
+function readCredential(filename) {
+  try {
+    const data = readCredentialFile(filename);
+    return data === null ? null : credentialFrom(data, publicOrigin(data.origin), data.refreshToken, data.checkedAt);
+  } catch {
+    throw error("cloud_credential_unreadable", "无法读取这台机器的 Hifabu 登录资料。请退出登录后重新接入。");
+  }
+}
+
+function writeCredential(filename, data, { replace = true } = {}) {
   const temporary = `${filename}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, JSON.stringify(data), { mode: 0o600, flag: "wx" });
-    renameSync(temporary, filename);
+    if (replace) renameSync(temporary, filename);
+    else linkSync(temporary, filename);
   } finally {
     removeFile(temporary);
   }
+}
+
+function runSecretTool(command, args, input) {
+  // Both tools can print secrets or echo input on failure. Keep their output private.
+  return spawnSync(command, args, { input, encoding: "utf8", stdio: "pipe", timeout: 15_000, maxBuffer: 16_384 });
+}
+
+function secretTool(storage, deviceId) {
+  if (typeof deviceId !== "string" || !accountIdPattern.test(deviceId)) throw unreadableCredential();
+  if (storage === "keychain") {
+    const attributes = ["-s", "hifabu", "-a", deviceId];
+    return {
+      // Only validated base64url tokens and ULIDs enter the interactive command.
+      write: (token) => runSecretTool("security", ["-i"], `add-generic-password -U ${attributes.join(" ")} -w ${token}\n`),
+      read: () => runSecretTool("security", ["find-generic-password", "-w", ...attributes]),
+      remove: () => runSecretTool("security", ["delete-generic-password", ...attributes]),
+      missing: (result) => result.status === 44 || (result.status === 1 && /could not be found in the keychain/i.test(result.stderr)),
+    };
+  }
+  if (storage === "secret-service") {
+    const attributes = ["service", "hifabu", "device", deviceId];
+    return {
+      write: (token) => runSecretTool("secret-tool", ["store", "--label=Hifabu", ...attributes], token),
+      read: () => runSecretTool("secret-tool", ["lookup", ...attributes]),
+      remove: () => runSecretTool("secret-tool", ["clear", ...attributes]),
+      missing: (result) => result.status === 1 && !result.stderr,
+    };
+  }
+  throw unreadableCredential();
+}
+
+function makerCredentialStore(filename) {
+  function publish(metadata) {
+    try {
+      writeCredential(filename, metadata, { replace: false });
+    } catch (err) {
+      const message = err.code === "EEXIST"
+        ? "另一个 Hifabu 进程已保存登录资料，请查看登录状态。"
+        : "无法保存 Hifabu 登录资料，请检查插件数据目录的权限后重试。";
+      throw error("cloud_credential_store_failed", message);
+    }
+  }
+
+  function read() {
+    try {
+      const data = readCredentialFile(filename);
+      if (data === null) return null;
+      const { credentialStorage = "file", deviceId, accountId } = data;
+      const origin = publicOrigin(data.origin);
+      let refreshToken = data.refreshToken;
+      if (credentialStorage !== "file") {
+        const result = secretTool(credentialStorage, deviceId).read();
+        if (result.status !== 0 || result.error) throw unreadableCredential();
+        refreshToken = result.stdout.trim();
+      }
+      if (typeof data.email !== "string" || !isMachineRole(data.role) || typeof data.relayEnabled !== "boolean" ||
+          typeof refreshToken !== "string" || !secretPattern.test(refreshToken) ||
+          typeof accountId !== "string" || !accountIdPattern.test(accountId)) throw unreadableCredential();
+      return { ...data, origin, refreshToken, credentialStorage, machineToken: null, expiresAt: 0 };
+    } catch {
+      throw unreadableCredential();
+    }
+  }
+
+  function write(data, deviceName) {
+    const { machineToken, expiresAt, refreshToken, ...details } = data;
+    let claims;
+    try {
+      claims = machineClaims(machineToken);
+      if (![claims.sub, claims.deviceId].every((id) => typeof id === "string" && accountIdPattern.test(id)) ||
+          typeof refreshToken !== "string" || !secretPattern.test(refreshToken)) throw new Error();
+    } catch {
+      throw error("cloud_response_invalid", "Hifabu 账号服务返回的机器标识有误。");
+    }
+    const { sub: accountId, deviceId } = claims;
+    const metadata = { ...details, accountId, deviceId, deviceName };
+    const storage = process.platform === "darwin" ? "keychain" : process.platform === "linux" ? "secret-service" : null;
+    const tool = storage && secretTool(storage, deviceId);
+    const stored = tool?.write(refreshToken);
+    if (!stored || stored.error?.code === "ENOENT") {
+      publish({ ...metadata, refreshToken });
+      return { credentialStorage: "file", deviceId };
+    }
+    try {
+      const check = !stored.error && stored.status === 0 && tool.read();
+      if (!check || check.error || check.status !== 0 || check.stdout.trim() !== refreshToken) {
+        throw error("cloud_credential_store_failed", "无法保存 Hifabu 凭据。请解锁钥匙串或检查 Secret Service 后重新接入。");
+      }
+      // A simultaneous login may have won. Keep its file and remove only our item.
+      publish({ ...metadata, credentialStorage: storage });
+      return { credentialStorage: storage, deviceId };
+    } catch (err) {
+      tool.remove();
+      throw err;
+    }
+  }
+
+  function remove(expected) {
+    if (expected === null) return;
+    const data = readCredentialFile(filename);
+    if (!data) return;
+    const external = data.credentialStorage && data.credentialStorage !== "file";
+    if (expected && (external ? data.deviceId !== expected.deviceId : data.refreshToken !== expected.refreshToken)) return;
+    if (external) {
+      const tool = secretTool(data.credentialStorage, data.deviceId);
+      const result = tool.remove();
+      if (result.error || (result.status !== 0 && !tool.missing(result))) {
+        throw error("cloud_credential_remove_failed", "无法删除系统存储中的 Hifabu 凭据。请解锁钥匙串或检查 Secret Service 后重试退出。");
+      }
+    }
+    removeFile(filename);
+  }
+
+  return { read, write, remove };
 }
 
 const signedOut = { state: "logged_out", loggedIn: false, email: null, role: null, relayEnabled: false };
@@ -87,6 +211,7 @@ export function createCloudHandlers({
   persistMachineToken = true, defaultRole = "executor",
 }) {
   const credentialFile = join(credentialsDir, credentialName);
+  const makerStore = persistMachineToken ? null : makerCredentialStore(credentialFile);
   let credential;
   let pending;
   let loginRequest;
@@ -107,14 +232,24 @@ export function createCloudHandlers({
   }
 
   function currentCredential() {
-    if (credential === undefined) credential = readCredential(credentialFile, persistMachineToken);
+    if (credential === undefined) credential = makerStore ? makerStore.read() : readCredential(credentialFile);
     return credential;
   }
 
-  function clearCredential() {
-    removeFile(credentialFile);
+  function clearCredential(expected) {
+    if (!makerStore) removeFile(credentialFile);
     clearTimeout(refreshTimer);
     refreshTimer = null;
+    if (makerStore) {
+      credential = null;
+      try {
+        makerStore.remove(expected);
+      } catch (err) {
+        const failure = err.code?.startsWith("cloud_credential_") ? err : unreadableCredential();
+        log(`[cloud] ${failure.code} ${failure.message}`);
+        throw failure;
+      }
+    }
     credential = null;
     reachable = true;
   }
@@ -127,15 +262,11 @@ export function createCloudHandlers({
     }), delay).unref();
   }
 
-  function save(data, { linking = false } = {}) {
-    if (linking || persistMachineToken) {
-      const { machineToken, expiresAt, ...details } = data;
-      const accountId = persistMachineToken ? null : machineAccountId(machineToken);
-      if (!persistMachineToken && (typeof accountId !== "string" || !accountIdPattern.test(accountId))) {
-        throw error("cloud_response_invalid", "Hifabu 账号服务返回的机器标识有误。");
-      }
+  function save(data, attempt) {
+    if (persistMachineToken || attempt) {
       mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
-      writeCredential(credentialFile, persistMachineToken ? data : { ...details, accountId });
+      if (makerStore) Object.assign(data, makerStore.write(data, attempt.name));
+      else writeCredential(credentialFile, data);
     }
     credential = data;
     reachable = true;
@@ -151,11 +282,15 @@ export function createCloudHandlers({
       if (updated.role !== data.role || updated.expiresAt <= Date.now() + refreshAheadMs) {
         throw error("cloud_response_invalid", "Hifabu 账号服务返回的登录资料有误。");
       }
+      if (makerStore) {
+        updated.credentialStorage = data.credentialStorage;
+        updated.deviceId = data.deviceId;
+      }
       save(updated);
     } catch (err) {
       if (credential !== data) return;
       if (err.code === "device_inactive") {
-        clearCredential();
+        clearCredential(data);
         log("[cloud] device_inactive 这台机器已退出 Hifabu。");
       } else {
         reachable = false;
@@ -242,11 +377,14 @@ export function createCloudHandlers({
       if (result.state !== "linked" || data.role !== attempt.role || data.expiresAt <= Date.now() + refreshAheadMs) {
         throw error("cloud_response_invalid", "Hifabu 账号服务返回的登录资料有误。");
       }
-      save(data, { linking: true });
+      save(data, attempt);
       finish(attempt, "linked");
     } catch (err) {
       if (pending !== attempt) return;
       if (err.code === "cloud_unavailable" || err.status >= 500) return schedulePoll(attempt);
+      if (makerStore && err.code === "cloud_credential_store_failed") {
+        return finish(attempt, "error", { error_code: err.code, message: err.message });
+      }
       finish(attempt, "error", {
         error_code: err.code === "device_inactive" ? "device_inactive" : "cloud_login_failed",
         message: "无法完成 Hifabu 登录，请重新登录或在我的 Hifabu 查看这台机器。",
@@ -263,11 +401,17 @@ export function createCloudHandlers({
       throw error("cloud_response_invalid", "Hifabu 账号服务返回的接入地址有误，请重试。");
     }
     const { code, url, expiresAt, pollToken } = challenge;
-    pending = { code, url, expiresAt, pollToken, origin, role };
+    pending = { code, url, expiresAt, pollToken, origin, role, name };
     terminal = null;
     schedulePoll(pending);
     openBrowser(url);
     return browserChallenge(pending);
+  }
+
+  function status(data, reachable) {
+    const result = signedIn(data, reachable);
+    if (makerStore) result.credentialStorage = data.credentialStorage;
+    return result;
   }
 
   async function logout() {
@@ -278,20 +422,22 @@ export function createCloudHandlers({
     pending = null;
     terminal = null;
     let warning;
+    let saved;
     try {
-      const saved = currentCredential();
+      saved = currentCredential();
       credential = null; // An in-flight refresh must never restore credentials during logout.
       if (saved) {
         const result = await request(saved.origin, "device.revoke.self", {}, saved.refreshToken);
         if (result?.revoked !== true) throw error("cloud_response_invalid", "Hifabu 未确认注销。");
       }
     } catch (err) {
-      const code = err.code ?? "cloud_revoke_failed";
+      const known = ["offline_mode", "cloud_unavailable", "cloud_response_invalid", "cloud_credential_unreadable", "device_inactive"];
+      const code = ((!makerStore || known.includes(err.code)) && err.code) || "cloud_revoke_failed";
       const message = "服务端没能注销这台设备，到 hifabu.com 的「我的 Hifabu」里手动移除。";
       log(`[cloud] ${code} ${message}`);
       warning = { code, message };
     } finally {
-      clearCredential();
+      clearCredential(saved);
     }
     return warning ? { ...signedOut, warning, message: warning.message } : signedOut;
   }
@@ -324,10 +470,10 @@ export function createCloudHandlers({
     async "cloud.status"() {
       const saved = currentCredential();
       if (!saved) return pending ? browserChallenge(pending) : terminal ?? signedOut;
-      if (offline && !isLoopback(new URL(saved.origin))) return signedIn(saved, false);
+      if (offline && !isLoopback(new URL(saved.origin))) return status(saved, false);
       // 状态核对也更新传片开通状态，不必等机器令牌临近到期。
       if (Date.now() >= nextStatusCheckAt) await refresh();
-      return credential ? signedIn(credential, reachable) : signedOut;
+      return credential ? status(credential, reachable) : signedOut;
     },
   };
 }
