@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash
 #
-# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → 飞书组件 lark-cli → vk init → 后台服务 → 打开控制台。
+# 做的事：私有 Node（不动系统里的）→ versekit 程序 → biliup → 飞书组件 lark-cli → hifabu init → 后台服务 → 打开控制台。
 # 全程不用 sudo、不问问题。再运行一次就是升级：数据库、配置、凭证、账号、浏览器登录都保留。
 #
 # 可用环境变量覆盖（开发机上验证用）：
@@ -20,9 +20,9 @@
 #   VERSEKIT_OFFLINE=1       服务以 --offline 启动（不访问任何平台）
 #   VERSEKIT_NO_OPEN=1       不自动打开浏览器
 #   VERSEKIT_APP_COMMIT      这份程序对应的提交号（40 位）；不给就用 tarball 里 install.sh 被 export-subst 写入的那个
-#   VERSEKIT_UPDATE=1        后台自动更新（vk update）用：不动 PATH 配置、不开浏览器，升完保留 app.prev
+#   VERSEKIT_UPDATE=1        后台自动更新（hifabu update）用：不动 PATH 配置、不开浏览器，升完保留 app.prev
 #                            给更新程序做「起来后自检、不行就退回」，由它自己清掉
-#   VK_HOME                  数据目录的 HOME（和 vk 本身一致）
+#   VK_HOME                  数据目录的 HOME（和 hifabu 本身一致）
 
 # 提交号：GitHub 源码包（git archive）会把这一行的占位符替换成 40 位提交号（见 .gitattributes 的 export-subst）。
 # 直接从 raw 地址拿到的脚本里它没被替换，下面只认 40 位十六进制，所以不会误读。
@@ -65,18 +65,24 @@ main() {
   trap cleanup EXIT
   trap 'exit 130' INT TERM
 
+  installed_cli() {
+    if [ -x "$PREFIX/bin/hifabu" ]; then printf '%s\n' "$PREFIX/bin/hifabu"
+    else printf '%s\n' "$PREFIX/bin/vk"; fi
+  }
+
   # 失败时回到安装前：旧程序放回去（升级）或把服务卸掉（首次），绝不留下半启动的服务。
   rollback() {
     [ "$SERVICE_TOUCHED" = 1 ] || [ "$SWAPPED" = 1 ] || return 0
-    local vk="$PREFIX/bin/vk"
-    if [ -x "$vk" ] && [ -d "$PREFIX/app" ]; then "$vk" service uninstall --service-only >/dev/null 2>&1 || true; fi
+    local cli
+    cli="$(installed_cli)"
+    if [ -x "$cli" ] && [ -d "$PREFIX/app" ]; then "$cli" service uninstall --service-only >/dev/null 2>&1 || true; fi
     if [ "$SWAPPED" = 1 ]; then
       rm -rf "$PREFIX/app"
       if [ "$HAD_APP" = 1 ] && [ -d "$PREFIX/app.prev" ]; then
         mv "$PREFIX/app.prev" "$PREFIX/app"
-        if [ -x "$vk" ] && [ -n "${OLD_PORT:-}" ]; then
+        if [ -x "$cli" ] && [ -n "${OLD_PORT:-}" ]; then
           local extra=(); [ "${VERSEKIT_OFFLINE:-}" = 1 ] && extra=(--offline)
-          "$vk" service install --port "$OLD_PORT" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || true
+          "$cli" service install --port "$OLD_PORT" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || true
           printf '  已回到升级前的版本并尝试恢复旧服务。\n' >&2
         fi
       fi
@@ -179,7 +185,7 @@ main() {
     die "下载下来的不是 versekit（没有 packages/cli/src/vk.mjs）" "确认 VERSEKIT_APP_URL 指向仓库的源码 tarball"
   local NEW_VERSION
   NEW_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$TMP/app-x/package.json" | head -1)"
-  # 程序知道自己是哪个提交（ACC-update-01）：写进程序目录，vk version / 系统页读它。
+  # 程序知道自己是哪个提交（ACC-update-01）：写进程序目录，hifabu version / 系统页读它。
   local APP_COMMIT="${VERSEKIT_APP_COMMIT:-}"
   [ -n "$APP_COMMIT" ] || APP_COMMIT="$(sed -n "s/^APP_COMMIT_STAMP='\([0-9a-f]\{40\}\)'.*/\1/p" "$TMP/app-x/install.sh" 2>/dev/null | head -1 || true)"
   printf '{\n  "commit": "%s",\n  "version": "%s",\n  "installed_at": "%s"\n}\n' "$APP_COMMIT" "$NEW_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMP/app-x/.versekit-build.json"
@@ -229,7 +235,9 @@ main() {
   # ------------------------------------------------------------ 换上新程序
   STEP="安装程序文件"
   # 下载和校验都过了才动已安装的东西：任何一步失败都不会破坏现有版本。
-  if [ -x "$PREFIX/bin/vk" ] && [ -d "$PREFIX/app" ]; then "$PREFIX/bin/vk" service stop >/dev/null 2>&1 || true; fi
+  local OLD_CLI
+  OLD_CLI="$(installed_cli)"
+  if [ -x "$OLD_CLI" ] && [ -d "$PREFIX/app" ]; then "$OLD_CLI" service stop >/dev/null 2>&1 || true; fi
   if [ "$NODE_STAGED" = 1 ]; then rm -rf "$PREFIX/node"; mv "$TMP/node-x" "$PREFIX/node"; fi
   local NODE="$PREFIX/node/bin/node"
   cp "$BILIUP_BIN" "$PREFIX/bin/biliup.new" && chmod +x "$PREFIX/bin/biliup.new" && mv "$PREFIX/bin/biliup.new" "$PREFIX/bin/biliup"
@@ -238,20 +246,23 @@ main() {
   if [ "$HAD_APP" = 1 ]; then mv "$PREFIX/app" "$PREFIX/app.prev"; elif [ -d "$PREFIX/app" ]; then rm -rf "$PREFIX/app"; fi
   mv "$TMP/app-x" "$PREFIX/app"
   SWAPPED=1
-  cat >"$PREFIX/bin/vk" <<EOF
+  local HIFABU="$PREFIX/bin/hifabu"
+  cat >"$HIFABU.new" <<EOF
 #!/bin/sh
-# versekit 启动器（install.sh 生成）：用私有 Node 跑 vk，并保证 PATH 里有 biliup。
+# Hifabu 启动器（install.sh 生成）：用私有 Node，并保证 PATH 里有 biliup。
+if [ "\${0##*/}" = vk ]; then printf '%s\n' 'vk 已改名为 hifabu' >&2; fi
 PATH="$PREFIX/bin:\$PATH"; export PATH
 exec "$PREFIX/node/bin/node" --no-warnings "$PREFIX/app/packages/cli/src/vk.mjs" "\$@"
 EOF
-  chmod +x "$PREFIX/bin/vk"
-  local VK="$PREFIX/bin/vk"
+  chmod +x "$HIFABU.new"
+  mv -f "$HIFABU.new" "$HIFABU"
+  ln -sfn hifabu "$PREFIX/bin/vk"
   export PATH="$PREFIX/bin:$PATH"
 
   # ------------------------------------------------------------ 4. init + 服务
-  STEP="初始化（vk init）"
-  say "初始化数据库（vk init）……"
-  "$VK" init >/dev/null || die "vk init 失败" "运行 $VK init 看具体报错"
+  STEP="初始化（hifabu init）"
+  say "初始化数据库（hifabu init）……"
+  "$HIFABU" init >/dev/null || die "hifabu init 失败" "运行 $HIFABU init 看具体报错"
 
   STEP="选端口"
   local PORT="$WANT_PORT"
@@ -272,7 +283,7 @@ EOF
   local extra=(); [ "${VERSEKIT_OFFLINE:-}" = 1 ] && extra=(--offline)
   SERVICE_TOUCHED=1
   local SVC_OUT
-  if ! SVC_OUT="$("$VK" service install --port "$PORT" ${extra[@]+"${extra[@]}"} --human 2>&1)"; then
+  if ! SVC_OUT="$("$HIFABU" service install --port "$PORT" ${extra[@]+"${extra[@]}"} --human 2>&1)"; then
     local LOGF="${VK_HOME:-$HOME}/.local/state/versekit/vk.log"
     printf '%s\n' "$SVC_OUT" >&2
     [ -f "$LOGF" ] && { printf '  日志最后几行（%s）：\n' "$LOGF" >&2; tail -n 8 "$LOGF" >&2 || true; }
@@ -288,7 +299,7 @@ EOF
     [ "$code" = 200 ] && break
     i=$((i + 1)); sleep 0.5
   done
-  [ "$code" = 200 ] || die "控制台 http://127.0.0.1:$PORT/today 没有返回 200（拿到 ${code:-无响应}）" "运行 vk service status 与查看 vk.log 排查；修好后重新运行安装命令"
+  [ "$code" = 200 ] || die "控制台 http://127.0.0.1:$PORT/today 没有返回 200（拿到 ${code:-无响应}）" "运行 hifabu service status 与查看 vk.log 排查；修好后重新运行安装命令"
 
   # ------------------------------------------------------------ 5. PATH 与收尾
   STEP="配置 PATH"
@@ -299,7 +310,7 @@ EOF
     if [ -f "$rc" ] && grep -qF '# >>> versekit >>>' "$rc"; then return 0; fi
     {
       [ -s "$rc" ] && printf '\n'
-      printf '# >>> versekit >>>\n# 由 versekit 安装脚本添加；vk service uninstall 会删掉这一段\nexport PATH="%s/bin:$PATH"\n# <<< versekit <<<\n' "$PREFIX"
+      printf '# >>> versekit >>>\n# 由 versekit 安装脚本添加；hifabu service uninstall 会删掉这一段\nexport PATH="%s/bin:$PATH"\n# <<< versekit <<<\n' "$PREFIX"
     } >>"$rc"
   }
   local SHELL_NAME; SHELL_NAME="$(basename "${SHELL:-}")"
@@ -310,7 +321,7 @@ EOF
     fish)
       RC_FILE=""
       [ "$UPDATING" = 1 ] || { mkdir -p "$HOME/.config/fish/conf.d"
-      printf '# 由 versekit 安装脚本添加；vk service uninstall 会删掉这个文件\nfish_add_path "%s/bin"\n' "$PREFIX" >"$HOME/.config/fish/conf.d/versekit.fish"; }
+      printf '# 由 versekit 安装脚本添加；hifabu service uninstall 会删掉这个文件\nfish_add_path "%s/bin"\n' "$PREFIX" >"$HOME/.config/fish/conf.d/versekit.fish"; }
       ;;
     *) RC_FILE="$HOME/.profile" ;;
   esac
@@ -333,7 +344,7 @@ EOF
     say "已是最新（$(printf '%s' "$APP_COMMIT" | cut -c1-7)），重新装了一遍（数据、账号、登录都保留）"
   elif [ "$HAD_APP" = 1 ]; then say "已升级 ${OLD_LABEL} → ${NEW_LABEL}（数据、账号、登录都保留）"
   else say "已安装 ${NEW_LABEL}"; fi
-  say "新开的终端里可以直接用 vk；日常管理：vk service status | restart | stop | uninstall"
+  say "新开的终端里可以直接用 hifabu；日常管理：hifabu service status | restart | stop | uninstall"
   if [ -n "$LARK_FAIL" ]; then
     printf '⚠ 飞书组件没装上：%s\n  versekit 其余部分已装好；要接飞书，网络通了以后重新运行这一行安装命令即可（可以反复运行，数据、账号、登录都保留）。\n' "$LARK_FAIL" >&2
   fi

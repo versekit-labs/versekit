@@ -168,6 +168,8 @@ const sh = (h, cmd, args, opts = {}) =>
   });
 const vkOf = (h) => join(h.prefix, "bin", "vk");
 const vk = (h, ...args) => sh(h, vkOf(h), args);
+const hifabuOf = (h) => join(h.prefix, "bin", "hifabu");
+const hifabu = (h, ...args) => sh(h, hifabuOf(h), args);
 const json = (r) => JSON.parse(r.stdout);
 const status = (port, path = "/today") =>
   new Promise((resolve) => {
@@ -224,6 +226,25 @@ test("ACC-update-02 vk update --check 说人话；--auto off|on 就地开关", {
   assert.equal(json(await vk(main, "version", "--json")).lastCheck.message, "已是最新", "检查结果记下来了，系统页显示它");
 });
 
+test("ACC-brand-04 安装 hifabu 与 vk 别名，兼容制作机的 --data", async () => {
+  for (const args of [["--help"], ["commands", "--json"], ["unknown-command"]]) {
+    const primary = await hifabu(main, ...args);
+    const alias = await vk(main, ...args);
+    assert.equal(primary.code, args[0] === "unknown-command" ? 2 : 0);
+    assert.equal(alias.code, primary.code);
+    assert.equal(alias.stdout, primary.stdout);
+    assert.equal(alias.stderr, "vk 已改名为 hifabu\n" + primary.stderr);
+  }
+
+  const otherData = join(main.home, "unused maker data");
+  const groups = await hifabu(main, "group", "list");
+  assert.equal(groups.code, 0, groups.stderr);
+  assert.ok(Array.isArray(JSON.parse(groups.stdout).groups));
+  assert.deepEqual(await hifabu(main, "--data", otherData, "group", "list"), groups);
+  assert.deepEqual(await hifabu(main, "group", "list", "--data", otherData), groups);
+  assert.equal(existsSync(otherData), false);
+});
+
 test("ACC-update-02 已是最新时 vk update 什么都不动", { timeout: 60000 }, async () => {
   latest = A;
   const r = json(await vk(main, "update"));
@@ -239,11 +260,19 @@ test("ACC-update-02/05 更新：用新包里的 install.sh 升级，数据/账�
   writeFileSync(cred, "secret");
   const rcBefore = readFileSync(join(main.home, ".zshrc"), "utf8");
 
+  // 模拟升级前只安装了 vk 的老版本。
+  const launcher = readFileSync(hifabuOf(main), "utf8");
+  rmSync(vkOf(main));
+  writeFileSync(vkOf(main), launcher.split("\n").filter((line) => !line.includes("vk 已改名")).join("\n"), { mode: 0o755 });
+  rmSync(hifabuOf(main));
+
   latest = B;
   titles = ["一", "二", "三", "四", "五", "六"];
   appTarball = "app-2";
   const r = await vk(main, "update");
   assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal((await hifabu(main, "--help")).code, 0);
+  assert.equal((await vk(main, "--help")).stderr, "vk 已改名为 hifabu\n");
   const out = json(r);
   assert.equal(out.updated, true, r.stdout);
   assert.equal(appVersion(main), "9.9.9");

@@ -11,10 +11,12 @@
     "packages/*"
   ],
   "bin": {
-    "vk": "./packages/cli/src/vk.mjs"
+    "hifabu": "./packages/cli/src/vk.mjs",
+    "vk": "./packages/cli/src/vk-alias.mjs"
   },
   "scripts": {
-    "vk": "node packages/cli/src/vk.mjs",
+    "hifabu": "node packages/cli/src/vk.mjs",
+    "vk": "node packages/cli/src/vk-alias.mjs",
     "serve": "node packages/cli/src/vk.mjs serve --open",
     "doctor": "node packages/cli/src/vk.mjs doctor --human",
     "test": "node plugins/hifabu/test/run-tests.mjs",

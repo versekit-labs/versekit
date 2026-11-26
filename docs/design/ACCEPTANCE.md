@@ -8,8 +8,8 @@
 ```bash
 # 1. 起离线服务（实现方负责）：只能用 --offline，不得起会连真实平台的服务
 export VK_HOME=$(mktemp -d)
-npm run vk -- demo seed            # 演示数据：待确认（长片+短片）、已发布（有好有差）、出问题
-npm run vk -- serve --offline      # http://127.0.0.1:8787；不跑队列/体检/采集，不接飞书，平台类接口返回 offline_mode
+npm run hifabu -- demo seed            # 演示数据：待确认（长片+短片）、已发布（有好有差）、出问题
+npm run hifabu -- serve --offline      # http://127.0.0.1:8787；不跑队列/体检/采集，不接飞书，平台类接口返回 offline_mode
 
 # 2. 机械验收（一条命令）
 npm run design:accept -- --url http://127.0.0.1:8787
@@ -131,7 +131,7 @@ npm run ci
 
 抽查三条：
 ```bash
-vk schedule list --group ai --from 2026-11-01 --to 2026-11-30 --json | jq '.works | length'
+hifabu schedule list --group ai --from 2026-11-01 --to 2026-11-30 --json | jq '.works | length'
 curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-30' | jq '.works | length'
 # 与计划页摘要里的「N 个作品」对照
 ```
@@ -182,7 +182,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 | ACC-harness-cycle-13 | 用假 `bin/ghx` 让 `issue view --json labels` 失败（首次失败、或两次都失败），对一个带 `model:opus` 的 `s:ready` issue 跑 `bin/cycle.sh --max 1` | 首次失败：重试一次后照常按 `model:opus` 派出；两次都失败：日志写 `✗ 取 #N 的 label 失败：<stderr 摘要>`，**该单本轮不派**、保持 `s:ready`，下一轮再试；任何情况下都不得在取不到 label 时退回 Sonnet 派出（2026-11-15 #145 带 `model:opus` 却被 Sonnet 做了） |
 | ACC-harness-loop-01 | 在同一项目里先起一个 `bin/coordinator-loop.sh`，再起第二个；然后 `kill -9` 第一个，留下旧的锁文件，再起一次 | 第二个立即退出（退出码 14），stderr 写明「已有循环在跑：pid=<N>」，不调用任何 `orca`/`cycle.sh`；第一个不受影响。锁文件在 `COORD_STATE_DIR` 下，记 pid；锁里的 pid 已不存在（或不是本项目的循环）时视为陈旧锁，接管并在日志写一行；正常退出（任何退出码）都删掉自己的锁，不删别人的 |
 | ACC-harness-loop-02 | 起循环后 `pgrep -fl 'coordinator-loop\[<项目名>\]'`；再在另一个项目目录里起一个同名脚本（或用临时目录模拟），重复一次 | 进程命令行带项目名，形如 `coordinator-loop[versekit]`；按项目名 pgrep 只命中本项目的循环；项目名默认取仓库名（`origin` 远端的仓库名，取不到用仓库目录名），可用 `COORD_PROJECT` 覆盖；脚本内容不写死 `versekit`，同一份脚本放进别的项目可直接用；`docs/COORDINATOR.md` 写明按项目名查进程的命令 |
-| ACC-harness-offline-01 | 用假 driver / 假适配器（被调用就记录）在临时 `VK_HOME` 里跑 `vk serve --offline`，库里放几个 `last_checked_at` 为空的账号和到点的已确认平台稿，等过一轮 daemon tick；再调 `/api` 的账号检查、发布、采集 | 全程**零次**体检/发布/采集/登录调用，没有起任何 Chrome；这些接口返回 `offline_mode` 和人话；启动时打印「离线模式：不会访问任何平台」；页面和只改库的动作（确认、改时间、跳过）照常可用。ACCEPTANCE 第一节与验收任务书只允许用 `--offline` 起服务（2026-11-16 验收起 daemon 自动体检访问了一次小红书） |
+| ACC-harness-offline-01 | 用假 driver / 假适配器（被调用就记录）在临时 `VK_HOME` 里跑 `hifabu serve --offline`，库里放几个 `last_checked_at` 为空的账号和到点的已确认平台稿，等过一轮 daemon tick；再调 `/api` 的账号检查、发布、采集 | 全程**零次**体检/发布/采集/登录调用，没有起任何 Chrome；这些接口返回 `offline_mode` 和人话；启动时打印「离线模式：不会访问任何平台」；页面和只改库的动作（确认、改时间、跳过）照常可用。ACCEPTANCE 第一节与验收任务书只允许用 `--offline` 起服务（2026-11-16 验收起 daemon 自动体检访问了一次小红书） |
 | ACC-harness-leak-01 | 假 `orca` 包装脚本：让一个 worker 完成并被 `cycle.sh` 处理（ack）后，查看 `terminal close` 调用 | 该 worker 的终端被自动关闭；验收 worker 同理；仍在运行的 worker 终端不被关；关闭失败只写日志，不阻断整轮 |
 | ACC-harness-leak-02 | 假 `orca` 与假 `dsh-model.sh`：`$role.channel` 记录 volc，本轮选 qwen，跑 `ensure_terminal` | 先关闭旧终端、再新建；日志含「通道切换，已关旧终端」；不出现两个终端同时留存 |
 | ACC-harness-leak-03 | 假 `orca` 返回超过「lane 数 + 2」个已完成未关的 worker 终端，跑 `bin/cycle.sh --max 1` | 派工前先清理已完成终端；清完仍超上限则不再开新终端并写 `cycle-owner-alert.txt`；上限可配置 |
@@ -254,12 +254,12 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 | ACC id | 怎么验 | 通过标准 |
 |---|---|---|
-| ACC-browser-mem-01 | 起 `vk serve`，触发一次账号检查（会起该账号 Chrome），然后 `kill -TERM` 守护进程 | 守护进程退出前关闭它起的所有账号 Chrome；`ps` 里不再有 `--user-data-dir=…/browser/acc_*` 进程 |
-| ACC-browser-mem-02 | 先手动留一个账号 Chrome（模拟上次守护进程被 `kill -9` 留下的孤儿），再起 `vk serve` 并空闲等待超过空闲回收时限（测试可用环境变量缩短） | 新守护进程接管或关闭孤儿：空闲时限到后该 Chrome 被关闭；正在被用户使用（有非空白标签页）的登录窗口不被强关 |
+| ACC-browser-mem-01 | 起 `hifabu serve`，触发一次账号检查（会起该账号 Chrome），然后 `kill -TERM` 守护进程 | 守护进程退出前关闭它起的所有账号 Chrome；`ps` 里不再有 `--user-data-dir=…/browser/acc_*` 进程 |
+| ACC-browser-mem-02 | 先手动留一个账号 Chrome（模拟上次守护进程被 `kill -9` 留下的孤儿），再起 `hifabu serve` 并空闲等待超过空闲回收时限（测试可用环境变量缩短） | 新守护进程接管或关闭孤儿：空闲时限到后该 Chrome 被关闭；正在被用户使用（有非空白标签页）的登录窗口不被强关 |
 | ACC-browser-mem-03 | 在账号页点「重新登录」→ 扫码成功 | 登录确认成功后，登录用的可见窗口在 10 秒内自动关闭（或转为无头），不会一直留在屏幕和内存里 |
 | ACC-browser-mem-04 | 设 `VK_BROWSER_POOL=2` 起服务，依次对 3 个账号触发检查 | 同时存活的账号 Chrome 不超过 2 个；第 3 个排队或复用槽位，不报错；默认值与上限行为不变 |
-| ACC-browser-login-01 | 从**后台会话**（`launchctl managername` 输出 `Background`，例如 agent 的 shell）起 `vk serve` 或直接调 driver，对一个临时账号 id 开 Chrome，用 CDP 写入一个带 30 天有效期的测试 cookie，等待落盘后关闭该 Chrome，再重新打开同一账号 | 重新打开后该 cookie 仍在；profile 的 `Default/Cookies` 里 `cookies` 表行数 > 0。验收人必须自己实际执行这一步，不得引用实现方的证据；不得读取或打印任何真实账号 cookie 的值 |
-| ACC-browser-login-02 | 构造「cookie 存不下来」的情形（例如用环境变量关掉修复、或让 cookie 存储不可写），然后跑 `vk doctor --human` 与一次账号检查 | 明确用人话报出「登录不会被保存」及原因，不静默；修复生效的正常情形下该项为通过 |
+| ACC-browser-login-01 | 从**后台会话**（`launchctl managername` 输出 `Background`，例如 agent 的 shell）起 `hifabu serve` 或直接调 driver，对一个临时账号 id 开 Chrome，用 CDP 写入一个带 30 天有效期的测试 cookie，等待落盘后关闭该 Chrome，再重新打开同一账号 | 重新打开后该 cookie 仍在；profile 的 `Default/Cookies` 里 `cookies` 表行数 > 0。验收人必须自己实际执行这一步，不得引用实现方的证据；不得读取或打印任何真实账号 cookie 的值 |
+| ACC-browser-login-02 | 构造「cookie 存不下来」的情形（例如用环境变量关掉修复、或让 cookie 存储不可写），然后跑 `hifabu doctor --human` 与一次账号检查 | 明确用人话报出「登录不会被保存」及原因，不静默；修复生效的正常情形下该项为通过 |
 | ACC-browser-login-03 | 关闭账号 Chrome（空闲回收、守护进程退出、`closeAccount`）之前刚发生过登录或 cookie 变更 | 关闭前留出落盘时间或主动刷盘，优先 `Browser.close`；紧接着重开，刚写入的持久 cookie 不丢 |
 
 ## 十、v2 验收口径（作品为中心，2026-11-15）
@@ -284,13 +284,13 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 ### 发布方案（最小形式，所有者 2026-11-16 定）
 
-- [ACC-v2-plan-01] `vk plan apply <cutId> [--accounts a,b] [--group 名字]` 为这支成片生成平台稿（命令在 `commands.mjs` 定义为 `plan.apply`，CLI、HTTP 由它派生）。不给 `--accounts` 时按 PRD 的默认方案：当前账号组里**所有已接入平台**的账号各一条。每条挂在这支成片下、用它的语言版本（有多个版本时默认 `zh`，没有 `zh` 用第一个），状态一律是待确认，不会自动发。已经有平台稿的账号跳过并在输出里列出，重复执行不新建。
+- [ACC-v2-plan-01] `hifabu plan apply <cutId> [--accounts a,b] [--group 名字]` 为这支成片生成平台稿（命令在 `commands.mjs` 定义为 `plan.apply`，CLI、HTTP 由它派生）。不给 `--accounts` 时按 PRD 的默认方案：当前账号组里**所有已接入平台**的账号各一条。每条挂在这支成片下、用它的语言版本（有多个版本时默认 `zh`，没有 `zh` 用第一个），状态一律是待确认，不会自动发。已经有平台稿的账号跳过并在输出里列出，重复执行不新建。
 - [ACC-v2-plan-02] 建议时间按 ACC-v2-confirm-06 的平台规则排：从现在起找每个账号最近的可用时间，不违反每日上限和最小间隔；输出里每条带建议时间。有测试钉住：同一账号已有一条 10 分钟后的平台稿时，新稿的建议时间不早于它之后 10 分钟。
 - [ACC-v2-plan-03] 平台稿发出去用的是**成片**的标题和元数据：生成时由 core 把成片标题写进平台稿（如 `overrides_json`，人在确认前改过的值优先），适配器不再 JOIN `work` 表取标题/元数据（与 ACC-v2-confirm-07 同理，零后门）。有测试钉住：作品标题与短片标题不同，发短片那条时适配器拿到的是短片标题。
 
 ### 平台文案：标题、正文、话题（所有者 2026-11-16 定：入库时由 Claude 写好）
 
-- [ACC-v2-copy-01] `vk work add` 的完整形式（清单）可以给每支成片、每个语言版本带各平台的文案：`copy: { <platform>: { title, body, tags: [] } }`，也可以给一份不分平台的默认文案。入库时按平台字段限制校验，超限的拒绝入库并指出是哪个平台、哪个字段、限多少（不悄悄截断）。限制写在 core 的一张表里，至少覆盖：B站 标题 ≤80、简介 ≤2000、话题 ≤10 个且每个 ≤20 字；小红书 标题 ≤20、正文 ≤1000；抖音 文案含话题 ≤1000；TikTok 文案 ≤2200；YouTube 标题 ≤100、简介 ≤5000。查不到官方数字的平台在表里标「未核实」，不校验但在 `vk doctor` 里列出。
+- [ACC-v2-copy-01] `vk work add` 的完整形式（清单）可以给每支成片、每个语言版本带各平台的文案：`copy: { <platform>: { title, body, tags: [] } }`，也可以给一份不分平台的默认文案。入库时按平台字段限制校验，超限的拒绝入库并指出是哪个平台、哪个字段、限多少（不悄悄截断）。限制写在 core 的一张表里，至少覆盖：B站 标题 ≤80、简介 ≤2000、话题 ≤10 个且每个 ≤20 字；小红书 标题 ≤20、正文 ≤1000；抖音 文案含话题 ≤1000；TikTok 文案 ≤2200；YouTube 标题 ≤100、简介 ≤5000。查不到官方数字的平台在表里标「未核实」，不校验但在 `hifabu doctor` 里列出。
 - [ACC-v2-copy-02] `plan.apply` 生成平台稿时把这支成片、这个语言版本、这个平台的文案（没有就用默认文案，再没有就用成片标题、正文空、话题空）写进平台稿；`vk work show` 每条平台稿输出 `title`、`body`、`tags`，并标出哪些是空的。
 - [ACC-v2-copy-03] 发布时适配器拿到的标题、正文、话题来自平台稿（人在确认前改过的值优先），由 core 解析后传入，适配器不读 `work` 表。有测试钉住：同一作品 B站、小红书两条平台稿文案不同，各自适配器收到的是各自的文案；B站的 `--desc`、`--tag` 与小红书的正文、话题都按平台稿填写。
 - [ACC-v2-copy-04] 确认时能看到并修改每条平台稿的标题、正文、话题（Web 确认面板与 `publish.edit` 命令；飞书卡片至少能看到正文前几行与话题）。正文或话题为空时在该行明确标出「没有正文」「没有话题」，不阻止确认。修改同样按 ACC-v2-copy-01 的限制校验。改页面前先改 `docs/design/` 的原型与任务书（AGENTS.md §6）。
@@ -299,7 +299,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 ### 今天、账号组、和平时比
 
-- [ACC-v2-today-01] `vk today` 输出 JSON 四块：等确认的作品（按成片分）、出了问题的、已确认等时间的队列（按时间排）、最近发布满 24 小时的结果。
+- [ACC-v2-today-01] `hifabu today` 输出 JSON 四块：等确认的作品（按成片分）、出了问题的、已确认等时间的队列（按时间排）、最近发布满 24 小时的结果。
 - [ACC-v2-group-01] work、today、stats 类命令默认只看当前账号组，可用 `--group` 指定；能查到其他每个组各有几件事等处理。
 - [ACC-v2-base-01] 倍数 = 这条发布 24 小时的播放 ÷ 同一个账号最近 20 条发布 24 小时播放的中位数。2 倍及以上标"比平时好"，一半及以下标"比平时差"，阈值可配。这个账号历史不足 5 条时不给倍数。任何地方都不把不同平台的播放数相加。
 
@@ -316,7 +316,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 所有者 2026-11-21 定：先把自动发布跑通，YouTube 是海外第一个平台。移植自 `trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`（`docs/adr-0001-reuse.md` §4.1）。agent 只对 mock 服务端验证，真机由所有者在同网电脑上做（第一节真机红线照旧）。
 
-- [ACC-youtube-01] 结构与移植：`packages/adapter-youtube` 按 `docs/adapter-contract.md` 导出 `{ platform, capabilities, ready, publish, collect }`，`npm run check:contract` 通过；文件头写 `// ported from trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`；不引入运行时依赖。工厂里的硬编码全部剥离，仓库里 grep 不到：播放列表名 `Overseas Compliance Explained`、`categoryId: '28'` 写死、`defaultLanguage: 'en'` 写死、过滤 `learnontiktok|techtok`、`filesOf()` / `episode` 目录约定、`~/.config/assurelane/youtube-*.json`。`vk publish --platform youtube --dry-run` 能单独跑、无副作用、产出将要提交的元数据。
+- [ACC-youtube-01] 结构与移植：`packages/adapter-youtube` 按 `docs/adapter-contract.md` 导出 `{ platform, capabilities, ready, publish, collect }`，`npm run check:contract` 通过；文件头写 `// ported from trustbridge@1f9c92f videos/factory/publishers/youtube.mjs`；不引入运行时依赖。工厂里的硬编码全部剥离，仓库里 grep 不到：播放列表名 `Overseas Compliance Explained`、`categoryId: '28'` 写死、`defaultLanguage: 'en'` 写死、过滤 `learnontiktok|techtok`、`filesOf()` / `episode` 目录约定、`~/.config/assurelane/youtube-*.json`。`hifabu publish --platform youtube --dry-run` 能单独跑、无副作用、产出将要提交的元数据。
 - [ACC-youtube-02] 授权在网页上完成：系统页账号那一行「接入 YouTube」→ 填用户自己的 Google OAuth client（client id / secret）→ 打开 Google 授权页 → 只在 `127.0.0.1` 临时端口收回调（带 `state` 和 PKCE S256），拿到 code 立即关端口。token 经 core 接口存本地凭证目录，账号表只存 `credential_ref`；client secret 和 token 不进库、不进日志、不进审计参数，仓库里 grep 不到。token 过期前用 refresh 续期；续期失败或被撤销时账号变「需要重新登录」并发事件。界面上不出现命令行。对 mock 授权服务器有测试。
 - [ACC-youtube-03] 发布：对 mock 服务端跑通 `videos.insert` 可续传上传，**分块读文件**，不整段读进内存（测试断言单次读取不超过分块大小）；中途断开从服务端报告的偏移续传。标题、描述、标签来自平台稿；语言来自成片的语言版本；类目、「含 AI 合成内容」声明、播放列表都是平台稿参数，默认不加播放列表。竖版且时长在 YouTube Shorts 上限内的成片按 Shorts 处理（按成片比例与时长判断，不靠写死话题）。「预约发」用私享上传加 `publishAt`，到点由 YouTube 公开；「现在发」按平台稿的可见性直接发。平台稿经 `transitionPublish()` 到已发布，并用 `videos.list` 回读核实 id、链接和状态，不信任上传返回。
 - [ACC-youtube-04] 不静默的私享：回读的 `privacyStatus` 和请求的不一致时（API 项目未过 Google 审核会被强制锁成私享），平台稿记 `visibility_forced_private`，发事件，人话写「YouTube 把这条锁成了私享：接入用的 Google 项目还没过审，需要在 YouTube Studio 里手动改成公开」，今天页和成片面板看得到，不算悄悄成功。视频上传成功后，缩略图、字幕、播放列表这些步骤失败只写进 notes、尽力而为，不重传视频。有测试。
@@ -329,7 +329,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 所有者 2026-11-21 定：先把自动发布跑通。流程参考 `dreammis/social-auto-upload@3847fff uploader/douyin_uploader/main.py`（MIT），按 `docs/adr-0002-sau-backend.md` §4.1 方式 B 带声明移植，用现有 `driver-browser` 重写，不走 Python sidecar。用哪个抖音号由用户自己在发布机上登录决定，适配器不写死账号。agent 只用录制页面和 stub driver 验证；真机由所有者在和手机同网的电脑上做（第一节真机红线照旧，本开发机不打开 `creator.douyin.com`）。
 
 - [ACC-douyin-01] 许可与移植：仓库根先有 `THIRD_PARTY_NOTICES.md`，收录 social-auto-upload 的 MIT 全文、版本 `3847fff` 和移植了哪个文件；适配器文件头写 `// ported from dreammis/social-auto-upload@3847fff uploader/douyin_uploader/main.py`。SAU 里的账号名、cookie 目录、固定话题、写死的等待秒数等硬编码全部剥离，仓库里 grep 不到。不引入运行时依赖（不装 Python、patchright）。
-- [ACC-douyin-02] 契约：按 `docs/adapter-contract.md` 导出，`capabilities.draft` 为 true，`npm run check:contract` 通过；遵守 14 条硬规则里适用的那些（持久 profile、真实鼠标事件、点前 `scrollIntoView`、中英文案双匹配、每步回读、按真实耗时给超时、失败留截图）。`vk publish --platform douyin --dry-run` 能单独跑，停在「存草稿」前一步并截图，不产生任何平台副作用。
+- [ACC-douyin-02] 契约：按 `docs/adapter-contract.md` 导出，`capabilities.draft` 为 true，`npm run check:contract` 通过；遵守 14 条硬规则里适用的那些（持久 profile、真实鼠标事件、点前 `scrollIntoView`、中英文案双匹配、每步回读、按真实耗时给超时、失败留截图）。`hifabu publish --platform douyin --dry-run` 能单独跑，停在「存草稿」前一步并截图，不产生任何平台副作用。
 - [ACC-douyin-03] 存草稿：对离线模拟页跑通（`fixtures/` 里手搭的页面，复现 SAU 依赖的发布页结构和文案；本开发机不能打开真实页面去录，真实页面上选择器对不对由 ACC-douyin-07 真机验证）：上传成片 → 填标题（不超过 55 字，超了在发布前就报错）→ 正文 → 话题（来自平台稿，逐个输入并回读）→ 封面（有入库封面用它，没有用平台默认）→ 点「存草稿」→ 到草稿箱回读出这一条，才记 `draft_pending`（状态「已送到抖音草稿箱，在手机上点发布」），不算已发布。每一步填完都回读，回读对不上就抛 `flaky_ui` 并留截图。
 - [ACC-douyin-04] 时间：第一版不用抖音页面自带的定时。「预约发」到计划时间由 VerseKit 把稿子送进草稿箱，并在今天页、飞书卡片提醒「去手机上发」；「现在发」立即送草稿箱。小红书逐条确认的规则不受影响。
 - [ACC-douyin-05] 登录与体检：`account.check` 打开创作者中心的一个只读页面判断登录态（正常 / 过期 / 被限），给人话；过期时账号变「需要重新登录」并发事件。登录走系统页已有的「在发布机上打开登录窗口」方式（ACC-v3-login-03），本单不做抖音扫码取二维码。
@@ -343,7 +343,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-shipinhao-01] 移植与契约：文件头写 `// ported from trustbridge@1f9c92f videos/factory/publishers/channels.mjs`（保活部分写 `keepalive.mjs`）；工厂里的硬编码剥离干净，仓库里 grep 不到 `assurelane`、`channels-error.png`、`filesOf(`、从 `youtube.json` 取 `short_title` 的约定、`ffmpeg` 调用；通知不直接调飞书，只发事件。不引入运行时依赖。按 `docs/adapter-contract.md` 导出，`capabilities.draft` 为 true，`npm run check:contract` 通过。dry-run 停在「保存草稿」前一步并截图，无平台副作用。
 - [ACC-shipinhao-02] 存草稿：对离线模拟页（`fixtures/` 里手搭，复现视频号助手的 wujie 微前端 shadow root 结构和文案）跑通：上传成片 → 按工厂的判定等上传完成（封面卡片出现「编辑」且没有上传中/生成中/百分比，超时 20 分钟）→ 短标题 → 描述 → 封面（入库清单有就用，没有用平台默认；9:16 一张、16:9 两张的分支都有测试）→ 位置、「含 AI 生成内容」标注（平台稿参数，默认「不显示位置」「标注」）→ 填完逐项回读 → 点「保存草稿」→ 到草稿列表回读出这一条，才记 `draft_pending`（「已送到视频号草稿箱，在手机上点发表」）。短标题不合规（超过 16 字含空格，或有 `《》“”：+？%°` 以外的标点）、描述超 950 字，在人确认之前就拦下并说明，不等到发布时失败。回读对不上抛 `flaky_ui` 并留截图。
 - [ACC-shipinhao-03] 登录检查：`account.check` 打开视频号助手的一个只读页面判断登录态；落到二维码页就是「过期」，人话写「视频号登录过期了，请重新扫码」，不能报成找不到元素。发布途中落到二维码页同样处理，抛 `auth`。
-- [ACC-shipinhao-04] 量登录能撑多久：每次登录成功、每次检查的结果（正常 / 过期）都记成账号事件。系统页视频号账号那一行显示「这次登录已 X 小时」，以及「最近几次登录平均撑 Y 小时」（从登录成功到第一次查到过期）；`vk account show <id>` 输出同样的数字。不足一次完整记录时显示「还在记录」。用假时钟测试。
+- [ACC-shipinhao-04] 量登录能撑多久：每次登录成功、每次检查的结果（正常 / 过期）都记成账号事件。系统页视频号账号那一行显示「这次登录已 X 小时」，以及「最近几次登录平均撑 Y 小时」（从登录成功到第一次查到过期）；`hifabu account show <id>` 输出同样的数字。不足一次完整记录时显示「还在记录」。用假时钟测试。
 - [ACC-shipinhao-05] 不做保活，只在需要时查登录（所有者 2026-11-21：工厂的保活不管用）：不定时打开页面「续命」。登录检查只在这几个时机做：发布机启动时、每天早上一次（时间可在系统页设置里改，默认 08:00）、人确认视频号平台稿时、计划发布前 2 小时（见 06）。每次检查都进 04 的记录。登录态已是过期时不再反复打开页面，等人重新扫码。用 stub driver 和假时钟测试这几个时机和停止条件；仓库里不出现按固定小时间隔反复检查视频号的定时任务。
 - [ACC-shipinhao-06] 提醒与重新扫码：查到过期立即发事件，今天页「要处理」和系统页账号行显示「视频号要重新扫码」，飞书通道按事件推送。有已确认、排了时间的视频号平台稿时，在计划时间前 2 小时额外查一次登录，过期就提前提醒，不等到发布失败。重新扫码走网页二维码（ACC-v3-login-01 的做法）：发布机取回视频号登录页的二维码，显示在账号那一行下面，用手机微信扫完自己变「正常」，不需要去发布机前开窗口。用录制页面 / stub 测试「出码 → 已扫 → 确认成功」与「二维码过期 → 换一个」。
 
@@ -364,7 +364,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-tiktok-api-04] 错误：429 指数退避后重试；`spam_risk_too_many_posts`、`spam_risk_user_banned_from_posting`、`reached_active_user_cap` 立即暂停账号、发事件、**不重试**；token 失效转「需要重新登录」。每种都有 `error_code` + 人话 + 事件，测试逐个钉住。浏览器自动化后端 `packages/adapter-tiktok` 行为不变（原测试全过），同一账号只能挂一个后端。
 - [ACC-tiktok-api-05] Web：系统页账号处有 **Connect TikTok**，连上后显示头像和昵称；TikTok 平台稿确认时有设置面板：隐私级别下拉（选项来自 creator_info、默认不选，没选不能发）、评论/合拍/拼接三个开关默认全关且 creator_info 不允许的置灰、文案可改、AI 生成标记可见、**Post** 与 **Send to TikTok drafts** 两个按钮；发布后显示进度和结果（成功/失败原因）。无水印。按 AGENTS.md §6 先写任务书，`npm run design:check` 通过。
 - [ACC-tiktok-api-06] 用 mock 服务端在本机 Web 上把审核视频要拍的四段走一遍并截图留证：授权显示头像昵称；选隐私→开关默认关→改文案→Post→成功；Send to drafts→显示已送到草稿箱；出错时的人话。证据附在 PR，不碰真实账号。
-- [ACC-tiktok-api-07] 代理（所有者 2026-11-16 录审核视频时踩到）：环境里有 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`（大小写都认，`NO_PROXY` 生效）时，官方接口适配器发出的所有请求都经过代理，用户不需要自己设 `NODE_USE_ENV_PROXY`；仍然不加运行时依赖。测试用本机假代理钉住：请求确实经过代理，`NO_PROXY` 命中的主机直连。连不上（超时、拒绝连接、代理不通）时，`error_code` 是 `network_unreachable`，人话里写明是网络或代理问题、该检查哪个变量，不能只显示 `fetch failed`。`vk doctor --human` 显示当前生效的代理（只显示主机和端口，不显示账号密码）。
+- [ACC-tiktok-api-07] 代理（所有者 2026-11-16 录审核视频时踩到）：环境里有 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`（大小写都认，`NO_PROXY` 生效）时，官方接口适配器发出的所有请求都经过代理，用户不需要自己设 `NODE_USE_ENV_PROXY`；仍然不加运行时依赖。测试用本机假代理钉住：请求确实经过代理，`NO_PROXY` 命中的主机直连。连不上（超时、拒绝连接、代理不通）时，`error_code` 是 `network_unreachable`，人话里写明是网络或代理问题、该检查哪个变量，不能只显示 `fetch failed`。`hifabu doctor --human` 显示当前生效的代理（只显示主机和端口，不显示账号密码）。
 - [ACC-tiktok-api-08] 未审核应用被拒（所有者 2026-11-16 录审核视频时踩到）：`unaudited_client_can_only_post_to_private_accounts` 的人话提示是"先在 TikTok App 里把账号设为私密（设置和隐私 → 隐私 → 私密账号），再重试；应用通过审核后就没有这个限制"，不能再写成"只能发仅自己可见"；测试钉住这条提示文案。作品页上，平台稿处于可重试状态（`failed` / `blocked` / `notify_pending`）时，那一行直接有「重试」按钮，走 `publish.retry`，和发布页、CLI 的结果一样；按 AGENTS.md §6 补任务书，`npm run design:check` 通过，并附重试前后的截图（用 `--offline` 加假数据，不碰真实账号）。
 
 
@@ -374,13 +374,13 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 开发机红线照旧：验收只用临时 `HOME`、本机假下载源和 `--offline` 服务，不碰任何真实平台账号，不往真实的 `~/Library/LaunchAgents`、`~/.config/versekit`、`~/.local/state/versekit` 写东西。
 
-- [ACC-install-01] 一条命令装好并启动：`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`。在一台**没有 Node、没有 Homebrew** 的 macOS（arm64 与 x86_64）上，全程不用 sudo、不问任何问题，依次完成：下载官方 Node **26 LTS**（版本号写死在脚本里、且是 CI 跑过 `npm test` 的那个版本；校验官方 SHASUMS256）到 `~/.versekit/node`，不动系统里已有的 Node；下载 versekit 到 `~/.versekit/app`（下载 tarball，不要求有 git）；按 CPU 架构下载 biliup-rs 到 `~/.versekit/bin`；`vk init`；注册后台服务（见 02）；等控制台真的能打开（`/today` 返回 200）后用默认浏览器打开 `http://127.0.0.1:8787`，最后打印一行"装好了，控制台地址 …，终端可以关了"。不跑 `npm test`。
-- [ACC-install-02] 后台运行，终端可以关：macOS 用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist，`RunAtLoad` + `KeepAlive`），关掉终端、注销重登、重启电脑后控制台都还在，进程崩了会被拉起；服务环境的 `PATH` 含 `~/.versekit/bin` 和装好的 Node，所以 `vk doctor` 能找到 biliup；日志写进 `vk.log`。Linux 用 `systemd --user`；没有 systemd 时退回 `vk serve --detach`，并明确告诉用户"重启电脑后要再运行一次安装命令"。Windows 不在本次范围，脚本在 Windows/WSL 以外的系统上直接说不支持并退出。
+- [ACC-install-01] 一条命令装好并启动：`curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install.sh | bash`。在一台**没有 Node、没有 Homebrew** 的 macOS（arm64 与 x86_64）上，全程不用 sudo、不问任何问题，依次完成：下载官方 Node **26 LTS**（版本号写死在脚本里、且是 CI 跑过 `npm test` 的那个版本；校验官方 SHASUMS256）到 `~/.versekit/node`，不动系统里已有的 Node；下载 versekit 到 `~/.versekit/app`（下载 tarball，不要求有 git）；按 CPU 架构下载 biliup-rs 到 `~/.versekit/bin`；`hifabu init`；注册后台服务（见 02）；等控制台真的能打开（`/today` 返回 200）后用默认浏览器打开 `http://127.0.0.1:8787`，最后打印一行"装好了，控制台地址 …，终端可以关了"。不跑 `npm test`。
+- [ACC-install-02] 后台运行，终端可以关：macOS 用 LaunchAgent（`~/Library/LaunchAgents/` 下的 plist，`RunAtLoad` + `KeepAlive`），关掉终端、注销重登、重启电脑后控制台都还在，进程崩了会被拉起；服务环境的 `PATH` 含 `~/.versekit/bin` 和装好的 Node，所以 `hifabu doctor` 能找到 biliup；日志写进 `vk.log`。Linux 用 `systemd --user`；没有 systemd 时退回 `hifabu serve --detach`，并明确告诉用户"重启电脑后要再运行一次安装命令"。Windows 不在本次范围，脚本在 Windows/WSL 以外的系统上直接说不支持并退出。
 - [ACC-install-03] 再运行一次就是升级：重复执行安装命令不报错，替换程序文件、重启服务，**数据库、配置、凭证、账号、浏览器登录全部保留**；输出升级前后的版本。任一步失败（断网、校验不过、端口被占）都说清是哪一步、为什么、该怎么办，退出码非 0，不留下半启动的服务；端口 8787 被别的程序占用时自动换一个空闲端口并在最后一行写明实际地址。
-- [ACC-install-04] 装完后的日常操作都有现成命令（CLI 完整律）：`vk` 可以直接在新终端里用（安装脚本把 `~/.versekit/bin` 加进 shell 配置，只加一次，带注释标记）；`vk service status|start|stop|restart` 管后台服务，在 `commands.mjs` 定义，标 `localOnly`，不出卡片按钮；`vk service uninstall` 卸掉后台服务和程序文件，默认**保留数据**，加 `--purge` 才删数据并先列出要删的目录。README 第一屏的上手步骤只剩这一条安装命令，原来的手动步骤挪到"开发者"一节。
-- [ACC-install-05] 可测、可在开发机上验：安装目录、服务名、端口、各下载地址都能用环境变量覆盖（例如 `VERSEKIT_PREFIX`、`VERSEKIT_PORT`、`VERSEKIT_SERVICE_LABEL`、`VERSEKIT_NODE_URL` 等），并支持 `VERSEKIT_OFFLINE=1` 让服务以 `--offline` 起。仓库里有自动化测试：起本机假下载源（假 Node 包 + SHASUMS、假 versekit tarball、假 biliup），在临时 `HOME` 里跑 `install.sh`，断言目录、服务文件、PATH 那一行、升级保留数据、校验失败时非 0 退出且不留服务；这个测试进 CI 的 `test` job（Linux 上走无 systemd 的退回路径）。PR 附 Mac mini 上的证据：临时 `HOME` + 测试用服务名 + 非 8787 端口跑一遍，在子 shell 里装完后退出该 shell，再 `curl` 控制台 200、`launchctl print` 显示服务已加载；然后 `vk service uninstall` 后服务和 plist 都不在了。
+- [ACC-install-04] 装完后的日常操作都有现成命令（CLI 完整律）：`hifabu` 可以直接在新终端里用（安装脚本把 `~/.versekit/bin` 加进 shell 配置，只加一次，带注释标记）；`hifabu service status|start|stop|restart` 管后台服务，在 `commands.mjs` 定义，标 `localOnly`，不出卡片按钮；`hifabu service uninstall` 卸掉后台服务和程序文件，默认**保留数据**，加 `--purge` 才删数据并先列出要删的目录。README 第一屏的上手步骤只剩这一条安装命令，原来的手动步骤挪到"开发者"一节。
+- [ACC-install-05] 可测、可在开发机上验：安装目录、服务名、端口、各下载地址都能用环境变量覆盖（例如 `VERSEKIT_PREFIX`、`VERSEKIT_PORT`、`VERSEKIT_SERVICE_LABEL`、`VERSEKIT_NODE_URL` 等），并支持 `VERSEKIT_OFFLINE=1` 让服务以 `--offline` 起。仓库里有自动化测试：起本机假下载源（假 Node 包 + SHASUMS、假 versekit tarball、假 biliup），在临时 `HOME` 里跑 `install.sh`，断言目录、服务文件、PATH 那一行、升级保留数据、校验失败时非 0 退出且不留服务；这个测试进 CI 的 `test` job（Linux 上走无 systemd 的退回路径）。PR 附 Mac mini 上的证据：临时 `HOME` + 测试用服务名 + 非 8787 端口跑一遍，在子 shell 里装完后退出该 shell，再 `curl` 控制台 200、`launchctl print` 显示服务已加载；然后 `hifabu service uninstall` 后服务和 plist 都不在了。
 
-- [ACC-install-06] 安装时看得到进度、下载量小（所有者 2026-11-17 第一次真装时反馈："这个安装过程一点进度提示都没有"；实测程序包 47MB、约 60 秒，其中 `.claude/` 41MB、`docs/` 13MB，运行时只用到 `packages/` 约 1.6MB）：① 每个下载步骤显示进度（终端是 tty 时用 curl 进度条或等价的百分比/已下载量，非 tty 时不刷屏），并在步骤开头写明大概大小；解压、初始化、等服务起来这些超过 2 秒的步骤也有「正在…」提示，不出现长时间无输出。② 下载的程序包只含运行需要的文件：用 `.gitattributes` 的 `export-ignore`（GitHub 源码包遵守它）或发布包，把 `.claude/`、`.impeccable/`、`docs/`、`assets/`、`site/`、测试等排除；排除后 `vk init`、`vk serve`、控制台各页面、`vk doctor` 照常。验证：实测新地址下载量 ≤ 5MB；安装测试断言进度输出存在；PR 附一段真实安装的终端录屏或输出。
+- [ACC-install-06] 安装时看得到进度、下载量小（所有者 2026-11-17 第一次真装时反馈："这个安装过程一点进度提示都没有"；实测程序包 47MB、约 60 秒，其中 `.claude/` 41MB、`docs/` 13MB，运行时只用到 `packages/` 约 1.6MB）：① 每个下载步骤显示进度（终端是 tty 时用 curl 进度条或等价的百分比/已下载量，非 tty 时不刷屏），并在步骤开头写明大概大小；解压、初始化、等服务起来这些超过 2 秒的步骤也有「正在…」提示，不出现长时间无输出。② 下载的程序包只含运行需要的文件：用 `.gitattributes` 的 `export-ignore`（GitHub 源码包遵守它）或发布包，把 `.claude/`、`.impeccable/`、`docs/`、`assets/`、`site/`、测试等排除；排除后 `hifabu init`、`hifabu serve`、控制台各页面、`hifabu doctor` 照常。验证：实测新地址下载量 ≤ 5MB；安装测试断言进度输出存在；PR 附一段真实安装的终端录屏或输出。
 
 ### 新版 Node 兼容（所有者 2026-11-17 在 Node 26 上跑测试时踩到）
 
@@ -397,12 +397,12 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v2-sys-03] 「重新登录」在系统页就地完成，不跳旧页面：B站 打开扫码窗口，扫完经 `account.check`（biliup renew）通过才显示正常；网页登录平台打开有头登录窗口；TikTok 官方接口走授权链接。进行中这一行显示「等你扫码 / 等你登录」，完成或失败后这一行就地刷新，失败写人话原因。
 - [ACC-v2-sys-04] 账号表下方有「接入账号」：选平台（来自 `platform.list`，只列已安装的适配器）→ 填账号名 → 当场走 ACC-v2-sys-03 的登录，成功后出现在表里、归当前账号组。旧 `/accounts/add` 能做的（B站 扫码 + biliup 校验、网页登录、TikTok Connect）都能在这里做。这个入口设计稿里没有，按设计稿的现有样式补（表格下方一行，主按钮墨色），并更新任务书。
 - [ACC-v2-sys-05] TikTok 没有应用凭证时，在那一行就地填 client key / client secret 并保存：写进本机 `config.json` 的 `tiktok.client_key / client_secret`（文件权限 600，环境变量仍优先），secret 输入框不回显，保存后任何 API 响应、日志、事件、数据库里都不出现 secret（有测试钉住）。保存后直接能 Connect。这条能力也要有 `vk` 命令（CLI 完整律），HTTP 由同一命令派生。
-- [ACC-v2-sys-06] 账号组一块：列出所有组、每组账号数、等你处理件数（与侧栏一致）、当前组标「当前」、其他组「切过去」、「新建账号组」，与 `vk group list / add / use` 同一份结果。旧 `/groups` 能做的都能在这里做。
+- [ACC-v2-sys-06] 账号组一块：列出所有组、每组账号数、等你处理件数（与侧栏一致）、当前组标「当前」、其他组「切过去」、「新建账号组」，与 `hifabu group list / add / use` 同一份结果。旧 `/groups` 能做的都能在这里做。
 - [ACC-v2-sys-07] 旧地址 `/accounts/add`、`/groups` 跳转到 `/system` 对应位置，不 404；侧栏底部的状态摘要（几个账号登录正常、发布机在线、今天还能发）与账号表一致。`npm run design:check -- --url <服务地址>` 通过。
 
 **发布方案、发布机、平台规则、最近出的问题**
 
-- [ACC-v2-sys-08] 有 `vk plan show` 与修改发布方案的命令（在 `commands.mjs` 定义，CLI / HTTP 由它派生）：按当前账号组列出「成片类型 · 语言 → 发到哪些平台 → 节奏」；改动后新作品 `plan.apply` 按新方案生成平台稿，已生成的平台稿不变。有测试钉住。
+- [ACC-v2-sys-08] 有 `hifabu plan show` 与修改发布方案的命令（在 `commands.mjs` 定义，CLI / HTTP 由它派生）：按当前账号组列出「成片类型 · 语言 → 发到哪些平台 → 节奏」；改动后新作品 `plan.apply` 按新方案生成平台稿，已生成的平台稿不变。有测试钉住。
 - [ACC-v2-sys-09] 系统页「发布方案」「发布机」「平台规则」「最近出的问题」四块的结构、文案与设计稿一致，数据来自 `/api`：发布方案的「改」可以就地改并保存；发布机显示心跳、排着要发、正在发、等你确认（与今天页数字一致）；平台规则显示生效的每日上限与最小间隔（改过配置就显示改过的值，默认值标「默认值」）；最近出的问题来自 `run.list` 的失败记录，「再试一次」调 `publish.retry`，最近 7 天没有就显示设计稿里的空状态。
 
 **清理旧实现（所有者 2026-11-17："做好后要把旧的实现相关代码给清理掉，保留新的就行"）**
@@ -418,12 +418,12 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 开发机验证一律用临时 `HOME`、测试服务名、非 8787 端口、本地假 tarball 服务器和 `VERSEKIT_OFFLINE=1`，不碰真实账号，验完卸掉。
 
-- [ACC-update-01] 装好的程序知道自己是哪个提交：程序包里带提交号（如 `.gitattributes` 的 `export-subst` 或安装时写入），`vk version` 输出版本号 + 短提交号 + 安装时间；系统页「发布机」一块显示当前版本。
-- [ACC-update-02] `vk update`（在 `commands.mjs` 定义，CLI / HTTP 由它派生）：`--check` 只比较已装提交与 main 最新提交并说人话（「已是最新」/「有新版本：N 个提交」）；不带参数就更新：下载新程序包、**用新包里的 `install.sh` 以非交互方式升级**（这样 Node、biliup 的版本变化也跟着升），保留 `app.prev`，数据、账号、登录、配置全部保留。
+- [ACC-update-01] 装好的程序知道自己是哪个提交：程序包里带提交号（如 `.gitattributes` 的 `export-subst` 或安装时写入），`hifabu version` 输出版本号 + 短提交号 + 安装时间；系统页「发布机」一块显示当前版本。
+- [ACC-update-02] `hifabu update`（在 `commands.mjs` 定义，CLI / HTTP 由它派生）：`--check` 只比较已装提交与 main 最新提交并说人话（「已是最新」/「有新版本：N 个提交」）；不带参数就更新：下载新程序包、**用新包里的 `install.sh` 以非交互方式升级**（这样 Node、biliup 的版本变化也跟着升），保留 `app.prev`，数据、账号、登录、配置全部保留。
 - [ACC-update-03] 后台服务启动时和之后每 6 小时检查一次（`config.json` 的 `update.auto` 默认开、`update.interval_hours` 可改）。只在空闲时更新：没有正在发布的、没有打开的登录窗口、接下来 15 分钟内没有要发的；不空闲就推迟到下一次检查，不打断。网络失败只记日志，下一轮再试，不弹提醒。GitHub 请求不带任何个人信息。
 - [ACC-update-04] 更新后自检：服务在 60 秒内重新起来且 `/api` 健康检查通过，否则自动退回 `app.prev` 并重启，留事件「自动更新失败，已回到 <旧版本>：<人话原因>」，在系统页「最近出的问题」里可见。有测试钉住：新包故意坏掉时会退回旧版本，服务照常可用。
-- [ACC-update-05] 看得见、关得掉：系统页「发布机」一块显示当前版本、上次检查时间、自动更新开关（就地切换，对应 `vk update --auto on|off`）；刚自动更新过时显示一行「已更新到 <版本>（时间）」，附最多 5 条更新内容（提交标题）。
-- [ACC-update-06] 版本号每次更新都不一样（所有者 2026-11-18：重装后显示「已升级 0.1.0 → 0.1.0」，看不出装没装上新版）：用户看得到的版本一律写成 `<package.json 版本>+<短提交号>`（如 `0.1.0+860ddc6`），只在一个函数里拼，`install.sh` 的「已升级 A → B」、`vk version`、系统页「当前版本」和「已更新到 <版本>」都用它；没有提交号时写「0.1.0+未知提交」，不假装是同一版。重装同一个提交时安装脚本说「已是最新（860ddc6），重新装了一遍」，不说「已升级」。有测试钉住：两个不同提交的包装上去，输出里前后版本不同。
+- [ACC-update-05] 看得见、关得掉：系统页「发布机」一块显示当前版本、上次检查时间、自动更新开关（就地切换，对应 `hifabu update --auto on|off`）；刚自动更新过时显示一行「已更新到 <版本>（时间）」，附最多 5 条更新内容（提交标题）。
+- [ACC-update-06] 版本号每次更新都不一样（所有者 2026-11-18：重装后显示「已升级 0.1.0 → 0.1.0」，看不出装没装上新版）：用户看得到的版本一律写成 `<package.json 版本>+<短提交号>`（如 `0.1.0+860ddc6`），只在一个函数里拼，`install.sh` 的「已升级 A → B」、`hifabu version`、系统页「当前版本」和「已更新到 <版本>」都用它；没有提交号时写「0.1.0+未知提交」，不假装是同一版。重装同一个提交时安装脚本说「已是最新（860ddc6），重新装了一遍」，不说「已升级」。有测试钉住：两个不同提交的包装上去，输出里前后版本不同。
 - [ACC-update-07] 发布机换了版本后，已经打开的网页跟着换新（所有者 2026-11-22：自动更新后系统页的版本号已经是新的，但「通知」分段和出口位置列都没出来，刷新才有）：每个页面记下自己载入时服务端的提交号；服务端推送或接口返回的提交号变了，页面在没有正在编辑的内容时自动刷新一次；有未保存的输入（改稿、表单）时不自动刷新，改在页面顶部显示一行「发布机已更新到 <版本>，刷新后能用上新功能」和「刷新」按钮。提交号来自 `buildInfo()`，不另造一份。有测试：页面载入后服务端提交号变化，没有编辑中的内容会刷新，有编辑中的内容只出提示、不刷新、输入不丢。
 
 ### 账号浏览器隔离与换号（所有者 2026-11-17 在自己电脑上踩到）
@@ -432,9 +432,9 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-acct-iso-01] 给账号 X 打开浏览器（登录、扫码、发布、采集、体检）时，绝不连到 `--user-data-dir` 不是 X 的 profile 的 Chrome：`pickPort` 接管和 `adoptOrphanAccounts` 认领前，核对该端口上 Chrome 进程实际的 `--user-data-dir`（如按监听端口查进程命令行），对不上就不接管、换端口自己起，并清掉 X 过期的标记文件。有测试钉住：B 的标记指向 A 的 Chrome 正在用的端口时，B 起自己的 Chrome，A 的不受影响。
 - [ACC-acct-iso-02] 登录成功后读出平台侧的用户标识（小红书取创作者账号 id；其他网页登录平台能取就取），存到账号上。同一平台标识已经接在另一个账号（任何组）上时，不标为正常，这一行就地显示人话：「这个小红书号已经接在「<组名>」的 <账号名> 上；要接另一个号，先点「退出登录」，再扫码或短信登录另一个号」。有测试钉住。
-- [ACC-acct-iso-03] 系统页每个网页登录账号的行内有「退出登录」，对应 `vk account logout <账号 id>`（`commands.mjs` 定义）：关掉这个账号的 Chrome、删掉它自己的 profile 目录，状态变成「没连上」，然后可以重新登录另一个号。有测试钉住：只删这个账号的目录，别的账号的 profile、凭证文件不动。
+- [ACC-acct-iso-03] 系统页每个网页登录账号的行内有「退出登录」，对应 `hifabu account logout <账号 id>`（`commands.mjs` 定义）：关掉这个账号的 Chrome、删掉它自己的 profile 目录，状态变成「没连上」，然后可以重新登录另一个号。有测试钉住：只删这个账号的目录，别的账号的 profile、凭证文件不动。
 - [ACC-acct-iso-04] 小红书扫码提示写明「扫码会登录手机 App 当前的号；要接另一个号，先在 App 里切换账号，或改用短信登录」。
-- [ACC-acct-iso-05] 每个平台都能换号（所有者 2026-11-23：「我的B站账号登陆错了，不能切换账号」「可能不止b站」）：系统页每个账号行有「换号」（所有平台，含 B站和走官方接口的 YouTube、TikTok），二次确认写明「会清掉这个号在发布机上的登录数据；排着的内容留在这个账号位置上，换好后按新号发」。确认后清掉这个账号在发布机上的**全部**登录数据——浏览器资料、平台凭据文件（如 B站 cookies 文件）、官方接口的授权令牌——状态变「没连上」，并直接进入该平台的登录流程（扫码类在二维码旁提示「扫码登录的是手机 App 当前的号，先在 App 里切到要接的号」）。登录成功后若平台标识与换号前不同，行内显示「已换成 <新号>」。CLI 同等可用：`vk account switch <账号 id>`（`commands.mjs` 定义）。只动这一个账号，别的账号的资料、凭据不碰。开发机用 stub driver / 假凭据验证，真实平台换号列为「待人工」（所有者在发布机上做）。
+- [ACC-acct-iso-05] 每个平台都能换号（所有者 2026-11-23：「我的B站账号登陆错了，不能切换账号」「可能不止b站」）：系统页每个账号行有「换号」（所有平台，含 B站和走官方接口的 YouTube、TikTok），二次确认写明「会清掉这个号在发布机上的登录数据；排着的内容留在这个账号位置上，换好后按新号发」。确认后清掉这个账号在发布机上的**全部**登录数据——浏览器资料、平台凭据文件（如 B站 cookies 文件）、官方接口的授权令牌——状态变「没连上」，并直接进入该平台的登录流程（扫码类在二维码旁提示「扫码登录的是手机 App 当前的号，先在 App 里切到要接的号」）。登录成功后若平台标识与换号前不同，行内显示「已换成 <新号>」。CLI 同等可用：`hifabu account switch <账号 id>`（`commands.mjs` 定义）。只动这一个账号，别的账号的资料、凭据不碰。开发机用 stub driver / 假凭据验证，真实平台换号列为「待人工」（所有者在发布机上做）。
 - [ACC-acct-iso-06] 「退出登录」（ACC-acct-iso-03）对所有平台都清干净：除浏览器资料外，同时删掉这个账号自己的平台凭据文件（B站 `bili-<账号 id>.json` 等）和官方接口授权令牌；退出后 `account.check` 判「没连上」，发布不会再用旧号。系统页对 B站也显示「退出登录」。有测试钉住：B站退出后凭据文件不存在、check 判没连上；别的账号的凭据文件仍在。
 - [ACC-acct-iso-07] 打开登录窗口不因页面没「加载完」而失败（所有者 2026-11-23：抖音点登录报「打不开登录窗口：等不到页面加载（https://creator.douyin.com/）」）：`account.login.open` 给人登录用的窗口，导航后只等到 DOM 就绪（`domcontentloaded`）或页面已显示即算打开成功；重页面一直不触发 load（长轮询、统计脚本）时不报错、不关窗口，交给后续的登录态轮询判断成功与否。只有导航本身失败（`Page.navigate` 返回 errorText，如断网、域名解析失败）才报「打不开」，并写出 errorText。所有平台的登录窗口都按这条走。有测试用一个永不触发 load 的本地页面钉住：窗口打开成功、状态进入「等你登录」。
 - [ACC-acct-iso-08] 网页登录的登录态轮询不开新标签页，每个平台按自己的规则认出登录成功（所有者 2026-11-24：「抖音登陆有问题，不断起新的tab」）：没有自带 `loginStatus` 的网页登录平台（抖音、TikTok 网页登录）的 `account.login.status` 不再走小红书的检测，改由该平台的适配器判断（如 `loginStatus`）。判断只读这个账号**已经打开的登录窗口**的当前页面：不新开标签页、不在人正在操作的标签页里导航、不关它；登录窗口不在时返回「没在登录」（idle），不另开页面去查。抖音以创作者中心首页渲染出来（不是登录页、也不是验证页）算登录成功；TikTok 网页按它自己的页面规则。成功后账号变「正常」、收掉登录窗口，与小红书一致。小红书、B站、视频号现有的登录流程行为不变。有测试钉住：stub driver 下对抖音、TikTok 网页账号各连续轮询 30 次，这个账号 Chrome 实例的标签页数量不增加；抖音 stub 页面切到已登录后，状态返回 ok、账号变「正常」。真实平台登录列为「待人工」（所有者在发布机上做）。
@@ -443,12 +443,12 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 所有者原话："你要把视频生产、传到我这个发布机，然后我再发布整个打通"。做视频在英国 Mac mini（制作机），发布在和手机同网的 Mac（发布机），中转在 volc1（ADR-0003 的最小一步：云端只存文件和投递清单，**不是**数据库，不存平台登录态、不连任何平台）。发布前必须人确认不变：投递只到「待确认」。
 
-- [ACC-relay-01] `vk relay serve`（云端中转）：只监听 127.0.0.1，由反代提供 HTTPS；推送和拉取各用一个 token（`config.json` 的 `relay.*`，文件权限 600，不进仓库、不进日志）；成片按 sha256 存，同一文件只存一份；投递有状态（待拉取 / 已下载 / 已入库 / 失败），发布机回报「已入库」7 天后清理文件；磁盘剩余不足 2GB 拒收并说人话。没有 token 或 token 错一律 401，不泄露有哪些投递。
+- [ACC-relay-01] `hifabu relay serve`（云端中转）：只监听 127.0.0.1，由反代提供 HTTPS；推送和拉取各用一个 token（`config.json` 的 `relay.*`，文件权限 600，不进仓库、不进日志）；成片按 sha256 存，同一文件只存一份；投递有状态（待拉取 / 已下载 / 已入库 / 失败），发布机回报「已入库」7 天后清理文件；磁盘剩余不足 2GB 拒收并说人话。没有 token 或 token 错一律 401，不泄露有哪些投递。
 - [ACC-relay-02] 制作机 `vk work push <清单.json> --group <组名>`（`commands.mjs` 定义）：先按 `work.add` 的规则校验清单（成片存在、各平台文案齐），不合格当场报错不上传；上传成片和清单，失败自动重试、大文件可断点续传；输出投递 id 和「等发布机拉取」。制作机本地不建作品。
-- [ACC-relay-03] 发布机 `vk relay connect <地址> --token <拉取 token>` 写配置；后台服务每 5 分钟（可配）拉取待投递：下载到本地、核对 sha256，按清单调用 `work.add` + `plan.apply` 入库到指定账号组，平台稿全部是待确认，再回报中转「已入库」。同一投递 id 只入库一次（重复拉取、服务重启都不重复）；哈希不符、组不存在、清单不合法时不入库，在系统页「最近出的问题」里写人话原因，并回报中转「失败」。
-- [ACC-relay-04] 看得见：系统页「发布机」一块显示中转连接状态、上次拉取时间、正在下载的投递和进度；`vk relay status` 同一份结果。新作品入库后出现在「今天」等确认；没确认的到时间也不会发。
+- [ACC-relay-03] 发布机 `hifabu relay connect <地址> --token <拉取 token>` 写配置；后台服务每 5 分钟（可配）拉取待投递：下载到本地、核对 sha256，按清单调用 `work.add` + `plan.apply` 入库到指定账号组，平台稿全部是待确认，再回报中转「已入库」。同一投递 id 只入库一次（重复拉取、服务重启都不重复）；哈希不符、组不存在、清单不合法时不入库，在系统页「最近出的问题」里写人话原因，并回报中转「失败」。
+- [ACC-relay-04] 看得见：系统页「发布机」一块显示中转连接状态、上次拉取时间、正在下载的投递和进度；`hifabu relay status` 同一份结果。新作品入库后出现在「今天」等确认；没确认的到时间也不会发。
 - [ACC-relay-05] 部署：仓库里有 volc1 的部署脚本和说明（systemd 服务、Caddy 反代、数据目录、token 生成），部署到 volc1 后用测试视频跑通一次「制作机 push → volc1 → 发布机拉取入库」：发布机用 Mac mini 上的临时 `HOME` 模拟，`VERSEKIT_OFFLINE=1`，不碰任何平台账号。不能动 volc1 上已有的服务和 Caddy 站点（radar 等），只新增 versekit 自己的站点块。
-- [ACC-relay-06] `vk relay pull` 下载时不沉默（所有者 2026-11-18：连上后跑 `vk relay pull`，3 支视频下了 6 分钟，终端一行字都没有，以为卡住了）：先说这一轮有几个投递；每个投递开始和结束各一行（「正在下载 2/3：<作品标题>，24MB」「已入库 2/3：<作品标题>，平台稿 N 条待确认」），下载中至少每 10 秒更新一次已下载大小；后台服务正在拉同一批时不重复下载，说「后台正在拉取，进度：…」并跟着输出直到结束；结束给一行汇总（入库几个、失败几个及原因、去「今天」页确认）。没有待投递时说「没有新投递」。`relay connect` 的提示里写明连上后会自动拉，下载大文件需要几分钟。
+- [ACC-relay-06] `hifabu relay pull` 下载时不沉默（所有者 2026-11-18：连上后跑 `hifabu relay pull`，3 支视频下了 6 分钟，终端一行字都没有，以为卡住了）：先说这一轮有几个投递；每个投递开始和结束各一行（「正在下载 2/3：<作品标题>，24MB」「已入库 2/3：<作品标题>，平台稿 N 条待确认」），下载中至少每 10 秒更新一次已下载大小；后台服务正在拉同一批时不重复下载，说「后台正在拉取，进度：…」并跟着输出直到结束；结束给一行汇总（入库几个、失败几个及原因、去「今天」页确认）。没有待投递时说「没有新投递」。`relay connect` 的提示里写明连上后会自动拉，下载大文件需要几分钟。
 
 ## 十一、v3 验收口径（做成 SaaS、界面不出现命令，2026-11-18）
 
@@ -490,7 +490,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v3-nocli-01] `docs/design/*.html` 和 `packages/web/public/` 下的页面、脚本里没有命令行：没有 `vk …`、`npm …`、`curl …`、配置文件名、`<code>` 包着的命令。`npm run design:check` 的 `cli-in-ui` 检查两处都跑。
 - [ACC-v3-nocli-02] 服务端返回给页面的报错和提示里也没有命令和内部标识（ISO 时间串、`error_code`、文件路径）。有测试：遍历 `handlers.mjs` 里会到达页面的错误文案。
 - [ACC-v3-nocli-03] 以前靠命令才能做的事，页面上都有入口：新建和改名账号组、接入和登录账号、退出登录、填应用凭证、改发布方案、现在更新、开关自动更新、接入和断开设备。逐条在真实服务上点一遍。
-- [ACC-v3-nocli-04] CLI 完整律不变：上面每个入口对应的命令在 `vk commands --json` 里。
+- [ACC-v3-nocli-04] CLI 完整律不变：上面每个入口对应的命令在 `hifabu commands --json` 里。
 
 ### 改内容：通用文案和各平台单独写
 
@@ -541,7 +541,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v3-egress-05] 暂停期间确认面板写明哪些平台暂停，暂停的行时间列是「暂停中」；确认后的提示是「其中 N 条等位置处理完再发」，不说「现在开始发」。侧栏第一行是「N 个账号暂停发布」。
 - [ACC-v3-egress-06] 「继续用新位置」要行内再确认一次并写出后果，确认后才改基线、恢复发布。「我去关掉代理」不改基线，这一条变成「等发布机复查」，发布机探测到位置回到基线才自动恢复并消失。有测试钉住两条路径。
 - [ACC-v3-egress-07] 接发布机的允许页、接受邀请的第 2 步写出那台电脑当时的位置、IP 和线路类型，并提醒先关代理。
-- [ACC-v3-egress-08] 记下「账号登录成功时的出口国家」不依赖发布机后台服务有没有在跑：在 core 里写入登录成功的那一处直接记（不靠 `serve` 启动时挂的钩子）。用命令行单独登录（`vk account login`，没起 `vk serve`）也要记下；离线模式下没有 IP 库或探测失败时不记，并留事件说明原因，不静默。测试覆盖：命令行单独登录、网页登录、体检恢复为正常，三条路径都能做到「CN 登录、首次探测 JP → 暂停」。（2026-11-21 #310 合并时留下的边角：`notifyLogin` 只在 `serve` 非离线时挂上钩子）
+- [ACC-v3-egress-08] 记下「账号登录成功时的出口国家」不依赖发布机后台服务有没有在跑：在 core 里写入登录成功的那一处直接记（不靠 `serve` 启动时挂的钩子）。用命令行单独登录（`hifabu account login`，没起 `hifabu serve`）也要记下；离线模式下没有 IP 库或探测失败时不记，并留事件说明原因，不静默。测试覆盖：命令行单独登录、网页登录、体检恢复为正常，三条路径都能做到「CN 登录、首次探测 JP → 暂停」。（2026-11-21 #310 合并时留下的边角：`notifyLogin` 只在 `serve` 非离线时挂上钩子）
 - [ACC-v3-egress-09] IP 库在慢网络上也能下载下来（所有者 2026-11-22 在发布机上看到「DB-IP City Lite 没下载成功：The operation was aborted due to timeout」；库约 60MB，原来整份文件限 120 秒，网速低于约 500KB/s 必然失败）：(a) 超时按「连续一段时间收不到数据」算，不按总时长；边下边写临时文件，不把整份读进内存；中断后下次从断点续传（服务端不支持断点时从头下，并说明）；解压、校验能打开之后才替换旧库。(b) 失败后的重试间隔逐次拉长（例如 10 分钟、1 小时、6 小时，之后每 6 小时），不在每 10 分钟的探测里重下一整份；成功后回到每月一次。(c) 系统页说法分两种：从来没下载成功过时写「位置库还没下载下来：<人话原因>，已试 N 次，下次 <时间>」，不写「继续用旧库」；已有旧库时才写「继续用 <日期> 的库」。(d) 「出口位置」这一格有「现在重新下载」，对应一条命令（在 `commands.mjs` 定义，CLI / HTTP 由它派生），下载中显示进度，已在下载时不重复开始。测试用本地假下载源覆盖：慢速但持续有数据的下载能成功、中途断开后续传成功、连续失败的重试间隔、两种提示文字、按钮触发下载，不访问真实网络。
 - [ACC-v3-egress-04] 两条线路出口不一样时，系统页两条都写出来，各自标明是国内平台还是海外平台看到的；机房线路用黄点标「可能是代理」（只提醒，不暂停）。查不到城市时只写国家。
 
@@ -607,7 +607,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-v3-fid-06] 已发布的行，时间列是发布时间；成片标题旁有时长；竖版成片的视频框是 360px 高。
 - [ACC-v3-fid-07] 设计没覆盖、实现各自补的状态，按下面统一：素材读不到 → 视频框位置是占位封面加一行灰字「成片文件读不到」，不是黑底白字；没有建议时间 → 「还没定时间」灰字；平台稿没挂成片是数据问题，由迁移补上，页面不为它单独画状态。
 - [ACC-v3-fid-09] 平台徽章用各平台的官方标志，形状不改；颜色是各平台的品牌色。「还没发」是灰色标志，「出了问题」是红底白色标志。素材以各平台品牌资源页的正式文件为准，来源和许可证写在文件头。TikTok 相关界面遵守 TikTok 的品牌规范。
-- [ACC-v3-fid-08] 界面类实现单的证据包：1360 宽的截图和 `docs/design/screenshots/v3/` 里对应的那张并排；并贴出上面 fid-01 的实测值。（截图放 `docs/design/screenshots/impl/<页面>.png`，用 `vk demo seed` 的演示数据截，每次覆盖同名文件；PR 描述里用相对链接和 v3 那张并排。不放所有者的作品封面。）
+- [ACC-v3-fid-08] 界面类实现单的证据包：1360 宽的截图和 `docs/design/screenshots/v3/` 里对应的那张并排；并贴出上面 fid-01 的实测值。（截图放 `docs/design/screenshots/impl/<页面>.png`，用 `hifabu demo seed` 的演示数据截，每次覆盖同名文件；PR 描述里用相对链接和 v3 那张并排。不放所有者的作品封面。）
 - [ACC-v3-fid-10] 入库可以带封面：清单的成片上可写 `cover`（图片路径，相对清单），`vk work add`、`vk work push` 和发布机拉取都带上它，`/api/works` 返回封面地址；页面有封面用封面，没有才退回首帧。入库技能 `versekit-ingest` 的清单说明补上这个字段。不引入 ffmpeg 等运行时依赖。有测试。
 
 ### 实现对设计的还原（2026-11-21 审计出来的）
@@ -626,7 +626,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 - [ACC-test-browser-01] `packages/driver-browser` 里「ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies 表有行、重开仍在」在全量 `npm test` 里稳定通过：本机全量连跑 5 次、CI 上 Node 22 和 Node 26 都不失败（2026-11-21 前 15 次 main CI 挂过 2 次，PR #266 也挂过 1 次）。查清原因写进 PR（Chrome 落盘 Cookies 的时机、关浏览器的顺序、端口或 profile 目录竞争）；不许加长固定等待、放宽断言或跳过。
 - [ACC-test-load-01] 机器负载高时全量 `npm test` 仍稳定（2026-11-21 PR #287 记录：几个 worker 同时跑测试时，`packages/channel-feishu/test/feishu.test.mjs` 的假 `lark-cli` 5 秒探测超时，报「飞书未配置：没有找到 lark-cli」，事件测试报 `0 !== 1`；`packages/cli/test/login-xhs.test.mjs` 等报「tab 连接已断开」「tab 已关闭」；单独复跑全过）。复现办法写进 PR（如同时起 3 份全量测试）；查清是探测超时写死、子进程启动慢还是共用端口或 Chrome；修测试的等待条件或实现的超时设置，不许加长固定等待、放宽断言或跳过。验收：同时起 3 份全量 `npm test`，连做 3 次都不失败；CI 上 Node 22 和 Node 26 都绿。
 - [ACC-test-load-02] `packages/core/test/egress.test.mjs` 的「ACC-v3-egress-09 慢但一直有数据的下载能成功」在 CI 上偶发失败（2026-11-23 PR #352 的 Node 26 一次失败、重跑通过）：夹具每 20ms 给一块、无数据超时只有 120ms，机器一卡、两块之间超过 120ms 就被判成「连续没数据」。改成不依赖真实时钟的判定（例如给 `refreshGeoDb` 注入时钟或计时器，测试里推进假时间），或者让夹具在两块之间的真实间隔与超时之间有数量级的余量，同时仍能证明「总时长超过超时也能成功」；不许删掉这条测试、放宽断言或改成跳过。同文件里另外几条用 `idleMs` 的 egress-09 测试按同样方式检查。验收：本机同时起 3 份 `node --test packages/core/test/egress.test.mjs`，连做 5 次都不失败；CI 上 Node 22 和 Node 26 都绿。
-- [ACC-test-cleanup-01] 测试跑完不留 Chrome 和临时目录（2026-11-22 协调器 Mac mini 磁盘写满、worker 全部停住：查到 55 个测试起的 Chrome 还活着，最早的跑了好几天，来自 `vk-yt-*`、`vk-tta-*`、`vk-sph-core-*`、`vk-sched-*`、`vk-acct-fresh-*`、`/tmp/vkt-*`、`/tmp/vks-*`、`/tmp/vkf-*`、`vk-click-*`、`vk-xhs-qr-*`；系统临时目录里测试残留约 48GB；Chrome 每次被强杀都在 `X/com.google.Chrome.code_sign_clone/` 留一份程序副本，已累计 1277 份）。根因：`driver-browser` 用 `detached` + `unref` 起 Chrome，测试结束时杀掉 `vk serve` / CLI 子进程或直接退出，没人关浏览器；全仓只有 2 个测试文件调 `closeAllAccounts()`；多数测试不删自己建的临时 `VK_HOME`。要求：(a) 测试共用一个收尾工具（例如 `test/helpers` 里登记临时目录和起过的子进程），每个起浏览器、守护进程或建临时目录的测试文件都用它，`after` 里关掉本文件起的全部 Chrome（按 `--user-data-dir` 落在本测试临时目录下识别，不碰别的 Chrome）、结束子进程、删临时目录；测试失败或超时也照样收尾。(b) `vk serve` 收到 SIGTERM / SIGINT 时调 `closeAllAccounts()` 再退出（有测试）。(c) 加一个检查进 `npm test`：全量跑完后，用户临时目录和 `/tmp` 下本次新出现的 `vk*` 目录为 0，`--user-data-dir` 在这些目录下的 Chrome 进程为 0；有残留时列出来并失败。(d) 不许为了过检查把浏览器改成不起、或跳过原本起浏览器的测试。验收：连跑 3 次全量 `npm test`，前后 Chrome 进程数和临时目录数不变；CI 上 Node 22 和 Node 26 都绿。
+- [ACC-test-cleanup-01] 测试跑完不留 Chrome 和临时目录（2026-11-22 协调器 Mac mini 磁盘写满、worker 全部停住：查到 55 个测试起的 Chrome 还活着，最早的跑了好几天，来自 `vk-yt-*`、`vk-tta-*`、`vk-sph-core-*`、`vk-sched-*`、`vk-acct-fresh-*`、`/tmp/vkt-*`、`/tmp/vks-*`、`/tmp/vkf-*`、`vk-click-*`、`vk-xhs-qr-*`；系统临时目录里测试残留约 48GB；Chrome 每次被强杀都在 `X/com.google.Chrome.code_sign_clone/` 留一份程序副本，已累计 1277 份）。根因：`driver-browser` 用 `detached` + `unref` 起 Chrome，测试结束时杀掉 `hifabu serve` / CLI 子进程或直接退出，没人关浏览器；全仓只有 2 个测试文件调 `closeAllAccounts()`；多数测试不删自己建的临时 `VK_HOME`。要求：(a) 测试共用一个收尾工具（例如 `test/helpers` 里登记临时目录和起过的子进程），每个起浏览器、守护进程或建临时目录的测试文件都用它，`after` 里关掉本文件起的全部 Chrome（按 `--user-data-dir` 落在本测试临时目录下识别，不碰别的 Chrome）、结束子进程、删临时目录；测试失败或超时也照样收尾。(b) `hifabu serve` 收到 SIGTERM / SIGINT 时调 `closeAllAccounts()` 再退出（有测试）。(c) 加一个检查进 `npm test`：全量跑完后，用户临时目录和 `/tmp` 下本次新出现的 `vk*` 目录为 0，`--user-data-dir` 在这些目录下的 Chrome 进程为 0；有残留时列出来并失败。(d) 不许为了过检查把浏览器改成不起、或跳过原本起浏览器的测试。验收：连跑 3 次全量 `npm test`，前后 Chrome 进程数和临时目录数不变；CI 上 Node 22 和 Node 26 都绿。
 
 ## 十二、Hifabu 账号与「交给发布机」（2026-11-24）
 
@@ -648,7 +648,7 @@ curl -s 'http://127.0.0.1:8787/api/schedule?group=ai&from=2026-11-01&to=2026-11-
 
 - [ACC-cloud-08] 中转（`packages/relay`）只认账号服务签的机器令牌：用公钥离线验签，不实时连账号服务；过期、篡改、没开通传片，一律 401 或 403，并说人话。投递和成片按 `<账号 id>/` 分目录存放，**只有同一账号的发布机拉得到**。测试造两个账号、各一台发布机，同时拉取，各自只拿到自己的投递，不会把对方的标成失败（这是 2026-11-24 的起因）。超过容量上限时拒收，并说还剩多少。现有的两个固定令牌暂时保留，有开关控制；所有者两台机器换成账号登录之后，按开关关掉，迁移步骤写进 `docs/deploy-relay.md`。发布机到 volc1 的实测下载速度写进 PR，列为待人工。
 
-### 交给发布机（vk 侧能力）
+### 交给发布机（hifabu 侧能力）
 
 - [ACC-deliver-01] 同一期再交是**更新，不是新建**：发布机入库时，优先用清单里的 `source`（制作机上那一期的路径）当作品来源，不再用 `inbox/<投递号>`。同一 `source` 再次投递时更新这个作品的成片、封面、文案；还没发出去的平台稿按新内容更新；已经发出去的不动，并在投递回报里说明。测试：同一期连交两次，只有一个作品。
 - [ACC-deliver-02] 预览：`work.push` 支持 `dryRun`，只校验、不传任何字节。返回会传哪些文件、各多大、按最近实测速度估多久到发布机、哪些平台的文案会被拒、拒的原因（比如「小红书标题 24 字，限 20 字」）。中转剩余空间不到 2GB 时提示空间不够和剩多少。`relay.connect` 或登录时可以记一个默认账号组，交付时不用每次给组名。CLI 和 HTTP 都走 `commands.mjs`。

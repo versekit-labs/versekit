@@ -20,7 +20,7 @@
 
 - **P1（主力，首先是作者自己）**：用 Claude 做内容的一人公司。发 5–7 个平台，每个平台 1–2 个账号；以视频和图文为主，之后加公众号文章。不在电脑前的时间远多于在电脑前。
   - 作者自己的平台：小红书、抖音、视频号、B站、TikTok、YouTube、官网、公众号（订阅号）。
-  - **门槛分两档**：能走官方接口或自研后端的平台只需 Node；要用 SAU 后端的平台还得装 Python ≥3.10、`uv` 和 patchright 浏览器（约 150MB），安装说明和 `vk doctor` 必须讲清楚、查得出来。
+  - **门槛分两档**：能走官方接口或自研后端的平台只需 Node；要用 SAU 后端的平台还得装 Python ≥3.10、`uv` 和 patchright 浏览器（约 150MB），安装说明和 `hifabu doctor` 必须讲清楚、查得出来。
   - **操作国内平台账号的电脑必须和手机同网**（§7 D10）。云服务器只放控制面，不放登录态（ADR-0003）。
 - **P2**：3–8 人小工作室，需要一个人拍板，其余人看数据。
 - **P3**：把 versekit 当 skill/MCP 接入自己 agent 流的开发者。
@@ -69,7 +69,7 @@
 
 ```
 ┌────────────────── 界面层 ──────────────────┐
-│  CLI vk    本地 Web    飞书卡片    MCP      │
+│  CLI hifabu    本地 Web    飞书卡片    MCP      │
 │  agent      人        人         agent     │
 └──────────────┬─────────────────────────────┘
                │ 命令总线
@@ -91,7 +91,7 @@
 
 **铁律**（进 CI 验收）：
 
-1. **CLI 完整律**：关闭 Web 和飞书后，`vk` 能力集合不减少。
+1. **CLI 完整律**：关闭 Web 和飞书后，`hifabu` 能力集合不减少。
 2. **三端一致律**：同一命令在三端产生相同的 command_id、幂等键、审计、状态迁移。
 3. **零后门律**：Web 与飞书不得直接读写 SQLite / 凭证目录。
 
@@ -235,7 +235,7 @@ packages/
   adapter-xiaohongshu/ 创作服务平台 web 自动化
   adapter-douyin/    创作者中心 web 自动化
   channel-feishu/    飞书长连接 + 交互卡片
-  cli/               vk
+  cli/               hifabu
   web/               本地控制台
 docs/
 ```
@@ -315,7 +315,7 @@ interface PlatformAdapter {
 | 门禁 | 断言 |
 |---|---|
 | test | 全部单测通过 |
-| commands-parity | `vk commands --json` == HTTP 路由 == 卡片按钮 |
+| commands-parity | `hifabu commands --json` == HTTP 路由 == 卡片按钮 |
 | adapter-contract | 每个适配器满足接口形状 + ready() 语义 + dry-run 无对外动作 |
 | no-backdoor | channel-* 与 web 不得 import core/db |
 
@@ -325,7 +325,7 @@ interface PlatformAdapter {
 
 ### 4.1 界面分工
 
-| | CLI vk | 本地 Web | 飞书卡片 |
+| | CLI hifabu | 本地 Web | 飞书卡片 |
 |---|---|---|---|
 | 用户 | agent、脚本、CI | 坐在电脑前的人 | 不在电脑前的人 |
 | 干什么 | 全能力（JSON 优先） | 扫码、编排、图表、排障 | 通知、审批、重试、看摘要 |
@@ -392,7 +392,7 @@ interface PlatformAdapter {
 
 ### 5.5 三端一致性测试
 
-- `vk commands --json` 的命令集合 == HTTP 路由表 == 卡片按钮集合
+- `hifabu commands --json` 的命令集合 == HTTP 路由表 == 卡片按钮集合
 - 不一致 CI 直接失败
 
 ---

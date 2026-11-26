@@ -97,11 +97,11 @@ async function alive(socketPath, timeout = 400) {
 }
 
 /**
- * Makes sure the daemon is up. Returns `{ started }` so `vk serve --detach` can say what happened
+ * Makes sure the daemon is up. Returns `{ started }` so `hifabu serve --detach` can say what happened
  * instead of hanging; throws only when the daemon genuinely could not come up.
  */
 export async function ensureDaemon({ timeoutMs = 6000, port = null, lan = false, log = () => {} } = {}) {
-  if (!isInitialised()) throw new Error("还没有初始化：先运行 vk init");
+  if (!isInitialised()) throw new Error("还没有初始化：先运行 hifabu init");
   const socketPath = paths().socket;
   if (existsSync(socketPath) && (await alive(socketPath))) return { started: false };
 
@@ -119,7 +119,7 @@ export async function ensureDaemon({ timeoutMs = 6000, port = null, lan = false,
     await sleep(200);
     if (existsSync(socketPath) && (await alive(socketPath))) return { started: true };
   }
-  throw new Error("守护进程没有起来：直接运行 vk serve，看它报什么错");
+  throw new Error("守护进程没有起来：直接运行 hifabu serve，看它报什么错");
 }
 
 /** One call that also guarantees the daemon exists. */

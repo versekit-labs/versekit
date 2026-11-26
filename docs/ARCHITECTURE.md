@@ -15,7 +15,7 @@
 ```
 ┌───────────────────────── 单机 ─────────────────────────┐
 │                                                        │
-│  vk (CLI)  ──unix socket──┐                            │
+│  hifabu (CLI)  ──unix socket──┐                            │
 │                           ├──►  versekitd  ──► SQLite  │
 │  browser(localhost:8787) ─┘     ├ 命令总线              │
 │                                 ├ 队列/调度             │
@@ -29,11 +29,11 @@
 |---|---|---|
 | 进程数 | **1 个守护进程 + N 个 CLI 客户端** | 发布/采集必须串行化在同一个内存与文件锁下 |
 | CLI ↔ 内核 | **本地 HTTP（unix socket）**，CLI 不直接写库 | 否则 Web/飞书/CLI 三条写路径必然分叉（违反 §5.3 零后门律） |
-| 守护进程未启动 | CLI **自动拉起**（`vk serve --detach`），2s 内就绪 | 用户不该学"先启服务" |
+| 守护进程未启动 | CLI **自动拉起**（`hifabu serve --detach`），2s 内就绪 | 用户不该学"先启服务" |
 | Web | 由守护进程同端口提供静态页 + `/api/*` | 免去第二套部署 |
 | 浏览器 | **共享一个持久 Chrome（CDP 9333）** | 登录态复用；三个平台共用一套 driver |
 
-> CLI 直连库只允许一种情况：`--offline` 的**只读**查询（daemon 挂了也能 `vk doctor`）。写入永远走 socket。
+> CLI 直连库只允许一种情况：`--offline` 的**只读**查询（daemon 挂了也能 `hifabu doctor`）。写入永远走 socket。
 
 ---
 
@@ -49,7 +49,7 @@ packages/
   adapter-xiaohongshu/  Web 后端（创作服务平台）
   adapter-douyin/       Web 后端（创作者中心，Wave 2）
   channel-feishu/       飞书长连接 + 卡片
-  cli/                  vk
+  cli/                  hifabu
   web/                  本地控制台（构建产物内嵌进 core）
 docs/
 ```
@@ -231,7 +231,7 @@ followup  open ──► done | waived
 | 被动信号 | 实时 | 发布/采集报 auth 错 → 立即置 `expired`，不等下一轮 |
 | 到期预测 | 实时 | 凭证自带 `expiresAt` 时提前 72h 置 `expiring` |
 
-无 `adapter.check()` 的适配器必须显式缺失（不是默默跳过）：`vk doctor` 里列为“只能被动发现失效”，并计入风险页。
+无 `adapter.check()` 的适配器必须显式缺失（不是默默跳过）：`hifabu doctor` 里列为“只能被动发现失效”，并计入风险页。
 
 ### 4.2 followup 核实器
 
@@ -300,23 +300,23 @@ defineCommand({
 
 | 命令 | 说明 | 远程可用 |
 |---|---|---|
-| `vk init` | 建库、生成配置、启动守护进程 | 否 |
-| `vk serve [--port]` | 前台/后台运行守护进程 | 否 |
-| `vk now [--human]` | 一屏状态：账号健康 / 队列 / 通道 / 下次采集 | 是 |
-| `vk account add <platform> --name` | 加账号，输出扫码页链接（自动开 Web） | 否 |
-| `vk account list / check / reauth / rm` | 账号生命周期 | `reauth` 可远程发起，但扫码必须在电脑前完成 |
-| `vk account mode <id> auto\|manual` | 该号是否自动 | 是 |
-| `vk publish <asset> --to a,b --schedule --visibility --dry-run` | 创建发布 | 否（本地） |
-| `vk publish list` / `retry <id>` / `release <id>` / `confirm <id>` | 列表与队列操作 | 是 |
-| `vk platforms` | 已安装适配器与可用状态（Web 发布台的数据源） | 否 |
-| `vk publish approve <work>` / `reject <work> --reason` | 审批门禁（可选） | 是 |
-| `vk collect [--now] [--platform]` | 立即采集 / 查看下次计划 | `--now` 是 |
-| `vk stats works [--range]` / `series <id>` | 数据查询（最新值 / 全部快照） | 否 |
-| `vk runs [--state]` / `events [--since]` | 队列与事件排障 | 是 |
-| `vk channel bind feishu` / `test` | 配对 + 探活 | 否 |
-| `vk commands [--json]` | 导出注册表（CI 用） | 否 |
-| `vk doctor [--json]` | 32 项自检 | 否 |
-| `vk event list [--since]` / `replay <id>` | 事件排查 | 是 |
+| `hifabu init` | 建库、生成配置、启动守护进程 | 否 |
+| `hifabu serve [--port]` | 前台/后台运行守护进程 | 否 |
+| `hifabu now [--human]` | 一屏状态：账号健康 / 队列 / 通道 / 下次采集 | 是 |
+| `hifabu account add <platform> --name` | 加账号，输出扫码页链接（自动开 Web） | 否 |
+| `hifabu account list / check / reauth / rm` | 账号生命周期 | `reauth` 可远程发起，但扫码必须在电脑前完成 |
+| `hifabu account mode <id> auto\|manual` | 该号是否自动 | 是 |
+| `hifabu publish <asset> --to a,b --schedule --visibility --dry-run` | 创建发布 | 否（本地） |
+| `hifabu publish list` / `retry <id>` / `release <id>` / `confirm <id>` | 列表与队列操作 | 是 |
+| `hifabu platforms` | 已安装适配器与可用状态（Web 发布台的数据源） | 否 |
+| `hifabu publish approve <work>` / `reject <work> --reason` | 审批门禁（可选） | 是 |
+| `hifabu collect [--now] [--platform]` | 立即采集 / 查看下次计划 | `--now` 是 |
+| `hifabu stats works [--range]` / `series <id>` | 数据查询（最新值 / 全部快照） | 否 |
+| `hifabu runs [--state]` / `events [--since]` | 队列与事件排障 | 是 |
+| `hifabu channel bind feishu` / `test` | 配对 + 探活 | 否 |
+| `hifabu commands [--json]` | 导出注册表（CI 用） | 否 |
+| `hifabu doctor [--json]` | 32 项自检 | 否 |
+| `hifabu event list [--since]` / `replay <id>` | 事件排查 | 是 |
 
 `--json` 是默认，`--human` 才给人看；`--dry-run` 对 `publish` 与 `collect` 都必须可用。
 
@@ -351,7 +351,7 @@ type EventType =
 | 接入方式 | **长连接（WebSocket）**，不是公网回调 → 不需要域名/内网穿透（与视频工厂"轮询不依赖公网"同一思路） |
 | 卡片 | 交互卡片 v2；`actions` 里每个按钮带 `command_id` + `idempotency_key` + `exp`（24h） |
 | 回执 | 收到 `card.action.trigger` 事件 → 校验 `exp` / 白名单 / 幂等键 → 执行 → **原地更新卡片**为结果态 |
-| 配对 | `vk channel bind feishu`：用 lark-cli 已登录身份取 open_id → 落 `channel_binding` → 发测试卡（不需要 6 位码，也不需要公网回调） |
+| 配对 | `hifabu channel bind feishu`：用 lark-cli 已登录身份取 open_id → 落 `channel_binding` → 发测试卡（不需要 6 位码，也不需要公网回调） |
 | 脱敏 | 卡片只放业务字段；路径、凭证、内部 id 一律不出 |
 | 降级 | 长连接断开 → 事件积压在 `delivery(pending)`，恢复后按 `created_at` 补投并按类型合并 |
 
@@ -447,7 +447,7 @@ WHERE id = (SELECT id FROM run
 
 ## 11. 可观测
 
-`vk doctor` 的 32 项自检分四组：**能跑吗**（daemon/DB/socket）· **能发吗**（账号健康/浏览器/凭证）· **能看到吗**（采集最近成功时间/平台降级率）· **能收到吗**（飞书长连接/最近投递）。任意一组红灯都输出"下一步该做什么"的一句话。
+`hifabu doctor` 的 32 项自检分四组：**能跑吗**（daemon/DB/socket）· **能发吗**（账号健康/浏览器/凭证）· **能看到吗**（采集最近成功时间/平台降级率）· **能收到吗**（飞书长连接/最近投递）。任意一组红灯都输出"下一步该做什么"的一句话。
 
 日志单文件 JSONL（`~/.local/state/versekit/vk.log`），关键字段 `event_id`/`run_id`/`publish_id` 与库对齐，便于 grep 串联。
 
@@ -457,7 +457,7 @@ WHERE id = (SELECT id FROM run
 
 | 测试 | 断言 |
 |---|---|
-| `commands-parity` | `vk commands --json` 的命令集合 == HTTP 路由表 == 卡片按钮集合 |
+| `commands-parity` | `hifabu commands --json` 的命令集合 == HTTP 路由表 == 卡片按钮集合 |
 | `adapter-contract` | 每个适配器包满足 §2 接口形状；`ready()` 返回 string 或 null |
 | `state-machine` | 所有迁移都在白名单表里；每个迁移都产生 event + audit |
 | `no-backdoor` | eslint：`channel-*` 与 `web` 不得 import `core/db` |

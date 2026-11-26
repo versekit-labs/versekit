@@ -1,4 +1,4 @@
-// 制作机的投递队列。登记和重试时间写进本机状态，实际传输由 vk serve 串行处理。
+// 制作机的投递队列。登记和重试时间写进本机状态，实际传输由 hifabu serve 串行处理。
 import { readConfig } from "../../core/src/config.mjs";
 import { emit } from "../../core/src/index.mjs";
 import { getRelayState, patchRelayState } from "../../core/src/store.mjs";

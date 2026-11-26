@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// vk — versekit CLI. Default output is JSON (agents and scripts are the primary caller);
+// hifabu — Hifabu CLI. Default output is JSON (agents and scripts are the primary caller);
 // --human switches to the layout a person reads.
 //
 // Reads run against the database directly (doctor must work when the daemon is dead); writes go
@@ -89,9 +89,9 @@ function cmdInit() {
     config: p.configFile,
     schema_version: getMeta("schema_version"),
     next: [
-      "vk serve --open（打开本地控制台）",
-      "vk group add 主矩阵 && vk account add bilibili --group 主矩阵 --name 主号 --credential <cookies.json>",
-      "vk doctor --human",
+      "hifabu serve --open（打开本地控制台）",
+      "hifabu group add 主矩阵 && hifabu account add bilibili --group 主矩阵 --name 主号 --credential <cookies.json>",
+      "hifabu doctor --human",
     ],
   };
   if (human) {
@@ -106,7 +106,7 @@ function cmdInit() {
 
 function guard() {
   if (isInitialised()) return true;
-  const msg = "还没有初始化：先运行 vk init";
+  const msg = "还没有初始化：先运行 hifabu init";
   if (human) console.error(msg);
   else out({ ok: false, error: { code: "not_initialised", message: msg } });
   return false;
@@ -121,7 +121,7 @@ function cmdNow() {
     console.log(`队列   待跑 ${data.queue.queued} · 运行中 ${data.queue.running} · 失败 ${data.queue.failed}`);
     console.log(`发布   成功 ${data.publishes.published} · 部分 ${data.publishes.published_limited} · 待确认 ${data.publishes.needs_human}`);
     console.log(`通道   飞书 ${data.channel.feishu === "bound" ? "已连接" : "未配对"}`);
-    if (!data.accounts.total) console.log("\n还没有账号：vk group add 主矩阵，然后 vk account add tiktok --group 主矩阵 --name 主号");
+    if (!data.accounts.total) console.log("\n还没有账号：hifabu group add 主矩阵，然后 hifabu account add tiktok --group 主矩阵 --name 主号");
   } else out({ ok: true, ...data });
   return data;
 }
@@ -319,8 +319,8 @@ async function bindXhsIdentity(accountId, tab, log = () => {}) {
 
 /** 备用入口：扫码失败（风控、页面改版）时页面和 CLI 都给出这两条，不让人卡住。 */
 const QR_FALLBACK = [
-  { mode: "sms", label: "短信验证码登录", cli: "vk account login <id> --phone <11 位手机号>" },
-  { mode: "window", label: "打开登录窗口", cli: "vk account login <id> --open" },
+  { mode: "sms", label: "短信验证码登录", cli: "hifabu account login <id> --phone <11 位手机号>" },
+  { mode: "window", label: "打开登录窗口", cli: "hifabu account login <id> --open" },
 ];
 const fallbackFor = (accountId) => QR_FALLBACK.map((f) => ({ ...f, cli: f.cli.replace("<id>", accountId) }));
 
@@ -449,7 +449,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
     adapters,
     log,
     doctor: doctorReport,
-    // 更新要停掉守护进程本身，所以交给脱离它的 `vk update --now`（#217）。
+    // 更新要停掉守护进程本身，所以交给脱离它的 `hifabu update --now`（#217）。
     updater: { apply: async () => service.startDetachedUpdate() },
     loginsOpen: activeLogins,
     uploadQueue,
@@ -477,7 +477,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
     }
     markAccountLoggedOut(accountId);
     log(`[logout] ${accountId} ${what}（浏览器资料${r.removed ? "已删除" : "本来就没有"}，平台凭据${credentialsRemoved ? "已删除" : "本来就没有"}）`);
-    return { accountId, state: "expired", browserClosed: r.closed, profileRemoved: r.removed, credentialsRemoved, next: "现在可以重新登录：vk account login " + accountId + " --qr（或 --phone / --open）" };
+    return { accountId, state: "expired", browserClosed: r.closed, profileRemoved: r.removed, credentialsRemoved, next: "现在可以重新登录：hifabu account login " + accountId + " --qr（或 --phone / --open）" };
   }
   return {
     ...buildHandlers(adapters, { log }),
@@ -717,7 +717,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
     /** 换号（#376）：清得和退出登录一样干净；调用方（系统页、CLI）随后直接进入登录流程。排期与平台稿不动。 */
     "account.switch": async ({ accountId }) => {
       const data = await logoutEverything(accountId, "换号：已清掉旧号的登录数据");
-      return { ...data, switched: true, next: `现在登录要接的号：vk account login ${accountId}（扫码登录的是手机 App 当前的号，先在 App 里切到要接的号）` };
+      return { ...data, switched: true, next: `现在登录要接的号：hifabu account login ${accountId}（扫码登录的是手机 App 当前的号，先在 App 里切到要接的号）` };
     },
 
     "account.login.cancel": async ({ accountId }) => {
@@ -806,7 +806,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue }) {
     "channel.app.set": async ({ appId, appSecret }) => {
       const r = await channelFeishu.configure({ appId, appSecret });
       updateConfig({ channel: { feishu: { profile: r.profile, app_id: r.appId, configured_at: Date.now() } } });
-      return { ...r, next: "应用已保存。要让卡片发给你，请在「通知」里点「接飞书」扫码，或 vk channel bind feishu --open-id <你的 open_id>" };
+      return { ...r, next: "应用已保存。要让卡片发给你，请在「通知」里点「接飞书」扫码，或 hifabu channel bind feishu --open-id <你的 open_id>" };
     },
 
     "channel.diagnose": async () => {
@@ -973,7 +973,7 @@ async function cmdService() {
   const log = (m) => console.error(m);
   const show = (d) => {
     if (!human) return out(d);
-    if (!d.installed) return console.log("后台服务：未安装（运行安装命令，或 vk service install）");
+    if (!d.installed) return console.log("后台服务：未安装（运行安装命令，或 hifabu service install）");
     console.log(line("后台服务", `${d.label}（${d.manager}）`));
     console.log(line("状态", d.running ? `运行中${d.pid ? `（pid ${d.pid}）` : ""}` : "已停止"));
     console.log(line("控制台", `${d.url}${d.reachable ? "（能打开）" : "（打不开）"}`));
@@ -998,30 +998,30 @@ async function cmdService() {
     if (human) {
       console.log(`后台服务已卸载（${data.label}）${data.removed.length ? "：\n  " + data.removed.join("\n  ") : ""}`);
       if (data.purged.length) console.log(`已删除数据：\n  ${data.purged.join("\n  ")}`);
-      else if (data.kept_data.length) console.log(`数据已保留：\n  ${data.kept_data.join("\n  ")}\n（要连数据一起删：vk service uninstall --purge）`);
+      else if (data.kept_data.length) console.log(`数据已保留：\n  ${data.kept_data.join("\n  ")}\n（要连数据一起删：hifabu service uninstall --purge）`);
     } else out(data);
     return data;
-  } else throw new Error("用法：vk service status | start | stop | restart | uninstall [--purge]");
+  } else throw new Error("用法：hifabu service status | start | stop | restart | uninstall [--purge]");
   show(data);
   return data;
 }
 
-/** vk version：版本号 + 短提交号 + 安装时间（ACC-update-01）。 */
+/** hifabu version：版本号 + 短提交号 + 安装时间（ACC-update-01）。 */
 async function cmdVersion() {
   const v = updates.statusView();
   if (has("--json")) return out(v);
   console.log(updates.versionLine(updates.buildInfo()));
-  console.log(line("自动更新", v.auto ? `开（每 ${v.intervalHours} 小时检查一次，空闲时更新）` : "关（vk update --auto on 打开）"));
+  console.log(line("自动更新", v.auto ? `开（每 ${v.intervalHours} 小时检查一次，空闲时更新）` : "关（hifabu update --auto on 打开）"));
   if (v.lastCheckAt) console.log(line("上次检查", `${new Date(v.lastCheckAt).toLocaleString()}：${v.lastCheck?.message ?? ""}`));
   if (v.lastFailure) console.log(line("最近失败", v.lastFailure.message));
 }
 
-/** vk update [--check] [--auto on|off] [--now]（ACC-update-02）：检查 / 开关走和 HTTP 同一个 handler，更新在本进程里做。 */
+/** hifabu update [--check] [--auto on|off] [--now]（ACC-update-02）：检查 / 开关走和 HTTP 同一个 handler，更新在本进程里做。 */
 async function cmdUpdate() {
   const core = createCoreHandlers({});
   // --auto 不在 argv.mjs 的带值参数表里，on|off 就是紧跟在 update 后面的位置参数。
   const auto = has("--auto") ? pos[1] : undefined;
-  if (has("--auto") && !["on", "off"].includes(auto)) throw new Error("用法：vk update --auto on|off");
+  if (has("--auto") && !["on", "off"].includes(auto)) throw new Error("用法：hifabu update --auto on|off");
   if (auto != null || has("--check")) {
     const r = await core.update({ check: has("--check"), auto: auto ?? null });
     if (human || auto != null) console.log(r.message);
@@ -1039,7 +1039,7 @@ async function cmdUpdate() {
 
 async function cmdDemo() {
   const sub = pos[1];
-  if (sub !== "seed") throw new Error("用法：vk demo seed（在当前 VK_HOME 造演示数据）");
+  if (sub !== "seed") throw new Error("用法：hifabu demo seed（在当前 VK_HOME 造演示数据）");
   const { seedDemoAsync } = await import("../../../scripts/demo-seed.mjs");
   const data = await seedDemoAsync();
   if (human) console.log(`演示数据已写入 ${paths().root}：${data.works} 个作品、${data.publishes} 条平台稿`);
@@ -1076,7 +1076,7 @@ function writeQrImage(accountId, dataUrl) {
 }
 
 /**
- * vk account login <id> --qr：取二维码 → 写成图片文件并打印路径 → 每 2 秒问一次状态，
+ * hifabu account login <id> --qr：取二维码 → 写成图片文件并打印路径 → 每 2 秒问一次状态，
  * 直到成功、失败或整场会话过期。过程信息在 JSON 模式下走 stderr，stdout 只留最终结果。
  */
 async function cmdLoginQr(accountId) {
@@ -1119,7 +1119,7 @@ async function cmdLoginQr(accountId) {
     }
   }
   await send("account.login.cancel", { accountId }).catch(() => {});
-  throw new Error("10 分钟内没有完成扫码，已取消。重新运行 vk account login " + accountId + " --qr");
+  throw new Error("10 分钟内没有完成扫码，已取消。重新运行 hifabu account login " + accountId + " --qr");
 }
 
 async function cmdAccount() {
@@ -1129,7 +1129,7 @@ async function cmdAccount() {
     const data = await send("account.list", val("--group") ? { group: val("--group") } : {}, { log });
     if (human) {
       if (data.group) console.log(`账号组：${data.group.name}`);
-      if (!data.accounts.length) console.log(`还没有账号：vk account add tiktok --group ${data.group?.name ?? "<组>"} --name 主号`);
+      if (!data.accounts.length) console.log(`还没有账号：hifabu account add tiktok --group ${data.group?.name ?? "<组>"} --name 主号`);
       for (const a of data.accounts) {
         const who = a.avatar_url && a.display_name ? `  ${a.display_name}（头像 ${a.avatar_url}）` : "";
         console.log(`${a.id.padEnd(16)}${platformLabelOf(a.platform).padEnd(12)}${a.handle.padEnd(18)}${a.state}${who}`);
@@ -1139,7 +1139,7 @@ async function cmdAccount() {
   }
   if (sub === "show") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account show <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account show <accountId>");
     const data = await send("account.show", { accountId }, { log });
     if (human) {
       const a = data.account;
@@ -1157,9 +1157,9 @@ async function cmdAccount() {
   }
   if (sub === "add") {
     const platform = pos[2];
-    if (!platform) throw new Error("用法：vk account add <platform> --group <组> --name <名字>");
+    if (!platform) throw new Error("用法：hifabu account add <platform> --group <组> --name <名字>");
     const group = val("--group");
-    if (!group) throw new Error("用法：vk account add <platform> --group <组> --name <名字>（账号必须属于一个账号组）");
+    if (!group) throw new Error("用法：hifabu account add <platform> --group <组> --name <名字>（账号必须属于一个账号组）");
     const name = val("--name") ?? platform;
     const data = await send(
       "account.add",
@@ -1178,7 +1178,7 @@ async function cmdAccount() {
   }
   if (sub === "logout") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account logout <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account logout <accountId>");
     const data = await send("account.logout", { accountId }, { log });
     if (human) console.log(`已退出登录：${accountId} 的浏览器已关闭、浏览器资料和平台凭据已删除，状态是「没连上」\n${data.next}`);
     else out(data);
@@ -1186,7 +1186,7 @@ async function cmdAccount() {
   }
   if (sub === "switch") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account switch <账号 id>");
+    if (!accountId) throw new Error("用法：hifabu account switch <账号 id>");
     const data = await send("account.switch", { accountId }, { log });
     if (human) console.log(`已换号：${accountId} 的浏览器资料、平台凭据文件、授权令牌都已清掉，状态是「没连上」；排期和平台稿还在这个账号位置上\n${data.next}`);
     else out(data);
@@ -1194,7 +1194,7 @@ async function cmdAccount() {
   }
   if (sub === "rename") {
     const accountId = pos[2];
-    if (!accountId || val("--name") === undefined) throw new Error("用法：vk account rename <账号 id> --name <新名字>");
+    if (!accountId || val("--name") === undefined) throw new Error("用法：hifabu account rename <账号 id> --name <新名字>");
     const data = await send("account.rename", { accountId, name: val("--name") }, { log });
     if (human) console.log(data.changed ? `已改名：${data.previous} → ${data.name}（只改 Hifabu 里的名字，不影响平台）` : `名字本来就是「${data.name}」，没有改动`);
     else out(data);
@@ -1202,19 +1202,19 @@ async function cmdAccount() {
   }
   if (sub === "remove") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account remove <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account remove <accountId>");
     const data = await send("account.remove", { accountId }, { log });
     if (human) {
       console.log(`已移除 ${data.platform} ${data.handle}（${accountId}）${data.group ? `，${data.group.name} 的这个平台槽位已空出` : ""}`);
       if (data.historyKept) console.log(`历史 ${data.historyKept} 条发布仍保留（只移除账号，不删数据）`);
-      console.log("现在可以重新添加这个平台的账号：vk account add <platform> --group <组> --name <名字>");
+      console.log("现在可以重新添加这个平台的账号：hifabu account add <platform> --group <组> --name <名字>");
     } else out(data);
     return data;
   }
   // TikTok 官方接口授权：第一次调用拿到授权链接，之后轮询到完成（会话在守护进程里）。
   if (sub === "connect") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account connect <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account connect <accountId>");
     let data = await send("account.connect", { accountId }, { log });
     if (data.state === "waiting") {
       // 链接走 stderr：stdout 留给 JSON，管道里的脚本不会被它污染。
@@ -1231,7 +1231,7 @@ async function cmdAccount() {
       while (data.state === "waiting" && Date.now() < deadline) {
         data = await send("account.connect", { accountId, timeoutMs: 15000 }, { log });
       }
-      if (data.state === "waiting") throw new Error("6 分钟内没有完成授权，已放弃：重新运行 vk account connect " + accountId);
+      if (data.state === "waiting") throw new Error("6 分钟内没有完成授权，已放弃：重新运行 hifabu account connect " + accountId);
     }
     if (human) console.log(`已连接 TikTok：${data.displayName ?? "（没有昵称）"}${data.avatarUrl ? `\n头像：${data.avatarUrl}` : ""}`);
     else out(data);
@@ -1240,7 +1240,7 @@ async function cmdAccount() {
   // 平台应用凭证（TikTok 官方接口、YouTube）。secret 不进命令行历史：优先 stdin / 环境变量，--client-secret 只是兜底。
   if (sub === "credentials") {
     const platform = pos[2];
-    const usage = "用法：vk account credentials tiktok|youtube --client-key <key 或 client id>（secret 从 stdin、TIKTOK_CLIENT_SECRET 或 YOUTUBE_CLIENT_SECRET 读，也可 --client-secret <secret>）";
+    const usage = "用法：hifabu account credentials tiktok|youtube --client-key <key 或 client id>（secret 从 stdin、TIKTOK_CLIENT_SECRET 或 YOUTUBE_CLIENT_SECRET 读，也可 --client-secret <secret>）";
     if (!platform) throw new Error(usage);
     const platformId = platform === "tiktok" ? "tiktok-api" : platform;
     const clientKey = val("--client-key") ?? (platformId === "youtube" ? process.env.YOUTUBE_CLIENT_ID : process.env.TIKTOK_CLIENT_KEY);
@@ -1252,13 +1252,13 @@ async function cmdAccount() {
     }
     if (!clientKey || !clientSecret) throw new Error(usage);
     const data = await send("account.credentials", { platform: platformId, clientKey, clientSecret }, { log });
-    if (human) console.log(`已保存 ${platformLabelOf(platformId)} 应用凭证（client key ${data.clientKey}），secret 只在本机 config.json（权限 600）。下一步：vk account connect <accountId>`);
+    if (human) console.log(`已保存 ${platformLabelOf(platformId)} 应用凭证（client key ${data.clientKey}），secret 只在本机 config.json（权限 600）。下一步：hifabu account connect <accountId>`);
     else out(data);
     return data;
   }
   if (sub === "creator") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account creator <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account creator <accountId>");
     const data = await send("account.creator", { accountId }, { log });
     if (human) {
       console.log(`TikTok 创作者：${data.nickname ?? "?"}`);
@@ -1271,7 +1271,7 @@ async function cmdAccount() {
   }
   if (sub === "mode") {
     const [, , accountId, mode] = pos;
-    if (!accountId || !mode) throw new Error("用法：vk account mode <accountId> auto|manual");
+    if (!accountId || !mode) throw new Error("用法：hifabu account mode <accountId> auto|manual");
     const data = await send("account.mode", { accountId, mode }, { log });
     if (human) console.log(`${accountId} → ${mode}`);
     else out(data);
@@ -1279,7 +1279,7 @@ async function cmdAccount() {
   }
   if (sub === "check") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account check <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account check <accountId>");
     const data = await send("account.check", { accountId }, { log });
     if (human) console.log(`${accountId} → ${data.state}${data.detail ? `（${data.detail}）` : ""}`);
     else out(data);
@@ -1287,7 +1287,7 @@ async function cmdAccount() {
   }
   if (sub === "login") {
     const accountId = pos[2];
-    const usage = "用法：vk account login <accountId> --qr | --phone <11 位手机号> | --code <验证码> | --resend | --open | --status | --cancel";
+    const usage = "用法：hifabu account login <accountId> --qr | --phone <11 位手机号> | --code <验证码> | --resend | --open | --status | --cancel";
     if (!accountId) throw new Error(usage);
     const cmd = loginCommandOf(accountId, flags);
     if (!cmd) throw new Error(`${usage}（--phone / --code 后面要跟值）`);
@@ -1300,19 +1300,19 @@ async function cmdAccount() {
 
   if (sub === "reauth") {
     const accountId = pos[2];
-    if (!accountId) throw new Error("用法：vk account reauth <accountId>");
+    if (!accountId) throw new Error("用法：hifabu account reauth <accountId>");
     const data = await send("account.reauth", { accountId }, { log });
     if (human) console.log(data.next ?? "已开始");
     else out(data);
     return data;
   }
-  throw new Error("用法：vk account list [--group <组>] | show <accountId> | checktime [时:分] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
+  throw new Error("用法：hifabu account list [--group <组>] | show <accountId> | checktime [时:分] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <accountId> auto|manual | reauth <accountId> | check <accountId> | login …");
 }
 
 async function cmdBootstrap() {
   const data = await send("bootstrap", {}, { log: (m) => human && console.log(m) });
   if (human) {
-    console.log(`当前账号组      ${data.current?.name ?? "未选择（先 vk group add <名字>）"}`);
+    console.log(`当前账号组      ${data.current?.name ?? "未选择（先 hifabu group add <名字>）"}`);
     console.log(`账号            ${data.accounts.length} 个（当前组 ${data.freshness.total} 个）`);
     console.log(
       `作品 / 发布     ${data.counts.works} 个作品 · ${data.counts.publishes} 条平台发布（${data.counts.publishedPublishes} 条已发布）`,
@@ -1353,7 +1353,7 @@ async function cmdToday() {
 async function cmdWork() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json> | push <清单.json> [--group <组名>] [--dry-run]";
+  const usage = "用法：hifabu work list [--group <组>] | show <workId> | add <视频文件或图片目录> [--title <标题>] | add <清单.json> | push <清单.json> [--group <组名>] [--dry-run]";
   if (sub === "push") {
     const target = pos[2];
     if (!target || (Object.hasOwn(flags, "--group") && !val("--group"))) throw new Error(usage);
@@ -1376,7 +1376,7 @@ async function cmdWork() {
     const data = await send("work.list", { ...(val("--group") ? { group: val("--group") } : {}) }, { log });
     if (human) {
       if (data.group) console.log(`账号组：${data.group.name}`);
-      if (!data.works.length) console.log("还没有作品：vk work add <视频文件>");
+      if (!data.works.length) console.log("还没有作品：hifabu work add <视频文件>");
       for (const w of data.works) {
         console.log(`${w.id.padEnd(18)}${String(w.title).padEnd(24)}${w.status.label.padEnd(12)}${w.cuts} 支成片 · ${w.versions} 个版本 · ${w.publishes} 条平台稿`);
       }
@@ -1499,17 +1499,17 @@ async function cmdDelivery() {
     for (const row of data.deliveries) printDelivery(row);
     return;
   }
-  if (sub !== "show" || !pos[2]) throw new Error("用法：vk delivery list | show <投递号>");
+  if (sub !== "show" || !pos[2]) throw new Error("用法：hifabu delivery list | show <投递号>");
   const data = await send("delivery.show", { id: pos[2] });
   if (human) printDelivery(data);
   else out(data);
 }
 
-/** vk relay serve|status|connect|pull|token（#226）。serve 是云端（volc1）上跑的中转，不需要数据库。 */
+/** hifabu relay serve|status|connect|pull|token（#226）。serve 是云端（volc1）上跑的中转，不需要数据库。 */
 async function cmdRelay() {
   const sub = pos[1];
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] [--group <默认组名>] | disconnect | pull | token push|pull";
+  const usage = "用法：hifabu relay serve [--port 8790] [--data <目录>] | status | connect <地址> --token <token> [--push] [--group <默认组名>] | disconnect | pull | token push|pull";
   if (sub === "serve") {
     const { mkdirSync, chmodSync: chmod } = await import("node:fs");
     const { randomBytes } = await import("node:crypto");
@@ -1529,7 +1529,7 @@ async function cmdRelay() {
     if (Object.keys(fresh).length) {
       updateConfig({ relay: fresh });
       chmod(p.configFile, 0o600);
-      console.error("[relay] 已生成缺少的 token，写入 config.json（权限 600）；用 vk relay token push|pull 取出");
+      console.error("[relay] 已生成缺少的 token，写入 config.json（权限 600）；用 hifabu relay token push|pull 取出");
     }
     const dataDir = val("--data") ?? cfg.data_dir ?? join(p.state, "relay");
     const port = Number(val("--port") ?? cfg.port ?? 8790);
@@ -1543,7 +1543,7 @@ async function cmdRelay() {
     const which = pos[2];
     if (!["push", "pull"].includes(which)) throw new Error(usage);
     const token = readConfig().relay?.[`${which}_token`];
-    if (!token) throw new Error("还没有这个 token：先在云端 vk relay serve 一次，它会自动生成");
+    if (!token) throw new Error("还没有这个 token：先在云端 hifabu relay serve 一次，它会自动生成");
     console.log(token);
     return;
   }
@@ -1652,7 +1652,7 @@ async function cmdRelay() {
 async function cmdPlan() {
   const sub = pos[1] ?? "show";
   const log = (m) => human && console.log(m);
-  const usage = "用法：vk plan show | vk plan set --to <平台,平台> [--kind video|image] [--lang zh|en] [--delay-days N] [--remove] | vk plan reset | vk plan apply <cutId> [--accounts a,b] [--group <组>]";
+  const usage = "用法：hifabu plan show | hifabu plan set --to <平台,平台> [--kind video|image] [--lang zh|en] [--delay-days N] [--remove] | hifabu plan reset | hifabu plan apply <cutId> [--accounts a,b] [--group <组>]";
   const groupArg = val("--group") ? { group: val("--group") } : {};
   const printPlan = (data) => {
     console.log(`发布方案 · ${data.group?.name ?? "（没有账号组）"}${data.isDefault ? "（默认方案）" : ""}`);
@@ -1716,7 +1716,7 @@ async function cmdGroup() {
   if (sub === "list" || !sub) {
     const data = await send("group.list", {}, { log });
     if (human) {
-      if (!data.groups.length) console.log("还没有账号组：vk group add <名字>");
+      if (!data.groups.length) console.log("还没有账号组：hifabu group add <名字>");
       for (const g of data.groups) {
         const mark = data.current?.id === g.id ? "*" : " ";
         console.log(`${mark} ${g.id.padEnd(16)}${String(g.name).padEnd(18)}${g.account_count} 个账号`);
@@ -1726,7 +1726,7 @@ async function cmdGroup() {
   }
   if (sub === "add") {
     const name = pos.slice(2).join(" ") || val("--name");
-    if (!name) throw new Error("用法：vk group add <名字>");
+    if (!name) throw new Error("用法：hifabu group add <名字>");
     const data = await send("group.add", { name }, { log });
     if (human) console.log(`${data.existed ? "已存在并切换到" : "已新建并进入"}账号组 ${data.name}（${data.id}）\n${data.next}`);
     else out(data);
@@ -1735,7 +1735,7 @@ async function cmdGroup() {
   if (sub === "rename") {
     const group = pos[2];
     const name = pos.slice(3).join(" ");
-    if (!group || !name) throw new Error("用法：vk group rename <组 id 或名字> <新名字>");
+    if (!group || !name) throw new Error("用法：hifabu group rename <组 id 或名字> <新名字>");
     const data = await send("group.rename", { group, name }, { log });
     if (human) console.log(data.changed ? `账号组改名：${data.previous} → ${data.name}` : `名字没变：${data.name}`);
     else out(data);
@@ -1743,22 +1743,22 @@ async function cmdGroup() {
   }
   if (sub === "use") {
     const group = pos[2];
-    if (!group) throw new Error("用法：vk group use <组 id 或名字>");
+    if (!group) throw new Error("用法：hifabu group use <组 id 或名字>");
     const data = await send("group.use", { group }, { log });
     if (human) console.log(`当前账号组 → ${data.current.name}`);
     else out(data);
     return data;
   }
-  throw new Error("用法：vk group list | add <名字> | use <组> | rename <组> <新名字>");
+  throw new Error("用法：hifabu group list | add <名字> | use <组> | rename <组> <新名字>");
 }
 
-/** vk cut edit：改一支成片的内容（cut.edit）。平台稿的改动用 --platforms 给 JSON 或 JSON 文件。 */
+/** hifabu cut edit：改一支成片的内容（cut.edit）。平台稿的改动用 --platforms 给 JSON 或 JSON 文件。 */
 async function cmdCut() {
   const [sub] = pos.slice(1);
-  if (sub !== "edit") throw new Error("用法：vk cut edit <cutId> --rev <版本号> [--lang <语言>] [--title <通用标题>] [--body <通用正文>] [--tags <话题,逗号分隔>] [--platforms <JSON或文件>]");
+  if (sub !== "edit") throw new Error("用法：hifabu cut edit <cutId> --rev <版本号> [--lang <语言>] [--title <通用标题>] [--body <通用正文>] [--tags <话题,逗号分隔>] [--platforms <JSON或文件>]");
   const cutId = pos[2];
   const rev = val("--rev") != null ? Number(val("--rev")) : NaN;
-  if (!cutId || !Number.isInteger(rev)) throw new Error("用法：vk cut edit <cutId> --rev <版本号>（版本号在 vk work show 里，每支成片一个）…");
+  if (!cutId || !Number.isInteger(rev)) throw new Error("用法：hifabu cut edit <cutId> --rev <版本号>（版本号在 hifabu work show 里，每支成片一个）…");
   const tags = val("--tags") != null ? val("--tags").split(/[,，]/).map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
   const generic = {
     ...(val("--title") != null ? { title: val("--title") } : {}),
@@ -1803,7 +1803,7 @@ async function cmdPublish() {
       for (const q of data.quota) console.log(`额度 ${q.day} ${q.platform} ${q.used} / ${q.cap}${q.over ? "  超了" : ""}`);
     } else if (human) {
       for (const r of data.rows) console.log(`${r.id.padEnd(16)}${r.platform.padEnd(10)}${r.state.padEnd(18)}${String(r.title).slice(0, 30)}`);
-      if (!data.rows.length) console.log("还没有发布：vk publish <素材> --to <平台>");
+      if (!data.rows.length) console.log("还没有发布：hifabu publish <素材> --to <平台>");
     } else out(data);
     return data;
   }
@@ -1812,20 +1812,20 @@ async function cmdPublish() {
   if (sub === "approve") {
     const cutId = val("--cut");
     const publishId = val("--publish") ?? pos[2];
-    if (!cutId && !publishId) throw new Error("用法：vk publish approve --cut <cutId> | --publish <publishId> [--now]");
+    if (!cutId && !publishId) throw new Error("用法：hifabu publish approve --cut <cutId> | --publish <publishId> [--now]");
     const data = await send("publish.approve", { ...(cutId ? { cutId } : {}), ...(publishId && !cutId ? { publishId } : {}), ...(has("--now") ? { when: "now" } : {}) }, { log });
     if (human) {
       for (const a of data.approved) console.log(`已确认 ${platformLabelOf(a.platform).padEnd(12)}${a.publishId}  ${a.scheduledAt ? fmtTime(a.scheduledAt) : "尽快"}${a.shifted ? `（原定 ${fmtTime(a.originalAt)}，已顺延）` : ""}`);
       for (const x of data.held ?? []) console.log(`没发 ${platformLabelOf(x.platform)} ${x.publishId}：${x.reason}`);
       for (const x of data.incomplete ?? []) console.log(`还不能确认 ${platformLabelOf(x.platform)} ${x.publishId}：${x.reason}`);
-      for (const x of data.perItem ?? []) console.log(`待逐条决定 ${x.platform.padEnd(9)}${x.publishId}：vk publish approve --publish ${x.publishId} | now | manual`);
+      for (const x of data.perItem ?? []) console.log(`待逐条决定 ${x.platform.padEnd(9)}${x.publishId}：hifabu publish approve --publish ${x.publishId} | now | manual`);
     } else out(data);
     return data;
   }
 
   if (sub === "skip") {
     const cutId = val("--cut") ?? pos[2];
-    if (!cutId) throw new Error("用法：vk publish skip --cut <cutId>");
+    if (!cutId) throw new Error("用法：hifabu publish skip --cut <cutId>");
     const data = await send("publish.skip", { cutId }, { log });
     if (human) {
       if (data.already) console.log(`「${data.title}」已经是先不发`);
@@ -1848,7 +1848,7 @@ async function cmdPublish() {
     const tags = val("--tags") != null ? val("--tags").split(/[,，]/).map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
     const body = val("--body");
     if (!publishId || (val("--title") == null && body == null && tags === undefined && at == null && !Object.keys(tiktok).length)) {
-      throw new Error("用法：vk publish edit <publishId> [--title <标题>] [--body <正文>] [--tags <话题,逗号分隔>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]");
+      throw new Error("用法：hifabu publish edit <publishId> [--title <标题>] [--body <正文>] [--tags <话题,逗号分隔>] [--at <2026-11-10T20:00|2h>] [--privacy <级别>] [--comment|--no-comment] [--duet|--no-duet] [--stitch|--no-stitch] [--caption <文案>] [--draft|--no-draft]");
     }
     const data = await send("publish.edit", { publishId, ...(val("--title") != null ? { title: val("--title") } : {}), ...(body != null ? { body } : {}), ...(tags !== undefined ? { tags } : {}), ...(at != null ? { at } : {}), ...tiktok }, { log });
     if (human) {
@@ -1865,7 +1865,7 @@ async function cmdPublish() {
 
   if (["now", "manual"].includes(sub)) {
     const publishId = pos[2];
-    if (!publishId) throw new Error(`用法：vk publish ${sub} <publishId>`);
+    if (!publishId) throw new Error(`用法：hifabu publish ${sub} <publishId>`);
     const data = await send(`publish.${sub}`, { publishId }, { log });
     if (human) console.log(`${publishId} → ${data.state}${data.next ? `。${data.next}` : ""}`);
     else out(data);
@@ -1874,7 +1874,7 @@ async function cmdPublish() {
 
   if (["retry", "release", "confirm"].includes(sub)) {
     const publishId = pos[2];
-    if (!publishId) throw new Error(`用法：vk publish ${sub} <publishId>`);
+    if (!publishId) throw new Error(`用法：hifabu publish ${sub} <publishId>`);
     const data = await send(`publish.${sub}`, { publishId }, { log });
     if (human) console.log(`${publishId} → ${data.state}`);
     else out(data);
@@ -1882,7 +1882,7 @@ async function cmdPublish() {
   }
 
   const asset = sub;
-  if (!asset) throw new Error("用法：vk publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]");
+  if (!asset) throw new Error("用法：hifabu publish <素材> --to tiktok,bilibili [--title] [--schedule 2h] [--visibility] [--dry-run]");
   const to = (val("--to") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (!to.length) throw new Error("要指定平台：--to tiktok,bilibili");
   const args = {
@@ -1984,7 +1984,7 @@ async function cmdMachine() {
   return data;
 }
 
-/** 发布机出口位置（#310）：vk egress [recheck|accept --yes|wait]。 */
+/** 发布机出口位置（#310）：hifabu egress [recheck|accept --yes|wait]。 */
 async function cmdEgress() {
   const sub = pos[1] ?? "status";
   const group = val("--group") ? { group: val("--group") } : {};
@@ -1995,7 +1995,7 @@ async function cmdEgress() {
     : sub === "accept" ? await send("egress.accept", { ...group, ...account, confirm: has("--yes") })
     : sub === "wait" ? await send("egress.wait", { ...group, ...account })
     : sub === "status" ? await send("egress.status", group)
-    : (() => { throw new Error(`没有 vk egress ${sub}：可用 status、recheck、geodb、accept --yes、wait`); })();
+    : (() => { throw new Error(`没有 hifabu egress ${sub}：可用 status、recheck、geodb、accept --yes、wait`); })();
   if (human) {
     for (const l of data.lines) console.log(`${l.label}：${l.error ? l.error : `${l.place}  ${l.ip}${l.datacenter ? "  机房线路，可能是代理" : ""}`}`);
     if (!data.lines.length) console.log("还没有探测过出口位置");
@@ -2036,7 +2036,7 @@ async function cmdApproval() {
 
   if (sub === "link") {
     const publishId = pos[2];
-    if (!publishId) throw new Error("用法：vk approval link <publishId>");
+    if (!publishId) throw new Error("用法：hifabu approval link <publishId>");
     const data = await send("approval.link", { publishId });
     if (human) console.log(data.url);
     else out(data);
@@ -2046,20 +2046,20 @@ async function cmdApproval() {
   if (sub === "apply" || sub === "retry" || sub === "cancel") {
     const token = sub === "apply" ? pos[2] : pos[2];
     const decision = sub === "cancel" ? "cancel" : sub === "apply" ? (pos[3] ?? "retry") : sub;
-    if (!token) throw new Error("用法：vk approval apply <token> retry|cancel");
+    if (!token) throw new Error("用法：hifabu approval apply <token> retry|cancel");
     const data = await send("approval.apply", { token, decision }, { log });
     if (human) console.log(data.message ?? data.state);
     else out(data);
     return data;
   }
 
-  throw new Error("用法：vk approval list | link <publishId> | apply <token> retry|cancel");
+  throw new Error("用法：hifabu approval list | link <publishId> | apply <token> retry|cancel");
 }
 
 async function cmdChannel() {
   const sub = pos[1];
   const name = pos[2] ?? "feishu";
-  if (name !== "feishu") throw new Error("目前只支持飞书：vk channel bind feishu");
+  if (name !== "feishu") throw new Error("目前只支持飞书：hifabu channel bind feishu");
 
   if (sub === "status") {
     const data = await send("channel.status", {});
@@ -2073,9 +2073,9 @@ async function cmdChannel() {
   }
 
   if (sub === "settings") {
-    // vk channel settings feishu [confirm|issue|daily on|off]：不带就是只看。
+    // hifabu channel settings feishu [confirm|issue|daily on|off]：不带就是只看。
     const kind = pos[3];
-    if (kind && !["confirm", "issue", "daily"].includes(kind)) throw new Error("用法：vk channel settings feishu [confirm|issue|daily on|off]");
+    if (kind && !["confirm", "issue", "daily"].includes(kind)) throw new Error("用法：hifabu channel settings feishu [confirm|issue|daily on|off]");
     if (kind && !["on", "off"].includes(pos[4])) throw new Error("后面要写 on 或 off");
     const data = await send("channel.settings", kind ? { [kind]: pos[4] === "on" } : {});
     if (human) {
@@ -2135,23 +2135,23 @@ async function cmdChannel() {
     return test;
   }
 
-  throw new Error("用法：vk channel bind | test | status | diagnose | subscription | settings | unbind | skip | unskip feishu");
+  throw new Error("用法：hifabu channel bind | test | status | diagnose | subscription | settings | unbind | skip | unskip feishu");
 }
 
 async function cmdStats() {
   const sub = pos[1];
   if (sub === "series") {
-    if (val("--group")) throw new Error("stats series 是按单条发布的，不接受 --group；按组看作品用 vk stats works --group");
+    if (val("--group")) throw new Error("stats series 是按单条发布的，不接受 --group；按组看作品用 hifabu stats works --group");
     const publishId = pos[2] ?? val("--publish");
-    if (!publishId) throw new Error("用法：vk stats series <publishId>");
+    if (!publishId) throw new Error("用法：hifabu stats series <publishId>");
     const data = await send("stats.series", { publishId });
     if (human) {
-      if (!data.points.length) console.log("还没有快照：vk collect --now");
+      if (!data.points.length) console.log("还没有快照：hifabu collect --now");
       for (const p of data.points) console.log(`${new Date(p.at).toLocaleString()}  ${p.status.padEnd(8)}${JSON.stringify(p.metrics)}`);
     } else out(data);
     return data;
   }
-  if (sub !== "works") throw new Error("用法：vk stats works|series …");
+  if (sub !== "works") throw new Error("用法：hifabu stats works|series …");
   const data = await send("stats.works", {
     range: val("--range") ?? "all",
     ...(val("--publish") ? { publishId: val("--publish") } : {}),
@@ -2160,7 +2160,7 @@ async function cmdStats() {
   if (human) {
     if (data.group) console.log(`账号组：${data.group.name}`);
     const rows = data.rows.filter((r) => r.latest);
-    if (!rows.length) console.log("还没有采集到数据：vk collect --now");
+    if (!rows.length) console.log("还没有采集到数据：hifabu collect --now");
     for (const r of rows) console.log(`${r.platform.padEnd(10)}${String(r.title).slice(0, 24).padEnd(26)}${JSON.stringify(r.latest.metrics)}`);
   } else out(data);
   return data;
@@ -2192,7 +2192,7 @@ async function cmdSchedule() {
       ...(to != null ? { to } : {}),
     });
     if (human) {
-      if (!data.cards.length) console.log("这段时间没有排期：vk publish <素材> --to <平台> --schedule 2026-11-10T20:00");
+      if (!data.cards.length) console.log("这段时间没有排期：hifabu publish <素材> --to <平台> --schedule 2026-11-10T20:00");
       for (const c of data.cards) {
         const plats = c.platforms.map((p) => `${p.platform}:${p.state}`).join(" ");
         console.log(`${fmtTime(c.at).padEnd(22)}${c.state.padEnd(12)}${String(c.title).slice(0, 24).padEnd(26)}${plats}${c.conflict ? "  ⚠ 撞车" : ""}`);
@@ -2206,7 +2206,7 @@ async function cmdSchedule() {
   if (sub === "move") {
     const workId = pos[2];
     const at = parseSchedule(val("--at"));
-    if (!workId || at == null) throw new Error("用法：vk schedule move <workId> --at <2026-11-10T20:00|2h> [--force]");
+    if (!workId || at == null) throw new Error("用法：hifabu schedule move <workId> --at <2026-11-10T20:00|2h> [--force]");
     const data = await send("schedule.move", { workId, at, ...(has("--force") ? { force: true } : {}) }, { log });
     if (human) {
       if (data.saved) console.log(`已改期：「${data.title}」${fmtTime(data.from)} → ${fmtTime(data.at)}（${data.moved.map((m) => m.platform).join("、")}）`);
@@ -2222,7 +2222,7 @@ async function cmdSchedule() {
 
   if (sub === "cancel") {
     const workId = pos[2];
-    if (!workId) throw new Error("用法：vk schedule cancel <workId>");
+    if (!workId) throw new Error("用法：hifabu schedule cancel <workId>");
     const data = await send("schedule.cancel", { workId }, { log });
     if (human) {
       if (data.already) console.log(`「${data.title}」已经是取消状态`);
@@ -2231,58 +2231,58 @@ async function cmdSchedule() {
     return data;
   }
 
-  throw new Error("用法：vk schedule list | move <workId> --at <时间> [--force] | cancel <workId>");
+  throw new Error("用法：hifabu schedule list | move <workId> --at <时间> [--force] | cancel <workId>");
 }
 
 function usage() {
   console.log(
     [
-      "vk — Hifabu CLI（默认 JSON，--human 给人看）",
+      "hifabu — Hifabu CLI（默认 JSON，--human 给人看）",
       "",
       "用法:",
-      "  vk init",
-      "  vk now [--human]",
-      "  vk doctor [--human]",
-      "  vk serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
-      "  vk serve --offline [--port 8787]             # 离线模式：不访问任何平台（验收/演示用）",
-      "  vk service status|start|stop|restart   # 后台服务（关掉终端也在跑）",
-      "  vk service uninstall [--purge]            # 卸载服务和程序文件；默认保留数据，--purge 才删数据",
-      "  vk demo seed                                 # 在当前 VK_HOME 造演示数据",
-      "  vk commands [--human]",
-      "  vk bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
-      "  vk group list | add <名字> | use <组 id 或名字>",
+      "  hifabu init",
+      "  hifabu now [--human]",
+      "  hifabu doctor [--human]",
+      "  hifabu serve [--open] [--detach] [--port 8787]   # --open 打开本地控制台",
+      "  hifabu serve --offline [--port 8787]             # 离线模式：不访问任何平台（验收/演示用）",
+      "  hifabu service status|start|stop|restart   # 后台服务（关掉终端也在跑）",
+      "  hifabu service uninstall [--purge]            # 卸载服务和程序文件；默认保留数据，--purge 才删数据",
+      "  hifabu demo seed                                 # 在当前 VK_HOME 造演示数据",
+      "  hifabu commands [--human]",
+      "  hifabu bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
+      "  hifabu group list | add <名字> | use <组 id 或名字>",
       // account.add 的 --group 是 #21 起的必填项，account.remove 也在这里；publish/stats/runs 的
       // --group 是 #22 的组作用域，两者都是真实存在的参数，各留各的。
-      "  vk account list [--group <组>] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
-      "  vk today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
-      "  vk work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
-      "  vk work push <清单.json> [--group <组名>] [--dry-run]   制作机：校验预览或把成片交给发布机",
-      "  vk delivery list | show <投递号>                       查看交付进度和发布机回报",
-      "  vk relay serve [--port 8790] [--data <目录>]            云端中转（只存文件和投递清单；只监听 127.0.0.1，HTTPS 由反代提供）",
-      "  vk relay connect <地址> --token <token> [--push] [--group <默认组名>]   连接中转并记住默认账号组",
-      "  vk relay status | pull | token push|pull                中转连接状态 / 立刻拉一轮 / 在云端取 token",
+      "  hifabu account list [--group <组>] | add <platform> --group <组> --name <名字> | rename <accountId> --name <新名字> | remove <accountId> | mode <id> auto|manual | reauth <id>",
+      "  hifabu today [--group <组>] [--human]   # 现在要我做什么：等确认 / 出问题 / 等时间 / 满 24 小时的结果",
+      "  hifabu work list [--group <组>] | show <workId> [--group <组>] | add <视频文件或图片目录> [--title <标题>] | add <清单.json>",
+      "  hifabu work push <清单.json> [--group <组名>] [--dry-run]   制作机：校验预览或把成片交给发布机",
+      "  hifabu delivery list | show <投递号>                       查看交付进度和发布机回报",
+      "  hifabu relay serve [--port 8790] [--data <目录>]            云端中转（只存文件和投递清单；只监听 127.0.0.1，HTTPS 由反代提供）",
+      "  hifabu relay connect <地址> --token <token> [--push] [--group <默认组名>]   连接中转并记住默认账号组",
+      "  hifabu relay status | pull | token push|pull                中转连接状态 / 立刻拉一轮 / 在云端取 token",
       ...COMMANDS.filter(({ name }) => name.startsWith("cloud.")).map(({ cli }) => `  ${cli.usage}`),
-      "  vk plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
-      "  vk plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
-      "  vk machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
-      "  vk egress [recheck | geodb | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、重新下载位置库、继续用新位置、等我关掉代理",
-      "  vk publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
-      "  vk publish retry|release|confirm <publishId>",
-      "  vk publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
-      "  vk publish now|manual <publishId>                          小红书逐条：现在发 / 我自己发",
-      "  vk publish skip --cut <cutId>                              这支先不发（以后还能再确认）",
-      "  vk publish edit <publishId> [--title <标题>] [--at <时间>]  确认前改标题或时间",
-      "  vk cut edit <cutId> --rev <版本号> [--title ..] [--platforms <JSON>]  改成片内容（通用文案 + 各平台），一次提交",
-      "  vk approval list | link <publishId> | apply <token> retry|cancel",
-      "  vk collect [--now] [--platform <p>]",
-      "  vk stats works [--range 7d] [--group <组>] | series <publishId>",
-      "  vk publish list [--state failed] [--platform tiktok]",
-      "  vk schedule list [--group <g>] [--from <日期>] [--to <日期>] | move <workId> --at <时间> [--force] | cancel <workId>",
-      "  vk platforms | runs [--state failed] [--group <组>] | events [--since <ms>]",
-      "  vk setup [--json] | vk channel bind feishu | test feishu",
-      "  vk version [--json]                                     版本号 + 提交号 + 安装时间 + 自动更新状态",
-      "  vk update [--check] [--auto on|off] [--now]             更新程序：--check 只看有没有新版本；--auto 开关后台自动更新（空闲时更新，失败自动退回）",
-      "  vk --version",
+      "  hifabu plan show / set / reset                              看、改、恢复默认的发布方案（哪种成片发到哪些平台）",
+      "  hifabu plan apply <cutId> [--accounts a,b] [--group <组>]   按成片和发布方案生成平台稿（待确认，建议时间守平台规则）",
+      "  hifabu machine [--group <组>]                               发布机：心跳、排着要发、正在发、等你确认",
+      "  hifabu egress [recheck | geodb | accept --yes | wait] [--group <组>]  发布机出口位置：看、再探测、重新下载位置库、继续用新位置、等我关掉代理",
+      "  hifabu publish <素材> --to tiktok,bilibili [--group <组>] [--title] [--schedule 2h] [--visibility] [--dry-run]",
+      "  hifabu publish retry|release|confirm <publishId>",
+      "  hifabu publish approve --cut <cutId> | --publish <publishId>    确认待确认的平台稿（按成片确认不带小红书）",
+      "  hifabu publish now|manual <publishId>                          小红书逐条：现在发 / 我自己发",
+      "  hifabu publish skip --cut <cutId>                              这支先不发（以后还能再确认）",
+      "  hifabu publish edit <publishId> [--title <标题>] [--at <时间>]  确认前改标题或时间",
+      "  hifabu cut edit <cutId> --rev <版本号> [--title ..] [--platforms <JSON>]  改成片内容（通用文案 + 各平台），一次提交",
+      "  hifabu approval list | link <publishId> | apply <token> retry|cancel",
+      "  hifabu collect [--now] [--platform <p>]",
+      "  hifabu stats works [--range 7d] [--group <组>] | series <publishId>",
+      "  hifabu publish list [--state failed] [--platform tiktok]",
+      "  hifabu schedule list [--group <g>] [--from <日期>] [--to <日期>] | move <workId> --at <时间> [--force] | cancel <workId>",
+      "  hifabu platforms | runs [--state failed] [--group <组>] | events [--since <ms>]",
+      "  hifabu setup [--json] | hifabu channel bind feishu | test feishu",
+      "  hifabu version [--json]                                     版本号 + 提交号 + 安装时间 + 自动更新状态",
+      "  hifabu update [--check] [--auto on|off] [--now]             更新程序：--check 只看有没有新版本；--auto 开关后台自动更新（空闲时更新，失败自动退回）",
+      "  hifabu --version",
       "",
       "命令总表由 packages/core/src/commands.mjs 派生（与 Web、飞书卡片同源）。",
     ].join("\n"),

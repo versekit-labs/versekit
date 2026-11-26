@@ -1,4 +1,4 @@
-// vk service：后台服务的安装 / 状态 / 启停 / 卸载（ACC-install-02 / 04）。
+// hifabu service：后台服务的安装 / 状态 / 启停 / 卸载（ACC-install-02 / 04）。
 //
 // 三种托管方式，按环境自动选（VERSEKIT_SERVICE_MANAGER 可强制）：
 //   launchd  macOS LaunchAgent（RunAtLoad + KeepAlive）：关终端、重登、重启都还在，崩了被拉起
@@ -30,8 +30,8 @@ const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", s
 export const labelOf = (env = process.env) => env.VERSEKIT_SERVICE_LABEL || DEFAULT_LABEL;
 
 /**
- * 安装前缀：`<prefix>/app` 是程序，`<prefix>/node` 私有 Node，`<prefix>/bin` 放 vk 与 biliup。
- * 在源码仓库里直接跑 vk（目录名不是 app）时没有「安装」可言，`installed` 为 false，
+ * 安装前缀：`<prefix>/app` 是程序，`<prefix>/node` 私有 Node，`<prefix>/bin` 放 hifabu、vk 别名与 biliup。
+ * 在源码仓库里直接跑 hifabu（目录名不是 app）时没有「安装」可言，`installed` 为 false，
  * 卸载就绝不会去删仓库。
  */
 export function installLayout(env = process.env) {
@@ -84,7 +84,7 @@ const guiTarget = (label) => `gui/${process.getuid()}/${label}`;
 
 const xml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** 服务进程的环境：PATH 含 <prefix>/bin 与私有 Node，所以 vk doctor 能找到 biliup。 */
+/** 服务进程的环境：PATH 含 <prefix>/bin 与私有 Node，所以 hifabu doctor 能找到 biliup。 */
 export function serviceEnvVars(env = process.env) {
   const layout = installLayout(env);
   const nodeDir = dirname(process.execPath);
@@ -261,7 +261,7 @@ async function detachStop() {
 
 function requireInstalled() {
   const meta = readMeta();
-  if (!meta) throw new Error("后台服务还没有安装：先运行安装命令，或 vk service install");
+  if (!meta) throw new Error("后台服务还没有安装：先运行安装命令，或 hifabu service install");
   return meta;
 }
 
@@ -576,7 +576,7 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
 
     if (!(await waitHealthy(port, healthTimeoutMs(env)))) {
       const back = await restorePrev(layout, port, offline, env).catch((err) => ({ up: false, error: err.message }));
-      return failed(`新版本起来后 ${Math.round(healthTimeoutMs(env) / 1000)} 秒内没通过自检（${HEALTH_PATH}）${back.up ? "" : `；退回时服务也没起来：${back.error ?? "请运行 vk service status 看看"}`}`, { restored: Boolean(back.up) });
+      return failed(`新版本起来后 ${Math.round(healthTimeoutMs(env) / 1000)} 秒内没通过自检（${HEALTH_PATH}）${back.up ? "" : `；退回时服务也没起来：${back.error ?? "请运行 hifabu service status 看看"}`}`, { restored: Boolean(back.up) });
     }
 
     rmSync(join(layout.prefix, "app.prev"), { recursive: true, force: true });
@@ -596,7 +596,7 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
 }
 
 /**
- * 守护进程里要更新时用：另起一个脱离守护进程的 `vk update`，因为更新会停掉守护进程本身。
+ * 守护进程里要更新时用：另起一个脱离守护进程的 `hifabu update`，因为更新会停掉守护进程本身。
  * systemd 会把整个 cgroup 一起杀掉，所以那种情况用 systemd-run 让它出来单独成一个 unit。
  */
 export function startDetachedUpdate({ env = process.env } = {}) {

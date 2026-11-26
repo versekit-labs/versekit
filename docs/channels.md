@@ -78,9 +78,9 @@
 飞书不是唯一的手机通道。任何需要人拍板的发布，都可以生成一条**签名链接**：
 
 ```bash
-vk approval list                 # 看哪些发布在等拍板
-vk approval link <publishId>     # 生成链接（24 小时有效）
-vk approval apply <token> retry  # 在电脑上也能执行同一动作
+hifabu approval list                 # 看哪些发布在等拍板
+hifabu approval link <publishId>     # 生成链接（24 小时有效）
+hifabu approval apply <token> retry  # 在电脑上也能执行同一动作
 ```
 
 - 链接带 HMAC 签名与 24 小时有效期，只能做「重试 / 取消」一件事
@@ -91,7 +91,7 @@ vk approval apply <token> retry  # 在电脑上也能执行同一动作
 **让手机能访问**：默认只监听 `127.0.0.1`。需要从手机打开时用：
 
 ```bash
-vk serve --lan     # 监听 0.0.0.0；除 /a/* 审批页外，局域网访问一律 403
+hifabu serve --lan     # 监听 0.0.0.0；除 /a/* 审批页外，局域网访问一律 403
 ```
 
 链接里的地址取本机局域网 IP；如果有公网隧道，可设置 `VK_PUBLIC_URL` 或配置 `server.public_url`。
