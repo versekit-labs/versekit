@@ -11,6 +11,8 @@ import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-approve-"));
 process.env.HIFABU_HOME = HOME;
+// The web stub must work on machines without the Bilibili CLI.
+process.env.HIFABU_BILIUP_BIN = join(HOME, "missing-biliup");
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");

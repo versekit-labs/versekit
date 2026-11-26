@@ -338,7 +338,7 @@ export function buildHandlers(adapters, { log = () => {}, publishTimeoutMs = con
         return { state: "notify_pending", fallback: "no_upload_path" };
       }
 
-      if (adapter.platform === "bilibili" && !componentBinary("biliup")) {
+      if (adapter.platform === "bilibili" && adapter.publish === "cli" && !componentBinary("biliup")) {
         const error = new AdapterError("component_missing");
         applyPublishError(publishId, error);
         throw error;
