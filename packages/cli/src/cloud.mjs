@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, type } from "node:os";
 import { join } from "node:path";
+import { readEnv } from "../../core/src/env.mjs";
 import { callCloud, isLoopback, isMachineRole, publicOrigin } from "../../cloud/src/transport.mjs";
 import { RelayError } from "../../relay/src/client.mjs";
 
@@ -255,7 +256,7 @@ export function createCloudHandlers({
 
   async function start({ name = hostname().replace(/\.local$/i, ""), role = defaultRole }, generation) {
     if (!isMachineRole(role)) throw error("cloud_role_invalid", "机器角色应为制作机（maker）或发布机（executor）。");
-    const origin = publicOrigin(process.env.VK_HIFABU_ORIGIN ?? defaultOrigin);
+    const origin = publicOrigin(readEnv("HIFABU_ORIGIN") ?? defaultOrigin);
     const challenge = await request(origin, "device.link.start", { name, role, os: system() });
     if (generation !== loginGeneration) return signedOut;
     if (!validChallenge(challenge, origin, Date.now())) {

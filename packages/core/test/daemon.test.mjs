@@ -9,7 +9,7 @@ import { request } from "node:http";
 import { Writable } from "node:stream";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-daemon-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { startDaemon, coerceArgs, createDispatcher } = await import("../src/daemon.mjs");

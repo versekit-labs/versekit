@@ -4,6 +4,7 @@
 // 「发什么、为什么失败」，点批准/取消即执行。链接有有效期、只能做一件事、
 // 重复点击按 command_audit 去重。
 
+import { readEnv } from "./env.mjs";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { open, enqueue, newId } from "./index.mjs";
@@ -62,7 +63,7 @@ export function lanIp() {
 export function baseUrl() {
   const cfg = readConfig();
   return (
-    process.env.VK_PUBLIC_URL ??
+    readEnv("HIFABU_PUBLIC_URL") ??
     cfg.server?.public_url ??
     `http://${cfg.server?.host && cfg.server.host !== "127.0.0.1" ? lanIp() : "127.0.0.1"}:${cfg.server?.port ?? 8787}`
   );

@@ -9,13 +9,13 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-iso-"));
-process.env.VK_HOME = HOME;
-process.env.VK_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_CHROME_BIN = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-chrome.mjs");
 // accountPort() 在 [基准, 65000) 里按账号哈希取端口；基准随机落在 20000–40000，减少与并行文件的重叠。
-process.env.VK_CDP_PORT = String(20000 + Math.floor(Math.random() * 20000));
-process.env.VK_BROWSER_POOL = "4";
-process.env.VK_BROWSER_IDLE_MS = "60000";
-delete process.env.VK_CHROME_PROFILE;
+process.env.HIFABU_CDP_PORT = String(20000 + Math.floor(Math.random() * 20000));
+process.env.HIFABU_BROWSER_POOL = "4";
+process.env.HIFABU_BROWSER_IDLE_MS = "60000";
+delete process.env.HIFABU_CHROME_PROFILE;
 
 const d = await import("../src/index.mjs");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -67,7 +67,7 @@ const markerOf = (id) => JSON.parse(readFileSync(join(d.accountProfile(id), ".vk
 function startChromeFor(id, port) {
   const profile = d.accountProfile(id);
   mkdirSync(profile, { recursive: true });
-  const child = spawn(process.env.VK_CHROME_BIN, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`], { detached: true, stdio: "ignore" });
+  const child = spawn(process.env.HIFABU_CHROME_BIN, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`], { detached: true, stdio: "ignore" });
   child.unref();
   return child.pid;
 }

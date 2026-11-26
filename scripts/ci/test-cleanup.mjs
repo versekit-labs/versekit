@@ -5,6 +5,7 @@
 //   2. 关掉 `--user-data-dir` 落在这些临时目录下的 Chrome（不碰别的 Chrome）；
 //   3. 删掉这些临时目录。
 // 先 SIGTERM、等一会儿再 SIGKILL：Chrome 被强杀会在 com.google.Chrome.code_sign_clone 留程序副本。
+import { readEnv } from "../../packages/core/src/env.mjs";
 import fs from "node:fs";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -26,9 +27,10 @@ export function trackChild(child) {
 }
 
 // 测试里为了 unix socket 路径够短，把 mkdtemp 的前缀写死在 /tmp 下。全量测试（scripts/ci/test-all.mjs）给了独占根目录
-// （VK_TEST_ROOT，也在 /tmp 下、名字很短），这里把 /tmp 下的 mkdtemp 前缀改到根目录里：
+// （HIFABU_TEST_ROOT，也在 /tmp 下、名字很短），这里把 /tmp 下的 mkdtemp 前缀改到根目录里：
 // 路径只多几个字符，而这些目录从此归本次全量测试独有——并发的另一份全量测试不会把它们当成自己的残留，也不会误删。
-const TEST_ROOT = process.env.VK_TEST_ROOT ? resolve(process.env.VK_TEST_ROOT) : null;
+const testRoot = readEnv("HIFABU_TEST_ROOT");
+const TEST_ROOT = testRoot ? resolve(testRoot) : null;
 function redirect(prefix) {
   if (!TEST_ROOT || typeof prefix !== "string") return prefix;
   const dir = dirname(resolve(prefix));
@@ -36,10 +38,10 @@ function redirect(prefix) {
   return prefix;
 }
 
-// 「记账」：测试里直接 mkdir 在系统临时目录（/tmp、原 $TMPDIR，或 VK_TEST_SCAN_DIRS）下的 vk* 目录——这种目录不走 mkdtemp，
-// 没法归到独占根目录里。把它们记进 VK_TEST_ROOT/.created，由 test-all 跑完后检查：还在就列出来并失败。
+// 「记账」：测试里直接 mkdir 在系统临时目录（/tmp、原 $TMPDIR，或 HIFABU_TEST_SCAN_DIRS）下的 vk* 目录——这种目录不走 mkdtemp，
+// 没法归到独占根目录里。把它们记进 HIFABU_TEST_ROOT/.created，由 test-all 跑完后检查：还在就列出来并失败。
 // 这样残留归属是精确的（本次测试进程自己建的），不会把同一台机器上别的会话的目录算进来、更不会误删。
-const SCAN_DIRS = (process.env.VK_TEST_SCAN_DIRS ?? "").split(":").filter(Boolean);
+const SCAN_DIRS = (readEnv("HIFABU_TEST_SCAN_DIRS") ?? "").split(":").filter(Boolean);
 function ledger(p) {
   if (!TEST_ROOT || !SCAN_DIRS.length || typeof p !== "string") return;
   const given = resolve(p);

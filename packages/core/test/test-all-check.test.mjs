@@ -17,7 +17,7 @@ const sandbox = mkdtempSync(join(tmpdir(), "chk-"));
 const run = (leave) =>
   spawnSync(process.execPath, [runner], {
     encoding: "utf8",
-    env: { ...baseEnv, VK_TEST_ALL_FILES: fixture, VK_TEST_ALL_SCAN: sandbox, VK_LEAVE_DIR: leave },
+    env: { ...baseEnv, HIFABU_TEST_ALL_FILES: fixture, HIFABU_TEST_ALL_SCAN: sandbox, HIFABU_LEAVE_DIR: leave },
   });
 
 test("扫描目录下留 vk* 目录：残留检查列出来、退出码非 0、并清掉", () => {

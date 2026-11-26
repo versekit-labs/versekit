@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-collect-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-collect-"));
 
 const core = await import("../src/index.mjs");
 const { nextCollectAt, COLLECT_WINDOW_MS } = await import("../src/collect-plan.mjs");

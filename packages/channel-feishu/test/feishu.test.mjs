@@ -37,9 +37,9 @@ if (args[0] === "api") {
   process.exit(0);
 }
 if (args[0] === "event") {
-  if (process.env.VK_TEST_PROBE_STDERR !== undefined) {
-    console.error(process.env.VK_TEST_PROBE_STDERR);
-    process.exitCode = Number(process.env.VK_TEST_PROBE_STATUS);
+  if (process.env.HIFABU_TEST_PROBE_STDERR !== undefined) {
+    console.error(process.env.HIFABU_TEST_PROBE_STDERR);
+    process.exitCode = Number(process.env.HIFABU_TEST_PROBE_STATUS);
     return;
   }
   console.log(JSON.stringify({ type: "card.action.trigger", operator_id: "ou_test", action_value: JSON.stringify({ cmd: "publish.retry", args: { publishId: "p1" }, exp: Date.now() + 60000, key: "k1" }), token: "tok_1" }));
@@ -55,37 +55,37 @@ process.exit(2);
 }
 
 const BIN = fakeLark();
-process.env.VK_LARK_BIN = BIN;
+process.env.HIFABU_LARK_BIN = BIN;
 const channel = (await import("../src/index.mjs")).default;
 
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 test("ready(): 有 lark-cli 返回 null，没有就给出人能照做的原因", () => {
   assert.equal(channel.ready(), null);
-  process.env.VK_LARK_BIN = join(DIR, "missing-cli");
+  process.env.HIFABU_LARK_BIN = join(DIR, "missing-cli");
   assert.match(channel.ready(), /没有找到 lark-cli/);
-  process.env.VK_LARK_BIN = BIN;
+  process.env.HIFABU_LARK_BIN = BIN;
 });
 
-test("默认用 versekit 目录下的 lark-cli；VK_LARK_BIN 仍可覆盖；没装就退回 PATH", () => {
+test("默认用 versekit 目录下的 lark-cli；HIFABU_LARK_BIN 仍可覆盖；没装就退回 PATH", () => {
   const prefix = mkdtempSync(join(tmpdir(), "vk-feishu-prefix-"));
   const own = join(prefix, "bin", "lark-cli");
   mkdirSync(join(prefix, "bin"), { recursive: true });
   writeFileSync(own, '#!/bin/sh\n[ "$1" = "--version" ] && { echo "lark-cli version own"; exit 0; }\nexit 2\n');
   chmodSync(own, 0o755);
-  const saved = { bin: process.env.VK_LARK_BIN, prefix: process.env.VERSEKIT_PREFIX, path: process.env.PATH };
+  const saved = { bin: process.env.HIFABU_LARK_BIN, prefix: process.env.HIFABU_PREFIX, path: process.env.PATH };
   try {
-    delete process.env.VK_LARK_BIN;
-    process.env.VERSEKIT_PREFIX = prefix;
+    delete process.env.HIFABU_LARK_BIN;
+    process.env.HIFABU_PREFIX = prefix;
     process.env.PATH = "/nonexistent-vk-test";
     assert.equal(channel.installed(), true, "PATH 里没有 lark-cli，也该找到 versekit 目录下的");
-    process.env.VK_LARK_BIN = join(prefix, "missing");
-    assert.equal(channel.installed(), false, "VK_LARK_BIN 优先于默认位置");
-    delete process.env.VK_LARK_BIN;
-    process.env.VERSEKIT_PREFIX = join(prefix, "empty");
+    process.env.HIFABU_LARK_BIN = join(prefix, "missing");
+    assert.equal(channel.installed(), false, "HIFABU_LARK_BIN 优先于默认位置");
+    delete process.env.HIFABU_LARK_BIN;
+    process.env.HIFABU_PREFIX = join(prefix, "empty");
     assert.equal(channel.installed(), false, "两处都没有就是没装");
   } finally {
-    for (const [k, v] of [["VK_LARK_BIN", saved.bin], ["VERSEKIT_PREFIX", saved.prefix], ["PATH", saved.path]]) {
+    for (const [k, v] of [["HIFABU_LARK_BIN", saved.bin], ["HIFABU_PREFIX", saved.prefix], ["PATH", saved.path]]) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
@@ -150,13 +150,13 @@ test("start(): 把长连接里的按钮事件交回来，stop() 能停掉", { ti
 
 async function probeWithFixture(stderr, status) {
   // 复用 ready() 和 start() 的假 CLI，避免首次执行新脚本的开销占掉探活期限。
-  process.env.VK_TEST_PROBE_STDERR = stderr;
-  process.env.VK_TEST_PROBE_STATUS = String(status);
+  process.env.HIFABU_TEST_PROBE_STDERR = stderr;
+  process.env.HIFABU_TEST_PROBE_STATUS = String(status);
   try {
     return await channel.probeEvents();
   } finally {
-    delete process.env.VK_TEST_PROBE_STDERR;
-    delete process.env.VK_TEST_PROBE_STATUS;
+    delete process.env.HIFABU_TEST_PROBE_STDERR;
+    delete process.env.HIFABU_TEST_PROBE_STATUS;
   }
 }
 
@@ -216,7 +216,7 @@ process.exit(0);
   );
   chmodSync(bin, 0o755);
 
-  process.env.VK_LARK_BIN = bin;
+  process.env.HIFABU_LARK_BIN = bin;
   try {
     const res = await channel.configure({ appId: "cli_test123", appSecret: "super-secret-value" });
     assert.equal(res.profile, "versekit");
@@ -226,7 +226,7 @@ process.exit(0);
     assert.ok(!audit.includes("super-secret-value"), "secret 不能出现在 argv 或日志里");
     assert.match(audit, /stdin_len=18/);
   } finally {
-    process.env.VK_LARK_BIN = BIN;
+    process.env.HIFABU_LARK_BIN = BIN;
   }
 });
 
@@ -234,11 +234,11 @@ test("ready(): 没有自己的 profile 时让你去配，不回落全局应用",
   const bin = join(DIR, "lark-noprofile");
   writeFileSync(bin, `#!/usr/bin/env node\nconst a=process.argv.slice(2);\nif(a[0]==="--version"){console.log("1.0.97");process.exit(0)}\nif(a[0]==="profile"){console.log("[]");process.exit(0)}\nprocess.exit(0);\n`);
   chmodSync(bin, 0o755);
-  process.env.VK_LARK_BIN = bin;
+  process.env.HIFABU_LARK_BIN = bin;
   try {
     assert.match(channel.ready(), /应用未配置|app_secret/);
   } finally {
-    process.env.VK_LARK_BIN = BIN;
+    process.env.HIFABU_LARK_BIN = BIN;
   }
 });
 
@@ -259,12 +259,12 @@ process.exit(0);
     return bin;
   };
   try {
-    process.env.VK_LARK_BIN = mk("lark-botok", { status: "ready" });
+    process.env.HIFABU_LARK_BIN = mk("lark-botok", { status: "ready" });
     assert.equal(channel.ready(), null, "只有机器人身份、没有用户登录，也算可用");
-    process.env.VK_LARK_BIN = mk("lark-botbad", { status: "error", message: "secret 失效" });
+    process.env.HIFABU_LARK_BIN = mk("lark-botbad", { status: "error", message: "secret 失效" });
     assert.match(channel.ready(), /机器人不可用.*secret 失效/);
   } finally {
-    process.env.VK_LARK_BIN = BIN;
+    process.env.HIFABU_LARK_BIN = BIN;
   }
 });
 
@@ -285,14 +285,14 @@ process.exit(0);
   );
   chmodSync(bin, 0o755);
 
-  process.env.VK_LARK_BIN = bin;
+  process.env.HIFABU_LARK_BIN = bin;
   try {
     await receiveAction(signal, (evt) => {
       assert.equal(evt.operator_id, "ou_nested");
       assert.equal(JSON.parse(evt.action_value).cmd, "publish.confirm");
     });
   } finally {
-    process.env.VK_LARK_BIN = BIN;
+    process.env.HIFABU_LARK_BIN = BIN;
   }
 });
 
@@ -319,14 +319,14 @@ const FAKE_LARK = new URL("../../cli/test/fixtures/fake-lark.mjs", import.meta.u
 
 async function withFakeLark(setup, fn) {
   const state = mkdtempSync(join(tmpdir(), "vk-feishu-cfg-"));
-  const prev = { bin: process.env.VK_LARK_BIN, dir: process.env.FAKE_LARK_DIR };
-  process.env.VK_LARK_BIN = FAKE_LARK;
+  const prev = { bin: process.env.HIFABU_LARK_BIN, dir: process.env.FAKE_LARK_DIR };
+  process.env.HIFABU_LARK_BIN = FAKE_LARK;
   process.env.FAKE_LARK_DIR = state;
   try {
     setup?.(state);
     return await fn(state);
   } finally {
-    process.env.VK_LARK_BIN = prev.bin;
+    process.env.HIFABU_LARK_BIN = prev.bin;
     if (prev.dir === undefined) delete process.env.FAKE_LARK_DIR; else process.env.FAKE_LARK_DIR = prev.dir;
   }
 }

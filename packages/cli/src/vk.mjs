@@ -6,6 +6,7 @@
 // through the daemon over the unix socket. That split is the whole point of the architecture:
 // one writer, many faces.
 
+import { readEnv } from "../../core/src/env.mjs";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -899,7 +900,7 @@ function openBrowser(url) {
 }
 
 // 通道只认 versekit 自己的 profile（用户在接入页配置的应用），不碰机器上的其他应用。
-process.env.VK_FEISHU_PROFILE = process.env.VK_FEISHU_PROFILE ?? feishuProfileName();
+process.env.HIFABU_FEISHU_PROFILE = readEnv("HIFABU_FEISHU_PROFILE") ?? feishuProfileName();
 
 async function cmdServe() {
   if (!guard()) return;
@@ -1002,9 +1003,9 @@ async function cmdService() {
   else if (sub === "stop") data = await service.stop();
   else if (sub === "restart") data = await service.restart();
   else if (sub === "install") {
-    const port = Number(val("--port") ?? process.env.VERSEKIT_PORT ?? service.DEFAULT_PORT);
+    const port = Number(val("--port") ?? readEnv("HIFABU_PORT") ?? service.DEFAULT_PORT);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`端口不对：${val("--port")}`);
-    const offline = has("--offline") || process.env.VERSEKIT_OFFLINE === "1";
+    const offline = has("--offline") || readEnv("HIFABU_OFFLINE") === "1";
     data = await service.install({ port, offline });
     show(data);
     if (!data.up) process.exitCode = 1;
@@ -1056,7 +1057,7 @@ async function cmdUpdate() {
 
 async function cmdDemo() {
   const sub = pos[1];
-  if (sub !== "seed") throw new Error("用法：hifabu demo seed（在当前 VK_HOME 造演示数据）");
+  if (sub !== "seed") throw new Error("用法：hifabu demo seed（在当前 HIFABU_HOME 造演示数据）");
   const { seedDemoAsync } = await import("../../../scripts/demo-seed.mjs");
   const data = await seedDemoAsync();
   if (human) console.log(`演示数据已写入 ${paths().root}：${data.works} 个作品、${data.publishes} 条平台稿`);
@@ -1236,7 +1237,7 @@ async function cmdAccount() {
     if (data.state === "waiting") {
       // 链接走 stderr：stdout 留给 JSON，管道里的脚本不会被它污染。
       console.error(`请在浏览器里打开下面的链接，用 TikTok 登录并同意授权：\n${data.url}`);
-      if (!process.env.VK_NO_BROWSER) {
+      if (!readEnv("HIFABU_NO_BROWSER")) {
         const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
         try {
           spawn(opener, process.platform === "win32" ? ["/c", "start", "", data.url] : [data.url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
@@ -2264,7 +2265,7 @@ function usage() {
       "  hifabu serve --offline [--port 8787]             # 离线模式：不访问任何平台（验收/演示用）",
       "  hifabu service status|start|stop|restart   # 后台服务（关掉终端也在跑）",
       "  hifabu service uninstall [--purge]            # 卸载服务和程序文件；默认保留数据，--purge 才删数据",
-      "  hifabu demo seed                                 # 在当前 VK_HOME 造演示数据",
+      "  hifabu demo seed                                 # 在当前 HIFABU_HOME 造演示数据",
       "  hifabu commands [--human]",
       "  hifabu bootstrap [--human]   # 当前组 / 组列表 / 账号 / 新鲜度 / 计数 / 矩阵",
       "  hifabu group list | add <名字> | use <组 id 或名字>",

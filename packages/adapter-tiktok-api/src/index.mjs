@@ -12,6 +12,7 @@
 //
 // 适配器不写库：只 open() 读行，返回结果或抛带码的 AdapterError；暂停账号、推事件、状态迁移归 core。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { extname } from "node:path";
 import { open } from "../../core/src/index.mjs";
@@ -127,7 +128,7 @@ export function checkDuration(creator, durationSec) {
 
 /** 分片方案：< 5MB 一整片；否则每片约 10MB，最后一片吃掉余数（TikTok 要求每片 5–64MB，末片可到 128MB）。 */
 export function planChunks(size) {
-  const override = Number(process.env.VK_TIKTOK_CHUNK_BYTES);
+  const override = Number(readEnv("HIFABU_TIKTOK_CHUNK_BYTES"));
   const unit = Number.isFinite(override) && override > 0 ? override : DEFAULT_CHUNK;
   if (!(override > 0) && size < MIN_CHUNK) return { chunkSize: size, total: 1 };
   const total = Math.max(1, Math.floor(size / unit));
@@ -180,7 +181,7 @@ const sleepMs = (ms, signal) =>
   });
 
 const pollIntervalMs = () => {
-  const n = Number(process.env.VK_TIKTOK_POLL_MS);
+  const n = Number(readEnv("HIFABU_TIKTOK_POLL_MS"));
   return Number.isFinite(n) && n >= 0 ? n : 3000;
 };
 const MAX_POLLS = 200;

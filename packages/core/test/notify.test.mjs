@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-notify-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-notify-"));
 
 const core = await import("../src/index.mjs");
 const { buildEventCard, resultCard, cardButtonCount } = await import("../src/cards.mjs");

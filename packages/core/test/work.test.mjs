@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const LEGACY_HOME = mkdtempSync(join(tmpdir(), "vk-work-legacy-"));
 const HOME = mkdtempSync(join(tmpdir(), "vk-work-"));
-process.env.VK_HOME = LEGACY_HOME;
+process.env.HIFABU_HOME = LEGACY_HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -105,7 +105,7 @@ test("ACC-v2-cut-02 旧库升级：publish 的 UNIQUE 去掉，成片补齐，�
 // ---------------------------------------------------------------- 新库
 
 test("ACC-v2-cut-01 单文件入库 = 1 作品 1 成片 1 版本；重复入库是更新，不新建", () => {
-  process.env.VK_HOME = HOME;
+  process.env.HIFABU_HOME = HOME;
   core.close();
   core.migrate();
   const handlers = createCoreHandlers({ adapters: [], log: () => {} });

@@ -1,12 +1,13 @@
 // hifabu service：后台服务的安装 / 状态 / 启停 / 卸载（ACC-install-02 / 04）。
 //
-// 三种托管方式，按环境自动选（VERSEKIT_SERVICE_MANAGER 可强制）：
+// 三种托管方式，按环境自动选（HIFABU_SERVICE_MANAGER 可强制）：
 //   launchd  macOS LaunchAgent（RunAtLoad + KeepAlive）：关终端、重登、重启都还在，崩了被拉起
 //   systemd  Linux `systemd --user`（Restart=always）
 //   detach   没有 systemd 时退回：自己 spawn 一个脱离终端的进程；重启电脑后要再运行一次安装命令
 //
 // 所有路径、服务名、端口都能用环境变量覆盖，开发机上用测试服务名 + 临时 HOME 就不会碰真实环境。
 
+import { readEnv } from "../../core/src/env.mjs";
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync, mkdtempSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -27,7 +28,7 @@ const APP_ROOT = dirname(dirname(dirname(dirname(CLI))));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
 
-export const labelOf = (env = process.env) => env.VERSEKIT_SERVICE_LABEL || DEFAULT_LABEL;
+export const labelOf = (env = process.env) => readEnv("HIFABU_SERVICE_LABEL", env) || DEFAULT_LABEL;
 
 /**
  * 安装前缀：`<prefix>/app` 是程序，`<prefix>/node` 私有 Node，`<prefix>/bin` 放 hifabu、vk 别名与 biliup。
@@ -35,9 +36,9 @@ export const labelOf = (env = process.env) => env.VERSEKIT_SERVICE_LABEL || DEFA
  * 卸载就绝不会去删仓库。
  */
 export function installLayout(env = process.env) {
-  const prefix = env.VERSEKIT_PREFIX || join(homedir(), ".versekit");
+  const prefix = readEnv("HIFABU_PREFIX", env);
   const fromApp = basename(APP_ROOT) === "app" ? dirname(APP_ROOT) : null;
-  const root = env.VERSEKIT_PREFIX ? prefix : (fromApp ?? prefix);
+  const root = prefix || fromApp || join(homedir(), ".versekit");
   return {
     prefix: root,
     app: join(root, "app"),
@@ -48,9 +49,9 @@ export function installLayout(env = process.env) {
 }
 
 export function detectManager(env = process.env) {
-  const forced = env.VERSEKIT_SERVICE_MANAGER;
+  const forced = readEnv("HIFABU_SERVICE_MANAGER", env);
   if (forced) {
-    if (!["launchd", "systemd", "detach"].includes(forced)) throw new Error(`不认识的 VERSEKIT_SERVICE_MANAGER=${forced}（可选 launchd / systemd / detach）`);
+    if (!["launchd", "systemd", "detach"].includes(forced)) throw new Error(`不认识的 HIFABU_SERVICE_MANAGER=${forced}（可选 launchd / systemd / detach）`);
     return forced;
   }
   if (process.platform === "darwin") return "launchd";
@@ -90,8 +91,10 @@ export function serviceEnvVars(env = process.env) {
   const nodeDir = dirname(process.execPath);
   const pathParts = [layout.bin, nodeDir, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
   const vars = { PATH: [...new Set(pathParts)].join(":"), HOME: homedir() };
-  if (env.VK_HOME) vars.VK_HOME = env.VK_HOME;
-  if (env.VERSEKIT_PREFIX) vars.VERSEKIT_PREFIX = env.VERSEKIT_PREFIX;
+  for (const name of ["HIFABU_HOME", "HIFABU_PREFIX"]) {
+    const value = readEnv(name, env);
+    if (value) vars[name] = value;
+  }
   return vars;
 }
 
@@ -450,13 +453,13 @@ export async function uninstall({ purge = false, serviceOnly = false, log = () =
 //
 // 流程：查最新提交 → 下载新包 → 用新包里的 install.sh 非交互升级（Node、biliup 的版本变化也跟着升，
 // 不另写一套下载/替换逻辑）→ 60 秒内服务重新起来且 /api 通过自检 → 否则退回 app.prev 并留事件。
-// install.sh 自己在「起不来」时会回滚；这里补的是「起来了但不健康」那一类，所以 VERSEKIT_UPDATE=1 让它
+// install.sh 自己在「起不来」时会回滚；这里补的是「起来了但不健康」那一类，所以 HIFABU_UPDATE=1 让它
 // 把 app.prev 留给我们。
 
 export const HEALTH_PATH = "/api/now";
 export const HEALTH_TIMEOUT_MS = 60e3;
 /** 开发机上验证「新包起来了但不健康」时可以缩短；默认 60 秒（ACC-update-04）。 */
-const healthTimeoutMs = (env) => Number(env.VERSEKIT_UPDATE_HEALTH_TIMEOUT_MS) || HEALTH_TIMEOUT_MS;
+const healthTimeoutMs = (env) => Number(readEnv("HIFABU_UPDATE_HEALTH_TIMEOUT_MS", env)) || HEALTH_TIMEOUT_MS;
 
 const lockFile = () => join(paths().state, "update.lock");
 
@@ -509,7 +512,29 @@ async function restorePrev(layout, port, offline, env) {
   if (meta) await stopInternal(meta);
   rmSync(layout.app, { recursive: true, force: true });
   renameSync(prev, layout.app);
-  return install({ port, offline, env });
+  // Let the restored version write the service template it knows how to read.
+  const home = paths().root;
+  const label = meta?.label ?? labelOf(env);
+  const manager = meta?.manager ?? detectManager(env);
+  const args = [CLI, "service", "install", "--port", String(port), ...(offline ? ["--offline"] : [])];
+  const result = run(process.execPath, args, {
+    env: {
+      ...env,
+      HIFABU_HOME: home,
+      HIFABU_PREFIX: layout.prefix,
+      HIFABU_SERVICE_LABEL: label,
+      HIFABU_SERVICE_MANAGER: manager,
+      HIFABU_OFFLINE: offline ? "1" : "",
+      VK_HOME: home,
+      VERSEKIT_PREFIX: layout.prefix,
+      VERSEKIT_SERVICE_LABEL: label,
+      VERSEKIT_SERVICE_MANAGER: manager,
+      VERSEKIT_OFFLINE: offline ? "1" : "",
+    },
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr.trim() || "旧版后台服务未能恢复");
+  return JSON.parse(result.stdout);
 }
 
 /**
@@ -541,7 +566,7 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
     log(`有新版本：${check.message}，开始更新（${current.short ?? "未知"} → ${updates.shortCommit(check.latest)}）`);
     const tarball = join(work, "app.tar.gz");
     const src = join(work, "src");
-    const url = env.VERSEKIT_APP_URL || `https://codeload.github.com/versekit-labs/versekit/tar.gz/${check.latest}`;
+    const url = readEnv("HIFABU_APP_URL", env) || `https://codeload.github.com/versekit-labs/versekit/tar.gz/${check.latest}`;
     try {
       await download(url, tarball);
       mkdirSync(src);
@@ -554,19 +579,17 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
 
     const installEnv = {
       ...env,
-      VERSEKIT_UPDATE: "1",
-      VERSEKIT_NO_OPEN: "1",
-      VERSEKIT_PREFIX: layout.prefix,
-      VERSEKIT_APP_URL: pathToFileURL(tarball).href,
-      VERSEKIT_APP_COMMIT: check.latest,
-      VERSEKIT_PORT: String(port),
-      VERSEKIT_SERVICE_LABEL: meta?.label ?? labelOf(env),
-      ...(meta?.manager ? { VERSEKIT_SERVICE_MANAGER: meta.manager } : {}),
+      HIFABU_UPDATE: "1",
+      HIFABU_NO_OPEN: "1",
+      HIFABU_PREFIX: layout.prefix,
+      HIFABU_APP_URL: pathToFileURL(tarball).href,
+      HIFABU_APP_COMMIT: check.latest,
+      HIFABU_APP_SHA256: "",
+      HIFABU_PORT: String(port),
+      HIFABU_OFFLINE: offline ? "1" : "",
+      HIFABU_SERVICE_LABEL: meta?.label ?? labelOf(env),
+      ...(meta?.manager ? { HIFABU_SERVICE_MANAGER: meta.manager } : {}),
     };
-    delete installEnv.VERSEKIT_APP_SHA256;
-    if (offline) installEnv.VERSEKIT_OFFLINE = "1";
-    else delete installEnv.VERSEKIT_OFFLINE;
-
     const r = await runInstall(join(src, "install.sh"), installEnv, log);
     if (r.code !== 0) {
       // install.sh 在失败时自己回滚（旧程序放回、旧服务重新注册）。

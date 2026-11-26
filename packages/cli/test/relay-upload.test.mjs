@@ -29,7 +29,7 @@ test("ACC-deliver-03 CLI 退出、断网、服务重启后继续上传，丢回�
   const home = mkdtempSync(join(tmpdir(), "vk402-"));
   const cleanup = [() => rmSync(home, { recursive: true, force: true })];
   t.after(async () => { for (const dispose of cleanup.reverse()) await dispose(); });
-  const env = { ...process.env, VK_HOME: home };
+  const env = { ...process.env, HIFABU_HOME: home };
   const cli = async (...args) => JSON.parse((await exec(process.execPath, [VK, ...args], { env, timeout: 8000 })).stdout);
   const dataDir = join(home, "relay");
   let freeBytes = 10 * 1024 ** 3;

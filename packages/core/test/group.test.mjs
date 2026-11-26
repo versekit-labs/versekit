@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const LEGACY_HOME = mkdtempSync(join(tmpdir(), "vk-group-legacy-"));
 const HOME = mkdtempSync(join(tmpdir(), "vk-group-"));
-process.env.VK_HOME = LEGACY_HOME;
+process.env.HIFABU_HOME = LEGACY_HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -54,7 +54,7 @@ test("ACC-groups 迁移：引入账号组之前的旧库升级两次，不报错
   assert.equal(rows.filter((r) => r.platform === "tiktok").length, 2);
 
   core.close();
-  process.env.VK_HOME = HOME;
+  process.env.HIFABU_HOME = HOME;
   core.migrate();
 });
 

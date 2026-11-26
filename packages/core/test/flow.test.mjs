@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-flow-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-flow-"));
 
 const core = await import("../src/index.mjs");
 const { applyPublishResult, applyPublishError, applyTerminalFailure, recordSnapshot, getPublishRow } = await import("../src/publish-flow.mjs");

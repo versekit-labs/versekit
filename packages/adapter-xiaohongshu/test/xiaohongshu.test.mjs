@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-xhs-"));
 
 const core = await import("../../core/src/index.mjs");
 const { AdapterError } = await import("../../core/src/errors.mjs");
@@ -39,7 +39,7 @@ function fixture(asset) {
 
 /** 在临时目录里造一个图集；files 的顺序就是我们要的自然排序输入（故意乱序）。 */
 function imageDir(name, files) {
-  const dir = join(process.env.VK_HOME, name);
+  const dir = join(process.env.HIFABU_HOME, name);
   mkdirSync(dir, { recursive: true });
   for (const file of files) writeFileSync(join(dir, file), "fake image");
   return dir;
@@ -71,7 +71,7 @@ test("图片素材不再被适配器拒绝：图文目录 dry-run 返回按文�
 });
 
 test("单张图片文件（发布台单文件路径）也算图文，不再被当成视频硬传", async () => {
-  const png = join(process.env.VK_HOME, "01_pier_landing.png");
+  const png = join(process.env.HIFABU_HOME, "01_pier_landing.png");
   writeFileSync(png, "fake image");
   const publishId = fixture(png);
 
@@ -117,7 +117,7 @@ test("同一作品图片与视频混装：适配器在本地拒绝并说人话�
 });
 
 test("视频 dry-run 照常返回，不改状态、不打开浏览器", async () => {
-  const mp4 = join(process.env.VK_HOME, "clip.mp4");
+  const mp4 = join(process.env.HIFABU_HOME, "clip.mp4");
   writeFileSync(mp4, "fake video");
   const publishId = fixture(mp4);
 

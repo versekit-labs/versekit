@@ -9,8 +9,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HOME = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "vks-"));
-process.env.VK_HOME = HOME;
-process.env.VK_NO_BROWSER = "1";
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_NO_BROWSER = "1";
 
 const VK = fileURLToPath(new URL("../src/vk.mjs", import.meta.url));
 const core = await import("../../core/src/index.mjs");

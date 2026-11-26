@@ -2,7 +2,7 @@
 // 离线模拟页的静态服务：只监听 127.0.0.1，把 /creator-micro/... 映射到本目录的手搭页面。
 // 它不是抖音：没有任何抖音资源，也不连任何外网。用法：
 //   node packages/adapter-douyin/fixtures/serve.mjs [--port=8099] [--mode=ok]
-//   VK_DOUYIN_BASE=http://127.0.0.1:8099 vk publish --platform douyin --dry-run ...
+//   HIFABU_DOUYIN_BASE=http://127.0.0.1:8099 vk publish --platform douyin --dry-run ...
 // 模式（页面启动时读 /__config）：ok | login | risk | limited | risk-on-save | risk-on-manage | cover-required | draft-lost
 
 import { createServer } from "node:http";

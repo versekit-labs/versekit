@@ -4,7 +4,7 @@
 // （开发机红线）。真机上扫码和短信是否真的通，列在 PR 的「待人工」里。
 // 没有 Chrome 时自动跳过；CI 不跑真浏览器用例（实例竞态），由设计闸门和下面的静态用例兜底。
 //
-// 设置 VK_SHOT_DIR 会顺带把每个状态截图（视口高度等于页面高度）放到那个目录，作为实现证据。
+// 设置 HIFABU_SHOT_DIR 会顺带把每个状态截图（视口高度等于页面高度）放到那个目录，作为实现证据。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-sys-login-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -22,7 +22,7 @@ const driver = await import("../../driver-browser/src/index.mjs");
 
 const missing = driver.browserReady();
 const skipBrowser = missing ?? (process.env.CI === "true" ? "CI 不跑真浏览器用例（实例竞态）" : false);
-const SHOTS = process.env.VK_SHOT_DIR || null;
+const SHOTS = process.env.HIFABU_SHOT_DIR || null;
 
 const PHONE = "13812345678";
 const CODE = "246810";

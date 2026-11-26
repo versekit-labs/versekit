@@ -10,7 +10,7 @@ const core = await import("../src/index.mjs");
 
 const freshHome = () => {
   const home = mkdtempSync(join(tmpdir(), "vk-open-"));
-  process.env.VK_HOME = home;
+  process.env.HIFABU_HOME = home;
   return home;
 };
 
@@ -47,7 +47,7 @@ test("迁移之后读写连接可以并存，schema_version 可读", () => {
   assert.equal(r.prepare("SELECT COUNT(*) n FROM meta").get().n > 0, true);
 });
 
-test("换一个 VK_HOME 不会沿用上一个库的连接", () => {
+test("换一个 HIFABU_HOME 不会沿用上一个库的连接", () => {
   freshHome();
   core.migrate();
   assert.equal(core.getMeta("schema_version"), "1");

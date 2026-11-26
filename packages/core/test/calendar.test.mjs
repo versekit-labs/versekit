@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-cal-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");

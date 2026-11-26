@@ -10,10 +10,10 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-yt-"));
-process.env.VK_HOME = HOME;
-process.env.VK_NO_BROWSER = "1";
-process.env.VK_YOUTUBE_BACKOFF_MS = "1";
-process.env.VK_YOUTUBE_CHUNK_BYTES = String(256 * 1024);
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_NO_BROWSER = "1";
+process.env.HIFABU_YOUTUBE_BACKOFF_MS = "1";
+process.env.HIFABU_YOUTUBE_CHUNK_BYTES = String(256 * 1024);
 
 const core = await import("../../core/src/index.mjs");
 const store = await import("../../core/src/store.mjs");
@@ -63,8 +63,8 @@ const reset = (patch = {}) => {
   mock.state.puts.length = 0;
   Object.assign(mock.state, DEFAULTS, patch);
   adapterModule.hooks.onRead = null;
-  delete process.env.VK_YOUTUBE_DAILY_INSERTS;
-  delete process.env.VK_YOUTUBE_DAILY_UNITS;
+  delete process.env.HIFABU_YOUTUBE_DAILY_INSERTS;
+  delete process.env.HIFABU_YOUTUBE_DAILY_UNITS;
   // 记账与暂停按项目记在凭证目录里：每个用例从干净状态开始。
   const f = credentialPath("youtube/_quota.json");
   if (existsSync(f)) writeFileSync(f, JSON.stringify({ version: 1, projects: {} }));
@@ -681,7 +681,7 @@ test("文件被 YouTube 判为损坏（failureReason）：asset_invalid 终态 +
 
 test("发布前预估配额：今天剩的不够就不开始上传，并说明原因", async () => {
   reset();
-  process.env.VK_YOUTUBE_DAILY_INSERTS = "1";
+  process.env.HIFABU_YOUTUBE_DAILY_INSERTS = "1";
   const a = await connectedAccount();
   const first = plan(a);
   await drain();
@@ -695,12 +695,12 @@ test("发布前预估配额：今天剩的不够就不开始上传，并说明�
   assert.equal(p.state, "notify_pending");
   assert.match(p.error_message, /上传配额不够.*已上传 1\/1 次.*没有开始上传.*重置/);
 
-  delete process.env.VK_YOUTUBE_DAILY_INSERTS;
-  process.env.VK_YOUTUBE_DAILY_UNITS = "3";
+  delete process.env.HIFABU_YOUTUBE_DAILY_INSERTS;
+  process.env.HIFABU_YOUTUBE_DAILY_UNITS = "3";
   const third = plan(a, { youtube: { playlist: "Existing List" } });
   await drain();
   assert.match(row(third).error_message, /接口配额不够.*预计还要/);
-  delete process.env.VK_YOUTUBE_DAILY_UNITS;
+  delete process.env.HIFABU_YOUTUBE_DAILY_UNITS;
 });
 
 test("太平洋时间：次日零点（含夏令时切换日）、配额日按太平洋时间切", () => {

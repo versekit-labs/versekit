@@ -68,7 +68,7 @@
 
 **配额**（2026-11-21 查阅官方文档）：
 - `videos.insert` 有**独立配额桶**，默认每天 100 次、每次计 1；其余接口共用每天 10,000 单位：`videos.list` / `channels.list` / `playlists.list` = 1，`thumbnails.set` / `playlistItems.insert` / `playlists.insert` = 50，`captions.insert` = 400。配额每天**太平洋时间零点**重置。
-- 官方页：<https://developers.google.com/youtube/v3/determine_quota_cost>、<https://developers.google.com/youtube/v3/getting-started>。数字都在 `src/quota.mjs` 一处；过审后额度调高了，写 `config.json` 的 `youtube.daily_inserts` / `youtube.daily_units`（或环境变量 `VK_YOUTUBE_DAILY_INSERTS` / `VK_YOUTUBE_DAILY_UNITS`），不要改代码。
+- 官方页：<https://developers.google.com/youtube/v3/determine_quota_cost>、<https://developers.google.com/youtube/v3/getting-started>。数字都在 `src/quota.mjs` 一处；过审后额度调高了，写 `config.json` 的 `youtube.daily_inserts` / `youtube.daily_units`（或环境变量 `HIFABU_YOUTUBE_DAILY_INSERTS` / `HIFABU_YOUTUBE_DAILY_UNITS`），不要改代码。
 - 本机按 Google 项目（client id）记账（凭证目录里，权限 600）；发布前预估今天剩的够不够，不够就**不开始上传**并说明原因。
 - 接口回 `quotaExceeded`：立即停下、不重试，这个项目暂停到太平洋时间次日零点，撞上的账号同时暂停（和 TikTok 风控暂停是同一个开关），发事件；到点后由 core 自动放开。429 和 5xx 指数退避重试（1s、2s、4s、8s）。
 - `uploadLimitExceeded`（频道当天传得太多）、token 失效（转「需要重新登录」）、视频被拒（`rejectionReason`）、文件被判损坏（`failureReason`）各有 `error_code` + 人话 + 事件。
@@ -103,7 +103,7 @@
 
 **错误对照**：标题超长 / 文案超限 / 文件不对 → `asset_invalid`（没开浏览器）；被踢回登录页 → `auth`；找不到控件、回读对不上、草稿箱里没多出这条 → `flaky_ui`（带截图）；风控页面、账号暂停中 → `platform_reject`（风控还带账号暂停）。
 
-**dry-run**：`hifabu publish --platform douyin --dry-run` 单独能跑，不产生平台副作用。真实站点上只出计划（标题、正文、话题、封面、步骤）；把 `VK_DOUYIN_BASE` 指到本机模拟页（`packages/adapter-douyin/fixtures/`，回环地址）时，会真的走一遍，停在「存草稿」前一步并截图。开发机从不打开 `creator.douyin.com`。
+**dry-run**：`hifabu publish --platform douyin --dry-run` 单独能跑，不产生平台副作用。真实站点上只出计划（标题、正文、话题、封面、步骤）；把 `HIFABU_DOUYIN_BASE` 指到本机模拟页（`packages/adapter-douyin/fixtures/`，回环地址）时，会真的走一遍，停在「存草稿」前一步并截图。开发机从不打开 `creator.douyin.com`。
 
 **待人工（ACC-douyin-07）**：页面选择器只对照手搭的模拟页和 SAU 的记录写成，真实页面上对不对由所有者在和手机同网的电脑上验证——登录一次、送一条成片进草稿箱、在手机上确认标题、正文、话题、封面都对，再手动发布。「存草稿」按钮的文案（「暂存离开」）和草稿箱入口的位置尤其要核对：它们集中在 `src/page.mjs` 的 `T` 表里，改版只改那一处。
 

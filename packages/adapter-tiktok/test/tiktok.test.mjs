@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // 必须在 import 之前指好状态目录：适配器会 import core，但测试不碰库。
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-tiktok-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-tiktok-"));
 
 const {
   default: adapter,

@@ -8,10 +8,10 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-tta-"));
-process.env.VK_HOME = HOME;
-process.env.VK_NO_BROWSER = "1";
-process.env.VK_TIKTOK_BACKOFF_MS = "1";
-process.env.VK_TIKTOK_POLL_MS = "1";
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_NO_BROWSER = "1";
+process.env.HIFABU_TIKTOK_BACKOFF_MS = "1";
+process.env.HIFABU_TIKTOK_POLL_MS = "1";
 
 const core = await import("../../core/src/index.mjs");
 const store = await import("../../core/src/store.mjs");
@@ -262,7 +262,7 @@ test("契约：能力声明合法，dry-run 不联网", async () => {
 
 test("Direct Post：creator_info → init(FILE_UPLOAD 分片) → 上传 → 轮询 → 已发布", async () => {
   reset();
-  process.env.VK_TIKTOK_CHUNK_BYTES = "1024";
+  process.env.HIFABU_TIKTOK_CHUNK_BYTES = "1024";
   try {
     const acct = await connectedAccount();
     const video = fakeMp4(5, 3000);
@@ -301,7 +301,7 @@ test("Direct Post：creator_info → init(FILE_UPLOAD 分片) → 上传 → 轮
     assert.equal(mock.state.uploads.reduce((s, u) => s + u.length, 0), 3000);
     assert.equal(mock.state.uploads[0].type, "video/mp4");
   } finally {
-    delete process.env.VK_TIKTOK_CHUNK_BYTES;
+    delete process.env.HIFABU_TIKTOK_CHUNK_BYTES;
   }
 });
 

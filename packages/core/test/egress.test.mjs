@@ -9,7 +9,7 @@ import { gzipSync } from "node:zlib";
 import { buildMmdb, city, asn } from "./fixtures/mmdb.mjs";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-egress-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");

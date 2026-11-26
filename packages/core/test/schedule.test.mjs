@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-schedule-"));
-const HOME = process.env.VK_HOME;
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-schedule-"));
+const HOME = process.env.HIFABU_HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -227,7 +227,7 @@ test("命令表 + 路由 + handler 三端同源", async () => {
 test("--group：旧库没有 account.group_id 时明确报错，不悄悄忽略过滤", () => {
   // #11 合入后主库已经有 group_id，这段只能在独立旧库上验证：造一张没有账号组列的表。
   const legacyHome = mkdtempSync(join(tmpdir(), "vk-schedule-legacy-"));
-  process.env.VK_HOME = legacyHome;
+  process.env.HIFABU_HOME = legacyHome;
   core.close();
   const { db: dbPath } = core.ensureDirs();
   const legacy = new DatabaseSync(dbPath);
@@ -238,7 +238,7 @@ test("--group：旧库没有 account.group_id 时明确报错，不悄悄忽略�
   assert.throws(() => sched.listSchedule({ ...window(nextDay()), group: "g1" }), (e) => e.code === "E_GROUP_UNSUPPORTED");
 
   core.close();
-  process.env.VK_HOME = HOME;
+  process.env.HIFABU_HOME = HOME;
 });
 
 test("--group：按组过滤；不同组的同平台账号不算撞车", () => {

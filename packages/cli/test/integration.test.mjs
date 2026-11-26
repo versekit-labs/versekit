@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-e2e-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../../core/src/index.mjs");
 const { loadAdapters, buildHandlers } = await import("../../core/src/adapters.mjs");
@@ -35,7 +35,7 @@ console.log("投稿成功 BV1yy411c7mF");
   );
   chmodSync(bin, 0o755);
   const log = join(dir, "calls.log");
-  process.env.VK_BILIUP_BIN = bin;
+  process.env.HIFABU_BILIUP_BIN = bin;
   process.env.FAKE_BILIUP_LOG = log;
   process.env.FAKE_BILIUP_STYLE = style;
   return { bin, log };

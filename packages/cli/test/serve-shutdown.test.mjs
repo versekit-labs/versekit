@@ -42,12 +42,12 @@ async function scenario(signal) {
   const port = await freePort();
   const env = {
     ...process.env,
-    VK_HOME: home,
-    VK_CHROME_BIN: FAKE_CHROME,
-    VK_CDP_PORT: String(40000 + Math.floor(Math.random() * 15000)),
-    VK_NO_BROWSER: "",
+    HIFABU_HOME: home,
+    HIFABU_CHROME_BIN: FAKE_CHROME,
+    HIFABU_CDP_PORT: String(40000 + Math.floor(Math.random() * 15000)),
+    HIFABU_NO_BROWSER: "",
   };
-  delete env.VK_CHROME_PROFILE;
+  delete env.HIFABU_CHROME_PROFILE;
   const init = spawn(process.execPath, [VK, "init"], { env, stdio: "ignore" });
   await new Promise((r) => init.on("close", r));
   const serve = spawn(process.execPath, [VK, "serve", "--offline", "--port", String(port)], { env, stdio: "ignore" });

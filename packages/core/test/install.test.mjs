@@ -22,12 +22,12 @@ const OS = platform() === "darwin" ? "darwin" : "linux";
 const CPU = arch() === "arm64" ? "arm64" : "x64";
 const BILIUP_PLAT = `${CPU === "arm64" ? "aarch64" : "x86_64"}-${OS === "darwin" ? "macos" : "linux"}`;
 // 假 Node 的版本号取自 install.sh 里写死的默认值：脚本默认要装哪一版，测试就按那一版造包。
-const PINNED = /VERSEKIT_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
+const PINNED = /HIFABU_NODE_VERSION:-v(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
 const NODE_VER = PINNED?.[1] ?? "0.0.0";
 const NODE_FILE = `node-v${NODE_VER}-${OS}-${CPU}.tar.gz`;
 
 // 假 lark-cli：版本号取自 install.sh 里写死的默认值，--version 输出和真的一样的格式。
-const LARK_PIN = /VERSEKIT_LARK_VERSION:-(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
+const LARK_PIN = /HIFABU_LARK_VERSION:-(\d+\.\d+\.\d+)\}/.exec(readFileSync(INSTALL_SH, "utf8"));
 const LARK_VER = LARK_PIN?.[1] ?? "0.0.0";
 const LARK_FILE = `lark-cli-${LARK_VER}-${OS}-${CPU === "arm64" ? "arm64" : "amd64"}.tar.gz`;
 let breakLarkSum = false;
@@ -136,19 +136,19 @@ async function newHome(extra = {}) {
     ...process.env,
     HOME: home,
     SHELL: "/bin/zsh",
-    VERSEKIT_PORT: String(port),
-    VERSEKIT_SERVICE_LABEL: `com.versekit.test.${process.pid}.${homes.length}`,
-    VERSEKIT_SERVICE_MANAGER: "detach",
-    VERSEKIT_OFFLINE: "1",
-    VERSEKIT_NO_OPEN: "1",
-    VERSEKIT_NODE_URL: `${base}/node`,
-    VERSEKIT_APP_URL: `${base}/app.tar.gz`,
-    VERSEKIT_BILIUP_URL: `${base}/biliup.tar.gz`,
-    VERSEKIT_LARK_URL: `${base}/lark`,
+    HIFABU_PORT: String(port),
+    HIFABU_SERVICE_LABEL: `com.versekit.test.${process.pid}.${homes.length}`,
+    HIFABU_SERVICE_MANAGER: "detach",
+    HIFABU_OFFLINE: "1",
+    HIFABU_NO_OPEN: "1",
+    HIFABU_NODE_URL: `${base}/node`,
+    HIFABU_APP_URL: `${base}/app.tar.gz`,
+    HIFABU_BILIUP_URL: `${base}/biliup.tar.gz`,
+    HIFABU_LARK_URL: `${base}/lark`,
     ...extra,
   };
-  delete env.VK_HOME;
-  delete env.VERSEKIT_PREFIX;
+  delete env.HIFABU_HOME;
+  delete env.HIFABU_PREFIX;
   const h = { home, port, env };
   homes.push(h);
   return h;
@@ -179,6 +179,30 @@ const status = (port, path = "/today") =>
 
 const markerCount = (file) => (readFileSync(file, "utf8").match(/# >>> versekit >>>/g) ?? []).length;
 
+test("ACC-brand-05 安装器兼容旧环境变量，新变量即使为空也优先", { timeout: 120000 }, async () => {
+  const h = await newHome();
+  const data = join(h.home, "data");
+  delete h.env.HIFABU_PORT;
+  Object.assign(h.env, {
+    VK_HOME: data,
+    VERSEKIT_PORT: String(h.port),
+    VERSEKIT_SERVICE_MANAGER: "invalid",
+    VERSEKIT_APP_SHA256: "invalid",
+    HIFABU_APP_SHA256: "",
+  });
+  try {
+    const r = await install(h);
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(await status(h.port), 200);
+    assert.ok(existsSync(join(data, ".local/state/versekit/vk.db")));
+    assert.equal(r.stderr.match(/VK_HOME 已改名为 HIFABU_HOME/g)?.length, 1, r.stderr);
+    assert.equal(r.stderr.match(/VERSEKIT_PORT 已改名为 HIFABU_PORT/g)?.length, 1, r.stderr);
+    assert.doesNotMatch(r.stderr, /(?:VERSEKIT_SERVICE_MANAGER|VERSEKIT_APP_SHA256) 已改名/);
+  } finally {
+    if (existsSync(vkOf(h))) await sh(h, vkOf(h), ["service", "uninstall", "--service-only"]);
+  }
+});
+
 // 这几条按顺序依赖同一个临时 HOME：装 → 升级 → 卸载。
 let main;
 
@@ -195,7 +219,7 @@ test("ACC-install-01/02/05：一条命令装好——私有 Node、程序、bili
   assert.ok(existsSync(join(main.home, ".local/state/versekit/vk.db")), "vk init 应该建库");
   assert.equal(await status(main.port), 200);
 
-  // 服务描述落盘，且是离线模式（VERSEKIT_OFFLINE=1）
+  // 服务描述落盘，且是离线模式（HIFABU_OFFLINE=1）
   const meta = JSON.parse(readFileSync(join(main.home, ".local/state/versekit/service.json"), "utf8"));
   assert.equal(meta.manager, "detach");
   assert.equal(meta.offline, true);
@@ -289,7 +313,7 @@ test("ACC-install-03/05：校验不过——非 0 退出、说清哪一步、不
 });
 
 test("ACC-v3-feishu-08：首次安装装上飞书组件 lark-cli（校验过、可执行、版本对）；重复运行跳过下载；系统里的 lark-cli 不动", { timeout: 180000 }, async () => {
-  assert.ok(LARK_PIN, "install.sh 里要有写死的 VERSEKIT_LARK_VERSION 默认值");
+  assert.ok(LARK_PIN, "install.sh 里要有写死的 HIFABU_LARK_VERSION 默认值");
   // 系统 PATH 里放一个「已有的」lark-cli，装完它必须原样还在。
   const sysBin = join(WORK, "sysbin");
   mkdirSync(sysBin, { recursive: true });
@@ -336,7 +360,7 @@ test("ACC-v3-feishu-08：lark-cli 校验不过——不拖垮安装：versekit �
 });
 
 test("ACC-install-03：下载失败——退出码非 0 并指出是哪一步", { timeout: 60000 }, async () => {
-  const h = await newHome({ VERSEKIT_BILIUP_URL: `${base}/nope.tar.gz` });
+  const h = await newHome({ HIFABU_BILIUP_URL: `${base}/nope.tar.gz` });
   const r = await install(h);
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /下载 biliup/);
@@ -364,11 +388,11 @@ test("ACC-install-03：8787 被别的程序占用时自动换空闲端口，最�
 const darwinGui = platform() === "darwin" && spawnSync("launchctl", ["print", `gui/${process.getuid()}`], { stdio: "ignore" }).status === 0;
 
 test("ACC-install-02：macOS 用 LaunchAgent（RunAtLoad + KeepAlive），卸载后服务和 plist 都不在", { skip: !darwinGui && "仅 macOS 图形会话", timeout: 120000 }, async () => {
-  const h = await newHome({ VERSEKIT_SERVICE_MANAGER: "" });
-  delete h.env.VERSEKIT_SERVICE_MANAGER;
+  const h = await newHome({ HIFABU_SERVICE_MANAGER: "" });
+  delete h.env.HIFABU_SERVICE_MANAGER;
   const r = await install(h);
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  const label = h.env.VERSEKIT_SERVICE_LABEL;
+  const label = h.env.HIFABU_SERVICE_LABEL;
   const plist = join(h.home, "Library/LaunchAgents", `${label}.plist`);
   try {
     assert.ok(existsSync(plist));
@@ -400,7 +424,7 @@ test("ACC-install-02：macOS 用 LaunchAgent（RunAtLoad + KeepAlive），卸载
 
 test("ACC-install-01：Node 版本写死为 26.x，下载地址不含浮动的 latest-*", () => {
   const sh = readFileSync(INSTALL_SH, "utf8");
-  assert.ok(PINNED, "install.sh 里要有写死的 VERSEKIT_NODE_VERSION 默认值");
+  assert.ok(PINNED, "install.sh 里要有写死的 HIFABU_NODE_VERSION 默认值");
   assert.equal(NODE_VER.split(".")[0], "26", "默认装 Node 26 LTS");
   assert.match(sh, /https:\/\/nodejs\.org\/dist\/\$NODE_VERSION/);
   assert.doesNotMatch(sh, /latest-v\d+\.x/);
@@ -473,15 +497,15 @@ test("ACC-update-06：版本号带短提交号——不同提交装上去前后�
   const A = "a".repeat(40);
   const B = "b".repeat(40);
   const h = await newHome();
-  const first = await install(h, { env: { VERSEKIT_APP_COMMIT: A } });
+  const first = await install(h, { env: { HIFABU_APP_COMMIT: A } });
   assert.equal(first.code, 0, first.stdout + first.stderr);
   assert.match(first.stdout, /已安装 0\.1\.0\+aaaaaaa/);
 
-  const second = await install(h, { env: { VERSEKIT_APP_COMMIT: B } });
+  const second = await install(h, { env: { HIFABU_APP_COMMIT: B } });
   assert.equal(second.code, 0, second.stdout + second.stderr);
   assert.match(second.stdout, /已升级 0\.1\.0\+aaaaaaa → 0\.1\.0\+bbbbbbb/);
 
-  const again = await install(h, { env: { VERSEKIT_APP_COMMIT: B } });
+  const again = await install(h, { env: { HIFABU_APP_COMMIT: B } });
   assert.equal(again.code, 0, again.stdout + again.stderr);
   assert.match(again.stdout, /已是最新（bbbbbbb），重新装了一遍/);
   assert.doesNotMatch(again.stdout, /已升级/);

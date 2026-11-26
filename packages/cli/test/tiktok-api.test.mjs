@@ -10,10 +10,10 @@ import { fileURLToPath } from "node:url";
 
 // unix socket 路径有长度上限（macOS 104），用短目录。
 const HOME = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "vkt-"));
-process.env.VK_HOME = HOME;
-process.env.VK_NO_BROWSER = "1";
-process.env.VK_TIKTOK_BACKOFF_MS = "1";
-process.env.VK_TIKTOK_POLL_MS = "1";
+process.env.HIFABU_HOME = HOME;
+process.env.HIFABU_NO_BROWSER = "1";
+process.env.HIFABU_TIKTOK_BACKOFF_MS = "1";
+process.env.HIFABU_TIKTOK_POLL_MS = "1";
 
 const VK = fileURLToPath(new URL("../src/vk.mjs", import.meta.url));
 const core = await import("../../core/src/index.mjs");

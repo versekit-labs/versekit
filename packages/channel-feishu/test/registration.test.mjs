@@ -33,8 +33,8 @@ const server = createServer((req, res) => {
 const BIN = join(DIR, "lark-cli");
 before(async () => {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  process.env.VK_FEISHU_ACCOUNTS_URL = `http://127.0.0.1:${server.address().port}`;
-  process.env.VK_FEISHU_POLL_SCALE = "0.01"; // 5 秒的轮询间隔压成 50ms
+  process.env.HIFABU_FEISHU_ACCOUNTS_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.HIFABU_FEISHU_POLL_SCALE = "0.01"; // 5 秒的轮询间隔压成 50ms
   writeFileSync(
     BIN,
     `#!/usr/bin/env node
@@ -76,7 +76,7 @@ process.exit(0);
 `,
   );
   chmodSync(BIN, 0o755);
-  process.env.VK_LARK_BIN = BIN;
+  process.env.HIFABU_LARK_BIN = BIN;
 });
 after(() => {
   server.close();

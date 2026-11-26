@@ -124,7 +124,7 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   const browserLog = join(directory, "opened");
   const opener = join(directory, process.platform === "darwin" ? "open" : "xdg-open");
   writeFileSync(opener, '#!/bin/sh\nprintf "%s" "$1" > "$HIFABU_TEST_BROWSER"\n', { mode: 0o700 });
-  const env = { ...process.env, VK_HOME: home, VK_HIFABU_ORIGIN: origin, HIFABU_TEST_BROWSER: browserLog, PATH: `${directory}:${process.env.PATH}` };
+  const env = { ...process.env, HIFABU_HOME: home, HIFABU_ORIGIN: origin, HIFABU_TEST_BROWSER: browserLog, PATH: `${directory}:${process.env.PATH}` };
   const runMaker = (...args) => exec(maker, ["--data", dataDir, "--offline", ...args], { env, timeout: 20_000 });
   const runFull = (...args) => exec(process.execPath, [full, ...args], { env, timeout: 20_000 });
 

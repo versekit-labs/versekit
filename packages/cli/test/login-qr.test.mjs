@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.VK_HOME ??= mkdtempSync(join(tmpdir(), "vk-xhs-qr-"));
+process.env.HIFABU_HOME ??= mkdtempSync(join(tmpdir(), "vk-xhs-qr-"));
 const { parseArgv, loginCommandOf, VALUE_FLAGS } = await import("../src/argv.mjs");
 const { qrProbe, switchToQr, readQr, refreshQr, qrStateOf } = await import("../src/login-xhs.mjs");
 const { COMMANDS } = await import("../../core/src/commands.mjs");

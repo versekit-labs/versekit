@@ -1,5 +1,5 @@
 // 后台自动更新（#217）的内核部分：程序知道自己是哪个提交、检查有没有新版本、只在空闲时更新、开关与状态。
-// 只用临时 VK_HOME 与本机假 GitHub；不联网、不碰真实服务。
+// 只用临时 HIFABU_HOME 与本机假 GitHub；不联网、不碰真实服务。
 // 真的下载 + 跑 install.sh + 自检 + 退回在 packages/cli/test/update.test.mjs。
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-update-"));
-process.env.VK_HOME = HOME;
+process.env.HIFABU_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const store = await import("../src/store.mjs");
@@ -42,7 +42,7 @@ before(async () => {
     res.end("{}");
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  process.env.VERSEKIT_UPDATE_API = `http://127.0.0.1:${server.address().port}`;
+  process.env.HIFABU_UPDATE_API = `http://127.0.0.1:${server.address().port}`;
 });
 after(() => {
   server?.close();

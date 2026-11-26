@@ -13,12 +13,12 @@ const schema = readFileSync(new URL("../src/schema.sql", import.meta.url), "utf8
 
 function openTestDb(t, ddl = null) {
   const home = mkdtempSync(join(tmpdir(), "vk-query-plan-"));
-  const previousHome = process.env.VK_HOME;
-  process.env.VK_HOME = home;
+  const previousHome = process.env.HIFABU_HOME;
+  process.env.HIFABU_HOME = home;
   t.after(() => {
     close();
-    if (previousHome === undefined) delete process.env.VK_HOME;
-    else process.env.VK_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.HIFABU_HOME;
+    else process.env.HIFABU_HOME = previousHome;
     rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   if (ddl) open().exec(ddl);

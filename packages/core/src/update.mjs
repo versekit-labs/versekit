@@ -8,6 +8,7 @@
 //   · 联网失败只记日志，不抛、不弹提醒，下一轮再试；
 //   · 更新只在空闲时发生：没有正在发的、没有打开的登录窗口、接下来 15 分钟内没有要发的。
 
+import { readEnv } from "./env.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,7 @@ export const SOON_MS = 15 * 60e3;
 export const LOGIN_STALE_MS = 30 * 60e3;
 const STATE_KEY = "update.state";
 
-export const apiBase = (env = process.env) => (env.VERSEKIT_UPDATE_API || DEFAULT_API).replace(/\/+$/, "");
+export const apiBase = (env = process.env) => (readEnv("HIFABU_UPDATE_API", env) || DEFAULT_API).replace(/\/+$/, "");
 
 // ---------------------------------------------------------------- 我是哪个提交
 
@@ -33,7 +34,7 @@ export const shortCommit = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 /**
  * 装好的程序自己知道自己是哪个提交：install.sh 在换上新程序之前把 `.versekit-build.json` 写进程序目录
- * （提交号来自 tarball 里被 export-subst 替换过的 install.sh，或 VERSEKIT_APP_COMMIT）。
+ * （提交号来自 tarball 里被 export-subst 替换过的 install.sh，或 HIFABU_APP_COMMIT）。
  * 在源码仓库里跑（开发）没有这个文件，退回 `git rev-parse HEAD`，再不行就是「未知」。
  */
 export function buildInfo({ root = APP_ROOT } = {}) {

@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=versekit
 Group=versekit
-# VK_HOME 下放 config.json（里面有 push/pull token，权限 600）和中转数据目录
-Environment=VK_HOME=/var/lib/versekit-relay
+# HIFABU_HOME 下放 config.json（里面有 push/pull token，权限 600）和中转数据目录
+Environment=HIFABU_HOME=/var/lib/versekit-relay
 ExecStart=/usr/local/bin/node /opt/versekit/packages/cli/src/vk.mjs relay serve --port 8790
 Restart=on-failure
 RestartSec=5

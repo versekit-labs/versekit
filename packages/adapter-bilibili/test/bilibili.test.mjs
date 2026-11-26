@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attachVersion } from "../../core/test/fixtures/attach-version.mjs";
 
-process.env.VK_HOME = mkdtempSync(join(tmpdir(), "vk-bili-"));
+process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-bili-"));
 
 const core = await import("../../core/src/index.mjs");
 const { AdapterError } = await import("../../core/src/errors.mjs");
@@ -35,17 +35,17 @@ console.log(JSON.stringify({ argv: args, id: "BV1yy411c7mF" }));
 `,
   );
   chmodSync(bin, 0o755);
-  process.env.VK_BILIUP_BIN = bin;
+  process.env.HIFABU_BILIUP_BIN = bin;
   return bin;
 }
 
 function seed({ state = "queued", credential = true, scheduledAt = null, title = null } = {}) {
   const n = ++seq;
-  const credPath = `${process.env.VK_HOME}/cookies-${n}.json`;
+  const credPath = `${process.env.HIFABU_HOME}/cookies-${n}.json`;
   if (credential) {
     writeFileSync(credPath, JSON.stringify({ cookie_info: { cookies: [{ name: "SESSDATA", value: "x" }, { name: "bili_jct", value: "y" }] } }));
   }
-  const asset = `${process.env.VK_HOME}/cut-${n}.mp4`;
+  const asset = `${process.env.HIFABU_HOME}/cut-${n}.mp4`;
   writeFileSync(asset, "fake video");
   db().prepare("INSERT INTO work (id, title, asset_path, meta_json, created_at) VALUES (?,?,?,?,?)").run(
     `w${n}`,
@@ -125,7 +125,7 @@ test("dry-run 不触碰平台状态，也不调用 biliup", async () => {
 test("ACC-v2-confirm-07：上传的是平台稿自己那个语言版本的文件，不是作品表里的第一支成片", async () => {
   const { publishId } = seed();
   // 平台稿改挂到另一支成片（短片）上：作品表素材列仍是长片。
-  const short = `${process.env.VK_HOME}/short-${publishId}.mp4`;
+  const short = `${process.env.HIFABU_HOME}/short-${publishId}.mp4`;
   writeFileSync(short, "fake short");
   const workId = db().prepare("SELECT work_id FROM publish WHERE id=?").get(publishId).work_id;
   db().prepare("INSERT INTO cut (id, work_id, title, position, created_at) VALUES (?,?,?,1,?)").run(`cut_short_${publishId}`, workId, "短片", Date.now());
@@ -219,9 +219,9 @@ test("同一账号里找不到稿件时，错误里带 external_id 便于排障"
 });
 
 test("ready() 按 PATH 找 biliup，而不是只看 cwd 的相对路径", () => {
-  const saved = { bin: process.env.VK_BILIUP_BIN, path: process.env.PATH };
+  const saved = { bin: process.env.HIFABU_BILIUP_BIN, path: process.env.PATH };
   try {
-    delete process.env.VK_BILIUP_BIN;
+    delete process.env.HIFABU_BILIUP_BIN;
     process.env.PATH = mkdtempSync(join(tmpdir(), "vk-emptypath-"));
     assert.match(adapter.ready(), /未配置/);
 
@@ -232,8 +232,8 @@ test("ready() 按 PATH 找 biliup，而不是只看 cwd 的相对路径", () => 
     process.env.PATH = dir;
     assert.equal(adapter.ready(), null);
   } finally {
-    if (saved.bin === undefined) delete process.env.VK_BILIUP_BIN;
-    else process.env.VK_BILIUP_BIN = saved.bin;
+    if (saved.bin === undefined) delete process.env.HIFABU_BILIUP_BIN;
+    else process.env.HIFABU_BILIUP_BIN = saved.bin;
     process.env.PATH = saved.path;
   }
 });
