@@ -239,9 +239,17 @@ test("ACC-brand-04 安装 hifabu 与 vk 别名，兼容制作机的 --data", asy
   const otherData = join(main.home, "unused maker data");
   const groups = await hifabu(main, "group", "list");
   assert.equal(groups.code, 0, groups.stderr);
-  assert.ok(Array.isArray(JSON.parse(groups.stdout).groups));
-  assert.deepEqual(await hifabu(main, "--data", otherData, "group", "list"), groups);
-  assert.deepEqual(await hifabu(main, "group", "list", "--data", otherData), groups);
+  const { reportedAt, ...expected } = JSON.parse(groups.stdout);
+  assert.ok(Array.isArray(expected.groups));
+  assert.ok(Number.isSafeInteger(reportedAt));
+  for (const args of [["--data", otherData, "group", "list"], ["group", "list", "--data", otherData]]) {
+    const result = await hifabu(main, ...args);
+    assert.equal(result.code, groups.code);
+    assert.equal(result.stderr, groups.stderr);
+    const { reportedAt: readAt, ...actual } = JSON.parse(result.stdout);
+    assert.ok(Number.isSafeInteger(readAt) && readAt >= reportedAt);
+    assert.deepEqual(actual, expected);
+  }
   assert.equal(existsSync(otherData), false);
 });
 

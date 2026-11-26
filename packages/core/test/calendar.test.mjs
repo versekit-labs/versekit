@@ -10,7 +10,7 @@ process.env.VK_HOME = HOME;
 
 const core = await import("../src/index.mjs");
 const { createCoreHandlers } = await import("../src/handlers.mjs");
-const { planRules, takenTimes, violationAt, dayUsage } = await import("../src/plan-rules.mjs");
+const { planRules, takenTimes, violationAt, dayUsage } = await import("../src/schedule-rules.mjs");
 const { updateConfig } = await import("../src/config.mjs");
 after(() => core.close());
 

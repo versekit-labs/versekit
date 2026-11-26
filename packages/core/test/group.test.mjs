@@ -60,7 +60,8 @@ test("ACC-groups 迁移：引入账号组之前的旧库升级两次，不报错
 
 test("group.add / group.list：新建组后进入空组不报错（ACC-groups-02）", () => {
   const h = createCoreHandlers();
-  const empty = h["group.list"]();
+  const { reportedAt, ...empty } = h["group.list"]();
+  assert.ok(Number.isSafeInteger(reportedAt));
   assert.deepEqual(empty, { groups: [], current: null }, "首次进入没有当前组（ACC-groups-01 落点）");
 
   const a = h["group.add"]({ name: "主矩阵" });

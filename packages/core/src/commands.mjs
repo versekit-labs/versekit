@@ -80,6 +80,7 @@ export const COMMANDS = [
   },
   {
     name: "group.list",
+    roles: ["maker"],
     summary: "列出账号组（含每组账号数与当前组）",
     remote: false,
     args: {},
@@ -143,6 +144,7 @@ export const COMMANDS = [
     // 制作机 → 云端中转（ACC-relay-02）：清单先按 work.add 的规则校验，不合格当场报错不上传；
     // 文件传到中转（可断点续传），制作机本地不建作品。
     name: "work.push",
+    roles: ["maker"],
     summary: "制作机：把清单和成片传到云端中转，等发布机拉取入库（不在本机建作品）",
     remote: false,
     localOnly: true,
@@ -197,6 +199,7 @@ export const COMMANDS = [
   },
   {
     name: "delivery.list",
+    roles: ["maker"],
     summary: "制作机：查看交付进度和发布机回报",
     remote: false,
     localOnly: true,
@@ -208,6 +211,7 @@ export const COMMANDS = [
   },
   {
     name: "delivery.show",
+    roles: ["maker"],
     summary: "制作机：按投递号查看进度、平台稿和没交成的原因",
     remote: false,
     localOnly: true,
@@ -1008,6 +1012,7 @@ export const COMMANDS = [
   },
   {
     name: "cloud.login",
+    roles: ["maker"],
     summary: "打开浏览器，接入这台机器的 Hifabu 账号",
     permission: "local",
     remote: false,
@@ -1020,6 +1025,7 @@ export const COMMANDS = [
   },
   {
     name: "cloud.logout",
+    roles: ["maker"],
     summary: "清除这台机器的 Hifabu 登录",
     permission: "local",
     remote: false,
@@ -1032,6 +1038,7 @@ export const COMMANDS = [
   },
   {
     name: "cloud.status",
+    roles: ["maker"],
     summary: "查看这台机器的 Hifabu 账号、角色和传片状态",
     permission: "local",
     remote: false,
@@ -1111,6 +1118,14 @@ export const CLOUD_COMMANDS = [
     args: {},
     http: { method: "GET", path: "/api/devices" },
     cli: { usage: "vk-cloud device list" },
+  },
+  {
+    name: "device.revoke.self",
+    summary: "使用这台机器的刷新凭据退出 Hifabu",
+    permission: "device",
+    args: {},
+    http: { method: "POST", path: "/api/devices/self/revoke" },
+    cli: { usage: "vk-cloud device revoke self" },
   },
   {
     name: "device.revoke",

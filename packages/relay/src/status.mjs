@@ -1,5 +1,8 @@
 import { deliveryTitle } from "./delivery-v1.mjs";
 
+export const MIN_FREE_BYTES = 2 * 1024 ** 3;
+export const RETENTION_MS = 7 * 864e5;
+
 // ADR-0003 §3 的实测基线（字节/秒）；有较新的上传或发布机下载样本时优先用实测样本。
 export const BASELINE_TRANSFER = { uploadBytesPerSecond: 1.1e6, downloadBytesPerSecond: 0.11e6 };
 const OFFLINE_AFTER_MS = 6 * 3600e3;

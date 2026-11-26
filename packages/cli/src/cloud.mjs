@@ -1,24 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, type } from "node:os";
 import { join } from "node:path";
-import { ensureDirs, paths } from "../../core/src/index.mjs";
-import { isMachineRole } from "../../cloud/src/machine-token.mjs";
-import { callCloud, isLoopback, publicOrigin } from "../../cloud/src/transport.mjs";
-import { RelayError } from "../../relay/src/index.mjs";
+import { callCloud, isLoopback, isMachineRole, publicOrigin } from "../../cloud/src/transport.mjs";
+import { RelayError } from "../../relay/src/client.mjs";
 
 const pollIntervalMs = 1500;
 const refreshAheadMs = 60_000;
 const refreshRetryMs = 30_000;
 const statusCheckMs = 60_000;
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
-const credentialName = "hifabu-machine.json";
 const defaultOrigin = "https://hifabu.com";
 const error = (code, message) => Object.assign(new Error(message), { code });
-
-function credentialFile() {
-  return join(paths().credentials, credentialName);
-}
+const accountIdPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const machineAccountId = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url")).sub;
 
 function removeFile(filename) {
   try {
@@ -39,14 +34,18 @@ function credentialFrom(data, origin, refreshToken, checkedAt) {
   };
 }
 
-function readCredential() {
+function readCredential(filename, persistMachineToken) {
   let fd;
   try {
-    fd = openSync(credentialFile(), constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(fd);
     if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600)) throw new Error();
     const data = JSON.parse(readFileSync(fd, "utf8"));
-    return credentialFrom(data, publicOrigin(data.origin), data.refreshToken, data.checkedAt);
+    const origin = publicOrigin(data.origin);
+    if (persistMachineToken) return credentialFrom(data, origin, data.refreshToken, data.checkedAt);
+    if (typeof data.email !== "string" || !isMachineRole(data.role) || typeof data.relayEnabled !== "boolean" ||
+        !secretPattern.test(data.refreshToken) || typeof data.accountId !== "string" || !accountIdPattern.test(data.accountId)) throw new Error();
+    return { ...data, origin, machineToken: null, expiresAt: 0 };
   } catch (err) {
     if (err.code === "ENOENT") return null;
     throw error("cloud_credential_unreadable", "无法读取这台机器的 Hifabu 登录资料。请退出登录后重新接入。");
@@ -55,9 +54,7 @@ function readCredential() {
   }
 }
 
-function writeCredential(data) {
-  ensureDirs();
-  const filename = credentialFile();
+function writeCredential(filename, data) {
   const temporary = `${filename}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, JSON.stringify(data), { mode: 0o600, flag: "wx" });
@@ -84,7 +81,11 @@ function validChallenge(challenge, origin, now) {
     Number.isSafeInteger(challenge.expiresAt) && challenge.expiresAt > now;
 }
 
-export function createCloudHandlers({ offline, openBrowser, log }) {
+export function createCloudHandlers({
+  offline, openBrowser, log, credentialsDir, credentialName = "hifabu-machine.json",
+  persistMachineToken = true, defaultRole = "executor",
+}) {
+  const credentialFile = join(credentialsDir, credentialName);
   let credential;
   let pending;
   let loginRequest;
@@ -92,6 +93,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
   let pollTimer;
   let refreshTimer;
   let refreshRequest;
+  let logoutRequest;
   let terminal;
   let reachable = true;
   let nextStatusCheckAt = 0;
@@ -104,12 +106,12 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
   }
 
   function currentCredential() {
-    if (credential === undefined) credential = readCredential();
+    if (credential === undefined) credential = readCredential(credentialFile, persistMachineToken);
     return credential;
   }
 
   function clearCredential() {
-    removeFile(credentialFile());
+    removeFile(credentialFile);
     clearTimeout(refreshTimer);
     refreshTimer = null;
     credential = null;
@@ -124,8 +126,16 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     }), delay).unref();
   }
 
-  function save(data) {
-    writeCredential(data);
+  function save(data, { linking = false } = {}) {
+    if (linking || persistMachineToken) {
+      const { machineToken, expiresAt, ...details } = data;
+      const accountId = persistMachineToken ? null : machineAccountId(machineToken);
+      if (!persistMachineToken && (typeof accountId !== "string" || !accountIdPattern.test(accountId))) {
+        throw error("cloud_response_invalid", "Hifabu 账号服务返回的机器标识有误。");
+      }
+      mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+      writeCredential(credentialFile, persistMachineToken ? data : { ...details, accountId });
+    }
     credential = data;
     reachable = true;
     nextStatusCheckAt = data.checkedAt + statusCheckMs;
@@ -176,8 +186,8 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     try {
       url = saved.relayUrl == null ? null : publicOrigin(saved.relayUrl);
       // 这里只为本机续传和队列取稳定的账号标识，服务端始终独立验签。
-      accountId = JSON.parse(Buffer.from(saved.machineToken.split(".")[1], "base64url")).sub;
-      if (typeof accountId !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(accountId)) throw new Error();
+      accountId = saved.accountId ?? machineAccountId(saved.machineToken);
+      if (typeof accountId !== "string" || !accountIdPattern.test(accountId)) throw new Error();
     } catch {
       throw error("cloud_credential_unreadable", "Hifabu 登录资料里的传片配置有误，请退出后重新接入。");
     }
@@ -231,7 +241,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
       if (result.state !== "linked" || data.role !== attempt.role || data.expiresAt <= Date.now() + refreshAheadMs) {
         throw error("cloud_response_invalid", "Hifabu 账号服务返回的登录资料有误。");
       }
-      save(data);
+      save(data, { linking: true });
       finish(attempt, "linked");
     } catch (err) {
       if (pending !== attempt) return;
@@ -243,7 +253,7 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     }
   }
 
-  async function start({ name = hostname().replace(/\.local$/i, ""), role = "executor" }, generation) {
+  async function start({ name = hostname().replace(/\.local$/i, ""), role = defaultRole }, generation) {
     if (!isMachineRole(role)) throw error("cloud_role_invalid", "机器角色应为制作机（maker）或发布机（executor）。");
     const origin = publicOrigin(process.env.VK_HIFABU_ORIGIN ?? defaultOrigin);
     const challenge = await request(origin, "device.link.start", { name, role, os: system() });
@@ -259,9 +269,36 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
     return browserChallenge(pending);
   }
 
+  async function logout() {
+    loginGeneration++;
+    loginRequest = null;
+    clearTimeout(pollTimer);
+    clearTimeout(refreshTimer);
+    pending = null;
+    terminal = null;
+    let warning;
+    try {
+      const saved = currentCredential();
+      credential = null; // An in-flight refresh must never restore credentials during logout.
+      if (saved) {
+        const result = await request(saved.origin, "device.revoke.self", {}, saved.refreshToken);
+        if (result?.revoked !== true) throw error("cloud_response_invalid", "Hifabu 未确认注销。");
+      }
+    } catch (err) {
+      const code = err.code ?? "cloud_revoke_failed";
+      const message = "服务端没能注销这台设备，到 hifabu.com 的「我的 Hifabu」里手动移除。";
+      log(`[cloud] ${code} ${message}`);
+      warning = { code, message };
+    } finally {
+      clearCredential();
+    }
+    return warning ? { ...signedOut, warning, message: warning.message } : signedOut;
+  }
+
   return {
     relayConnection,
     async "cloud.login"(args) {
+      if (logoutRequest) await logoutRequest;
       const saved = currentCredential();
       if (saved) return signedIn(saved, reachable);
       if (pending) return browserChallenge(pending);
@@ -274,14 +311,14 @@ export function createCloudHandlers({ offline, openBrowser, log }) {
         if (loginRequest === operation) loginRequest = null;
       }
     },
-    "cloud.logout"() {
-      clearCredential();
-      loginGeneration++;
-      loginRequest = null;
-      clearTimeout(pollTimer);
-      pending = null;
-      terminal = null;
-      return signedOut;
+    async "cloud.logout"() {
+      if (logoutRequest) return logoutRequest;
+      logoutRequest = logout();
+      try {
+        return await logoutRequest;
+      } finally {
+        logoutRequest = null;
+      }
     },
     async "cloud.status"() {
       const saved = currentCredential();
