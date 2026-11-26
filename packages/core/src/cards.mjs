@@ -92,7 +92,7 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
     case "system.dead":
       title = "守护进程停了";
       template = "red";
-      body = line("versekit 没有心跳了。", "回到电脑上运行 vk serve --open，队列不会丢。");
+      body = line("Hifabu 没有心跳了。", "回到电脑上运行 vk serve --open，队列不会丢。");
       break;
 
     default:
@@ -101,7 +101,7 @@ export function buildEventCard(event, { publish = null, account = null, now = Da
 
   return {
     config: { wide_screen_mode: true },
-    header: { template, title: { tag: "plain_text", content: `versekit · ${title}` } },
+    header: { template, title: { tag: "plain_text", content: `Hifabu · ${title}` } },
     elements: [
       { tag: "div", text: { tag: "lark_md", content: body } },
       ...(buttons.length ? [{ tag: "action", actions: buttons }] : []),
@@ -127,7 +127,7 @@ export function cardKindOf(eventType) {
 export function resultCard(title, message, { ok = true } = {}) {
   return {
     config: { wide_screen_mode: true },
-    header: { template: ok ? "green" : "red", title: { tag: "plain_text", content: `versekit · ${title}` } },
+    header: { template: ok ? "green" : "red", title: { tag: "plain_text", content: `Hifabu · ${title}` } },
     elements: [{ tag: "div", text: { tag: "lark_md", content: message } }],
   };
 }

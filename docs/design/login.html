@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · versekit</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · Hifabu</title>
 <link rel="stylesheet" href="app.css"></head>
 <body><main class="lone" id="main"></main>
 <script>
@@ -8,7 +8,7 @@ const HASH = Object.fromEntries(location.hash.slice(1).split('&').filter(Boolean
 const main = document.getElementById('main'); let err = HASH.err || '';
 function draw() {
   main.innerHTML = `
-  <div class="brand"><i></i>versekit</div>
+  <div class="brand"><i></i>Hifabu</div>
   <h1>登录</h1>
   ${HASH.from === 'link' ? '<div class="sub">登录后继续接入「书房的 Mac」。</div>' : ''}
   <form class="panel" novalidate>

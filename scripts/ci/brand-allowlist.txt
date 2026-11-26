@@ -28,3 +28,12 @@ docs/design/HANDOFF-v3.md	-	历史文档	保留 2026-11-18 整理的 v3 交接�
 scripts/ci/check-brand.mjs	-	迁移代码	检查器必须引用旧名称来识别改名残留。
 packages/core/test/check-brand.test.mjs	-	迁移代码	品牌检查测试使用旧名称构造受控样例。
 scripts/ci/brand-allowlist.txt	-	白名单本身	豁免规则必须引用要保留的旧名称。
+.impeccable/mocks/decision/	-	历史文档	保留旧账号页视觉方案的选型原型，与当时的截图对应。
+docs/wireframes.html	-	历史文档	保留 v0.1 原始线框稿作为设计记录。
+docs/screenshots/issue-173/mock-demo.mjs	-	历史文档	保留 #173 原始截图的离线演示脚本。
+docs/design/RENAME-HIFABU.md	-	历史文档	改名计划记录原名、迁移边界和当时的扫描基线。
+docs/design/plugin/INPUT-2026-11-26.md	-	历史文档	保留 2026-11-26 记录的原始插件反馈。
+docs/design/account/BRIEF.md	制作机上要先有 versekit 程序	历史文档	保留 2026-11-24 的前置安装讨论，后续方案见插件设计。
+docs/design/plugin/DESIGN.md	永远不说\*\*：VerseKit|VerseKit → Hifabu|整个产品 \| VerseKit、versekit|不出现 VerseKit、curl	历史文档	保留插件命名表和验收口径中明确淘汰的名称。
+packages/channel-feishu/test/feishu.test.mjs	profile "versekit" already exists	迁移代码	飞书 profile 冲突的测试样例，R6 处理。
+docs/design/ACCEPTANCE.md	-	历史文档	验收口径原文存档，协调器维护。

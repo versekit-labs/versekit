@@ -1,4 +1,4 @@
-<h1 align="center">versekit</h1>
+<h1 align="center">Hifabu</h1>
 
 <p align="center">
   给创作者的开源工具集
@@ -26,7 +26,7 @@
 
 现有产品分两类，两类都缺一半：**SaaS**（Buffer / Postiz Cloud / 蚁小二）手机体验好，但**凭证在别人手里**；**自托管开源**（Mixpost / Postiz 自部署）数据在自己手里，但**没有手机控制面**。
 
-versekit 的位置只有一个：
+Hifabu 的位置只有一个：
 
 > **凭证在你手里，同时手机上能拍板。**
 
@@ -102,8 +102,8 @@ flowchart LR
 失败会降级、状态会落库、数据会按节奏回收。飞书通道还没接。
 
 <p align="center">
-  <img src="docs/screenshots/setup-qr.png" alt="versekit 接入向导" width="820"/>
-  <br/><sub>总览：成功、失败、待处理与账号健康在一屏（真实运行截图）</sub>
+  <img src="docs/design/screenshots/impl/today.png" alt="Hifabu 今天页" width="820"/>
+  <br/><sub>今天页显示待确认的平台稿、发布失败和近期结果（演示数据）</sub>
 </p>
 
 | 层 | 状态 |
@@ -237,4 +237,4 @@ docs/
 
 ---
 
-<p align="center"><sub>MIT · versekit</sub></p>
+<p align="center"><sub>MIT · Hifabu</sub></p>

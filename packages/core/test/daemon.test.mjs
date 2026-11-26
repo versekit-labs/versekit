@@ -134,7 +134,8 @@ test("本地控制台首页就是今天的待办，静态资源带了正确类�
   assert.equal(index.status, 200);
   assert.match(index.headers.get("content-type"), /text\/html/);
   const html = await index.text();
-  assert.match(html, /versekit/);
+  assert.match(html, /<title>今天 · Hifabu<\/title>/);
+  assert.match(html, /class="brand"><i><\/i>Hifabu<\/div>/);
   assert.match(html, /data-page="today"/, "首页必须是今天页");
 
   const css = await fetch(`${base}/app.css`);

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>允许设备接入 · versekit</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>允许设备接入 · Hifabu</title>
 <link rel="stylesheet" href="app.css"></head>
 <body><main class="lone" id="main"></main>
 <script>
@@ -11,14 +11,14 @@ const D = maker
   : { name: '书房的 Mac', os: 'macOS 15', as: '作为发布机', can: '登录你的平台账号；按你确认过的时间发布；把数据传回来', cant: '发布你没有确认过的内容' };
 function draw() {
   const body = {
-    ask: `<h1>「${D.name}」想接入你的 versekit，${D.as}</h1><div class="sub">你现在登录的是陈默（chenmo@example.com）。</div>
+    ask: `<h1>「${D.name}」想接入你的 Hifabu，${D.as}</h1><div class="sub">你现在登录的是陈默（chenmo@example.com）。</div>
       <div class="panel"><dl class="facts"><dt>设备</dt><dd>${D.name} <span class="sub">${D.os}</span></dd><dt>它能做</dt><dd>${D.can}</dd><dt>它不能做</dt><dd>${D.cant}</dd>${maker ? '' : '<dt>它现在在</dt><dd>美国 洛杉矶 <span class="mono">203.0.113.24</span> <span class="sub">家庭宽带。以后会把这里当作你的账号平时的位置；如果那台电脑开着代理，先关掉再接</span></dd>'}<dt>核对码</dt><dd><span class="mono">KQ7M-2XPD</span> <span class="sub">和那台电脑上显示的一样才点允许</span></dd></dl>
       <div class="go"><button class="btn pri lg" data-s="ok">允许</button><button class="link" data-s="no">不是我</button></div></div>`,
     ok: `<h1>接上了</h1><div class="panel"><div class="st done">「${D.name}」已经接入</div><div class="sub">可以关掉这一页，那台电脑会自己继续。${maker ? '在 Claude 里说「把这期入库」就能送作品进来。' : '回到刚才的页面接着做；如果已经关了，在「系统」里登录你的平台账号。'}</div><div class="go"><a class="btn" href="system.html#tab=${maker ? 'devices' : 'accounts'}">${maker ? '看设备' : '去登录平台账号'}</a></div></div>`,
-    no: `<h1>已拒绝</h1><div class="panel"><div>「${D.name}」没有接进来。</div><div class="sub">如果你没有在装 versekit，说明有人在试着接入你的账号，建议改一下密码。</div><div class="go"><a class="btn" href="today.html">回到今天</a></div></div>`,
+    no: `<h1>已拒绝</h1><div class="panel"><div>「${D.name}」没有接进来。</div><div class="sub">如果你没有在装 Hifabu，说明有人在试着接入你的账号，建议改一下密码。</div><div class="go"><a class="btn" href="today.html">回到今天</a></div></div>`,
     old: `<h1>这次接入过期了</h1><div class="panel"><div>接入要在 10 分钟内点允许。</div><div class="sub">回到那台电脑上重新开始，它会再打开这一页。</div><div class="go"><a class="btn" href="today.html">回到今天</a></div></div>`,
   }[s];
-  main.innerHTML = `<div class="brand"><i></i>versekit</div>${body}`;
+  main.innerHTML = `<div class="brand"><i></i>Hifabu</div>${body}`;
 }
 main.addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (b) { s = b.dataset.s; draw(); } });
 draw();

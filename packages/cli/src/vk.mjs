@@ -204,7 +204,7 @@ async function sendTestCard(binding) {
   const now = Date.now();
   const card = {
     config: { wide_screen_mode: true },
-    header: { template: "blue", title: { tag: "plain_text", content: "versekit · 通道已连通" } },
+    header: { template: "blue", title: { tag: "plain_text", content: "Hifabu · 通道已连通" } },
     elements: [
       { tag: "div", text: { tag: "lark_md", content: "以后发布失败、登录失效、需要你确认，都会发到这里的卡片上；点下面的按钮，验证「手机点一下、电脑执行」这条闭环。" } },
       {
@@ -941,7 +941,7 @@ async function cmdServe() {
 
   const web = `http://127.0.0.1:${daemon.port}`;
   if (has("--open")) openBrowser(web);
-  log(`versekit 守护进程已启动：${web} · socket ${daemon.socketPath}`);
+  log(`Hifabu 守护进程已启动：${web} · socket ${daemon.socketPath}`);
   if (!offline) log(`适配器 ${adapters.length} 个${adapters.length ? "：" + adapters.map((a) => a.platform).join(", ") : "（尚未安装）"}`);
   for (const e of errors) log(`适配器加载失败 ${e.dir}: ${e.message}`);
 
@@ -1196,7 +1196,7 @@ async function cmdAccount() {
     const accountId = pos[2];
     if (!accountId || val("--name") === undefined) throw new Error("用法：vk account rename <账号 id> --name <新名字>");
     const data = await send("account.rename", { accountId, name: val("--name") }, { log });
-    if (human) console.log(data.changed ? `已改名：${data.previous} → ${data.name}（只改 VerseKit 里的名字，不影响平台）` : `名字本来就是「${data.name}」，没有改动`);
+    if (human) console.log(data.changed ? `已改名：${data.previous} → ${data.name}（只改 Hifabu 里的名字，不影响平台）` : `名字本来就是「${data.name}」，没有改动`);
     else out(data);
     return data;
   }
@@ -2237,7 +2237,7 @@ async function cmdSchedule() {
 function usage() {
   console.log(
     [
-      "vk — versekit CLI（默认 JSON，--human 给人看）",
+      "vk — Hifabu CLI（默认 JSON，--human 给人看）",
       "",
       "用法:",
       "  vk init",

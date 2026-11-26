@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>系统 · versekit</title>
+<title>系统 · Hifabu</title>
 <link rel="stylesheet" href="/app.css">
 <style>
 /* 系统页：账号 / 发布方案 / 设备 三个分段。结构照 docs/design/system.html（v3）。 */
@@ -63,7 +63,7 @@
 </head>
 <body data-page="system">
 <div class="app">
-  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+  <nav class="nav" aria-label="主导航"><div class="brand"><i></i>Hifabu</div>
     <a class="nv" href="today.html" data-key="today">今天<b data-todo hidden></b></a>
     <a class="nv" href="works.html" data-key="works">作品</a>
     <a class="nv" href="data.html" data-key="data">数据</a>
@@ -825,7 +825,7 @@
       // 只有一个二维码：扫完就建好机器人并认出你，后面自己往下走。
       const err = f.create?.error;
       return head + note + (err ? `<div class="subin bad" style="margin-bottom:12px"><p><span class="st bad">没接成</span>　${esc(String(err).replace(/[。.]+$/, ""))}。</p><span class="acts">${B('data-fs="connect"', "重新来", "btn")}</span></div>` : "") +
-        (err ? "" : `<div class="subin">${fsQr(f.create?.qr, "正在取二维码…")}<div class="how"><b>用飞书 App 扫这个码</b><span class="sub">会在你的飞书里建一个只属于你的机器人「versekit」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。</span>` +
+        (err ? "" : `<div class="subin">${fsQr(f.create?.qr, "正在取二维码…")}<div class="how"><b>用飞书 App 扫这个码</b><span class="sub">会在你的飞书里建一个只属于你的机器人「Hifabu」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。</span>` +
         `<span class="alt">${f.create?.url ? `<a class="link" href="${esc(f.create.url)}" target="_blank" rel="noopener">扫不了？点这里打开</a>` : ""}${B('data-fs="cancel"', "取消", "link")}</span></div></div>`) + link;
     }
     if (s === "sub") {
@@ -841,7 +841,7 @@
     const dropAsk = ui.fsDrop ? subRow(2, `<p>断开后不再往飞书发卡片，要你确认的只出现在网页的「今天」里。飞书里的机器人不会被删，你可以自己在飞书里删掉。</p><span class="acts">${B('data-fs="keep"', "取消", "link")}${B('data-fs="drop-ok"', "断开")}</span>`) : "";
     return head + note +
       (bad ? `<div class="subin bad" style="margin-bottom:12px"><p><span class="st bad">卡片发不出去</span>　${esc(whenText(f.failure.at))} 那张没送到：${esc(f.failure.reason)}。要你确认的现在只出现在网页的「今天」里。</p><span class="acts">${B('data-fs="connect"', "重新接", "btn", busy)}</span></div>` : "") +
-      `<div class="tblwrap"><table><tbody><tr><td><b class="nm">${bad ? '<span class="st bad">发不出去</span>' : '<span class="st done">接好了</span>'}</b><div class="sub">发给你自己的飞书 · 机器人「versekit」${bad ? "" : ` · 上一张卡片：${esc(fsWhen(f.lastOkAt))}`}</div></td>` +
+      `<div class="tblwrap"><table><tbody><tr><td><b class="nm">${bad ? '<span class="st bad">发不出去</span>' : '<span class="st done">接好了</span>'}</b><div class="sub">发给你自己的飞书 · 机器人「Hifabu」${bad ? "" : ` · 上一张卡片：${esc(fsWhen(f.lastOkAt))}`}</div></td>` +
       `<td class="n"><span class="acts">${ui.fsDrop ? "" : `${B('data-fs="drop"', "断开", "link")}${bad ? "" : B('data-fs="test"', "发一张测试卡片", "btn", busy)}`}</span></td></tr>${dropAsk}</tbody></table></div>` +
       `<h2 class="sec">往飞书发什么</h2><div class="tblwrap"><table><tbody>` +
       row("confirm", "要你确认的", "新作品入库、建议的时间快到了还没确认。卡片上可以直接确认、改时间、这条不发。") +
@@ -1345,7 +1345,7 @@
       try {
         await post(accPath(id, "rename"), { accountId: id, name: ui.renameAccName });
         ui.renamingAcc = null; ui.renameAccBusy = false;
-        toast("已改名（只改 VerseKit 里的名字，不影响平台）");
+        toast("已改名（只改 Hifabu 里的名字，不影响平台）");
         await refresh();
       } catch (err) {
         ui.renameAccBusy = false; ui.renameAccNote = err.message; draw();

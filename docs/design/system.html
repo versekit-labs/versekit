@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统 · versekit</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统 · Hifabu</title>
 <link rel="stylesheet" href="app.css">
 <style>
 .two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
@@ -36,7 +36,7 @@ tr.subrow td{padding-top:0}
 @media (max-width:860px){.two{grid-template-columns:minmax(0,1fr)}}
 </style></head>
 <body><div class="app">
-<nav class="nav" aria-label="主导航"><div class="brand"><i></i>versekit</div>
+<nav class="nav" aria-label="主导航"><div class="brand"><i></i>Hifabu</div>
 <a class="nv" href="today.html">今天<b data-todo hidden></b></a>
 <a class="nv" href="works.html">作品</a>
 <a class="nv" href="data.html">数据</a>
@@ -76,7 +76,7 @@ const MACH = [{ id: 'm1', name: '书房的 Mac', os: 'macOS 15', online: true, s
 if (STATES) MACH.push({ id: 'm2', name: '客厅的小主机', os: 'Windows 11', online: false, seen: '3 小时前', ver: '0.8.4', state: 'old', auto: true, step: null, routes: [['', '美国 洛杉矶', '203.0.113.24', '家庭宽带']], none: true });
 const MAKERS = [{ id: 'c1', name: 'Mac mini 上的 Claude', seen: '今天 13:52 用过', last: 'GDPR 罚单是怎么算出来的？', up: '正在上传 · 3 / 5 个文件', step: null }];
 const USERS = [{ name: '陈默', mail: 'chenmo@example.com', me: true, state: 'ok', dev: '1 台发布机 · 1 个 Claude', use: '1.2 GB / 20 GB' }, { name: '林夏', mail: 'linxia@example.com', state: 'ok', dev: '1 台发布机', use: '0.3 GB / 20 GB', step: null }, { name: '', mail: 'zhou@example.com', state: 'invited', dev: '', use: '', step: null }];
-const SAY = '帮我接入 versekit：https://vk.example.com/claude';
+const SAY = '帮我接入 Hifabu：https://vk.example.com/claude';
 let updFixed = false, notesOpen = false, addMach = false, addMaker = false, rn = null, ipStep = null, groupAdd = false;
 const M0 = () => (MACH[0] ? MACH[0].name : '发布机');
 const names = (ks) => ks.map((k) => PF[k][1]).join('、');
@@ -196,10 +196,10 @@ function tabNotify() {
   const head = `<h2 class="sec">飞书 · 要你确认的发到手机上，在卡片上就能确认</h2>`;
   if (s === 'none' || s === 'off') return `${head}<div class="tblwrap"><table><tbody><tr><td><span class="st ${s === 'off' ? '' : 'wait'}">${s === 'off' ? '不用飞书' : '还没接'}</span><div class="sub">${s === 'off' ? '要你确认的只出现在网页的「今天」里。没有人确认，一条都不会发。' : '接上以后，有要你确认的、出了问题的，会发到你的飞书里。不接也可以，那就只在网页上确认。'}</div></td><td class="n"><span class="acts">${s === 'off' ? '' : '<button class="link" data-fs="off">不用飞书</button>'}<button class="btn ${s === 'off' ? '' : 'pri'}" data-fs="qr">接飞书</button></span></td></tr></tbody></table></div>
   <div class="cmd"><a class="link" href="feishu.html">看飞书卡片长什么样</a></div>`;
-  if (s === 'qr') return `${head}<div class="subin"><button class="qr" data-fs="sub" title="原型里点一下，当作飞书扫了码">二维码<br>（原型里点一下当作扫了码）</button><div class="how"><b>用飞书 App 扫这个码</b><span class="sub">会在你的飞书里建一个只属于你的机器人「versekit」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。</span><span class="alt"><button class="link" data-fs="none">取消</button></span></div></div>`;
+  if (s === 'qr') return `${head}<div class="subin"><button class="qr" data-fs="sub" title="原型里点一下，当作飞书扫了码">二维码<br>（原型里点一下当作扫了码）</button><div class="how"><b>用飞书 App 扫这个码</b><span class="sub">会在你的飞书里建一个只属于你的机器人「Hifabu」，卡片由它发给你。别人看不到你的卡片，你也看不到别人的。扫完这里会自己往下走。</span><span class="alt"><button class="link" data-fs="none">取消</button></span></div></div>`;
   if (s === 'sub') return `${head}<div class="subin wait"><p><span class="st wait">差一步</span>　<b>让卡片上的按钮能点。</b>机器人建好了，卡片也能收到，但飞书默认不把「点了按钮」告诉我们。点下面的按钮到飞书里开通，开通后这里会自己变成「接好了」，不用回来按什么。</p><span class="acts"><button class="link" data-fs="none">先不接了</button><button class="btn pri" data-fs="ok">去飞书里开通</button></span></div>`;
   return `${head}${s === 'bad' ? `<div class="subin bad" style="margin-bottom:12px"><p><span class="st bad">卡片发不出去</span>　今天 09:02 那张没送到：飞书里的机器人被停用或删除了。要你确认的现在只出现在网页的「今天」里。</p><span class="acts"><button class="btn" data-fs="qr">重新接</button></span></div>` : ''}
-  <div class="tblwrap"><table><tbody><tr><td><b class="nm">${s === 'bad' ? '<span class="st bad">发不出去</span>' : '<span class="st done">接好了</span>'}</b><div class="sub">发给陈默的飞书 · 机器人「versekit」${s === 'bad' ? '' : ' · 上一张卡片' + FS.last}</div></td><td class="n"><span class="acts">${FS.drop ? '' : `<button class="link" data-fs="drop">断开</button>${s === 'bad' ? '' : '<button class="btn" data-fs="test">发一张测试卡片</button>'}`}</span></td></tr>
+  <div class="tblwrap"><table><tbody><tr><td><b class="nm">${s === 'bad' ? '<span class="st bad">发不出去</span>' : '<span class="st done">接好了</span>'}</b><div class="sub">发给陈默的飞书 · 机器人「Hifabu」${s === 'bad' ? '' : ' · 上一张卡片' + FS.last}</div></td><td class="n"><span class="acts">${FS.drop ? '' : `<button class="link" data-fs="drop">断开</button>${s === 'bad' ? '' : '<button class="btn" data-fs="test">发一张测试卡片</button>'}`}</span></td></tr>
   ${FS.drop ? sub(2, `<p>断开后不再往飞书发卡片，要你确认的只出现在网页的「今天」里。飞书里的机器人不会被删，你可以自己在飞书里删掉。</p><span class="acts"><button class="link" data-fs="keep">取消</button><button class="btn" data-fs="drop-ok">断开</button></span>`) : ''}</tbody></table></div>
   <h2 class="sec">往飞书发什么</h2><div class="tblwrap"><table><tbody>${row('confirm', '要你确认的', '新作品入库、建议的时间快到了还没确认。卡片上可以直接确认、改时间、这条不发。')}${row('issue', '出了问题的', '没发出去、账号要重新登录、发布机不在线、出口位置变了。')}${row('daily', '每天的结果', '每天早上一张：昨天发了什么、哪条比平时好、哪条差。')}</tbody></table></div>
   <div class="cmd">关掉「要你确认的」以后，确认只能在网页上做。<a class="link" href="feishu.html">看飞书卡片长什么样</a></div>`;
