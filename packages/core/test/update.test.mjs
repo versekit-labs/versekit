@@ -1,5 +1,5 @@
 // 后台自动更新（#217）的内核部分：程序知道自己是哪个提交、检查有没有新版本、只在空闲时更新、开关与状态。
-// 只用临时 HIFABU_HOME 与本机假 GitHub；不联网、不碰真实服务。
+// 只用临时 HIFABU_HOME 与本机假 hifabu.com；不联网、不碰真实服务。
 // 真的下载 + 跑 install.sh + 自检 + 退回在 packages/cli/test/update.test.mjs。
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakeRelease } from "./install-fixtures.mjs";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-update-"));
 process.env.HIFABU_HOME = HOME;
@@ -19,25 +20,26 @@ const { findCommand } = await import("../src/commands.mjs");
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
+const RELEASE = "0.2.0";
 const seen = [];
 let server;
-let latest = B;
-let behindTitles = ["修一处", "再修一处"];
+let release;
 let down = false;
+
+function useRelease(version = RELEASE, commit = B) {
+  release = fakeRelease("http://127.0.0.1", {
+    version, commit, platform: "darwin-arm64", app: Buffer.alloc(0), node: Buffer.alloc(0),
+  });
+}
 
 before(async () => {
   core.migrate();
+  useRelease();
   server = createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers });
     if (down) { res.statusCode = 503; return res.end("{}"); }
     res.setHeader("content-type", "application/json");
-    if (req.url === "/commits/main") return res.end(JSON.stringify({ sha: latest }));
-    if (req.url.startsWith("/compare/")) {
-      const [from, to] = req.url.slice("/compare/".length).split("...");
-      if (from === to) return res.end(JSON.stringify({ status: "identical", ahead_by: 0, commits: [] }));
-      // GitHub 的 compare 是旧的在前
-      return res.end(JSON.stringify({ status: "ahead", ahead_by: behindTitles.length, commits: behindTitles.slice().reverse().map((t) => ({ commit: { message: `${t}\n\n正文` } })) }));
-    }
+    if (release[req.url] !== undefined) return res.end(release[req.url]);
     res.statusCode = 404;
     res.end("{}");
   });
@@ -50,7 +52,7 @@ after(() => {
   rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-const cur = (commit) => ({ version: "0.1.0", commit, short: updates.shortCommit(commit) });
+const cur = (commit, version = "0.1.0") => ({ version, commit, short: updates.shortCommit(commit) });
 const setState = (id, state) => core.open().prepare("UPDATE publish SET state=? WHERE id=?").run(state, id);
 function pub(state, scheduledAt = null) {
   const g = store.addGroup({ name: `组 ${Math.random()}` });
@@ -106,37 +108,44 @@ test("ACC-update-01/05 update.status 是命令表里的只读命令，带版本�
 
 // ── ACC-update-02：--check 说人话 ─────────────────────────────────────────
 
-test("ACC-update-02 检查：已是最新 / 有新版本：N 个提交（带最多 5 条标题，新的在前）；请求不带任何个人信息", async () => {
+test("ACC-release-03 检查正式版版本号与 CHANGELOG，请求不带任何个人信息", async () => {
+  useRelease();
   seen.length = 0;
-  latest = A;
-  assert.equal((await updates.checkLatest({ current: cur(A) })).message, "已是最新");
-
-  latest = B;
-  behindTitles = ["一", "二", "三", "四", "五", "六", "七"]; // 新的在前
   const r = await updates.checkLatest({ current: cur(A) });
-  assert.equal(r.message, "有新版本：7 个提交");
-  assert.equal(r.behind, 7);
-  assert.deepEqual(r.commits, ["一", "二", "三", "四", "五"]);
+  assert.equal(r.message, `有新版本：${RELEASE}`);
+  assert.equal(r.latest, B);
+  assert.equal(r.latestVersion, RELEASE);
+  assert.equal(r.behind, null);
+  assert.deepEqual(r.commits, []);
+  assert.equal(r.notes, JSON.parse(release[`/${RELEASE}/manifest.json`]).notes);
+  assert.deepEqual(seen.map((s) => s.url), ["/latest.json", `/${RELEASE}/SHA256SUMS`, `/${RELEASE}/manifest.json`]);
 
   for (const s of seen) {
     assert.equal(s.headers.authorization, undefined, "不带 token");
     assert.equal(s.headers.cookie, undefined);
+    assert.equal(s.headers.referer, undefined);
     assert.equal(s.headers["user-agent"], "versekit-updater", "固定的通用 UA，不含主机名/用户名");
   }
   const flat = JSON.stringify(seen);
-  assert.ok(!flat.includes(HOME) && !flat.includes(process.env.USER ?? "\u0000"));
+  assert.ok(!flat.includes(HOME) && !flat.includes(A));
 });
 
-test("ACC-update-02 本机提交号未知：照样能说有新版本，只是数不出差几个", async () => {
-  latest = B;
-  const r = await updates.checkLatest({ current: cur(null) });
-  assert.match(r.message, /^有新版本/);
-  assert.equal(r.behind, null);
+test("ACC-release-03 按 SemVer 比较，忽略提交差异与构建元数据，撤回版本指针时不降级", async () => {
+  useRelease("0.2.0-rc.10+build");
+  for (const [version, upToDate] of [
+    ["0.2.0-rc.9", false], ["0.2.0-rc.10+local", true], ["0.2.0", true], ["0.10.0", true],
+  ]) {
+    assert.equal((await updates.checkLatest({ current: cur(A, version) })).upToDate, upToDate, version);
+  }
+  useRelease();
+  assert.equal((await updates.checkLatest({ current: cur(null) })).upToDate, false);
+  assert.equal((await updates.checkLatest({ current: cur(A, RELEASE) })).upToDate, true);
 });
 
-test("ACC-update-02 handler：update --check 走同一份检查；联网失败说人话", async () => {
+test("ACC-release-03 handler：update --check 走同一份检查；联网失败说人话", async () => {
   const h = createCoreHandlers({});
-  latest = B; down = false;
+  useRelease();
+  down = false;
   const r = await h.update({ check: true });
   assert.ok(r.latest === B && r.message.startsWith("有新版本"));
   assert.ok(updates.readState().last_check_at, "记下上次检查时间");
@@ -205,7 +214,8 @@ test("ACC-update-03 定时检查：不空闲就推迟不打断；空闲才更新
       stop();
     }
   };
-  latest = B; down = false;
+  useRelease();
+  down = false;
   core.open().prepare("DELETE FROM meta WHERE key='update.state'").run();
   // buildInfo 在测试里读的是仓库根：没有 .versekit-build.json、提交号未知，不影响（只要不是最新）
 
@@ -215,18 +225,21 @@ test("ACC-update-03 定时检查：不空闲就推迟不打断；空闲才更新
   assert.ok(logs.some((l) => /不空闲.*登录窗口.*推迟到下一次检查/.test(l)), logs.join("\n"));
   assert.ok(updates.readState().last_check_at, "照样记下检查时间");
 
-  // 2) 空闲：更新，目标是最新提交
+  // 2) 空闲：更新，目标是最新正式版本
   await run({ waitForApply: true });
   assert.deepEqual(applied, [{ latest: B }]);
 
   // 3) 网络失败：只记日志，不更新、不抛
+  const eventCount = core.open().prepare("SELECT COUNT(*) AS n FROM event WHERE type = 'update.failed'").get().n;
   applied.length = 0; logs.length = 0; down = true;
   await run();
   assert.equal(applied.length, 0);
   assert.ok(logs.some((l) => /检查更新没成功.*下一轮再试/.test(l)));
+  assert.equal(core.open().prepare("SELECT COUNT(*) AS n FROM event WHERE type = 'update.failed'").get().n, eventCount);
+  assert.equal(updates.readState().last_failure, undefined);
   down = false;
 
-  // 4) 这个提交上次自动更新失败过：不再自动重试
+  // 4) 这个版本上次自动更新失败过：不再自动重试
   updates.patchState({ last_failure: { at: Date.now(), to: B, message: "x" } });
   await run();
   assert.equal(applied.length, 0);

@@ -33,6 +33,7 @@
 .app .subin input{flex:1 1 180px;max-width:260px}
 .app .subin .how{flex:1 1 280px;display:grid;gap:4px;min-width:0}
 .app .subin .how b{font-size:14px;font-weight:600}
+.app .subin .release-notes{white-space:pre-wrap;overflow-wrap:anywhere}
 .app .subin .how .alt{display:flex;gap:4px 16px;flex-wrap:wrap}
 .app .sw{display:inline-flex;gap:6px;align-items:center;min-height:32px;cursor:pointer;color:var(--ink2)}
 .app .sw input{width:auto}
@@ -560,7 +561,15 @@
 
   // ── 画页面：设备（发布机、中转、版本与更新）─────────────────────────────────
   const ago = (ms) => (ms < 90e3 ? "刚刚" : ms < 3600e3 ? `${Math.round(ms / 60e3)} 分钟前` : `${Math.round(ms / 3600e3)} 小时前`);
-  const RECENT_UPDATE_MS = 3 * 864e5;
+  const releaseCheck = (u) => u?.lastCheck?.latestVersion ? u.lastCheck : null;
+  const updateAvailable = (u) => {
+    const check = releaseCheck(u);
+    return Boolean(check && !check.up_to_date && check.latestVersion !== u.version);
+  };
+  const releaseNotes = (u) => {
+    if (updateAvailable(u) && u.lastCheck.notes) return { version: u.lastCheck.latestVersion, text: u.lastCheck.notes };
+    return u?.notes ? { version: u.version, text: u.notes } : null;
+  };
 
   /** 中转：连接状态、上次拉取、正在下载的投递和进度。没配中转就不画。 */
   function relayRows() {
@@ -580,16 +589,14 @@
     if (!u) return '<span class="sub">读不到版本</span>';
     const ver = `<span class="mono">${esc(u.display ?? `${u.version}+${u.short ?? "未知提交"}`)}</span>`;
     if (ui.upd) return `${ver}<div class="sub">服务会短暂重启，几十秒后回来</div>`;
-    const behind = u.lastCheck && !u.lastCheck.up_to_date;
-    const latest = u.lastCheck?.up_to_date;
-    const lu = u.lastUpdate;
-    const hasNotes = lu && Date.now() - lu.at < RECENT_UPDATE_MS && (lu.commits ?? []).length;
+    const behind = updateAvailable(u);
     const state = behind ? `<span class="sub">${esc(u.lastCheck.message || "有新版本")}</span>`
-      : latest ? `<span class="sub">已是最新</span>${hasNotes ? ` <button class="link" data-notes aria-expanded="${ui.notesOpen}">${ui.notesOpen ? "收起" : "看更新了什么"}</button>` : ""}`
+      : releaseCheck(u) ? '<span class="sub">已是最新</span>'
       : '<span class="sub">还没检查过</span>';
-    const checked = u.lastCheckAt ? `<div class="sub">上次检查 ${esc(ago(Date.now() - u.lastCheckAt))}</div>` : "";
+    const notes = releaseNotes(u) ? ` <button class="link" data-notes aria-expanded="${ui.notesOpen}">${ui.notesOpen ? "收起" : "看更新了什么"}</button>` : "";
+    const checked = releaseCheck(u) && u.lastCheckAt ? `<div class="sub">上次检查 ${esc(ago(Date.now() - u.lastCheckAt))}</div>` : "";
     const auto = `<div class="sub">自动更新${u.auto ? "开着" : "关着"} <button class="link" data-autoupd="${u.auto ? "off" : "on"}"${ui.updBusy ? " disabled" : ""}>${u.auto ? "关掉" : "打开"}</button>${u.auto ? `　每 ${esc(u.intervalHours)} 小时检查，只在空闲时更新，失败自动退回` : ""}</div>`;
-    return `${ver} ${state}${checked}${auto}`;
+    return `${ver} ${state}${notes}${checked}${auto}`;
   }
 
   // ── 出口位置：平台看到的你在哪（ACC-v3-egress-01/04/06）─────────────────────
@@ -674,15 +681,15 @@
       : online ? `<span class="st done">在线</span><div class="sub">${esc(ago(m.heartbeatAgeMs ?? 0))}还连着</div>`
       : `<span class="st bad">不在线</span><div class="sub">${m.heartbeatAgeMs == null ? "还没有收到心跳" : `${esc(ago(m.heartbeatAgeMs))}有心跳`}</div>`;
     const accountsN = (VK.snapshot()?.accounts ?? []).length;
-    const behind = u?.lastCheck && !u.lastCheck.up_to_date;
+    const behind = updateAvailable(u);
     let act = "";
     if (!ui.upd && u) {
       const dis = !online ? ` disabled title="${esc(machineName())}不在线，上线后才能更新"` : "";
       act = `<span class="acts">${B("data-updnow", "现在更新", behind ? "btn" : "link", dis)}</span>${!online ? `<div class="sub">${esc(machineName())}不在线，上线后才能更新</div>` : ""}`;
     }
-    const lu = ui.update?.lastUpdate;
-    const notes = ui.notesOpen && lu?.commits?.length
-      ? subRow(6, `<div class="how"><b>${esc(lu.display ?? lu.version)} · ${esc(whenText(lu.at))} 更新</b><ul>${lu.commits.slice(0, 5).map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`)
+    const release = releaseNotes(u);
+    const notes = ui.notesOpen && release
+      ? subRow(6, `<div class="how"><b>${esc(release.version)} · 更新内容</b><div class="release-notes">${esc(release.text)}</div></div>`)
       : "";
     const updMsg = ui.upd ? subRow(6, `<p role="status">正在更新到最新版本，更新时${esc(machineName())}的服务会短暂重启；失败会自动回到现在的版本。</p>`, "wait")
       : ui.updNote ? subRow(6, `<p role="status">${esc(ui.updNote)}</p><span class="acts">${B("data-updnoteok", "知道了", "link")}</span>`, "bad") : "";
@@ -764,7 +771,7 @@
     for (const o of ui.today?.others ?? []) pending[o.group.id] = o.total;
     const needs = ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length + ui.problems.length + (updFailure() ? 1 : 0) + (ui.relay?.failures ?? []).length + fsTodo();
     const sub = !group ? "还没有账号组" : needs ? `有 ${needs} 件事要处理` : "一切正常";
-    const behind = ui.update?.lastCheck && !ui.update.lastCheck.up_to_date;
+    const behind = updateAvailable(ui.update);
     const devN = (publisherOffline() ? 1 : 0) + (behind ? 1 : 0) + (egressPaused().length ? 1 : 0);
     const counts = { accounts: group ? ui.accounts.filter((a) => VK.loginState(a).key !== "ok" || a.identityConflict).length : 0, plan: 0, devices: devN, notify: fsTodo() };
     const tabs = `<div class="seg tabs" role="group" aria-label="系统的哪一部分">${TABS.map(([k, n]) => `<button data-tab="${k}" aria-pressed="${k === ui.tab}">${n}${counts[k] ? ` ${counts[k]}` : ""}</button>`).join("")}</div>`;
@@ -1165,7 +1172,8 @@
       if (s) {
         const changed = (s.commit ?? s.display) !== ui.upd?.from;
         if (changed) return done(() => toast(`已更新到 ${s.display}`));
-        if (s.lastFailure && s.lastFailure.at >= (ui.upd?.since ?? 0)) return done(() => toast("没更新成功，已回到原来的版本；原因在「最近出的问题」里"));
+        if (s.lastFailure && s.lastFailure.at >= (ui.upd?.since ?? 0)) return done(() => toast(s.lastFailure.message));
+        if (s.lastCheckError && s.lastCheckError.at >= (ui.upd?.since ?? 0)) return done();
         if (!s.inProgress && reads >= 4) return done(() => { ui.updNote = "没有更新：已经是最新版本，或者现在不能更新。"; });
       }
       if (ticks > Math.round(270e3 / (POLL_MS * 1.5))) done(() => { ui.updNote = "更新还没完成，过一会儿回来看版本有没有变。"; });

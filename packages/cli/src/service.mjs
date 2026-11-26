@@ -12,7 +12,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readdirSync, rmdirSync, mkdtempSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { request } from "node:http";
 import { paths, emit } from "../../core/src/index.mjs";
 import * as updates from "../../core/src/update.mjs";
@@ -550,8 +550,8 @@ export async function uninstall({ purge = false, serviceOnly = false, log = () =
 
 // ---------------------------------------------------------------- 后台自动更新（#217）
 //
-// 流程：查最新提交 → 下载新包 → 用新包里的 install.sh 非交互升级（Node、biliup 的版本变化也跟着升，
-// 不另写一套下载/替换逻辑）→ 60 秒内服务重新起来且 /api 通过自检 → 否则退回 app.prev 并留事件。
+// 流程：查最新发版 → 校验同版的安装脚本 → 非交互安装 → 60 秒内服务重新起来且 /api 通过自检 →
+// 否则退回 app.prev 并留事件。程序包和依赖由正式版安装器按锁定清单处理。
 // install.sh 自己在「起不来」时会回滚；这里补的是「起来了但不健康」那一类，所以 HIFABU_UPDATE=1 让它
 // 把 app.prev 留给我们。
 
@@ -571,12 +571,6 @@ function takeLock() {
     if (err.message.startsWith("已经有")) throw err;
   }
   writeFileSync(lockFile(), String(process.pid), { mode: 0o600 });
-}
-
-async function download(url, file) {
-  const res = await fetch(url, { headers: { "User-Agent": "versekit-updater" }, signal: AbortSignal.timeout(120e3) });
-  if (!res.ok) throw new Error(`下载新版本失败：${url} 返回 ${res.status}`);
-  writeFileSync(file, Buffer.from(await res.arrayBuffer()));
 }
 
 function runInstall(script, env, log) {
@@ -641,14 +635,27 @@ async function restorePrev(layout, previous, env) {
 
 /**
  * 更新一次。`now` 为 true 时调用方已经决定不看空闲（CLI --now / 守护进程已判过）。
- * 返回 { updated, message, ... }；失败时已经退回旧版本，返回 { ok:false, rolledBack:true, message }，不抛。
+ * 返回 { updated, message, ... }；安装后自检失败时退回旧版本。
  */
 export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
   const layout = installLayout(env);
   if (!layout.installed) throw new Error("这份程序不是用安装命令装出来的（在源码目录里直接跑），没法自动更新：用 git pull");
   const meta = readMeta();
   const current = updates.buildInfo();
-  const check = await updates.checkLatest({ current, env });
+  const downloadFailed = (reason) => {
+    const message = `[update] ${reason}，稍后再试`;
+    log(message);
+    updates.patchState({ last_check_error: { at: Date.now(), message } });
+    return { ok: false, updated: false, rolledBack: false, message, reason };
+  };
+  let release;
+  try {
+    release = await updates.inspectRelease({ current, env });
+  } catch (err) {
+    if (err instanceof updates.ReleaseDownloadError) return downloadFailed(err.message);
+    throw err;
+  }
+  const { check } = release;
   if (check.upToDate) return { ok: true, updated: false, message: "已是最新", version: current.version, display: updates.displayVersion(current), commit: current.commit };
 
   takeLock();
@@ -658,26 +665,23 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
   updates.patchState({ in_progress: { since: Date.now(), to: check.latest } });
   const oldLabel = updates.displayVersion(current);
   const failed = (reason, extra = {}) => {
-    const rolledBack = extra.restored !== false;
-    const message = `自动更新失败，${rolledBack ? `已回到 ${oldLabel}` : `未能恢复 ${oldLabel} 的后台服务`}：${reason}`;
+    const rolledBack = extra.restored !== false && !extra.untouched;
+    const outcome = extra.untouched ? `继续运行 ${oldLabel}`
+      : rolledBack ? `已回到 ${oldLabel}` : `未能恢复 ${oldLabel} 的后台服务`;
+    const message = `自动更新失败，${outcome}：${reason}`;
     emit({ type: "update.failed", severity: "warn", payload: { error_code: "update_failed", from: current.commit, to: check.latest, from_version: current.version, reason, message } });
     updates.patchState({ last_failure: { at: Date.now(), from: current.commit, to: check.latest, from_version: current.version, reason, message } });
     log(message);
     return { ok: false, updated: false, rolledBack, message, reason, ...extra };
   };
   try {
-    log(`有新版本：${check.message}，开始更新（${current.short ?? "未知"} → ${updates.shortCommit(check.latest)}）`);
-    const tarball = join(work, "app.tar.gz");
-    const src = join(work, "src");
-    const url = readEnv("HIFABU_APP_URL", env) || `https://codeload.github.com/versekit-labs/versekit/tar.gz/${check.latest}`;
+    log(`${check.message}，开始更新（${current.version} → ${check.latestVersion}）`);
+    const installer = join(work, "install.sh");
     try {
-      await download(url, tarball);
-      mkdirSync(src);
-      const t = run("tar", ["-xzf", tarball, "-C", src, "--strip-components=1"]);
-      if (t.status !== 0) throw new Error(`新程序包解压失败：${(t.stderr || "").trim()}`);
-      if (!existsSync(join(src, "install.sh"))) throw new Error("新程序包里没有 install.sh");
+      writeFileSync(installer, await release.downloadInstaller(), { mode: 0o600 });
     } catch (err) {
-      return failed(err.message);
+      if (err instanceof updates.ReleaseDownloadError) return downloadFailed(err.message);
+      return failed(err.message, { untouched: true });
     }
 
     const installEnv = {
@@ -685,18 +689,16 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
       HIFABU_UPDATE: "1",
       HIFABU_NO_OPEN: "1",
       HIFABU_PREFIX: layout.prefix,
-      HIFABU_APP_URL: pathToFileURL(tarball).href,
-      HIFABU_APP_COMMIT: check.latest,
-      HIFABU_APP_SHA256: "",
       HIFABU_PORT: String(port),
       HIFABU_OFFLINE: offline ? "1" : "",
       HIFABU_SERVICE_LABEL: previous.label === LEGACY_LABEL ? DEFAULT_LABEL : previous.label,
       ...(meta?.manager ? { HIFABU_SERVICE_MANAGER: meta.manager } : {}),
     };
-    const r = await runInstall(join(src, "install.sh"), installEnv, log);
+    const r = await runInstall(installer, installEnv, log);
     if (r.code !== 0) {
       // install.sh 在失败时自己回滚（旧程序放回、旧服务重新注册）。
       const why = /原因：(.*)/.exec(r.stderr)?.[1]?.trim() || r.stderr.trim().split("\n").pop() || `install.sh 退出码 ${r.code}`;
+      if (why.startsWith("下载失败：") && !r.stderr.includes("未能恢复升级前的后台服务")) return downloadFailed(why);
       return failed(why, r.stderr.includes("未能恢复升级前的后台服务") ? { restored: false } : {});
     }
 
@@ -708,12 +710,13 @@ export async function applyUpdate({ log = () => {}, env = process.env } = {}) {
     rmSync(join(layout.prefix, "app.prev"), { recursive: true, force: true });
     const now = updates.buildInfo({ root: `${layout.app}/` });
     updates.patchState({
-      last_update: { at: Date.now(), from: current.commit, from_version: updates.displayVersion(current), to: now.commit ?? check.latest, version: now.version, display: updates.displayVersion(now), commits: check.commits },
+      last_update: { at: Date.now(), from: current.commit, from_version: updates.displayVersion(current), to: now.commit ?? check.latest, version: now.version, display: updates.displayVersion(now), commits: check.commits, notes: check.notes },
       last_failure: null,
+      last_check_error: null,
     });
     const message = `已更新到 ${updates.displayVersion(now)}（数据、账号、登录都保留）`;
     log(message);
-    return { ok: true, updated: true, message, version: now.version, display: updates.displayVersion(now), commit: now.commit, commits: check.commits };
+    return { ok: true, updated: true, message, version: now.version, display: updates.displayVersion(now), commit: now.commit, commits: check.commits, notes: check.notes };
   } finally {
     updates.patchState({ in_progress: null });
     rmSync(work, { recursive: true, force: true });

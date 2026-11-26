@@ -1,21 +1,21 @@
-// 后台自动更新的「读」这一半（#217）：我是哪个提交、有没有新版本、现在空闲吗、什么时候再查。
+// 后台自动更新：检查正式发版、校验下载、判断是否空闲。
 //
-// 「写」这一半（下载新包、跑新包里的 install.sh、自检、退回）在 packages/cli/src/service.mjs，
-// 因为它要动服务和程序目录；这里只依赖库和配置，守护进程、CLI、系统页共用同一份结果。
+// 安装、自检与退回由 packages/cli/src/service.mjs 负责。
 //
 // 约束：
-//   · GitHub 请求不带 token、不带任何个人信息，User-Agent 是固定的通用名；
+//   · 下载请求不带 token、不带任何个人信息，User-Agent 是固定的通用名；
 //   · 联网失败只记日志，不抛、不弹提醒，下一轮再试；
 //   · 更新只在空闲时发生：没有正在发的、没有打开的登录窗口、接下来 15 分钟内没有要发的。
 
 import { readEnv } from "./env.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { open, getMeta } from "./index.mjs";
 import { readConfig, updateConfig } from "./config.mjs";
 
-export const DEFAULT_API = "https://api.github.com/repos/versekit-labs/versekit";
+export const DEFAULT_API = "https://hifabu.com/download";
 export const DEFAULT_INTERVAL_HOURS = 6;
 /** 接下来这段时间里有要发的，就不更新。 */
 export const SOON_MS = 15 * 60e3;
@@ -23,7 +23,16 @@ export const SOON_MS = 15 * 60e3;
 export const LOGIN_STALE_MS = 30 * 60e3;
 const STATE_KEY = "update.state";
 
-export const apiBase = (env = process.env) => (readEnv("HIFABU_UPDATE_API", env) || DEFAULT_API).replace(/\/+$/, "");
+export function apiBase(env = process.env) {
+  const override = readEnv("HIFABU_UPDATE_API", env);
+  if (!override) return DEFAULT_API;
+  const base = new URL(override);
+  if (base.protocol !== "http:" || base.hostname !== "127.0.0.1" ||
+      base.username || base.password || base.search || base.hash) {
+    throw new Error("测试更新源必须是本地 HTTP 地址，且不能包含凭证、查询参数或片段");
+  }
+  return base.href.replace(/\/+$/, "");
+}
 
 // ---------------------------------------------------------------- 我是哪个提交
 
@@ -107,50 +116,117 @@ export function patchState(patch) {
 
 // ---------------------------------------------------------------- 检查
 
-const headers = { Accept: "application/vnd.github+json", "User-Agent": "versekit-updater" };
+const headers = { "User-Agent": "versekit-updater" };
+const SHA256 = /^[0-9a-f]{64}$/;
+// 与发布脚本接受的 SemVer 一致。
+const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/;
+const INTEGER = /^[0-9]+$/;
 
-async function getJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
-  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`GitHub 返回 ${res.status}`);
-  return res.json();
+function isNewer(latest, current) {
+  if (!current) return true;
+  for (let i = 1; i <= 3; i++) {
+    if (latest[i] !== current[i]) return BigInt(latest[i]) > BigInt(current[i]);
+  }
+  if (!current[4]) return false;
+  if (!latest[4]) return true;
+  const next = latest[4].split(".");
+  const installed = current[4].split(".");
+  for (let i = 0; i < Math.min(next.length, installed.length); i++) {
+    if (next[i] === installed[i]) continue;
+    const nextNumeric = INTEGER.test(next[i]);
+    const installedNumeric = INTEGER.test(installed[i]);
+    if (nextNumeric && installedNumeric) return BigInt(next[i]) > BigInt(installed[i]);
+    if (nextNumeric !== installedNumeric) return !nextNumeric;
+    return next[i] > installed[i];
+  }
+  return next.length > installed.length;
 }
 
-/**
- * 已装提交 vs main 最新提交。返回人话 `message`；联网失败抛错（调用方决定是记日志还是报给人）。
- * `commits` 是新提交的标题（最多 5 条，新的在前），给系统页「更新了什么」用。
- */
-export async function checkLatest({ current = buildInfo(), fetchImpl = globalThis.fetch, env = process.env } = {}) {
+export class ReleaseDownloadError extends Error {}
+
+async function download(base, file, fetchImpl, timeoutMs = 15000) {
+  try {
+    const res = await fetchImpl(`${base}/${file}`, {
+      headers, credentials: "omit", redirect: "error", signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    throw new ReleaseDownloadError(`下载新版本失败：${file}（${err.message}）`);
+  }
+}
+
+function parseJson(bytes, file) {
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error(`${file} 的 JSON 格式无效`);
+  }
+}
+
+function checksum(sums, name) {
+  const matches = sums.toString("utf8").split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .filter((fields) => fields.length === 2 && fields[1] === name);
+  if (matches.length !== 1 || !SHA256.test(matches[0][0])) {
+    throw new Error(`SHA256SUMS 中缺少 ${name} 的唯一有效 SHA-256`);
+  }
+  return matches[0][0];
+}
+
+function verify(bytes, expected, file) {
+  if (createHash("sha256").update(bytes).digest("hex") !== expected) {
+    throw new Error(`${file} 的 SHA-256 校验不通过`);
+  }
+  return bytes;
+}
+
+/** 先把版本指针与同一版的清单对上，再提供该版经过校验的安装脚本。 */
+export async function inspectRelease({ current = buildInfo(), fetchImpl = globalThis.fetch, env = process.env } = {}) {
   const base = apiBase(env);
-  const head = await getJson(`${base}/commits/main`, { fetchImpl });
-  const latest = head?.sha;
-  if (!FULL_SHA.test(latest ?? "")) throw new Error("GitHub 返回的最新提交号不对");
-  const out = { current: current.commit, latest, behind: null, commits: [], upToDate: false, message: "" };
-  if (current.commit === latest) {
-    return { ...out, behind: 0, upToDate: true, message: "已是最新" };
+  const latest = parseJson(await download(base, "latest.json", fetchImpl), "latest.json");
+  const version = latest?.version;
+  const parsed = typeof version === "string" && SEMVER.exec(version);
+  if (!parsed || latest.manifest !== `${version}/manifest.json` ||
+      typeof latest.sha256 !== "string" || !SHA256.test(latest.sha256)) {
+    throw new Error("latest.json 的版本指针无效");
   }
-  if (current.commit) {
-    try {
-      const cmp = await getJson(`${base}/compare/${current.commit}...${latest}`, { fetchImpl });
-      if (cmp.status === "identical" || cmp.ahead_by === 0) return { ...out, behind: 0, upToDate: true, message: "已是最新" };
-      if (Number.isInteger(cmp.ahead_by)) out.behind = cmp.ahead_by;
-      out.commits = (cmp.commits ?? [])
-        .map((c) => String(c.commit?.message ?? "").split("\n")[0].trim())
-        .filter(Boolean)
-        .reverse()
-        .slice(0, 5);
-    } catch {
-      /* 比不出差几个就只说「有新版本」 */
-    }
+
+  const sums = await download(base, `${version}/SHA256SUMS`, fetchImpl);
+  const manifestBytes = await download(base, latest.manifest, fetchImpl);
+  if (checksum(sums, "manifest.json") !== latest.sha256) {
+    throw new Error("SHA256SUMS 中 manifest.json 的 SHA-256 与 latest.json 不符");
   }
-  out.message = out.behind != null ? `有新版本：${out.behind} 个提交` : current.commit ? "有新版本" : "有新版本（本机的提交号未知，没法数差几个）";
-  return out;
+  const manifest = parseJson(verify(manifestBytes, latest.sha256, "manifest.json"), "manifest.json");
+  if (manifest?.schema !== "hifabu.release/1" || manifest.version !== version ||
+      typeof manifest.commit !== "string" || !FULL_SHA.test(manifest.commit) || typeof manifest.notes !== "string") {
+    throw new Error("manifest.json 的版本信息无效");
+  }
+  const upToDate = !isNewer(parsed, SEMVER.exec(current.version));
+  const check = {
+    current: current.commit, latest: manifest.commit, behind: upToDate ? 0 : null, commits: [],
+    upToDate, message: upToDate ? "已是最新" : `有新版本：${version}`,
+    latestVersion: version, notes: manifest.notes,
+  };
+  return {
+    check,
+    async downloadInstaller() {
+      const expected = checksum(sums, "install.sh");
+      const script = await download(base, `${version}/install.sh`, fetchImpl, 120e3);
+      return verify(script, expected, "install.sh");
+    },
+  };
 }
 
-/** 检查并记下时间与结果；联网失败也记下「上次检查失败」，但不抛。 */
+export async function checkLatest(opts) {
+  return (await inspectRelease(opts)).check;
+}
+
+/** 检查并记下时间与结果；检查失败由调用方处理。 */
 export async function recordCheck(opts = {}) {
   try {
     const r = await checkLatest(opts);
-    patchState({ last_check_at: Date.now(), last_check: { latest: r.latest, behind: r.behind, up_to_date: r.upToDate, message: r.message, commits: r.commits }, last_check_error: null });
+    patchState({ last_check_at: Date.now(), last_check: { latest: r.latest, behind: r.behind, up_to_date: r.upToDate, message: r.message, commits: r.commits, latestVersion: r.latestVersion, notes: r.notes }, last_check_error: null });
     return r;
   } catch (err) {
     patchState({ last_check_error: { at: Date.now(), message: err.message } });
@@ -180,12 +256,24 @@ export function idleState({ now = Date.now(), loginsOpen = 0 } = {}) {
 
 // ---------------------------------------------------------------- 状态视图（update.status）
 
+function installedReleaseNotes(build) {
+  if (!build.fromInstall) return null;
+  try {
+    const release = JSON.parse(readFileSync(`${APP_ROOT}release-manifest.json`, "utf8"));
+    return release.schema === "hifabu.release/1" && release.version === build.version &&
+      release.commit === build.commit && typeof release.notes === "string" ? release.notes : null;
+  } catch {
+    return null; // 旧安装没有版本清单。
+  }
+}
+
 export function statusView({ now = Date.now() } = {}) {
   const b = buildInfo();
   const cfg = autoConfig();
   const s = readState();
   return {
     version: b.version,
+    notes: installedReleaseNotes(b),
     display: displayVersion(b),
     commit: b.commit,
     short: b.short,
@@ -239,18 +327,18 @@ export function startAutoUpdate({ apply, busy = () => 0, log = () => {}, startDe
       }
       const state = readState();
       if (state.last_failure?.to === r.latest) {
-        log(`[update] ${shortCommit(r.latest)} 上次自动更新失败过，不再自动重试（在系统页点「现在更新」可以再试）`);
+        log(`[update] ${r.latestVersion} 上次自动更新失败过，不再自动重试（在系统页点「现在更新」可以再试）`);
         return next();
       }
       const idle = idleState({ now: now(), loginsOpen: busy() });
       if (!idle.idle) {
-        log(`[update] 有新版本（${r.message}），现在不空闲：${idle.reason}；推迟到下一次检查`);
+        log(`[update] ${r.message}，现在不空闲：${idle.reason}；推迟到下一次检查`);
         return next();
       }
-      log(`[update] ${r.message}，空闲，开始更新到 ${shortCommit(r.latest)}`);
+      log(`[update] ${r.message}，空闲，开始更新`);
       await apply({ latest: r.latest });
     } catch (err) {
-      // 联网失败、GitHub 限流：只记日志，不弹提醒。
+      // 检查失败只记日志，下一轮再试。
       log(`[update] 检查更新没成功（${err.message}），下一轮再试`);
     }
     return next();

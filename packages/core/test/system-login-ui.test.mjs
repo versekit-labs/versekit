@@ -55,6 +55,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     },
   };
   const logs = [];
+  const releaseNotes = "## 更新内容\n- 通用文案按字段覆盖\n- 现在发和预约发\n<em>保留原文</em>";
   const markOk = (id) => db.prepare("UPDATE account SET state='ok', last_checked_at=? WHERE id=?").run(Date.now(), id);
   const adapters = ["xiaohongshu", "douyin", "bilibili"].map((platform) => ({ platform, adapter: { ready: () => null } }));
   adapters.push(ytAdapter);
@@ -85,8 +86,8 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     "account.switch": async ({ accountId }) => { script.seen.push({ cmd: "switch", accountId }); db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired", switched: true }; },
     "account.logout": async ({ accountId }) => { db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired" }; },
     "update.status": () => script.updated
-      ? { version: "0.9.2", display: "0.9.2+bbbbbbb", commit: "b".repeat(40), short: "bbbbbbb", auto: true, intervalHours: 6, lastCheckAt: Date.now(), lastCheck: { up_to_date: true, message: "已是最新" }, lastUpdate: { at: Date.now(), display: "0.9.2+bbbbbbb", commits: ["通用文案按字段覆盖", "现在发和预约发"] }, lastFailure: null, inProgress: false }
-      : { version: "0.9.1", display: "0.9.1+aaaaaaa", commit: "a".repeat(40), short: "aaaaaaa", auto: true, intervalHours: 6, lastCheckAt: Date.now() - 600e3, lastCheck: { up_to_date: false, behind: 2, message: "有新版本：2 个提交" }, lastUpdate: null, lastFailure: null, inProgress: script.updating > 0 && script.updating < 3 && (script.updating++, true) },
+      ? { version: "0.9.2", display: "0.9.2+bbbbbbb", commit: "b".repeat(40), short: "bbbbbbb", auto: true, intervalHours: 6, lastCheckAt: Date.now(), lastCheck: { latestVersion: "0.9.2", up_to_date: true, message: "已是最新" }, notes: releaseNotes, lastFailure: null, inProgress: false }
+      : { version: "0.9.1", display: "0.9.1+aaaaaaa", commit: "a".repeat(40), short: "aaaaaaa", auto: true, intervalHours: 6, lastCheckAt: Date.now() - 600e3, lastCheck: { latestVersion: "0.9.2", up_to_date: false, message: "有新版本：0.9.2", notes: releaseNotes }, lastUpdate: null, lastFailure: null, inProgress: script.updating > 0 && script.updating < 3 && (script.updating++, true) },
     update: async (args) => {
       if (args?.auto) return { auto: args.auto === "on" };
       script.seen.push({ cmd: "update" });
@@ -297,9 +298,12 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     await tab.goto(`${base}/system?r=3#tab=devices&pollms=200`);
     await tab.waitFor(`document.querySelector("table.dev")`, [], { timeout: 15e3, what: "设备分段" });
     await watch();
-    await waitText(/有新版本：2 个提交/, "有新版本");
+    await waitText(/有新版本：0\.9\.2/, "有新版本");
     assert.match(await text(), /自动更新开着/);
-    assert.doesNotMatch(await text(), /看更新了什么/, "更新内容没更新过时不展开也不出现");
+    assert.doesNotMatch(await text(), /通用文案按字段覆盖/, "更新内容默认收起");
+    await click("[data-notes]");
+    await waitText(/0\.9\.2 · 更新内容/, "升级前可查看本版 CHANGELOG");
+    await click("[data-notes]");
     await shot("system-devices.png");
     await click("[data-updnow]");
     await waitText(/正在更新…/, "正在更新…");
@@ -311,6 +315,8 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     assert.doesNotMatch(await text(), /通用文案按字段覆盖/);
     await click("[data-notes]");
     await waitText(/通用文案按字段覆盖/, "展开更新内容");
+    assert.equal(await tab.eval(`document.querySelector(".release-notes").textContent`), releaseNotes);
+    assert.equal(await tab.eval(`document.querySelector(".release-notes em")`), null);
     await shot("system-devices-notes.png");
 
     await watch();
