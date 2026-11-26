@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
-import { COMMANDS, parseArgs } from "../../core/src/commands.mjs";
+import { MAKER_COMMANDS, parseArgs } from "../../core/src/commands.mjs";
 import { isLoopback } from "../../cloud/src/transport.mjs";
 import { createDeliveryHandlers, deliveryTargetPlatforms } from "../../core/src/maker-handlers.mjs";
 import { getGroupSnapshot, pushDelivery, relayConnectionKey } from "../../relay/src/client.mjs";
@@ -14,8 +14,8 @@ import { projectGroupSnapshot } from "../../relay/src/group-snapshot.mjs";
 import { formatBytes, formatDuration, RETENTION_MS } from "../../relay/src/status.mjs";
 import { parseArgv } from "./argv.mjs";
 import { createCloudHandlers } from "./cloud.mjs";
+import { scanProject } from "./maker-scan.mjs";
 
-const makerCommands = COMMANDS.filter(({ roles }) => roles?.includes("maker"));
 const options = new Map([["--name", "name"], ["--role", "role"], ["--group", "group"], ["--dry-run", "dryRun"]]);
 const globalOptions = new Set(["--data", "--json", "--human", "--offline", "--help"]);
 const queueFilename = /^dl_[0-9a-f]{12,32}\.json$/;
@@ -329,7 +329,7 @@ function usage() {
   console.log([
     "Hifabu 制作机",
     "全局选项  --data <目录>  --json  --human  --offline  --help",
-    ...makerCommands.map(({ cli }) => cli.usage),
+    ...MAKER_COMMANDS.map(({ cli }) => cli.usage),
   ].join("\n"));
 }
 
@@ -337,6 +337,7 @@ function commandArgs(command, target, flags) {
   const args = {};
   if (command.name === "work.push" && target) args.manifest = resolve(target);
   if (command.name === "delivery.show" && target) args.id = target;
+  if (command.name === "scan" && target) args.root = resolve(target);
   if (target && !Object.keys(args).length) throw new Error(command.cli.usage);
   for (const [flag, value] of Object.entries(flags)) {
     if (globalOptions.has(flag)) continue;
@@ -356,6 +357,9 @@ function printHuman(name, data) {
         console.log(`刷新凭据存于${storage[data.credentialStorage]}。`);
       }
     } else console.log(data.message ?? "这台机器未登录 Hifabu。");
+  } else if (name === "scan") {
+    for (const { path } of data.files) console.log(path);
+    if (data.truncated) console.log("仅列出各类最近修改的 100 个文件。");
   } else if (name === "group.list") {
     if (data.reportedAt == null) console.log("发布机还没同步账号组。");
     else if (!data.groups.length) console.log("发布机上还没有账号组。");
@@ -431,17 +435,21 @@ try {
     // live worker while it was finishing and queued another job.
     while (await runUploader(options)) {}
   } else {
-    await kickUploader();
-    if (!pos.length || flags["--help"]) usage();
+    if (!pos.length || flags["--help"]) {
+      await kickUploader();
+      usage();
+    }
     else {
       const [area, action = (area === "group" || area === "delivery") ? "list" : "", target] = pos;
-      const command = makerCommands.find(({ name }) => name === area + "." + action);
-      if (!command || pos.length > 3) throw new Error("未知制作机命令，运行 hifabu --help 查看。");
-
-      const args = commandArgs(command, target, flags);
+      const command = MAKER_COMMANDS.find(({ name }) => name === area || name === area + "." + action);
+      const singleWord = command?.name === area;
+      if (!command || pos.length > (singleWord ? 2 : 3)) throw new Error("未知制作机命令，运行 hifabu --help 查看。");
+      const args = commandArgs(command, singleWord ? action : target, flags);
+      if (command.name !== "scan") await kickUploader();
       const handlers = {
         ...cloud,
         ...createDeliveryHandlers({ makerConnection, state, uploadQueue, defaultGroupOf: (manifest) => projectGroup(dataDir, manifest), log }),
+        scan: scanProject,
         async "group.list"() {
           const snapshot = await getGroupSnapshot(makerConnection());
           return snapshot ? projectGroupSnapshot(snapshot) : { groups: [], reportedAt: null };

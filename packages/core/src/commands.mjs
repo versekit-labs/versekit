@@ -1053,6 +1053,24 @@ export const COMMANDS = [
 
 export const findCommand = (name) => COMMANDS.find((c) => c.name === name) ?? null;
 
+// This projection includes commands that act on a project on the maker's computer.
+export const MAKER_COMMANDS = [
+  ...COMMANDS.filter(({ roles }) => roles?.includes("maker")),
+  {
+    name: "scan",
+    roles: ["maker"],
+    summary: "列出项目中最近修改的成片、图片和文案候选",
+    permission: "local",
+    remote: false,
+    localOnly: true,
+    args: { root: "string" },
+    http: null,
+    cli: { usage: "hifabu scan <项目根> [--json]" },
+    card: null,
+    audit: "never",
+  },
+];
+
 // 云端命令只挂在 Hifabu 账号服务，供它的 CLI 和 HTTP 投影使用。
 export const CLOUD_COMMANDS = [
   {

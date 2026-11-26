@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMMANDS, CLOUD_COMMANDS } from "../packages/core/src/commands.mjs";
+import { MAKER_COMMANDS, CLOUD_COMMANDS } from "../packages/core/src/commands.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const entry = "packages/cli/src/maker.mjs";
@@ -21,11 +21,11 @@ const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 function projectRegistry(source) {
   const parser = source.indexOf("const EMPTY_STRING_MEANS_VALUE =");
   if (parser === -1) throw new Error("找不到命令参数校验");
-  const maker = COMMANDS.filter((command) => command.roles?.includes("maker"));
   const cloud = CLOUD_COMMANDS.filter((command) => cloudNames.has(command.name));
   if (cloud.length !== cloudNames.size) throw new Error("制作机所需的云端命令不完整");
   return [
-    `export const COMMANDS = ${JSON.stringify(maker, null, 2)};`,
+    `export const MAKER_COMMANDS = ${JSON.stringify(MAKER_COMMANDS, null, 2)};`,
+    `export const COMMANDS = MAKER_COMMANDS.filter(({ http }) => http != null);`,
     `export const CLOUD_COMMANDS = ${JSON.stringify(cloud, null, 2)};`,
     source.slice(parser),
   ].join("\n\n");
