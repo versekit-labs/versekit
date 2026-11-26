@@ -53,7 +53,7 @@ function ingest(extra = {}) {
 test("命令表里有 plan.apply（CLI、HTTP 由它派生）", () => {
   const c = COMMANDS.find((x) => x.name === "plan.apply");
   assert.ok(c);
-  assert.match(c.cli.usage, /vk plan apply <cutId> \[--accounts a,b\] \[--group <组>\]/);
+  assert.match(c.cli.usage, /hifabu plan apply <cutId> \[--accounts a,b\] \[--group <组>\]/);
 });
 
 test("ACC-v2-plan-01：默认当前组所有账号各一条，待确认，挂在这支成片的 zh 版本上；重复执行不新建", () => {

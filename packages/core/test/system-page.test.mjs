@@ -76,7 +76,7 @@ test("命令表里有这条命令（CLI 完整律）：HTTP 由它派生，secre
   const cmd = findCommand("account.credentials");
   assert.ok(cmd, "account.credentials 必须在 commands.mjs 定义");
   assert.deepEqual(cmd.http, { method: "POST", path: "/api/platforms/:platform/credentials" });
-  assert.match(cmd.cli.usage, /vk account credentials tiktok/);
+  assert.match(cmd.cli.usage, /hifabu account credentials tiktok/);
   assert.equal(cmd.audit, "never", "audit 会把 args 原样写库，里面有 secret");
   assert.equal(cmd.card, null);
   assert.throws(() => parseArgs(cmd, { platform: "tiktok-api", clientKey: KEY }), /缺少参数：clientSecret/);
