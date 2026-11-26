@@ -1,13 +1,12 @@
 // 后台自动更新（#217）：真的跑 install.sh、真的起服务、真的退回。
 //
 // 不碰真实环境：HOME 是临时目录，服务名带测试前缀，端口随机，服务以 --offline 起，托管方式固定 detach；
-// 下载源是本机假服务器（Node、biliup、versekit tarball、假 GitHub API 全在里面）。
+// 下载源是本机假 hifabu.com，提供正式版安装器、清单、Node 和程序包。
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createServer as netServer } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir, platform, arch } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,12 +28,11 @@ const NEW_SERVICE = "com.hifabu.daemon";
 const homes = [];
 let server;
 let base;
-let appTarball = "app-1";
-let latest = B;
-let titles = ["修了一处", "加了一个功能"];
+let servedRelease = "app-1";
 let releases;
+const requests = [];
+const overrides = new Map();
 
-const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const tar = (args) => {
   const r = spawnSync("tar", args, { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
@@ -88,7 +86,7 @@ before(async () => {
   buildApp("app-1", "0.1.0");
   buildApp("app-2", "9.9.9");
   // 坏包：能起来、/today 是 200，但 /api/now 一直报错——install.sh 自己发现不了，要靠更新后的自检。
-  buildApp("app-bad", "8.8.8", (dir) => {
+  buildApp("app-bad", "10.0.0", (dir) => {
     const f = join(dir, "packages/core/src/handlers.mjs");
     const src = readFileSync(f, "utf8");
     const patched = src.replace("now: () => ({ ...store.statusSnapshot() }),", 'now: () => { throw new Error("故意坏掉"); },');
@@ -100,23 +98,18 @@ before(async () => {
   });
   server = createServer((req, res) => {
     const url = req.url ?? "";
-    if (url === "/app.tar.gz" && appTarball !== "404") {
-      res.end(readFileSync(join(WORK, `${appTarball}.tar.gz`)));
-    } else if (url === "/api/commits/main") res.end(JSON.stringify({ sha: latest }));
-    else if (url.startsWith("/api/compare/")) {
-      res.end(JSON.stringify({ status: "ahead", ahead_by: titles.length, commits: titles.slice().reverse().map((t) => ({ commit: { message: `${t}\n\n正文` } })) }));
-    } else {
-      const body = releases[appTarball]?.[url];
-      if (body !== undefined) return res.end(body);
-      res.writeHead(404).end("no");
-    }
+    requests.push({ url, headers: req.headers });
+    const body = overrides.has(url) ? overrides.get(url) : releases[servedRelease]?.[url];
+    if (body === null) return req.socket.destroy();
+    if (body !== undefined) return res.end(body);
+    res.writeHead(404).end("no");
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
   releases = Object.fromEntries([
     ["app-1", "0.1.0", A],
     ["app-2", "9.9.9", B],
-    ["app-bad", "8.8.8", C],
+    ["app-bad", "10.0.0", C],
     ["app-init-bad", "8.8.8", C],
   ].map(([name, version, commit]) => [
     name,
@@ -152,8 +145,10 @@ async function newHome(extra = {}) {
     HIFABU_NO_OPEN: "1",
     HIFABU_INSTALL_TEST: "1",
     HIFABU_DOWNLOAD_URL: base,
-    HIFABU_APP_URL: `${base}/app.tar.gz`,
-    HIFABU_UPDATE_API: `${base}/api`,
+    HIFABU_APP_URL: `${base}/retired-archive?name=fixture-device`,
+    GH_TOKEN: "fixture-private-token",
+    HIFABU_UPDATE_API: base,
+    HIFABU_UPDATE_START_DELAY_MS: "600000",
     HIFABU_UPDATE_HEALTH_TIMEOUT_MS: "4000",
     ...extra,
   };
@@ -293,7 +288,7 @@ async function measureDowntime(port, operation) {
 }
 
 async function installV1(h) {
-  appTarball = "app-1";
+  servedRelease = "app-1";
   const r = await sh(h, "bash", [INSTALL_SH]);
   assert.equal(r.code, 0, r.stdout + r.stderr);
 }
@@ -303,7 +298,6 @@ for (const manager of ["launchd", "systemd"]) {
     const h = await newHome({ HIFABU_SERVICE_LABEL: OLD_SERVICE });
     fakeServiceManager(h, manager);
     h.env.HIFABU_HOME = h.home;
-    latest = A;
     await installV1(h);
     delete h.env.HIFABU_SERVICE_LABEL;
     const initial = json(await hifabu(h, "service", "status"));
@@ -351,8 +345,7 @@ for (const manager of ["launchd", "systemd"]) {
       assert.deepEqual(await dataSnapshot(h, loginFiles), before);
     };
 
-    latest = B;
-    appTarball = "app-bad";
+    servedRelease = "app-bad";
     const unhealthy = await measureDowntime(h.port, () => hifabu(h, "update", "--now"));
     assert.equal(unhealthy.code, 1, unhealthy.stdout + unhealthy.stderr);
     assert.match(json(unhealthy).reason, /com\.hifabu\.daemon 没通过自检/, unhealthy.stderr);
@@ -364,7 +357,7 @@ for (const manager of ["launchd", "systemd"]) {
     assert.match(event.payload.reason, /没通过自检/);
 
     if (manager === "launchd") {
-      appTarball = "app-init-bad";
+      servedRelease = "app-init-bad";
       const result = await sh(h, "bash", [INSTALL_SH], { env: { HIFABU_APP_COMMIT: B } });
       assert.equal(result.code, 1, result.stdout + result.stderr);
       assert.match(result.stderr, /hifabu init 失败/);
@@ -374,7 +367,7 @@ for (const manager of ["launchd", "systemd"]) {
       assert.match(failed?.payload.reason, /hifabu init 失败/);
     }
 
-    appTarball = "app-2";
+    servedRelease = "app-2";
     if (manager === "systemd") {
       const fail = join(h.home, "manager-failure");
       for (const step of [`stop ${OLD_SERVICE}`, `enable ${NEW_SERVICE}`, `disable ${OLD_SERVICE}`]) {
@@ -427,12 +420,12 @@ test("ACC-update-01 装好的程序知道自己是哪个提交：app/.versekit-b
   assert.equal(await status(main.port, "/api/update"), 200);
 });
 
-test("ACC-update-02 vk update --check 说人话；--auto off|on 就地开关", { timeout: 120000 }, async () => {
-  latest = B;
+test("ACC-release-03 vk update --check 显示正式版本；--auto off|on 就地开关", { timeout: 120000 }, async () => {
+  servedRelease = "app-2";
   const c = json(await vk(main, "update", "--check"));
-  assert.equal(c.message, "有新版本：2 个提交");
-  assert.deepEqual(c.commits, ["修了一处", "加了一个功能"].reverse().reverse());
-  latest = A;
+  assert.equal(c.message, "有新版本：9.9.9");
+  assert.equal(c.notes, JSON.parse(releases["app-2"]["/9.9.9/manifest.json"]).notes);
+  servedRelease = "app-1";
   assert.equal(json(await vk(main, "update", "--check")).message, "已是最新");
 
   const off = await vk(main, "update", "--auto", "off");
@@ -471,14 +464,14 @@ test("ACC-brand-04 安装 hifabu 与 vk 别名，兼容制作机的 --data", asy
 });
 
 test("ACC-update-02 已是最新时 vk update 什么都不动", { timeout: 60000 }, async () => {
-  latest = A;
+  servedRelease = "app-1";
   const r = json(await vk(main, "update"));
   assert.equal(r.updated, false);
   assert.equal(r.message, "已是最新");
   assert.equal(appVersion(main), "0.1.0");
 });
 
-test("ACC-update-02/05 更新：用新包里的 install.sh 升级，数据/账号/配置保留，app.prev 清掉，提交号更新，系统页看得到更新内容", { timeout: 180000 }, async () => {
+test("ACC-release-03 校验后用正式版安装器升级，数据保留，系统页读取该版 CHANGELOG", { timeout: 180000 }, async () => {
   const added = await vk(main, "group", "add", "保留我");
   assert.equal(added.code, 0, added.stdout + added.stderr);
   const cred = join(main.home, ".config/versekit/credentials/keep.txt");
@@ -491,11 +484,19 @@ test("ACC-update-02/05 更新：用新包里的 install.sh 升级，数据/账�
   writeFileSync(vkOf(main), launcher.split("\n").filter((line) => !line.includes("vk 已改名")).join("\n"), { mode: 0o755 });
   rmSync(hifabuOf(main));
 
-  latest = B;
-  titles = ["一", "二", "三", "四", "五", "六"];
-  appTarball = "app-2";
+  servedRelease = "app-2";
+  requests.length = 0;
   const r = await vk(main, "update");
   assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(requests.map(({ url }) => url), [
+    "/latest.json", "/9.9.9/SHA256SUMS", "/9.9.9/manifest.json", "/9.9.9/install.sh",
+    "/deps/node.tar.gz", "/9.9.9/app.tar.gz",
+  ]);
+  for (const { headers } of requests) {
+    for (const name of ["authorization", "cookie", "referer"]) assert.equal(headers[name], undefined);
+  }
+  assert.ok(requests.slice(0, 4).every(({ headers }) => headers["user-agent"] === "versekit-updater"));
+  assert.doesNotMatch(JSON.stringify(requests), /fixture-device|fixture-private-token/);
   assert.equal((await hifabu(main, "--help")).code, 0);
   assert.equal((await vk(main, "--help")).stderr, "vk 已改名为 hifabu\n");
   const out = json(r);
@@ -508,8 +509,11 @@ test("ACC-update-02/05 更新：用新包里的 install.sh 升级，数据/账�
   assert.equal(v.version, "9.9.9");
   assert.equal(v.commit, B, "提交号是新包的");
   assert.equal(v.lastUpdate.version, "9.9.9");
-  assert.equal(v.lastUpdate.commits.length, 5, "最多 5 条提交标题");
-  assert.deepEqual(v.lastUpdate.commits, ["一", "二", "三", "四", "五"]);
+  const notes = JSON.parse(releases["app-2"]["/9.9.9/manifest.json"]).notes;
+  assert.equal(v.lastUpdate.notes, notes);
+  assert.equal(v.notes, notes);
+  const api = await fetch(`http://127.0.0.1:${main.port}/api/update`);
+  assert.equal((await api.json()).notes, notes);
   assert.equal(v.lastFailure, null);
 
   // 数据都在，服务照常
@@ -526,8 +530,7 @@ test("ACC-update-02/05 更新：用新包里的 install.sh 升级，数据/账�
 
 test("ACC-update-04 新包故意坏掉（起得来、/api 不通过自检）：自动退回旧版本，服务照常可用，留事件，系统页能看到", { timeout: 180000 }, async () => {
   assert.equal(appVersion(main), "9.9.9");
-  latest = C;
-  appTarball = "app-bad";
+  servedRelease = "app-bad";
   const r = await vk(main, "update");
   assert.equal(r.code, 1, r.stdout + r.stderr);
   const out = json(r);
@@ -554,27 +557,69 @@ test("ACC-update-04 新包故意坏掉（起得来、/api 不通过自检）：�
   assert.equal(v.lastFailure.to, C);
 });
 
-test("ACC-update-04 下载不到新包：什么都没动，同样说人话并留事件", { timeout: 120000 }, async () => {
-  latest = C;
-  appTarball = "404";
-  const r = await vk(main, "update");
-  assert.equal(r.code, 1, r.stdout + r.stderr);
-  assert.match(json(r).message, /^自动更新失败，已回到 9\.9\.9.*下载新版本失败/);
-  assert.equal(appVersion(main), "9.9.9");
-  assert.equal(await status(main.port), 200);
+test("ACC-release-03 校验不通过时拒绝执行安装脚本", { timeout: 120000 }, async (t) => {
+  servedRelease = "app-bad";
+  const versionDir = "/10.0.0";
+  const sums = `${versionDir}/SHA256SUMS`;
+  const manifest = `${versionDir}/manifest.json`;
+  const installer = `${versionDir}/install.sh`;
+  const initial = json(await vk(main, "service", "status"));
+  for (const [path, damage, expected] of [
+    [sums, (value) => value.replace(/[0-9a-f]{64}(?=  manifest\.json)/, "0".repeat(64)), /manifest\.json.*与 latest\.json 不符/],
+    [manifest, (value) => value + " ", /manifest\.json 的 SHA-256 校验不通过/],
+    [installer, (value) => value + "\n# unexpected change\n", /install\.sh 的 SHA-256 校验不通过/],
+  ]) {
+    await t.test(path, async (t) => {
+      overrides.set(path, damage(releases["app-bad"][path]));
+      t.after(() => overrides.delete(path));
+      requests.length = 0;
+      const r = await vk(main, "update");
+      assert.equal(r.code, 1, r.stdout + r.stderr);
+      const result = json(r);
+      assert.match(result.reason ?? result.error?.message, expected);
+      assert.deepEqual(requests.map(({ url }) => url), ["/latest.json", sums, manifest, ...(path === installer ? [installer] : [])]);
+      assert.equal(appVersion(main), "9.9.9");
+      assert.equal(json(await vk(main, "service", "status")).pid, initial.pid);
+      assert.equal(await status(main.port), 200);
+    });
+  }
+  const events = json(await vk(main, "events"));
+  const event = (events.events ?? events.rows ?? events).find((e) => e.type === "update.failed" && e.payload.reason.includes("install.sh"));
+  assert.equal(event?.payload.error_code, "update_failed");
+  assert.match(event.payload.message, /继续运行.*install\.sh 的 SHA-256 校验不通过/);
+});
+
+test("ACC-release-03 下载断线只记日志，不产生更新失败事件或提醒", { timeout: 120000 }, async (t) => {
+  servedRelease = "app-bad";
+  const before = json(await vk(main, "events"));
+  const state = json(await vk(main, "version", "--json"));
+  for (const path of ["/latest.json", "/10.0.0/manifest.json", "/10.0.0/install.sh", "/10.0.0/app.tar.gz"]) {
+    await t.test(path, async (t) => {
+      overrides.set(path, null);
+      t.after(() => overrides.delete(path));
+      const r = await vk(main, "update");
+      assert.equal(r.code, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /\[update\] 下载.*稍后再试/);
+      assert.equal(json(r).updated, false);
+      assert.equal(appVersion(main), "9.9.9");
+      assert.equal(await status(main.port), 200);
+      assert.deepEqual(json(await vk(main, "events")), before);
+      const after = json(await vk(main, "version", "--json"));
+      assert.deepEqual(after.lastFailure, state.lastFailure);
+      assert.match(after.lastCheckError.message, /下载.*稍后再试/);
+    });
+  }
 });
 
 test("ACC-update-03 后台服务自己更新：启动后检查，空闲就更新（脱离守护进程跑完，服务换成新版本）", { timeout: 180000 }, async () => {
   const h = await newHome({ HIFABU_UPDATE_START_DELAY_MS: "1500" });
-  // 装 v1 之前假 GitHub 就说「已是最新」，装好后再放出新版本，避免装的过程中被自己更新
-  latest = A;
+  // 装 v1 后再发布新版，避免安装过程中触发自动更新。
   await installV1(h);
   assert.equal(appVersion(h), "0.1.0");
   await sleep(2500); // 启动检查：已是最新
   assert.equal(appVersion(h), "0.1.0");
 
-  latest = B;
-  appTarball = "app-2";
+  servedRelease = "app-2";
   // 重启服务触发「启动时检查」
   const rs = await vk(h, "service", "restart");
   assert.equal(rs.code, 0, rs.stdout + rs.stderr);
@@ -596,20 +641,17 @@ test("ACC-update-03 后台服务自己更新：启动后检查，空闲就更新
 
 test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", { timeout: 120000 }, async (t) => {
   const requests = [];
-  const comparePath = `/api/compare/${A}...${B}`;
-  const comparison = JSON.stringify({ status: "ahead", ahead_by: 1, commits: [] });
-  let firstCompare;
+  const manifest = "/9.9.9/manifest.json";
+  const newRelease = releases["app-2"];
+  let pending;
   const updateServer = createServer((req, res) => {
     requests.push(req.url);
-    if (req.url === "/api/commits/main") return res.end(JSON.stringify({ sha: B }));
-    if (req.url === comparePath) {
-      // 卡住旧进程的检查，保证开关先落盘、GitHub 响应后到。
-      if (!firstCompare) {
-        firstCompare = res;
-        return;
-      }
-      return res.end(comparison);
+    // 等开关落盘，再让旧进程收到版本清单。
+    if (req.url === manifest && !pending) {
+      pending = res;
+      return;
     }
+    if (newRelease[req.url] !== undefined) return res.end(newRelease[req.url]);
     res.writeHead(404).end();
   });
   t.after(() => {
@@ -619,21 +661,21 @@ test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", 
   await new Promise((resolve) => updateServer.listen(0, "127.0.0.1", resolve));
 
   const h = await newHome({
-    HIFABU_UPDATE_API: `http://127.0.0.1:${updateServer.address().port}/api`,
+    HIFABU_UPDATE_API: `http://127.0.0.1:${updateServer.address().port}`,
     HIFABU_UPDATE_START_DELAY_MS: "500",
   });
   await installV1(h);
   const initial = json(await vk(h, "service", "status"));
   assert.equal(initial.running && initial.reachable, true);
-  await waitFor(() => firstCompare, () => `启动检查未到达 compare：${JSON.stringify(requests)}`);
+  await waitFor(() => pending, () => `启动检查未到达 manifest.json：${JSON.stringify(requests)}`);
   const off = await vk(h, "update", "--auto", "off");
   assert.equal(off.code, 0, off.stdout + off.stderr);
   assert.equal(json(await vk(h, "version", "--json")).auto, false);
 
   const log = () => readFileSync(initial.log, "utf8");
   const discarded = /\[update\] 检查期间关闭了自动更新，跳过安装/;
-  appTarball = "app-2";
-  firstCompare.end(comparison);
+  servedRelease = "app-2";
+  pending.end(newRelease[manifest]);
   const outcome = await waitFor(
     () => log().match(/\[update\] (?:检查期间关闭了自动更新，跳过安装|.*空闲，开始更新)/)?.[0],
     () => `旧进程没有处理完检查：\n${log()}`,
@@ -650,7 +692,7 @@ test("ACC-update-03 自动更新关掉：服务启动后不检查、不更新", 
     () => log().slice(logOffset).includes("[update] 自动更新已关闭，跳过检查"),
     () => `重启后没有走到关闭分支：\n${log().slice(logOffset)}\n请求：${JSON.stringify(requests)}`,
   );
-  assert.deepEqual(requests, ["/api/commits/main", comparePath], "只有关闭前的检查可以访问 GitHub");
+  assert.deepEqual(requests, ["/latest.json", "/9.9.9/SHA256SUMS", manifest], "只有关闭前的检查可以访问下载源");
   assert.equal(appVersion(h), "0.1.0");
   assert.equal(await status(service.port), 200);
 });
