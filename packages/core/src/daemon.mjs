@@ -10,7 +10,9 @@
 
 import { readEnv } from "./env.mjs";
 import { createServer } from "node:http";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
+import { DatabaseSync } from "node:sqlite";
+import { chmodSync, createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths, newId, open } from "./index.mjs";
@@ -30,6 +32,7 @@ import { verifyApproval, applyApproval } from "./approval.mjs";
 
 const MAX_BODY = 1 << 20;
 const MAX_ASSET = 4 * 1024 * 1024 * 1024; // 4GB：单条视频的上限，超了直接拒绝而不是写满磁盘
+export const DAEMON_START_TIMEOUT_MS = 6000;
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "public");
 const MIME = {
@@ -639,6 +642,118 @@ function listen(server, options) {
   });
 }
 
+function readyFile(socketPath) {
+  return basename(socketPath) === "vk.sock" ? join(dirname(socketPath), "daemon.json") : `${socketPath}.json`;
+}
+
+function readDaemonFile(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    if (err.code === "ENOENT" || err instanceof SyntaxError) return null;
+    throw err;
+  }
+}
+
+function removeDaemonFile(file) {
+  try {
+    unlinkSync(file);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+}
+
+function writeDaemonFile(file, data) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
+    renameSync(temporary, file);
+  } finally {
+    removeDaemonFile(temporary);
+  }
+}
+
+function hasPid(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (err.code === "ESRCH") return false;
+    if (err.code === "EPERM") return true;
+    throw err;
+  }
+}
+
+export function readDaemonReady(socketPath = paths().socket) {
+  const info = readDaemonFile(readyFile(socketPath));
+  return info?.socket === socketPath && hasPid(info.pid) ? info : null;
+}
+
+export function daemonStartingPid(socketPath) {
+  const { pid } = readDaemonFile(`${socketPath}.pid`) ?? {};
+  return hasPid(pid) ? pid : null;
+}
+
+export function reserveDaemonStart(socketPath, pid) {
+  writeDaemonFile(`${socketPath}.pid`, { pid });
+}
+
+// The launcher reserves a PID under this lock, then the daemon holds it for its
+// lifetime. The OS releases it on process exit. This file has no tables or app data.
+export function tryDaemonLock(socketPath) {
+  const lock = new DatabaseSync(`${socketPath}.lock`);
+  try {
+    lock.exec("BEGIN IMMEDIATE");
+    return () => lock.close();
+  } catch (err) {
+    lock.close();
+    if (err.errcode === 5) return null; // SQLITE_BUSY
+    throw err;
+  }
+}
+
+// Connecting to the socket is independent of how quickly the daemon can handle
+// an HTTP request. A connection timeout is inconclusive.
+export function probeDaemonSocket(socketPath, timeout = 400) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    const finish = (result) => { socket.destroy(); resolve(result); };
+    socket.once("connect", () => finish("listening"));
+    socket.setTimeout(timeout, () => finish("unknown"));
+    socket.once("error", (err) => {
+      if (err.code === "ENOENT" || err.code === "ECONNREFUSED") finish("absent");
+      else reject(err);
+    });
+  });
+}
+
+async function claimDaemon(socketPath) {
+  // A CLI may still be writing the reservation for the child it just spawned.
+  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
+  let unlock;
+  while (!(unlock = tryDaemonLock(socketPath))) {
+    if (readDaemonReady(socketPath) || Date.now() >= deadline) throw new Error("守护进程已经在启动或运行");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  try {
+    const starter = daemonStartingPid(socketPath);
+    if ((starter && starter !== process.pid) || await probeDaemonSocket(socketPath) !== "absent") {
+      throw new Error("守护进程已经在启动或运行");
+    }
+    removeDaemonFile(readyFile(socketPath));
+    if (existsSync(socketPath)) {
+      if (!lstatSync(socketPath).isSocket()) throw new Error(`守护进程的 socket 路径被其他文件占用：${socketPath}`);
+      removeDaemonFile(socketPath);
+    }
+    removeDaemonFile(`${socketPath}.pid`);
+    return unlock;
+  } catch (err) {
+    unlock();
+    throw err;
+  }
+}
+
 /**
  * 离线模式（#180）：验收与演示不得访问真实平台。
  *
@@ -714,7 +829,21 @@ export function startRelayPuller({ pull, configured = (r) => r.url && r.pull_tok
  * Starts the daemon. Both listeners share one dispatcher, so the unix socket and 127.0.0.1 cannot
  * drift apart. `port: 0` is for tests; the real port comes from config.
  */
-export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath = paths().socket, runQueue = true, webRoot, channels = [], doctor = null, offline = false, autoUpdate = null } = {}) {
+export async function startDaemon({ socketPath = paths().socket, ...options } = {}) {
+  const release = await claimDaemon(socketPath);
+  try {
+    const daemon = await runDaemon({ ...options, socketPath });
+    const close = daemon.close;
+    let closing;
+    daemon.close = () => closing ??= close().finally(release);
+    return daemon;
+  } catch (err) {
+    release();
+    throw err;
+  }
+}
+
+async function runDaemon({ handlers = {}, log = () => {}, port = 8787, host = "127.0.0.1", socketPath, runQueue = true, webRoot, channels = [], doctor = null, offline = false, autoUpdate = null }) {
   // 离线服务不访问任何外部：登录成功也不探测出口位置（#325）。
   setLoginRecording(!offline);
   if (offline) {
@@ -736,22 +865,24 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
   const httpServer = createServer(dispatch);
   const socketServer = createServer(dispatch);
 
-  await listen(httpServer, { host, port });
-
-  // A leftover socket file from a crashed daemon would make listen() fail with EADDRINUSE.
-  if (existsSync(socketPath)) {
-    try {
-      unlinkSync(socketPath);
-    } catch {
-      /* best effort */
-    }
-  }
-  await listen(socketServer, { path: socketPath });
+  const closeListeners = () => Promise.all([httpServer, socketServer].map((server) => {
+    server.closeAllConnections?.();
+    return new Promise((resolve) => server.close(() => resolve()));
+  }));
+  const infoFile = readyFile(socketPath);
+  let boundPort;
   try {
-    const { chmodSync } = await import("node:fs");
-    chmodSync(socketPath, 0o600);
-  } catch {
-    /* non-POSIX */
+    await listen(httpServer, { host, port });
+    await listen(socketServer, { path: socketPath });
+    try {
+      chmodSync(socketPath, 0o600);
+    } catch {
+      /* non-POSIX */
+    }
+    boundPort = httpServer.address().port;
+  } catch (err) {
+    await closeListeners();
+    throw err;
   }
 
   let stopSweeper = () => {};
@@ -881,18 +1012,7 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
     deliverAll();
   }
 
-  const { port: boundPort } = httpServer.address();
-
-  // 谁起的守护进程不重要，重要的是别的客户端能问到它监听在哪。端口不写下来的话，
-  // `serve --detach --port 8801` 只能靠猜。
-  const infoFile = join(paths().state, "daemon.json");
-  try {
-    writeFileSync(infoFile, JSON.stringify({ pid: process.pid, port: boundPort, socket: socketPath, started_at: Date.now() }), { mode: 0o600 });
-  } catch {
-    /* 写不下来就退化成「只能用默认端口」 */
-  }
-
-  return {
+  const daemon = {
     runner,
     port: boundPort,
     socketPath,
@@ -913,20 +1033,19 @@ export async function startDaemon({ handlers = {}, log = () => {}, port = 8787, 
         }
       }
       runner.stop();
-      httpServer.closeAllConnections?.();
-      socketServer.closeAllConnections?.();
-      await Promise.all([
-        new Promise((r) => httpServer.close(() => r())),
-        new Promise((r) => socketServer.close(() => r())),
-      ]);
-      for (const file of [socketPath, infoFile]) {
-        if (!existsSync(file)) continue;
-        try {
-          unlinkSync(file);
-        } catch {
-          /* best effort */
-        }
+      try {
+        removeDaemonFile(infoFile);
+      } finally {
+        await closeListeners();
       }
     },
   };
+  try {
+    // Publish one marker only after both listeners and background setup are ready.
+    writeDaemonFile(infoFile, { pid: process.pid, port: boundPort, socket: socketPath, started_at: Date.now() });
+  } catch (err) {
+    await daemon.close();
+    throw err;
+  }
+  return daemon;
 }
