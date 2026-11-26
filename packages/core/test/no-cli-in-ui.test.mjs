@@ -22,7 +22,7 @@ before(() => core.migrate());
 
 /** 命令行、配置文件名、参数开关、内部标识：页面上的人不该读到。 */
 const LEAK = [
-  [/\bvk [a-z]/, "vk 命令"],
+  [/\b(?:hifabu|vk) [a-z]/, "Hifabu 命令"],
   [/\bnpm (?:run|install|test)\b/, "npm 命令"],
   [/\bcurl \S/, "curl 命令"],
   [/config\.json/, "配置文件名"],
@@ -41,7 +41,7 @@ test("ACC-v3-nocli-01：packages/web/public 下的页面和脚本里没有命令
   const bad = [];
   for (const f of readdirSync(dir).filter((n) => /\.(html|js)$/.test(n))) {
     const src = readFileSync(join(dir, f), "utf8");
-    const hits = [...src.matchAll(/<code[\s>]|\bvk (?:[a-z]+)\b|\bnpm (?:run|install|test)\b|\bcurl \S|config\.json/g)].map((m) => m[0]);
+    const hits = [...src.matchAll(/<code[\s>]|\b(?:hifabu|vk) [a-z]+\b|\bnpm (?:run|install|test)\b|\bcurl \S|config\.json/g)].map((m) => m[0]);
     if (hits.length) bad.push(`${f}: ${hits.join(" | ")}`);
   }
   assert.deepEqual(bad, []);
@@ -161,7 +161,7 @@ test("ACC-v3-nocli-03：以前靠命令才能做的事，页面脚本里都有�
   for (const [name, re] of Object.entries(entries)) assert.match(page, re, `页面上缺「${name}」的入口`);
 });
 
-test("ACC-v3-nocli-04：CLI 完整律：上面每个入口对应的命令都在 vk commands --json 里", () => {
+test("ACC-v3-nocli-04：CLI 完整律：上面每个入口对应的命令都在 hifabu commands --json 里", () => {
   const out = JSON.parse(execFileSync(process.execPath, [join(ROOT, "packages/cli/src/vk.mjs"), "commands", "--json"], { env: { ...process.env, VK_HOME: HOME }, encoding: "utf8" }));
   const names = new Set((out.commands ?? out).map((c) => c.name));
   for (const n of [
@@ -170,7 +170,7 @@ test("ACC-v3-nocli-04：CLI 完整律：上面每个入口对应的命令都在 
     "update.status", "relay.connect", "relay.disconnect",
   ]) assert.ok(names.has(n), `命令表里缺 ${n}`);
   const cmd = findCommand("relay.disconnect");
-  assert.equal(cmd.cli.usage, "vk relay disconnect");
+  assert.equal(cmd.cli.usage, "hifabu relay disconnect");
   assert.deepEqual(cmd.http, { method: "POST", path: "/api/relay/disconnect" });
 });
 

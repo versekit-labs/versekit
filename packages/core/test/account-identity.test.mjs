@@ -64,18 +64,18 @@ test("ACC-acct-iso-02：已移除的账号不再占着标识", () => {
   assert.equal(store.recordPlatformUid(b.id, "uid-gone").ok, true);
 });
 
-test("ACC-acct-iso-03：account.logout 在命令表里只定义一次，CLI 用法是 vk account logout", () => {
+test("ACC-acct-iso-03：account.logout 在命令表里只定义一次，CLI 用法是 hifabu account logout", () => {
   const c = findCommand("account.logout");
   assert.ok(c);
-  assert.equal(c.cli.usage, "vk account logout <accountId>");
+  assert.equal(c.cli.usage, "hifabu account logout <accountId>");
   assert.equal(c.http.path, "/api/accounts/:accountId/logout");
   assert.equal(c.card, null, "退出登录会删资料，不给卡片按钮");
 });
 
-test("ACC-acct-iso-05：account.switch 在命令表里只定义一次，CLI 用法是 vk account switch，不给卡片按钮", () => {
+test("ACC-acct-iso-05：account.switch 在命令表里只定义一次，CLI 用法是 hifabu account switch，不给卡片按钮", () => {
   const c = findCommand("account.switch");
   assert.ok(c);
-  assert.equal(c.cli.usage, "vk account switch <accountId>");
+  assert.equal(c.cli.usage, "hifabu account switch <accountId>");
   assert.equal(c.http.path, "/api/accounts/:accountId/switch");
   assert.equal(c.card, null);
   assert.equal(c.audit, "always");

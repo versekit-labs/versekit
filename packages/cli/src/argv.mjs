@@ -1,4 +1,4 @@
-// vk 的命令行参数解析。从 vk.mjs 抽出来是为了能单测：vk.mjs 一 import 就会执行命令。
+// hifabu 的命令行参数解析。从 vk.mjs 抽出来是为了能单测：vk.mjs 一 import 就会执行命令。
 //
 // #112 的根因就在这里：--phone / --code 不在「带值参数」表里，被解析成布尔 true，
 // 后面的手机号/验证码变成了位置参数，val("--phone") 永远是 undefined，命令直接报「要指定 --phone」。
@@ -16,7 +16,7 @@ export const VALUE_FLAGS = new Set([
   "--privacy", "--caption",
   // 确认时改正文和话题（#175）：都带值。
   "--body", "--tags",
-  // 云端中转（#226）：token 与数据目录都带值。
+  // --data 只由 relay serve 用作中转目录；制作机命令接受它但使用完整版自己的数据目录。
   "--token", "--data", "--role",
 ]);
 
@@ -40,7 +40,7 @@ export function parseArgv(argv) {
 }
 
 /**
- * `vk account login <id> …` 的分派：参数 → 要发的命令与载荷。纯函数，便于单测；
+ * `hifabu account login <id> …` 的分派：参数 → 要发的命令与载荷。纯函数，便于单测；
  * 不认识的组合返回 null，由调用方报用法。
  */
 export function loginCommandOf(accountId, flags) {

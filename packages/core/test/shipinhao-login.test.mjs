@@ -99,7 +99,7 @@ test("ACC-shipinhao-04 account.show 和 account.list 是同一份数字；别的
   const other = account("xiaohongshu");
   assert.equal(h["account.show"]({ accountId: other.id }).loginClock, undefined);
   assert.throws(() => h["account.show"]({ accountId: "nope" }), /没有这个账号/);
-  assert.ok(findCommand("account.show").cli.usage.includes("vk account show"), "命令在注册表里，CLI / HTTP 由它派生");
+  assert.ok(findCommand("account.show").cli.usage.includes("hifabu account show"), "命令在注册表里，CLI / HTTP 由它派生");
 });
 
 // ---------------------------------------------------------------- ACC-shipinhao-05 只在需要时查

@@ -1,6 +1,6 @@
 # 部署中转到 volc1（ACC-relay-05）
 
-中转（`vk relay serve`，见 ADR-0003 与 `packages/relay`）只存成片文件和投递清单，不连任何平台。
+中转（`hifabu relay serve`，见 ADR-0003 与 `packages/relay`）只存成片文件和投递清单，不连任何平台。
 部署文件都在 `deploy/volc1/`：
 
 | 文件 | 作用 |
@@ -84,8 +84,8 @@ ssh volc1 'runuser -u versekit -- env VK_HOME=/var/lib/versekit-relay node /opt/
 然后在对应机器上：
 
 ```bash
-vk relay connect https://vk.fangyouxi.cn --token <推送 token> --push   # 制作机
-vk relay connect https://vk.fangyouxi.cn --token <拉取 token>          # 发布机
+hifabu relay connect https://vk.fangyouxi.cn --token <推送 token> --push   # 制作机
+hifabu relay connect https://vk.fangyouxi.cn --token <拉取 token>          # 发布机
 ```
 
 换 token：删掉 volc1 上 `config.json` 里对应字段，`systemctl restart versekit-relay` 会重新生成，再重新 connect。
@@ -100,11 +100,11 @@ deploy/volc1/e2e.sh
 ```
 
 `e2e.sh` 用 ffmpeg 生成 2 秒测试视频；制作机、发布机各用一个临时 `VK_HOME`，发布机带 `VERSEKIT_OFFLINE=1`，
-不配任何平台账号凭证（只建没有凭证的占位账号），所以碰不到平台。步骤：发布机建组 → 连中转 → 制作机 `vk work push` →
-发布机 `vk relay pull` → 核对作品入库、平台稿「等确认」。结束（包括失败）时清掉本机临时目录、两个守护进程，
+不配任何平台账号凭证（只建没有凭证的占位账号），所以碰不到平台。步骤：发布机建组 → 连中转 → 制作机 `hifabu work push` →
+发布机 `hifabu relay pull` → 核对作品入库、平台稿「等确认」。结束（包括失败）时清掉本机临时目录、两个守护进程，
 以及 volc1 上这次测试的投递文件和成片。
 
-**注意**：发布机不能用 `vk serve --offline`。离线模式不加载适配器，入库时 `plan.apply` 一条平台稿也生成不了，
+**注意**：发布机不能用 `hifabu serve --offline`。离线模式不加载适配器，入库时 `plan.apply` 一条平台稿也生成不了，
 投递会落成「没入库：一条平台稿都没生成」。这里的「离线」靠 `VERSEKIT_OFFLINE=1` 标记 + 没有任何账号凭证来保证；
 拉取入库只生成待确认稿，不发布、不采集。
 

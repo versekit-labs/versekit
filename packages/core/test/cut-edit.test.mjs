@@ -53,7 +53,7 @@ test("命令表有 cut.edit（CLI、HTTP 由它派生），approve 多了 when �
   const c = findCommand("cut.edit");
   assert.ok(c);
   assert.equal(c.http.path, "/api/cuts/:cutId/edit");
-  assert.match(c.cli.usage, /vk cut edit <cutId> --rev/);
+  assert.match(c.cli.usage, /hifabu cut edit <cutId> --rev/);
   assert.ok(COMMANDS.find((x) => x.name === "publish.approve").args.when);
   assert.deepEqual(parseArgs(c, { cutId: "c", rev: 0, generic: { title: "x" } }), { cutId: "c", rev: 0, generic: { title: "x" } });
   assert.throws(() => parseArgs(c, { cutId: "c", rev: 0, generic: ["x"] }), /必须是对象/);

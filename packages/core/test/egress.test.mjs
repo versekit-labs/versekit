@@ -701,7 +701,7 @@ test("ACC-v3-egress-09 「现在重新下载」是一条命令（egress.geodb）
   const cmd = (await import("../src/commands.mjs")).COMMANDS.find((c) => c.name === "egress.geodb");
   assert.ok(cmd, "命令在 commands.mjs 里定义，CLI / HTTP 由它派生");
   assert.equal(cmd.http.path, "/api/egress/geodb");
-  assert.match(cmd.cli.usage, /vk egress geodb/);
+  assert.match(cmd.cli.usage, /hifabu egress geodb/);
 
   const gz = gzCity();
   let release;

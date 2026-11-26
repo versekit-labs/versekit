@@ -38,7 +38,7 @@ Hifabu 的位置只有一个：
 flowchart TB
   subgraph UI["界面层 · 只发命令，不含业务逻辑"]
     direction LR
-    CLI["<b>CLI · vk</b><br/>agent / 脚本 / CI"]
+    CLI["<b>CLI · hifabu</b><br/>agent / 脚本 / CI"]
     WEB["<b>本地 Web</b><br/>扫码 · 编排 · 图表"]
     IM["<b>飞书卡片</b><br/>通知 · 审批 · 重试"]
   end
@@ -134,13 +134,13 @@ curl -fsSL https://raw.githubusercontent.com/versekit-labs/versekit/main/install
 关终端、注销重登、重启电脑后都还在，进程崩了会被拉起。再运行一遍同一条命令就是升级，数据、账号、登录都保留。
 8787 被占用时自动换一个空闲端口；Linux 没有 `systemd --user` 时退回后台进程（重启电脑后要再运行一次安装命令）。
 
-装完新开的终端里直接用 `vk`：
+装完后在新开的终端里用 `hifabu`。旧命令 `vk` 作为别名保留两个小版本，每次使用会在 stderr 提示改名。
 
 ```bash
-vk service status       # 服务有没有在跑、控制台地址、日志位置
-vk service restart      # 也有 start / stop
-vk service uninstall    # 卸掉服务和程序文件；数据默认保留
-vk service uninstall --purge   # 连数据一起删（先列出要删的目录）
+hifabu service status       # 服务有没有在跑、控制台地址、日志位置
+hifabu service restart      # 也有 start / stop
+hifabu service uninstall    # 卸掉服务和程序文件；数据默认保留
+hifabu service uninstall --purge   # 连数据一起删（先列出要删的目录）
 ```
 
 第一次打开如果还没有账号，会自动落在「接入」页：四步走完即可发布，不需要先读文档。
@@ -154,7 +154,7 @@ vk service uninstall --purge   # 连数据一起删（先列出要删的目录�
 /plugin install hifabu@hifabu
 ```
 
-打开制作项目后，说「交给发布机」或运行 `/hifabu:handoff 21`（把 21 换成你的期号）。插件目前提供 `vibe-video` 项目的交付约定。首次使用时，插件会引导你安装 `vk`、登录 Hifabu 和开通传片，再继续交付这一期。说「到了吗」可以查投递进度。
+打开制作项目后，说「交给发布机」或运行 `/hifabu:handoff 21`（把 21 换成你的期号）。插件目前提供 `vibe-video` 项目的交付约定。首次使用时，插件会引导你安装完整版 CLI、登录 Hifabu 和开通传片，再继续交付这一期。说「到了吗」可以查投递进度。
 
 更新插件时，在终端运行 `claude plugin marketplace update hifabu` 和 `claude plugin update hifabu@hifabu`，再重启 Claude Code。
 
@@ -164,8 +164,8 @@ vk service uninstall --purge   # 连数据一起删（先列出要删的目录�
 
 ```bash
 node -v                     # 需要 ≥ 22.13（node:sqlite；更早的 22.x 有 .get() 返回 null 行的问题）
-npm run vk -- init          # 建库 + 配置
-npm run vk -- serve         # 前台启动守护进程，打开 http://127.0.0.1:8787（关终端就停）
+npm run hifabu -- init          # 建库 + 配置
+npm run hifabu -- serve         # 前台启动守护进程，打开 http://127.0.0.1:8787（关终端就停）
 ```
 
 安装脚本可用环境变量覆盖，在开发机上验证时用临时 `HOME`、测试服务名和非 8787 端口，别碰真实目录：
@@ -178,11 +178,11 @@ npm run vk -- serve         # 前台启动守护进程，打开 http://127.0.0.1
 浏览器里就是控制台：加账号 → 拖素材 → 勾平台 → 发布。也可以全部用 CLI：
 
 ```bash
-npm run vk -- account add bilibili --name 主号 --credential ~/cookies.json
-npm run vk -- publish ep1.mp4 --to bilibili --title "第一条" --dry-run
-npm run vk -- publish ep1.mp4 --to bilibili --title "第一条"
-npm run vk -- now --human
-npm run vk -- stats works --range 7d
+npm run hifabu -- account add bilibili --name 主号 --credential ~/cookies.json
+npm run hifabu -- publish ep1.mp4 --to bilibili --title "第一条" --dry-run
+npm run hifabu -- publish ep1.mp4 --to bilibili --title "第一条"
+npm run hifabu -- now --human
+npm run hifabu -- stats works --range 7d
 ```
 
 B站需要先 `biliup -u ~/cookies.json login` 选「浏览器登录」（一键安装已经把 biliup 装好）；TikTok 在控制台里登录一次即可。
@@ -224,7 +224,7 @@ packages/
   adapter-bilibili/  biliup 发布 + 创作中心采集
   adapter-tiktok/    TikTok Studio 自动化 + 后台拦截采集
   web/               本地控制台（零构建，daemon 直接托管）
-  cli/               vk
+  cli/               hifabu
 scripts/ci/          parity · adapter-contract · no-backdoor
 docs/
   PRD.md             产品定义 · 范围 · 竞品位置 · 路线图

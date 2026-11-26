@@ -40,10 +40,10 @@ const platformsOf = (res) => res.created.map((c) => c.platform).sort();
 
 test("命令表里有 plan.show / plan.set / plan.reset / machine.status，HTTP 路由能匹配回自己", () => {
   for (const [name, method, path, usage] of [
-    ["plan.show", "GET", "/api/plan", /vk plan show/],
-    ["plan.set", "POST", "/api/plan", /vk plan set/],
-    ["plan.reset", "POST", "/api/plan/reset", /vk plan reset/],
-    ["machine.status", "GET", "/api/machine", /vk machine/],
+    ["plan.show", "GET", "/api/plan", /hifabu plan show/],
+    ["plan.set", "POST", "/api/plan", /hifabu plan set/],
+    ["plan.reset", "POST", "/api/plan/reset", /hifabu plan reset/],
+    ["machine.status", "GET", "/api/machine", /hifabu machine/],
   ]) {
     const c = COMMANDS.find((x) => x.name === name);
     assert.ok(c, name);

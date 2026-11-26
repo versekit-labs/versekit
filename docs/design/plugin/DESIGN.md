@@ -6,7 +6,7 @@
 
 ## 一页结论
 
-1. **插件 = 一个技能 + 一个小命令行程序 `hifabu`**。`hifabu` 只有制作机要的 8 条命令（登录、状态、登出、看发布机的账号组、预览、交付、查列表、查单个），由 `commands.mjs` 里标了 `maker` 的条目**构建生成**，和 `vk` 同名同参，CI 校验两边一致。这样 CLI 完整律和三端一致律都守得住，又不用装完整版 Hifabu。没有 hooks、没有 MCP、不注册后台服务。
+1. **插件 = 一个技能 + 一个小命令行程序 `hifabu`**。`hifabu` 只有制作机要的 8 条命令（登录、状态、登出、看发布机的账号组、预览、交付、查列表、查单个），由 `commands.mjs` 里标了 `maker` 的条目**构建生成**，和完整版 `hifabu` 同名同参，CI 校验两边一致。这样 CLI 完整律和三端一致律都守得住，又不用装完整版 Hifabu。没有 hooks、没有 MCP、不注册后台服务。
 2. **不写死项目**：约定从插件挪到用户项目里的 `.hifabu/project.json`。第一次用时 Claude 扫目录、猜一份约定，和用户确认后写下；之后这个项目一句话交完。用 git 仓库根定位项目，worktree、改目录名都不影响。
 3. **交付接口 v1** 单独成文、带版本号。用 `work.key`（项目 id/期）代替本机路径：同一期再交就是更新。发布机读不了新版本时，制作机**不上传**，直接说清原因。
 4. **关掉 Claude 也接着传**：前台命令起一个分离的上传进程，传完自己退出。实测 `claude -p` 退出后它还活着。电脑重启后，下次任何一次 `hifabu` 调用都会接着传。
@@ -68,7 +68,7 @@
 | 查进度 | `delivery.list` `delivery.show` | 读中转 `GET /v1/deliveries?view=maker` 与 `/:id`。 |
 | 看发布机的账号组（新增） | `group.list`（制作机版本：读中转上发布机报的快照，不读本地库） | 所有者 11-26 定：制作机必须知道账号组。见 §A.4.5。 |
 
-**就这 8 条。**不需要 SQLite、不需要平台适配器、不需要账号组管理、不需要本地 Web。现在这些能力只长在 `vk` 里，而 `vk` 绑着整个发布机——这是 0.1.0 必须先装完整版 Hifabu 的根因。
+**就这 8 条。**不需要 SQLite、不需要平台适配器、不需要账号组管理、不需要本地 Web。现在这些能力由完整版 CLI 提供，这是 0.1.0 必须先装完整版 Hifabu 的原因。
 
 还缺三条服务端能力，本设计新增（见 §D 第 1、2 单）：
 - 发布机每次来取时上报账号组快照，中转按账号存最新一份（§A.4.5）。
@@ -80,7 +80,7 @@
 | | ① 插件自带小客户端（推荐） | ② 插件带 MCP server | ③ Claude 直接调 HTTP | ④ 原生二进制（Go 等） |
 |---|---|---|---|---|
 | 形态 | `bin/hifabu` 启动脚本 + `lib/hifabu.mjs` 单文件，由 `commands.mjs` 里标了 `maker` 的 8 条命令**构建生成** | stdio MCP 进程，8 个工具，同样由命令表派生 | 技能里写 curl 步骤，Claude 自己拼请求 | 另写一个跨平台二进制 |
-| 守 CLI 完整律 | ✅ 这 8 条在 `vk` 里照旧存在；`hifabu` 是命令表的又一个投影，和 HTTP、卡片同级 | ✅ 同左 | ❌ 能力只存在于提示词里 | ⚠️ 要另做代码生成才能和命令表对齐 |
+| 守 CLI 完整律 | ✅ 这 8 条由完整版 `hifabu` 提供。小客户端是命令表的又一个投影，和 HTTP、卡片同级 | ✅ 同左 | ❌ 能力只存在于提示词里 | ⚠️ 要另做代码生成才能和命令表对齐 |
 | 守三端一致律 | ✅ 加一条 parity 测试：`hifabu` 的命令集合 = 命令表里 `roles` 含 `maker` 的集合 | ✅ 同左 | ❌ | ⚠️ |
 | 关掉 Claude 后上传继续 | ✅ 分离子进程（§A.5） | ❌ MCP 进程随会话结束；要继续还得再起一个独立进程，等于又做一遍 ① | ❌ | ✅ |
 | 断点续传、sha256 | ✅ 直接复用 `packages/relay/src/client.mjs` | ✅ 复用 | ❌ Claude 拼不可靠，令牌会出现在命令行和会话记录里 | ✅ 重写 |
@@ -125,9 +125,9 @@
 ```
 
 - `scripts/build-maker-client.mjs`：用 esbuild 一类的打包器（只在构建时用，不进运行时依赖）把「命令表里 `roles` 含 `maker` 的条目 + 它们的 handler + relay 客户端 + 设备登录客户端」打成一个 ESM 文件 `plugins/hifabu/lib/hifabu.mjs`，文件头写源码 tag 和 sha256。
-- 命令名、参数、`--json` 输出与 `vk` **逐字相同**：`hifabu work push <清单> --dry-run --json` ≡ `vk work push ...`。技能里只写 `hifabu`。
+- 命令名、参数、`--json` 输出与完整版 **逐字相同**。例如，两版都运行 `hifabu work push <清单> --dry-run --json`。技能里只写 `hifabu`。
 - CI 加两条：parity（`hifabu --help` 列出的命令 = 命令表 maker 子集）；可复现（重跑构建，产物 sha256 不变）。
-- handler 要能在没有 SQLite 的地方跑：`work.push` 现在调 `store.checkWorkPlan`、`store.COPY_LIMITS`、`store.copyViolations`，要抽到 `packages/core/src/plan-rules.mjs`（纯函数，`vk` 和 `hifabu` 共用）。上传队列和失败记录从 `store.patchRelayState` 改成一个小接口，`vk` 用库实现，`hifabu` 用数据目录里的 JSON 文件实现（§A.5）。
+- handler 要能在没有 SQLite 的地方跑：`work.push` 现在调 `store.checkWorkPlan`、`store.COPY_LIMITS`、`store.copyViolations`，要抽到 `packages/core/src/plan-rules.mjs`（纯函数，完整版和小客户端共用）。上传队列和失败记录从 `store.patchRelayState` 改成一个小接口，完整版用库实现，小客户端用数据目录里的 JSON 文件实现（§A.5）。
 
 ### A.3 用户没有 Node 怎么办
 
@@ -557,7 +557,7 @@ Claude：（hifabu cloud status → 已登录、已开通）
 | # | 单 | 改哪里 | 可检查的验收点 |
 |---|---|---|---|
 | 1 | **交付接口 v1** | `docs/delivery-interface.md`、`schemas/delivery-v1.json`；中转接受新清单并原样存；发布机按 `work.key` 匹配更新；`ping` 回报 `accepts`；发布机来取时声明 `accepts`；发布机来取时上报账号组快照，中转按账号存 | ① schema 文件能校验文中示例；② 同一 `work.key` 连交两次只有一个作品，已发平台稿不动；③ 清单里出现绝对路径就拒收；④ 发布机遇到 `hifabu.delivery/2` 回报 `schema_unsupported`，原因回到制作机；⑤ 0.1.0 的旧清单（`source` 是路径）仍能入库；⑥ 快照里没有凭据、cookie 和账号 id，测试断言字段白名单；⑦ 隐私政策补上账号组同步那一句 |
-| 2 | **制作机命令抽离 + `hifabu` 客户端构建** | `commands.mjs` 加 `roles`；校验抽成 `plan-rules.mjs`；`scripts/build-maker-client.mjs`；新增 `device.revoke.self`；`group.list` 的制作机版本读中转快照 | ① `hifabu --help` 的命令集合 = 命令表 maker 子集（CI）；② 同一清单 `vk work push --dry-run --json` 与 `hifabu work push --dry-run --json` 输出相同；③ 构建两次产物 sha256 相同；④ 产物不 import 任何 `node:sqlite`；⑤ `hifabu cloud logout` 后服务端该设备不可再刷新 |
+| 2 | **制作机命令抽离 + `hifabu` 客户端构建** | `commands.mjs` 加 `roles`；校验抽成 `plan-rules.mjs`；`scripts/build-maker-client.mjs`；新增 `device.revoke.self`；`group.list` 的制作机版本读中转快照 | ① `hifabu --help` 的命令集合 = 命令表 maker 子集（CI）；② 完整版与小客户端对同一清单运行 `hifabu work push --dry-run --json` 输出相同；③ 构建两次产物 sha256 相同；④ 产物不 import 任何 `node:sqlite`；⑤ `hifabu cloud logout` 后服务端该设备不可再刷新 |
 | 3 | **后台上传进程** | `hifabu` 的队列、单例锁、分离子进程、macOS 防睡眠、调用时自动续传 | ① `work push` 1 秒内返回投递号；② 杀掉父进程（模拟关 Claude）后上传继续完成；③ 本地假中转中途断开再恢复，最终 sha256 一致、只有一个投递；④ 杀掉上传进程后，任意一次 `hifabu delivery list` 会把它拉起并续传，不重传已完成的分块；⑤ 队列空后进程退出，`ps` 里没有残留；⑥ 不写任何 launchd / systemd 文件 |
 | 4 | **运行时与凭据** | `bin/hifabu` 启动脚本找 Node；`hifabu-runtime install` 下载锁定版本并校验；凭据进钥匙串 / Secret Service / 600 文件 | ① 没有 Node 的临时 HOME 里，同意前不下载任何东西；② 下载文件 sha256 不符时停下并说明；③ 凭据不出现在任何日志、会话输出、命令行参数里（测试抓 `ps` 和输出）；④ 卸载说明写明凭据位置 |
 | 5 | **插件 0.2.0 重写** | `plugins/hifabu/`：技能主流程 + `references/`；`allowed-tools`；项目约定 `.hifabu/project.json` 的扫描与确认；README、CHANGELOG、`repository`；打包白名单 | ① `claude plugin validate --strict` 通过；② 包里只有运行要用的文件（白名单测试），没有 `test/`、没有个人数据、没有任何项目名；③ `claude plugin details` 常驻成本 ≤ 60 token；④ 用三个目录结构不同的假项目（仿 vibe-video、tcm-video、只有一个视频的项目）跑离线评测：第一次各问 ≤ 2 个问题，第二次 0 个；⑤ 在 worktree 里、改了目录名后仍能认出同一个项目；⑥ 「到了吗」在没交过东西的普通会话里不触发；⑦ 有两个账号组时第一次问一次、之后不问，说「这期交到中医组」只换这一次；⑧ 第一次使用时用 Edit 打开自动更新，用户拒绝后不再问 |

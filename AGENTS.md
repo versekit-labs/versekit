@@ -50,9 +50,9 @@
 ## 5. 常用命令
 
 ```bash
-npm run vk -- init                 # 建库
-npm run vk -- doctor --human       # 自检
-npm run vk -- serve --once         # 跑一轮队列
+npm run hifabu -- init                 # 建库
+npm run hifabu -- doctor --human       # 自检
+npm run hifabu -- serve --once         # 跑一轮队列
 npm test                           # 全部测试（当前 214 项）
 npm run design:check               # 设计闸门：任务书/导航/死链/检测器/触控/溢出
 bin/ghx issue list                 # 以 buxibuxi 身份操作 GitHub

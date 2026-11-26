@@ -376,9 +376,9 @@ test("ACC-youtube-02（静态）：缺应用凭证优先于登录失败态；平
   assert.doesNotMatch(page, /重新连接/);
 });
 
-test("ACC-youtube-02（静态）：vk account credentials 的用法写清 YouTube", () => {
+test("ACC-youtube-02（静态）：hifabu account credentials 的用法写清 YouTube", () => {
   const cli = readFileSync(new URL("../../cli/src/vk.mjs", import.meta.url), "utf8");
-  assert.match(cli, /vk account credentials tiktok\|youtube/);
+  assert.match(cli, /hifabu account credentials tiktok\|youtube/);
   assert.match(cli, /YOUTUBE_CLIENT_SECRET/);
   assert.match(cli, /YOUTUBE_CLIENT_ID/);
 });

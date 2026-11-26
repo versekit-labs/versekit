@@ -42,7 +42,7 @@ test("名字 = 组名、两个平台同名都能加；空名与超长被拒并�
 test("account.rename：命令表定义一次（HTTP + CLI 派生），改名前后 id / 平台 / handle / 登录状态 / 凭据不变，写事件", () => {
   const cmd = findCommand("account.rename");
   assert.equal(cmd.http.path, "/api/accounts/:accountId/rename");
-  assert.match(cmd.cli.usage, /vk account rename <账号 id> --name/);
+  assert.match(cmd.cli.usage, /hifabu account rename <账号 id> --name/);
 
   const g = h["group.add"]({ name: "改名组" });
   const { id } = h["account.add"]({ platform: "xiaohongshu", name: "旧名", group: g.id, credentialRef: "cred/xhs-1" });

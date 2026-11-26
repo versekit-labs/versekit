@@ -91,7 +91,7 @@ interface Followup {
 普通 `Error` 会被归为 `unknown` 并保留原文，不会丢失。
 
 **可执行版本**：上面的形状不是靠文档自觉，`core/src/contract.mjs` 是唯一校验实现，
-loader、`vk doctor`、契约测试共用它；`packages/core/test/contract.test.mjs` 钉住这些断言。
+loader、`hifabu doctor`、契约测试共用它；`packages/core/test/contract.test.mjs` 钉住这些断言。
 
 **`ready()` 的返回文案是产品的一部分**。工厂里的写法值得照抄：
 
@@ -122,7 +122,7 @@ ready: () => !hasBiliup() ? 'B站 未配置：没有安装 biliup（见 README�
 | 11 | **发布后去平台核实**：跳主页取最新 `/video/` 链接得到 id/url，而不是相信返回页 | TikTok `@ACCOUNT` |
 | 12 | **失败必须留现场**：截图 + 错误信息里带路径（`~/.config/…/tiktok-error.png`），否则无法远程排障 | TikTok `catch` |
 | 13 | **dry-run 必须存在**，且产出截图：跑到"发布"前一步停下，截图存档 | TikTok `--dry-run` |
-| 14 | **每个平台可独立运行**（`node publishers/tiktok.mjs <dir> --dry-run`）；对应到 versekit 就是 `vk publish --platform tiktok --dry-run` 能单独跑，不需要跑整条流水线 | 各 publisher 的 `import.meta.url` 入口 |
+| 14 | **每个平台可独立运行**（`node publishers/tiktok.mjs <dir> --dry-run`）；对应到 versekit 就是 `hifabu publish --platform tiktok --dry-run` 能单独跑，不需要跑整条流水线 | 各 publisher 的 `import.meta.url` 入口 |
 
 补充两条工程性细节：
 
