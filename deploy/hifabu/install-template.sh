@@ -315,7 +315,8 @@ main() {
   else
     [ "$NEW_VERSION" = "$RELEASE" ] ||
       die "程序包版本 $NEW_VERSION 与锁定清单版本 $RELEASE 不符" "请联系发布方"
-    printf '%s\n' "$HIFABU_RELEASE_MANIFEST" >"$TMP/app-x/.hifabu-release.json"
+    # P1 嵌入时移除了 JSON 文件末尾的换行，写回时补上原来的换行。
+    printf '%s\n' "$HIFABU_RELEASE_MANIFEST" >"$TMP/app-x/release-manifest.json"
   fi
   printf '{\n  "commit": "%s",\n  "version": "%s",\n  "release": "%s",\n  "installed_at": "%s"\n}\n' \
     "$APP_COMMIT" "$NEW_VERSION" "$RELEASE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMP/app-x/.versekit-build.json"

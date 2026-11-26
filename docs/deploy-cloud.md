@@ -137,6 +137,8 @@ node deploy/hifabu/publish-release.mjs "${release_inputs[@]}" --host seoul-vps -
 
 使用固定版本的安装地址，例如 `https://hifabu.com/download/0.3.0/install.sh`。系统需有 Bash、curl、tar、Perl（含 JSON::PP）与 shasum 或 sha256sum。首次安装只下载锁定的程序和私有 Node。升级沿用 `~/.versekit` 和原数据目录，同时用清单版本更新已装在 `~/.versekit/bin` 的 biliup 和 lark-cli。安装器先校验本次下载的每个文件，再替换程序文件。它在注册前显示服务名称、用途和日志路径。
 
+正式版安装和升级都会把本版的 `manifest.json` 原样落盘为 `~/.versekit/app/release-manifest.json`，与 `packages/` 同级，供按需安装组件时读取。
+
 旧 GitHub 安装地址通过 HTTPS 读取 `latest.json`，下载指定版本的 `SHA256SUMS` 和 `manifest.json`。先确认 `SHA256SUMS` 中登记的清单哈希等于 `latest.json`，再校验 `manifest.json` 和 `install.sh` 的实际哈希，通过后才运行安装脚本。仅在离线测试中，可同时设 `HIFABU_INSTALL_TEST=1` 和 `HIFABU_DOWNLOAD_URL`，改用回环 HTTP 地址或本地文件目录。
 
 仍在运行的旧更新程序可以继续提交 `file://` 本地源码包用于升级，保留 `app.prev` 供原有自检和回滚处理。

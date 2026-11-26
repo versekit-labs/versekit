@@ -213,7 +213,8 @@ test("ACC-release-02 / ACC-install-01/02/05：正式版全新安装只装 Node �
   assert.equal(lines.at(-1), `装好了，控制台地址 http://127.0.0.1:${main.port}，终端可以关了`, r.stderr);
 
   const prefix = join(main.home, ".versekit");
-  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "app/.hifabu-release.json", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
+  for (const f of ["node/bin/node", "app/packages/cli/src/vk.mjs", "bin/vk"]) assert.ok(existsSync(join(prefix, f)), `缺 ${f}`);
+  assert.equal(readFileSync(join(prefix, "app/release-manifest.json"), "utf8"), releases[FIRST][`/${FIRST}/manifest.json`]);
   assert.ok(existsSync(join(main.home, ".local/state/versekit/vk.db")), "vk init 应该建库");
   assert.equal(await status(main.port), 200);
 
@@ -249,7 +250,6 @@ test("ACC-release-02 / ACC-install-03：旧地址按 latest.json 升级，保留
   const prefix = join(main.home, ".versekit");
   const stamp = join(prefix, "app/.versekit-build.json");
   writeFileSync(stamp, readFileSync(stamp, "utf8").replace(/^  "release":.*\n/m, ""));
-  rmSync(join(prefix, "app/.hifabu-release.json"));
   for (const name of ["biliup", "lark-cli"]) writeFileSync(join(prefix, "bin", name), "old version", { mode: 0o755 });
 
   currentVersion = SECOND;
@@ -273,6 +273,12 @@ test("ACC-release-02 / ACC-install-03：旧地址按 latest.json 升级，保留
   const after = JSON.parse((await sh(main, vk, ["service", "status"])).stdout).pid;
   assert.notEqual(after, before, "升级要重启服务");
   assert.ok(!existsSync(join(main.home, ".versekit/app.prev")), "升级成功后不留旧程序");
+});
+
+test("ACC-release-02：升级后 release-manifest.json 原样换成本次发版清单", () => {
+  const installed = readFileSync(join(main.home, ".versekit/app/release-manifest.json"), "utf8");
+  assert.equal(installed, releases[SECOND][`/${SECOND}/manifest.json`]);
+  assert.notEqual(installed, releases[FIRST][`/${FIRST}/manifest.json`]);
 });
 
 test("ACC-install-04：vk service stop / start / restart 管得住后台服务", { timeout: 60000 }, async () => {
