@@ -168,6 +168,21 @@ test("ACC-release-05: 官网页头导航与首页链接指向下载页，插件�
   assert.doesNotMatch(plugin, /download\//, "插件页不链回下载页（DESIGN.md §3.1）");
 });
 
+test("ACC-cloud-10: 官网和两种下载页的最后一个导航项都链到 /login", () => {
+  const pages = new Map(
+    ["index.html", "privacy/index.html", "terms/index.html", "plugin/index.html"]
+      .map((path) => [path, readFileSync(join(REPO, "site", path), "utf8")]),
+  );
+  pages.set("download (release)", renderDownloadPage({ manifest: sampleManifest(), installSha256: "c".repeat(64) }));
+  pages.set("download (unavailable)", renderUnavailablePage());
+
+  for (const [name, html] of pages) {
+    const nav = html.match(/<header>[\s\S]*?<nav\b[^>]*>([\s\S]*?)<\/nav>/)?.[1];
+    assert.ok(nav, name);
+    assert.match(nav, /<a href="\/login">Sign in<\/a>\s*$/, name);
+  }
+});
+
 test("ACC-release-05: publish-release.mjs 从清单生成下载页，并在激活和撤回时原子更新", (t) => {
   const root = mkdtempSync(join(tmpdir(), "hifabu-pub-dl-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
