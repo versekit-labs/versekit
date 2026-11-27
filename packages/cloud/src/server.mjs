@@ -389,7 +389,9 @@ export function createCloudServer({
       }
       if (req.method === "GET" && url.pathname === callbackPath) return await finishLogin(req, res, url.searchParams);
       if (req.method === "GET" && url.pathname === "/login") {
-        return html(res, 200, loginPage({ googlePath, machine: await machineFor(onlyParam(url.searchParams, "code")) }));
+        const machine = await machineFor(onlyParam(url.searchParams, "code"));
+        if (!machine && sessionFor(req)) return redirect(res, "/account");
+        return html(res, 200, loginPage({ googlePath, machine }));
       }
       if (req.method === "GET" && url.pathname === "/link") {
         const code = onlyParam(url.searchParams, "code");

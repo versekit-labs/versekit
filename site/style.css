@@ -14,9 +14,11 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);color:v
 /* 页头、页脚四页共用；.home 是首页和插件页的正文 */
 header{justify-content:space-between;flex-wrap:wrap;margin-bottom:48px}
 header img{width:140px;height:auto;border-radius:0;display:block}
-nav{display:flex;gap:20px;flex-wrap:wrap}
+nav{display:flex;gap:0 16px;flex-wrap:wrap}
 nav a{font-size:15px;font-weight:500;color:var(--fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:4px;padding:8px 0}
 nav a:hover{text-decoration-color:var(--accent)}
+nav a[href="/login"]{margin-inline-start:auto;white-space:nowrap}
+nav a[href="/login"]:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
 .kicker{margin:0 0 12px;color:var(--muted);font-size:14px;letter-spacing:.04em}
 .home h1{font-size:clamp(28px,5vw,38px);line-height:1.2;letter-spacing:-.01em;margin:0 0 16px;text-wrap:balance}
 .lead{font-size:18px;margin:0 0 12px}
@@ -50,7 +52,6 @@ nav a[aria-current]{text-decoration-color:var(--accent)}
 .steps li{min-width:0}
 .steps{grid-template-columns:minmax(0,1fr)}
 .cmd{min-width:0;max-width:100%}
-nav{gap:0 20px}
 @media (max-width:520px){.cmd code{white-space:normal;overflow-wrap:anywhere}}
 .cmd.wrap code{white-space:normal;overflow-wrap:anywhere}
 .plain{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:8px 0 12px}

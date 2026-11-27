@@ -230,6 +230,7 @@ export function renderUnavailablePage() {
     <a href="../plugin/">Claude Code plugin</a>
     <a href="../privacy/">Privacy Policy</a>
     <a href="../terms/">Terms of Service</a>
+    <a href="/login">Sign in</a>
   </nav>
 </header>
 <section class="hero">

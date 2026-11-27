@@ -163,6 +163,21 @@ test("ACC-cloud-02: Google login over local HTTP with PKCE, verified identity, s
     assert.deepEqual(JSON.parse(await cli(["session", "get"], accountToken.split("=")[1])), second);
   });
 
+  await t.test("ACC-cloud-10: /login shows the sign-in page or redirects a signed-in browser to /account", async () => {
+    const anonymous = await request("/login");
+    assert.equal(anonymous.status, 200);
+    assert.match(await anonymous.text(), /用 Google 继续/);
+
+    const headers = { Cookie: accountToken };
+    const signedIn = await request("/login", { headers });
+    assert.equal(signedIn.status, 303);
+    assert.equal(signedIn.headers.get("Location"), "/account");
+
+    const switchAccount = await request("/login?code=123456", { headers });
+    assert.equal(switchAccount.status, 200);
+    assert.match(await switchAccount.text(), /name="code" value="123456"/);
+  });
+
   await t.test("rejects a foreign or missing Origin before starting login or revoking a session", async () => {
     for (const Origin of [undefined, "https://elsewhere.invalid", "null"]) {
       const headers = { Cookie: accountToken, ...(Origin && { Origin }) };
