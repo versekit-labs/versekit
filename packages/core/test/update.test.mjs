@@ -27,6 +27,7 @@ const seen = [];
 let server;
 let release;
 let down = false;
+let serveInstaller;
 
 function useRelease(version = RELEASE, commit = B) {
   release = fakeRelease("http://127.0.0.1", {
@@ -40,6 +41,7 @@ before(async () => {
   server = createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers });
     if (down) { res.statusCode = 503; return res.end("{}"); }
+    if (serveInstaller && req.url === `/${RELEASE}/install.sh`) return serveInstaller(req, res);
     res.setHeader("content-type", "application/json");
     if (release[req.url] !== undefined) return res.end(release[req.url]);
     res.statusCode = 404;
@@ -130,6 +132,32 @@ test("ACC-release-03 检查正式版版本号与 CHANGELOG，请求不带任何�
   }
   const flat = JSON.stringify(seen);
   assert.ok(!flat.includes(HOME) && !flat.includes(A));
+});
+
+test("ACC-release-07：更新器从断点续传安装脚本，校验失败后重新下载整份脚本", async (t) => {
+  useRelease();
+  const path = `/${RELEASE}/install.sh`;
+  const script = Buffer.from(release[path]);
+  const halfway = Math.floor(script.length / 2);
+  const ranges = [];
+  serveInstaller = (req, res) => {
+    ranges.push(req.headers.range);
+    if (ranges.length === 1) {
+      res.setHeader("Content-Length", script.length);
+      return res.write(script.subarray(0, halfway), () => setTimeout(() => res.destroy(), 25));
+    }
+    if (ranges.length === 2) {
+      const corrupt = Buffer.from(script.subarray(halfway));
+      corrupt[0] ^= 1;
+      return res.writeHead(206, { "Content-Range": `bytes ${halfway}-${script.length - 1}/${script.length}` }).end(corrupt);
+    }
+    res.end(script);
+  };
+  t.after(() => { serveInstaller = undefined; });
+
+  const releaseCheck = await updates.inspectRelease({ current: cur(A) });
+  assert.deepEqual(await releaseCheck.downloadInstaller(), script);
+  assert.deepEqual(ranges, [undefined, `bytes=${halfway}-`, undefined]);
 });
 
 test("ACC-release-03 按 SemVer 比较，忽略提交差异与构建元数据，撤回版本指针时不降级", async () => {

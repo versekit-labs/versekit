@@ -11,6 +11,7 @@ import { readEnv } from "./env.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { open, getMeta } from "./index.mjs";
 import { readConfig, updateConfig } from "./config.mjs";
@@ -143,15 +144,93 @@ function isNewer(latest, current) {
 }
 
 export class ReleaseDownloadError extends Error {}
+export class ReleaseIntegrityError extends Error {}
 
-async function download(base, file, fetchImpl, timeoutMs = 15000) {
+async function downloadWithRetries(url, { fetchImpl, timeoutMs, requestHeaders, sha256, size }) {
+  let chunks = [];
+  let offset = 0;
+  let canResume = false;
+  let etag;
+  const reset = () => { chunks = []; offset = 0; canResume = false; etag = undefined; };
+
+  for (let attempt = 0; ; attempt++) {
+    if (!canResume) reset();
+    const request = { ...requestHeaders, "Accept-Encoding": "identity" };
+    if (offset) {
+      request.Range = `bytes=${offset}-`;
+      if (etag) request["If-Range"] = etag;
+    }
+    try {
+      const res = await fetchImpl(url, {
+        headers: request, credentials: "omit", redirect: "error", signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        if (res.status === 416) reset();
+        await res.body?.cancel();
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const encoding = res.headers.get("content-encoding");
+      const identity = !encoding || encoding.toLowerCase() === "identity";
+      let rangeEnd;
+      let total;
+      if (res.status === 206) {
+        const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get("content-range") ?? "");
+        const [start, end, length] = range?.slice(1).map(Number) ?? [];
+        if (!offset || !identity || start !== offset || end < start || end >= length || !Number.isSafeInteger(length)) {
+          reset();
+          await res.body?.cancel();
+          throw new Error("续传响应的 Content-Range 无效");
+        }
+        rangeEnd = end + 1;
+        total = length;
+      } else {
+        reset();
+        const tag = res.headers.get("etag");
+        etag = tag?.startsWith('"') ? tag : undefined;
+        // 没有锁定哈希的文件需要强 ETag，避免把两个版本的字节拼在一起。
+        canResume = identity && Boolean(sha256 || etag);
+      }
+      if (res.body) {
+        for await (const chunk of res.body) {
+          offset += chunk.length;
+          if (size !== undefined && offset > size) throw new ReleaseIntegrityError("下载文件大于清单所列大小");
+          if (rangeEnd !== undefined && offset > rangeEnd) {
+            reset();
+            throw new Error("续传响应超过 Content-Range 的长度");
+          }
+          chunks.push(chunk);
+        }
+      }
+      if (rangeEnd !== undefined && offset !== total) throw new Error("续传响应未传完");
+      return Buffer.concat(chunks, offset);
+    } catch (err) {
+      if (err instanceof ReleaseIntegrityError || attempt === 5) throw err;
+      await delay(2000);
+    }
+  }
+}
+
+/** 下载同一份发布文件；校验失败时丢弃全部字节，再从头下载一次。 */
+export async function downloadReleaseFile(url, { fetchImpl = globalThis.fetch, timeoutMs, requestHeaders, sha256, size }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const bytes = await downloadWithRetries(url, { fetchImpl, timeoutMs, requestHeaders, sha256, size });
+      if ((size !== undefined && bytes.length !== size) ||
+          (sha256 && createHash("sha256").update(bytes).digest("hex") !== sha256)) {
+        throw new ReleaseIntegrityError("SHA-256 校验不通过");
+      }
+      return bytes;
+    } catch (err) {
+      if (!(err instanceof ReleaseIntegrityError) || attempt === 1) throw err;
+    }
+  }
+}
+
+async function download(base, file, fetchImpl, timeoutMs = 15000, sha256) {
   try {
-    const res = await fetchImpl(`${base}/${file}`, {
-      headers, credentials: "omit", redirect: "error", signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    return await downloadReleaseFile(`${base}/${file}`, { fetchImpl, timeoutMs, requestHeaders: headers, sha256 });
   } catch (err) {
+    if (err instanceof ReleaseIntegrityError) throw new Error(`${file} 的 SHA-256 校验不通过`);
     throw new ReleaseDownloadError(`下载新版本失败：${file}（${err.message}）`);
   }
 }
@@ -174,13 +253,6 @@ function checksum(sums, name) {
   return matches[0][0];
 }
 
-function verify(bytes, expected, file) {
-  if (createHash("sha256").update(bytes).digest("hex") !== expected) {
-    throw new Error(`${file} 的 SHA-256 校验不通过`);
-  }
-  return bytes;
-}
-
 /** 先把版本指针与同一版的清单对上，再提供该版经过校验的安装脚本。 */
 export async function inspectRelease({ current = buildInfo(), fetchImpl = globalThis.fetch, env = process.env } = {}) {
   const base = apiBase(env);
@@ -193,11 +265,11 @@ export async function inspectRelease({ current = buildInfo(), fetchImpl = global
   }
 
   const sums = await download(base, `${version}/SHA256SUMS`, fetchImpl);
-  const manifestBytes = await download(base, latest.manifest, fetchImpl);
   if (checksum(sums, "manifest.json") !== latest.sha256) {
     throw new Error("SHA256SUMS 中 manifest.json 的 SHA-256 与 latest.json 不符");
   }
-  const manifest = parseJson(verify(manifestBytes, latest.sha256, "manifest.json"), "manifest.json");
+  const manifestBytes = await download(base, latest.manifest, fetchImpl, undefined, latest.sha256);
+  const manifest = parseJson(manifestBytes, "manifest.json");
   if (manifest?.schema !== "hifabu.release/1" || manifest.version !== version ||
       typeof manifest.commit !== "string" || !FULL_SHA.test(manifest.commit) || typeof manifest.notes !== "string") {
     throw new Error("manifest.json 的版本信息无效");
@@ -212,8 +284,7 @@ export async function inspectRelease({ current = buildInfo(), fetchImpl = global
     check,
     async downloadInstaller() {
       const expected = checksum(sums, "install.sh");
-      const script = await download(base, `${version}/install.sh`, fetchImpl, 120e3);
-      return verify(script, expected, "install.sh");
+      return download(base, `${version}/install.sh`, fetchImpl, 120e3, expected);
     },
   };
 }

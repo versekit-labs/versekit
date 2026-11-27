@@ -33,6 +33,7 @@ let currentVersion = FIRST;
 let releases;
 let breakPath;
 let missingPath;
+let serveNode;
 
 const tar = (args) => {
   const r = spawnSync("tar", args, { encoding: "utf8" });
@@ -92,6 +93,7 @@ before(async () => {
     hits.push(url);
     const body = releases[currentVersion][url] ?? releases[FIRST][url] ?? releases[SECOND][url];
     if (body === undefined || url === missingPath) return res.writeHead(404).end("no");
+    if (serveNode && url === "/deps/node.tar.gz") return serveNode(req, res, body);
     if (url !== breakPath) return res.end(body);
     if (url.endsWith("/SHA256SUMS")) return res.end(body.replace(/^\w{64}(?=  manifest\.json$)/m, "0".repeat(64)));
     res.end(Buffer.concat([Buffer.from(body), Buffer.from("corrupted")]));
@@ -381,6 +383,58 @@ test("ACC-install-03：下载失败——退出码非 0 并指出文件", { time
   missingPath = undefined;
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /下载失败：.*app\.tar\.gz/);
+});
+
+test("ACC-release-07：安装器续传、校验失败后重下，耗尽五次重试后清理半截文件", { timeout: 60000 }, async (t) => {
+  for (const [scenario, succeeds, corrupt, ignoresRange] of [
+    ["中途断线后续传并通过校验", true, false, false],
+    ["续传后的 SHA-256 不符时丢弃并从头下载", true, true, false],
+    ["镜像忽略 Range 时从头下载", true, false, true],
+    ["持续断线时报告下载失败并清理半截文件", false, false, false],
+  ]) {
+    await t.test(scenario, async (t) => {
+      const h = await newHome();
+      const downloads = join(h.home, "downloads");
+      mkdirSync(downloads);
+      const offsets = [];
+      let halfway;
+      serveNode = (req, res, body) => {
+        const requested = Number(/^bytes=(\d+)-$/.exec(req.headers.range ?? "")?.[1] ?? 0);
+        offsets.push(requested);
+        halfway = Math.floor(body.length / 2);
+        const offset = ignoresRange ? 0 : requested;
+        const remaining = body.subarray(offset);
+        res.setHeader("Content-Length", remaining.length);
+        if (offset) {
+          res.statusCode = 206;
+          res.setHeader("Content-Range", `bytes ${offset}-${body.length - 1}/${body.length}`);
+        }
+        if (!succeeds || offsets.length === 1) {
+          const part = Buffer.from(remaining.subarray(0, Math.floor(remaining.length / 2)));
+          if (corrupt) part[0] ^= 1;
+          return res.write(part, () => setTimeout(() => res.destroy(), 25));
+        }
+        res.end(remaining);
+      };
+      t.after(() => { serveNode = undefined; });
+
+      const r = await sh(h, "bash", [join(WORK, "release-install.sh")], { env: { TMPDIR: downloads } });
+      assert.deepEqual(readdirSync(downloads), []);
+      if (succeeds) {
+        assert.equal(r.code, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /校验通过，解压 Node/);
+        assert.deepEqual(offsets, corrupt || ignoresRange ? [0, halfway, 0] : [0, halfway]);
+        assert.equal(await status(h.port), 200);
+      } else {
+        assert.equal(r.code, 1, r.stdout + r.stderr);
+        assert.match(r.stderr, /下载失败：.*node\.tar\.gz/);
+        assert.equal(offsets.length, 6);
+        assert.deepEqual(offsets.slice(0, 2), [0, halfway]);
+        assert.ok(offsets.slice(1).every((offset, i) => offset > offsets[i]));
+        assert.ok(!existsSync(join(h.home, ".versekit")));
+      }
+    });
+  }
 });
 
 test("ACC-release-02：旧更新器传入本地源码包，保留 app.prev 且不改 PATH", { timeout: 120000 }, async (t) => {

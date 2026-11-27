@@ -161,11 +161,23 @@ main() {
 
   # 终端是 tty 时显示 curl 进度条（stderr），否则（管道、CI、日志）静默，不刷屏。
   fetch() { # fetch <url> <输出文件>
-    local flags=-fsSL
-    [ -t 2 ] && flags="-fL --progress-bar"
-    # shellcheck disable=SC2086
-    curl -q $flags --proto-redir '=https' --retry 2 --connect-timeout 15 -o "$2" -- "$1" </dev/null ||
-      die "下载失败：$1" "检查网络（需要能访问该地址）后重新运行；这条命令可以反复运行"
+    local url="$1" file="$2" attempt rc status
+    local -a flags=(-fsSL)
+    [ -t 2 ] && flags=(-fL --progress-bar)
+    # 每次重新启动 curl，让 -C - 按当前文件长度计算续传位置。
+    for attempt in 0 1 2 3 4 5; do
+      if status="$(curl -q "${flags[@]}" --proto-redir '=https' --connect-timeout 15 \
+          -C - --write-out '%{http_code}' -o "$file" -- "$url" </dev/null)"; then
+        return 0
+      else
+        rc=$?
+      fi
+      # 镜像忽略 Range 或拒绝该偏移时，下次从头下载。
+      if [ "$rc" = 33 ] || [ "$status" = 416 ]; then rm -f "$file"; fi
+      if [ "$attempt" != 5 ]; then sleep 2; fi
+    done
+    rm -f "$file"
+    die "下载失败：$url" "检查网络（需要能访问该地址）后重新运行；这条命令可以反复运行"
   }
   sha_of() { $SHA "$1" | awk '{print $1}'; }
 
@@ -226,11 +238,14 @@ main() {
   }
 
   verified_download() {
-    local url="$1" file="$2" want="$3" got
-    fetch "$url" "$file"
-    got="$(sha_of "$file")"
-    [ "$got" = "$want" ] ||
-      die "${url##*/} 的 SHA-256 校验不通过（锁定值 ${want}，实际 ${got}）" "重新下载该版本；持续失败请联系发布方"
+    local url="$1" file="$2" want="$3" got attempt
+    for attempt in 1 2; do
+      fetch "$url" "$file"
+      got="$(sha_of "$file")"
+      if [ "$got" = "$want" ]; then return 0; fi
+      rm -f "$file"
+    done
+    die "${url##*/} 的 SHA-256 校验不通过（锁定值 ${want}，实际 ${got}）" "重新下载该版本；持续失败请联系发布方"
   }
 
   local APP_URL APP_SHA APP_COMMIT RELEASE="" NODE_VERSION NODE_URL NODE_SHA

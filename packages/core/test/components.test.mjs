@@ -16,7 +16,7 @@ import { createRunner, queuePublish } from "../src/runner.mjs";
 import { getFeishuDelivery } from "../src/store.mjs";
 import feishu from "../../channel-feishu/src/index.mjs";
 
-test("ACC-release-04：只安装校验通过的锁定文件，已有组件无需下载，移除只动私有目录", async (t) => {
+test("ACC-release-04 / ACC-release-07：续传并校验锁定文件，已有组件无需下载，移除只动私有目录", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "vk-component-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const prefix = join(dir, "install");
@@ -44,10 +44,23 @@ test("ACC-release-04：只安装校验通过的锁定文件，已有组件无需
     "lark-cli": archive("lark-cli", "1.0.97", "-czf"),
   };
   const requests = [];
+  const biliupRanges = [];
+  const halfway = Math.floor(packages.biliup.length / 2);
   const server = createServer((req, res) => {
     const name = req.url.slice(1);
     requests.push(name);
     if (!Object.hasOwn(packages, name)) return res.writeHead(404).end();
+    if (name === "biliup") {
+      const body = packages.biliup;
+      biliupRanges.push(req.headers.range);
+      if (biliupRanges.length === 1) {
+        res.setHeader("Content-Length", body.length);
+        return res.write(body.subarray(0, halfway), () => setTimeout(() => res.destroy(), 25));
+      }
+      if (req.headers.range === `bytes=${halfway}-`) {
+        return res.writeHead(206, { "Content-Range": `bytes ${halfway}-${body.length - 1}/${body.length}` }).end(body.subarray(halfway));
+      }
+    }
     res.end(packages[name]);
   });
   server.listen(0, "127.0.0.1");
@@ -91,15 +104,17 @@ test("ACC-release-04：只安装校验通过的锁定文件，已有组件无需
   const before = readFileSync(binary);
   assert.equal((await installComponent("biliup")).already, true);
   assert.deepEqual(readFileSync(binary), before);
-  assert.deepEqual(requests, ["biliup"]);
+  assert.deepEqual(requests, ["biliup", "biliup"]);
+  assert.deepEqual(biliupRanges, [undefined, `bytes=${halfway}-`]);
 
   await assert.rejects(installComponent("lark-cli"), { code: "component_checksum" });
+  assert.deepEqual(requests, ["biliup", "biliup", "lark-cli", "lark-cli"]);
   assert.deepEqual(readdirSync(join(prefix, "bin")), ["biliup"]);
   const original = lark.url;
   lark.url = lark.upstream;
   save();
   await assert.rejects(installComponent("lark-cli", { offline: true }), { code: "offline_mode" });
-  assert.deepEqual(requests, ["biliup", "lark-cli"]);
+  assert.deepEqual(requests, ["biliup", "biliup", "lark-cli", "lark-cli"]);
   lark.url = original;
   lark.sha256 = goodLarkDigest;
   save();
