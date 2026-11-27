@@ -354,10 +354,9 @@ function printHuman(name, data) {
   if (name.startsWith("cloud.")) {
     if (data.loggedIn) {
       console.log(`${data.email} · ${data.role === "maker" ? "制作机" : "发布机"} · 传片${data.relayEnabled ? "已开通" : "未开通"}`);
-      if (name === "cloud.status") {
-        const storage = { keychain: "macOS 钥匙串", "secret-service": "Secret Service", file: "device.json（权限 600）" };
-        console.log(`刷新凭据存于${storage[data.credentialStorage]}。`);
-      }
+      const storage = { keychain: "macOS 钥匙串", "secret-service": "Secret Service" };
+      if (data.message) console.log(data.message);
+      else if (storage[data.credentialStorage]) console.log(`刷新凭据存于${storage[data.credentialStorage]}。`);
     } else console.log(data.message ?? "这台机器未登录 Hifabu。");
   } else if (name === "scan") {
     for (const { path } of data.files) console.log(path);
@@ -423,6 +422,7 @@ try {
     if (!state.jobs().length) return;
     const { live, pid } = readLock(lockPath);
     if (live && pid) return;
+    await cloud.prepareEnvironmentCredential();
     const cfg = connection();
     if (!cfg || !uploadQueue.matching(cfg).length) return;
     const child = spawn(process.execPath, [process.argv[1], "_uploader", "--data", dataDir, ...(offline ? ["--offline"] : [])],
@@ -432,7 +432,8 @@ try {
   }
 
   if (pos.length === 1 && pos[0] === "_uploader") {
-    const options = { state, queue: uploadQueue, lockPath, connection: () => connection(makeCloud()) };
+    const usesEnvironment = await cloud.prepareEnvironmentCredential();
+    const options = { state, queue: uploadQueue, lockPath, connection: () => connection(usesEnvironment ? cloud : makeCloud()) };
     // Recheck after releasing the lock in case a foreground command saw the
     // live worker while it was finishing and queued another job.
     while (await runUploader(options)) {}
@@ -447,7 +448,12 @@ try {
       const singleWord = command?.name === area;
       if (!command || pos.length > (singleWord ? 2 : 3)) throw new Error("未知制作机命令，运行 hifabu --help 查看。");
       const args = commandArgs(command, singleWord ? action : target, flags);
-      if (command.name !== "scan") await kickUploader();
+      if (command.name !== "scan" && !(command.name === "cloud.logout" && process.env.HIFABU_DEVICE_TOKEN !== undefined)) {
+        await kickUploader();
+      }
+      if (["work.push", "delivery.list", "delivery.show", "group.list"].includes(command.name)) {
+        await cloud.prepareEnvironmentCredential();
+      }
       const handlers = {
         ...cloud,
         ...createDeliveryHandlers({ makerConnection, state, uploadQueue, defaultGroupOf: (manifest) => projectGroup(dataDir, manifest), log }),

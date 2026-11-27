@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -273,7 +273,7 @@ async function eventually(probe) {
   assert.fail("等待本机测试服务超时");
 }
 
-test("ACC-maker-11: secret stores keep credentials out of ps, command output and logs", {
+test("ACC-maker-11/12: credential storage, fallback and logout keep secrets out of ps, output and logs", {
   skip: process.platform === "win32", timeout: 45_000,
 }, async (t) => {
   const deviceId = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -281,22 +281,32 @@ test("ACC-maker-11: secret stores keep credentials out of ps, command output and
   const machineToken = `machine.${Buffer.from(JSON.stringify({ sub: accountId, deviceId })).toString("base64url")}.signature`;
   const refreshToken = "R".repeat(43);
   const pollToken = "P".repeat(43);
-  const secrets = [refreshToken, machineToken, pollToken];
+  const rejectedToken = "E".repeat(43);
+  const secrets = [refreshToken, machineToken, pollToken, rejectedToken];
   const route = (name) => cloudRoute(name).path;
-  const machine = () => ({ email: "maker@example.test", role: "maker", relayEnabled: false,
+  const machine = () => ({ email: "maker@example.test", role: "maker", relayEnabled: true, relayUrl: origin,
     machineToken, expiresAt: Date.now() + 3600_000 });
   let origin;
   let revoked = 0;
+  let operations;
   const server = createHttpServer((req, res) => {
     req.resume();
     const auth = req.headers.authorization;
     let payload;
+    if (req.url === route("device.refresh") && auth === `Bearer ${rejectedToken}`) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error_code: rejectedToken, message: rejectedToken }));
+    }
     if (req.url === route("device.link.start")) {
+      appendFileSync(operations, '"link.start"\n');
       payload = { url: `${origin}/link?code=${"L".repeat(32)}`, code: "123456", pollToken, expiresAt: Date.now() + 10_000 };
     } else if (req.url === route("device.link.poll") && auth === `Bearer ${pollToken}`) {
+      appendFileSync(operations, '"link.poll"\n');
       payload = { state: "linked", refreshToken, ...machine() };
     } else if (req.url === route("device.refresh") && auth === `Bearer ${refreshToken}`) {
       payload = machine();
+    } else if (req.url === "/v1/group-snapshot" && auth === `Bearer ${machineToken}`) {
+      payload = { snapshot: null };
     } else if (req.url === route("device.revoke.self") && auth === `Bearer ${refreshToken}`) {
       revoked++;
       payload = { revoked: true };
@@ -315,12 +325,16 @@ test("ACC-maker-11: secret stores keep credentials out of ps, command output and
       const metadata = join(data, "device.json");
       const vault = join(directory, "fake-vault");
       const snapshots = join(directory, "ps.log");
-      const operations = join(directory, "operations.log");
+      operations = join(directory, "operations.log");
       const locked = join(directory, "locked");
+      const lockAfterOpening = join(directory, "lock-after-opening");
       const bin = isolatedPath(directory, ["awk", "dirname", "node"]);
       const preload = join(directory, "platform.mjs");
       writeFileSync(preload, `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });\n`);
-      writeFileSync(join(bin, platform === "darwin" ? "open" : "xdg-open"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      writeFileSync(join(bin, platform === "darwin" ? "open" : "xdg-open"), `#!/bin/sh
+printf '"browser.open"\\n' >> "$FIXTURE_LOG"
+if [ -e "$FIXTURE_LOCK_AFTER_OPENING" ]; then : > "$FIXTURE_LOCKED"; fi
+`, { mode: 0o700 });
       writeFileSync(join(bin, platform === "darwin" ? "security" : "secret-tool"), `#!/usr/bin/env node
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -343,7 +357,8 @@ if (operation === "-i" || operation === "store") {
 } else process.exit(1);
 `, { mode: 0o700 });
       const env = { HOME: directory, PATH: bin, NODE_OPTIONS: `--import=${pathToFileURL(preload)}`,
-        HIFABU_ORIGIN: origin, FIXTURE_VAULT: vault, FIXTURE_PS: snapshots, FIXTURE_LOG: operations, FIXTURE_LOCKED: locked };
+        HIFABU_ORIGIN: origin, FIXTURE_VAULT: vault, FIXTURE_PS: snapshots, FIXTURE_LOG: operations,
+        FIXTURE_LOCKED: locked, FIXTURE_LOCK_AFTER_OPENING: lockAfterOpening };
       const run = (...args) => exec(maker, ["--data", data, "--offline", "cloud", ...args], { env, timeout: 15_000 });
       const output = [];
       const capture = ({ stdout, stderr }) => {
@@ -366,11 +381,78 @@ if (operation === "-i" || operation === "store") {
       assert.equal(existsSync(vault), false);
       assert.equal(existsSync(metadata), false);
 
-      writeFileSync(locked, "");
-      const failure = await run("login").then(() => assert.fail("无法写系统凭据时应返回错误"), (error) => error);
-      assert.equal(JSON.parse(capture(failure)).error.code, "cloud_credential_store_failed");
-      assert.match(failure.stderr, /cloud_credential_store_failed/);
-      assert.equal(existsSync(metadata), false);
+      const writeOperation = platform === "darwin" ? "-i" : "store";
+      const removeOperation = platform === "darwin" ? "delete-generic-password" : "clear";
+      for (const trigger of [locked, lockAfterOpening]) {
+        const offset = readFileSync(operations, "utf8").length;
+        writeFileSync(trigger, "");
+        const login = JSON.parse(capture(await run("login")));
+        const steps = readFileSync(operations, "utf8").slice(offset).trim().split("\n").map(JSON.parse)
+          .map((step) => Array.isArray(step) ? step[0] : step);
+        assert.equal(steps[0], writeOperation);
+        assert.ok(steps.indexOf(removeOperation) < steps.indexOf("link.start"));
+        assert.ok(steps.indexOf("link.start") < steps.indexOf("browser.open"));
+        const writes = steps.flatMap((step, index) => step === writeOperation ? [index] : []);
+        assert.equal(writes.length, trigger === locked ? 1 : 2);
+        if (trigger === lockAfterOpening) assert.ok(writes[1] > steps.indexOf("link.poll"));
+        assert.equal(steps.filter((step) => step === "link.start").length, 1);
+        assert.equal(steps.filter((step) => step === "link.poll").length, 1);
+        assert.equal(login.loggedIn, true);
+        assert.equal(login.credentialStorage, "file");
+        assert.equal(login.credentialPath, metadata);
+        assert.ok(login.message.includes(metadata));
+        assert.equal(statSync(metadata).mode & 0o777, 0o600);
+        const fallback = JSON.parse(readFileSync(metadata, "utf8"));
+        assert.equal(fallback.refreshToken, refreshToken);
+        assert.ok(!Object.hasOwn(fallback, "machineToken"));
+        assert.equal(existsSync(vault), false);
+        // A leftover native entry must not override the file and must be cleaned on logout.
+        writeFileSync(vault, "S".repeat(43), { mode: 0o600 });
+        assert.equal(JSON.parse(capture(await run("status"))).credentialStorage, "file");
+        assert.ok(capture(await run("status", "--human")).includes(metadata));
+        const beforeFallbackLogout = revoked;
+        assert.equal(JSON.parse(capture(await run("logout"))).loggedIn, false);
+        assert.equal(revoked, beforeFallbackLogout + 1);
+        assert.equal(existsSync(vault), false);
+        assert.equal(existsSync(metadata), false);
+        rmSync(locked);
+        rmSync(lockAfterOpening, { force: true });
+      }
+
+      const environmentRun = (token, ...args) => exec(maker, ["--data", data, "--offline", ...args], {
+        env: { ...env, HIFABU_DEVICE_TOKEN: token }, timeout: 15_000,
+      });
+      const localFile = "{broken";
+      writeFileSync(metadata, localFile, { mode: 0o600 });
+      writeFileSync(vault, "S".repeat(43), { mode: 0o600 });
+      const beforeEnvOperations = readFileSync(operations, "utf8");
+      const beforeEnvLogout = revoked;
+      const envStatus = JSON.parse(capture(await environmentRun(refreshToken, "cloud", "status")));
+      assert.equal(envStatus.loggedIn, true);
+      assert.equal(envStatus.credentialStorage, "env");
+      assert.match(envStatus.message, /来自环境变量 HIFABU_DEVICE_TOKEN/);
+      assert.match(capture(await environmentRun(refreshToken, "cloud", "status", "--human")), /来自环境变量 HIFABU_DEVICE_TOKEN/);
+      assert.equal(JSON.parse(capture(await environmentRun(refreshToken, "cloud", "login"))).loggedIn, true);
+      assert.deepEqual(JSON.parse(capture(await environmentRun(refreshToken, "group", "list"))),
+        { groups: [], reportedAt: null, ok: true });
+      await assert.rejects(environmentRun(refreshToken, "cloud", "logout"), (failure) => {
+        assert.equal(failure.code, 1);
+        const { error } = JSON.parse(capture(failure));
+        assert.equal(error.code, "cloud_logout_env_token");
+        assert.match(error.message, /从环境里移除它.*我的 Hifabu/);
+        return true;
+      });
+      for (const [token, code] of [["", "cloud_environment_credential_invalid"], [rejectedToken, "cloud_environment_credential_failed"]]) {
+        await assert.rejects(environmentRun(token, "cloud", "status"), (failure) => {
+          assert.equal(JSON.parse(capture(failure)).error.code, code);
+          return true;
+        });
+      }
+      assert.equal(readFileSync(metadata, "utf8"), localFile);
+      assert.equal(readFileSync(vault, "utf8"), "S".repeat(43));
+      assert.equal(revoked, beforeEnvLogout);
+      assert.equal(readFileSync(operations, "utf8"), beforeEnvOperations);
+
       const ps = readFileSync(snapshots, "utf8");
       const log = readFileSync(operations, "utf8");
       assert.ok(ps.includes(platform === "darwin" ? "security -i" : "secret-tool store"), "ps captured the live credential tool");
@@ -379,7 +461,8 @@ if (operation === "-i" || operation === "store") {
       for (const stream of [...output, ps, log, file]) {
         assert.ok(secrets.every((secret) => !stream.includes(secret)), `${storage}: no fixture secret in captured stream`);
       }
-      evidence(`${storage}: ps, argv, stdout, stderr, logs and device.json contained 0 secrets (refresh, poll and machine tokens); locked store emitted cloud_credential_store_failed; logout removed the item`);
+      assert.doesNotMatch(output.join("\n"), /请解锁钥匙串|cloud_credential_store_failed/);
+      evidence(`${storage}: preflight before authorization, locked-at-start and locked-mid-login scenarios completed with one authorization each; logout removed both stores; ps, argv, stdout, stderr and logs contained 0 credential values`);
     });
   }
 });
@@ -556,6 +639,21 @@ test("ACC-maker-01/02/04/05: offline CLI parity, queued retry and credential rev
   }), [queued.id]);
   assert.equal(JSON.parse((await runMaker("delivery", "list")).stdout).deliveries[0].id, queued.id);
   assert.throws(() => statSync(jobFile), { code: "ENOENT" });
+
+  const envData = join(directory, "env-maker");
+  const envManifest = join(directory, "env-manifest.json");
+  const envDelivery = JSON.parse(readFileSync(manifest, "utf8"));
+  envDelivery.work.key = "offline/18";
+  writeFileSync(envManifest, JSON.stringify(envDelivery));
+  const envPush = await exec(maker, ["--data", envData, "--offline", "work", "push", envManifest], {
+    env: { ...makerEnv, HIFABU_DEVICE_TOKEN: saved.refreshToken }, timeout: 20_000,
+  });
+  const envJob = JSON.parse(envPush.stdout);
+  assert.equal(envJob.state, "pending");
+  assert.equal((envPush.stdout + envPush.stderr).includes(saved.refreshToken), false);
+  await eventually(async () => (await pull()).some(({ id }) => id === envJob.id));
+  await eventually(() => !existsSync(join(envData, "uploader.lock")));
+  assert.equal(existsSync(join(envData, "device.json")), false);
 
   const loggedOut = JSON.parse((await runMaker("cloud", "logout")).stdout);
   assert.equal(loggedOut.loggedIn, false);

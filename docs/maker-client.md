@@ -14,11 +14,13 @@
 
 - macOS 使用钥匙串，服务名为 `hifabu`，账户名为设备 ID。
 - Linux 使用由 `secret-tool` 提供的 Secret Service，条目标签为 `Hifabu`，属性为 `service=hifabu` 和 `device=<设备 ID>`。
-- 系统工具缺失时，刷新凭据保存在权限为 `0600` 的 `<数据目录>/device.json`。有系统工具但无法写入时，登录会报错并提示检查系统凭据服务。已有的文件凭据可以继续用，退出并重新登录后会按当前机器选择存储位置。
+- 打开浏览器前，小程序会试写并清理一条临时的系统凭据。钥匙串锁着、无桌面会话或系统工具无法写入时，刷新凭据保存在权限为 `0600` 的 `<数据目录>/device.json`。授权后遇到系统写入失败也会改存到该文件，本次授权继续有效。登录结果和状态都显示文件位置。
 
 使用系统存储时，权限为 `0600` 的 `device.json` 只保存设备和连接资料。有效期一小时的机器令牌保存在运行进程的内存中。
 
-卸载前运行 `hifabu --data <目录> cloud logout`，让 Hifabu 作废设备并删除本地凭据。若退出时无法联网，可在「我的 Hifabu」移除该设备。插件卸载通常删除数据目录，包括私有 Node 和未完成的投递，除非卸载时选择保留数据。钥匙串和 Secret Service 条目由系统保管，可能在插件卸载后保留。若已卸载，可以在 macOS「钥匙串访问」中按服务 `hifabu` 和设备 ID 找到并删除该条目。Linux 可在系统密码管理器中删除对应的 `Hifabu` 条目，或运行 `secret-tool clear service hifabu device <设备 ID>`。保留了插件数据时，文件凭据仍在 `device.json`，可在退出 Hifabu 后删除该文件。
+卸载前运行 `hifabu --data <目录> cloud logout`，让 Hifabu 作废设备，并清理系统存储和本地文件。若退出时无法联网，可在「我的 Hifabu」移除该设备。插件卸载通常删除数据目录，包括私有 Node 和未完成的投递，除非卸载时选择保留数据。钥匙串和 Secret Service 条目由系统保管，可能在插件卸载后保留。若已卸载，可以在 macOS「钥匙串访问」中按服务 `hifabu` 和设备 ID 找到并删除该条目。Linux 可在系统密码管理器中删除对应的 `Hifabu` 条目，或运行 `secret-tool clear service hifabu device <设备 ID>`。保留了插件数据时，文件凭据仍在 `device.json`，可在退出 Hifabu 后删除该文件。
+
+常驻机器和脚本可以通过进程环境中的 `HIFABU_DEVICE_TOKEN` 提供设备刷新凭据。设置后，制作机只用环境变量换取机器令牌，跳过浏览器授权和本地凭据的读写。状态显示环境变量名称，JSON 的 `credentialStorage` 为 `env`。此时 `cloud logout` 返回非零退出码和 `cloud_logout_env_token`，提示从环境移除该变量，原有本地凭据和服务端设备保持原状。要让环境变量中的凭据彻底失效，到「我的 Hifabu」移除对应设备。
 
 ## 制作机命令
 
