@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { constants, accessSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -7,6 +6,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { readEnv } from "./env.mjs";
+import { downloadReleaseFile, ReleaseIntegrityError } from "./update.mjs";
 
 const exec = promisify(execFile);
 const components = new Map([
@@ -139,26 +139,14 @@ export async function listComponents() {
 
 async function download(name, lock, offline) {
   if (offline && !lock.local) throw failure("offline_mode", "离线模式只能从本机测试源下载组件。");
-  let bytes;
   try {
-    const response = await fetch(lock.url, { redirect: "error", signal: AbortSignal.timeout(90_000) });
-    if (!response.ok || !response.body) throw new Error("download failed");
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of response.body) {
-      size += chunk.length;
-      if (size > lock.size) throw failure("component_checksum", `${name} 下载文件大于清单所列大小，安装已停止。`);
-      chunks.push(chunk);
-    }
-    bytes = Buffer.concat(chunks, size);
+    return await downloadReleaseFile(lock.url, { timeoutMs: 90_000, sha256: lock.sha256, size: lock.size });
   } catch (err) {
-    if (err.code === "component_checksum") throw err;
+    if (err instanceof ReleaseIntegrityError) {
+      throw failure("component_checksum", `${name} 的文件校验没通过，安装已停止。请重试。`);
+    }
     throw failure("component_download", `没能下载 ${name}。请检查发布机的网络后重试。`);
   }
-  if (bytes.length !== lock.size || createHash("sha256").update(bytes).digest("hex") !== lock.sha256) {
-    throw failure("component_checksum", `${name} 的文件校验没通过，安装已停止。请重试。`);
-  }
-  return bytes;
 }
 
 async function binaryFromArchive(path, name) {

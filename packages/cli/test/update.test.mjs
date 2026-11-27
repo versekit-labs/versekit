@@ -579,7 +579,12 @@ test("ACC-release-03 校验不通过时拒绝执行安装脚本", { timeout: 120
       assert.equal(r.code, 1, r.stdout + r.stderr);
       const result = json(r);
       assert.match(result.reason ?? result.error?.message, expected);
-      assert.deepEqual(requests.map(({ url }) => url), ["/latest.json", sums, manifest, ...(path === installer ? [installer] : [])]);
+      const expectedRequests = {
+        [sums]: ["/latest.json", sums],
+        [manifest]: ["/latest.json", sums, manifest, manifest],
+        [installer]: ["/latest.json", sums, manifest, installer, installer],
+      };
+      assert.deepEqual(requests.map(({ url }) => url), expectedRequests[path]);
       assert.equal(appVersion(main), "9.9.9");
       assert.equal(json(await vk(main, "service", "status")).pid, initial.pid);
       assert.equal(await status(main.port), 200);
