@@ -22,7 +22,8 @@ claude plugin install hifabu --marketplace https://hifabu.com/plugin/marketplace
 
 - 项目只保存一份 `.hifabu/project.json`，可提交并随工作树移动。约定只有素材定位规则和稳定标识。
 - 插件数据默认在 `~/.claude/plugins/data/` 下本插件的目录，由 Claude Code 提供路径，跨升级保留。目录含设备记录、项目账号组选择、自动更新处理状态、上传队列、暂存素材和可能安装的 Node 运行时。
-- 刷新凭据优先存在 macOS 钥匙串（服务名 `hifabu`）或 Linux Secret Service。无可用服务时存插件数据目录内权限为 600 的 `device.json`。机器令牌只在小程序内存中。
+- 刷新凭据优先存在 macOS 钥匙串（服务名 `hifabu`）或 Linux Secret Service。系统存储锁着或写入失败时，登录自动改存插件数据目录内权限为 600 的 `device.json`。`cloud status` 显示凭据位置。机器令牌只在小程序内存中。
+- 脚本可用环境变量 `HIFABU_DEVICE_TOKEN` 提供设备刷新凭据，跳过本地凭据读写。此时 `cloud logout` 返回错误并提示从环境移除变量，设备须在「我的 Hifabu」移除才能彻底作废。
 - 卸载前在 Claude Code 里说「退出 Hifabu」，或用插件小程序的 `hifabu --data <插件数据目录> cloud logout`。这会清理本机凭据并请求 Hifabu 注销此设备。离线时可稍后到「我的 Hifabu」移除设备。
 - 运行 `claude plugin uninstall hifabu@hifabu` 卸载。卸载最后一个范围时会删除插件数据和未完成的上传队列，`--keep-data` 可以保留它们。若已经卸载但未登出，可在钥匙串或 Secret Service 中删除 Hifabu 的此设备条目，并在「我的 Hifabu」移除设备。项目里的约定可在不再需要时自行删除。
 

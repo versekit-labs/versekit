@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, type } from "node:os";
 import { join } from "node:path";
@@ -104,6 +104,27 @@ function secretTool(storage, deviceId) {
   throw unreadableCredential();
 }
 
+function nativeCredentialStorage() {
+  if (process.platform === "darwin") return "keychain";
+  if (process.platform === "linux") return "secret-service";
+  return null;
+}
+
+function storeSecret(tool, token) {
+  const result = tool.write(token);
+  if (result.error?.code === "ENOENT") return { stored: false };
+  const check = !result.error && result.status === 0 && tool.read();
+  return {
+    stored: !!check && !check.error && check.status === 0 && check.stdout.trim() === token,
+    attempted: true,
+  };
+}
+
+function removeSecret(tool) {
+  const result = tool.remove();
+  return !result.error && (result.status === 0 || tool.missing(result));
+}
+
 function makerCredentialStore(filename) {
   function publish(metadata) {
     try {
@@ -116,17 +137,36 @@ function makerCredentialStore(filename) {
     }
   }
 
+  function prepare() {
+    const storage = nativeCredentialStorage();
+    if (!storage) return null;
+    // Use a fresh item so the probe cannot overwrite an existing device.
+    const tool = secretTool(storage, randomBytes(13).toString("hex").toUpperCase());
+    const probe = storeSecret(tool, randomBytes(32).toString("base64url"));
+    const removed = probe.attempted && removeSecret(tool);
+    return probe.stored && removed ? storage : null;
+  }
+
   function read() {
     try {
       const data = readCredentialFile(filename);
       if (data === null) return null;
-      const { credentialStorage = "file", deviceId, accountId } = data;
+      const { deviceId, accountId } = data;
       const origin = publicOrigin(data.origin);
+      let credentialStorage = "file";
       let refreshToken = data.refreshToken;
-      if (credentialStorage !== "file") {
-        const result = secretTool(credentialStorage, deviceId).read();
-        if (result.status !== 0 || result.error) throw unreadableCredential();
-        refreshToken = result.stdout.trim();
+      // A successful file fallback is authoritative even if the native store
+      // also contains an item. Older metadata can still point to a native item.
+      if (typeof refreshToken !== "string" || !secretPattern.test(refreshToken)) {
+        const storage = data.credentialStorage === "file" ? nativeCredentialStorage()
+          : data.credentialStorage ?? nativeCredentialStorage();
+        if (storage && deviceId) {
+          const result = secretTool(storage, deviceId).read();
+          if (result.status === 0 && !result.error) {
+            refreshToken = result.stdout.trim();
+            credentialStorage = storage;
+          }
+        }
       }
       if (typeof data.email !== "string" || !isMachineRole(data.role) || typeof data.relayEnabled !== "boolean" ||
           typeof refreshToken !== "string" || !secretPattern.test(refreshToken) ||
@@ -137,7 +177,7 @@ function makerCredentialStore(filename) {
     }
   }
 
-  function write(data, deviceName) {
+  function write(data, deviceName, storage) {
     const { machineToken, expiresAt, refreshToken, ...details } = data;
     let claims;
     try {
@@ -149,44 +189,42 @@ function makerCredentialStore(filename) {
     }
     const { sub: accountId, deviceId } = claims;
     const metadata = { ...details, accountId, deviceId, deviceName };
-    const storage = process.platform === "darwin" ? "keychain" : process.platform === "linux" ? "secret-service" : null;
-    const tool = storage && secretTool(storage, deviceId);
-    const stored = tool?.write(refreshToken);
-    if (!stored || stored.error?.code === "ENOENT") {
-      publish({ ...metadata, refreshToken });
-      return { credentialStorage: "file", deviceId };
-    }
-    try {
-      const check = !stored.error && stored.status === 0 && tool.read();
-      if (!check || check.error || check.status !== 0 || check.stdout.trim() !== refreshToken) {
-        throw error("cloud_credential_store_failed", "无法保存 Hifabu 凭据。请解锁钥匙串或检查 Secret Service 后重新接入。");
+    let cleanupStorage;
+    if (storage) {
+      const tool = secretTool(storage, deviceId);
+      const result = storeSecret(tool, refreshToken);
+      if (result.stored) {
+        try {
+          publish({ ...metadata, credentialStorage: storage });
+          return { credentialStorage: storage, deviceId };
+        } catch (err) {
+          // A simultaneous login may have won. Remove only our native item.
+          removeSecret(tool);
+          throw err;
+        }
       }
-      // A simultaneous login may have won. Keep its file and remove only our item.
-      publish({ ...metadata, credentialStorage: storage });
-      return { credentialStorage: storage, deviceId };
-    } catch (err) {
-      tool.remove();
-      throw err;
+      if (result.attempted && !removeSecret(tool)) cleanupStorage = storage;
     }
+    publish({ ...metadata, refreshToken, ...(cleanupStorage && { cleanupStorage }) });
+    return { credentialStorage: "file", deviceId };
   }
 
   function remove(expected) {
     if (expected === null) return;
     const data = readCredentialFile(filename);
     if (!data) return;
-    const external = data.credentialStorage && data.credentialStorage !== "file";
-    if (expected && (external ? data.deviceId !== expected.deviceId : data.refreshToken !== expected.refreshToken)) return;
-    if (external) {
-      const tool = secretTool(data.credentialStorage, data.deviceId);
-      const result = tool.remove();
-      if (result.error || (result.status !== 0 && !tool.missing(result))) {
-        throw error("cloud_credential_remove_failed", "无法删除系统存储中的 Hifabu 凭据。请解锁钥匙串或检查 Secret Service 后重试退出。");
-      }
+    if (expected && (data.deviceId ? data.deviceId !== expected.deviceId : data.refreshToken !== expected.refreshToken)) return;
+    const recordedStorage = data.credentialStorage !== "file" && data.credentialStorage;
+    const requiredStorage = data.cleanupStorage || recordedStorage ||
+      (expected?.credentialStorage !== "file" && expected?.credentialStorage);
+    const storage = requiredStorage || nativeCredentialStorage();
+    if (storage && data.deviceId && !removeSecret(secretTool(storage, data.deviceId)) && requiredStorage) {
+      throw error("cloud_credential_remove_failed", "无法删除系统存储中的 Hifabu 凭据。请检查系统凭据存储后重试退出。");
     }
     removeFile(filename);
   }
 
-  return { read, write, remove };
+  return { prepare, read, write, remove };
 }
 
 const signedOut = { state: "logged_out", loggedIn: false, email: null, role: null, relayEnabled: false };
@@ -212,6 +250,7 @@ export function createCloudHandlers({
 }) {
   const credentialFile = join(credentialsDir, credentialName);
   const makerStore = persistMachineToken ? null : makerCredentialStore(credentialFile);
+  const environmentToken = makerStore ? readEnv("HIFABU_DEVICE_TOKEN") : undefined;
   let credential;
   let pending;
   let loginRequest;
@@ -224,15 +263,21 @@ export function createCloudHandlers({
   let reachable = true;
   let nextStatusCheckAt = 0;
 
-  function request(origin, command, args, token) {
+  function checkOffline(origin) {
     if (offline && !isLoopback(new URL(origin))) {
       throw error("offline_mode", "离线模式无法连接 Hifabu。");
     }
+  }
+
+  function request(origin, command, args, token) {
+    checkOffline(origin);
     return callCloud(origin, command, args, token ? { Authorization: `Bearer ${token}` } : {});
   }
 
   function currentCredential() {
-    if (credential === undefined) credential = makerStore ? makerStore.read() : readCredential(credentialFile);
+    if (credential === undefined && environmentToken === undefined) {
+      credential = makerStore ? makerStore.read() : readCredential(credentialFile);
+    }
     return credential;
   }
 
@@ -240,7 +285,7 @@ export function createCloudHandlers({
     if (!makerStore) removeFile(credentialFile);
     clearTimeout(refreshTimer);
     refreshTimer = null;
-    if (makerStore) {
+    if (makerStore && environmentToken === undefined) {
       credential = null;
       try {
         makerStore.remove(expected);
@@ -265,13 +310,39 @@ export function createCloudHandlers({
   function save(data, attempt) {
     if (persistMachineToken || attempt) {
       mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
-      if (makerStore) Object.assign(data, makerStore.write(data, attempt.name));
+      if (makerStore) Object.assign(data, makerStore.write(data, attempt.name, attempt.storage));
       else writeCredential(credentialFile, data);
     }
     credential = data;
     reachable = true;
     nextStatusCheckAt = data.checkedAt + statusCheckMs;
     scheduleRefresh(data);
+  }
+
+  async function prepareEnvironmentCredential() {
+    if (environmentToken === undefined) return false;
+    if (credential) return true;
+    if (!secretPattern.test(environmentToken)) {
+      throw error("cloud_environment_credential_invalid", "环境变量 HIFABU_DEVICE_TOKEN 中的刷新凭据格式无效。");
+    }
+    const origin = publicOrigin(readEnv("HIFABU_ORIGIN") ?? defaultOrigin);
+    checkOffline(origin);
+    if (!refreshRequest) {
+      refreshRequest = (async () => {
+        try {
+          const response = await request(origin, "device.refresh", {}, environmentToken);
+          const data = credentialFrom(response, origin, environmentToken, Date.now());
+          if (data.expiresAt <= Date.now() + refreshAheadMs) throw new Error();
+          save({ ...data, credentialStorage: "env" });
+        } catch {
+          throw error("cloud_environment_credential_failed", "无法使用环境变量 HIFABU_DEVICE_TOKEN 登录。请检查网络和设备凭据。");
+        } finally {
+          refreshRequest = null;
+        }
+      })();
+    }
+    await refreshRequest;
+    return true;
   }
 
   async function renew(data) {
@@ -395,13 +466,15 @@ export function createCloudHandlers({
   async function start({ name = hostname().replace(/\.local$/i, ""), role = defaultRole }, generation) {
     if (!isMachineRole(role)) throw error("cloud_role_invalid", "机器角色应为制作机（maker）或发布机（executor）。");
     const origin = publicOrigin(readEnv("HIFABU_ORIGIN") ?? defaultOrigin);
+    checkOffline(origin);
+    const storage = makerStore?.prepare();
     const challenge = await request(origin, "device.link.start", { name, role, os: system() });
     if (generation !== loginGeneration) return signedOut;
     if (!validChallenge(challenge, origin, Date.now())) {
       throw error("cloud_response_invalid", "Hifabu 账号服务返回的接入地址有误，请重试。");
     }
     const { code, url, expiresAt, pollToken } = challenge;
-    pending = { code, url, expiresAt, pollToken, origin, role, name };
+    pending = { code, url, expiresAt, pollToken, origin, role, name, storage };
     terminal = null;
     schedulePoll(pending);
     openBrowser(url);
@@ -410,7 +483,14 @@ export function createCloudHandlers({
 
   function status(data, reachable) {
     const result = signedIn(data, reachable);
-    if (makerStore) result.credentialStorage = data.credentialStorage;
+    if (makerStore) {
+      result.credentialStorage = data.credentialStorage;
+      if (data.credentialStorage === "file") {
+        result.credentialPath = credentialFile;
+        result.message = `刷新凭据存于 ${credentialFile}，文件权限为 600。`;
+      }
+      if (data.credentialStorage === "env") result.message = "刷新凭据来自环境变量 HIFABU_DEVICE_TOKEN。";
+    }
     return result;
   }
 
@@ -444,10 +524,12 @@ export function createCloudHandlers({
 
   return {
     relayConnection,
+    ...(makerStore && { prepareEnvironmentCredential }),
     async "cloud.login"(args) {
       if (logoutRequest) await logoutRequest;
+      if (makerStore) await prepareEnvironmentCredential();
       const saved = currentCredential();
-      if (saved) return signedIn(saved, reachable);
+      if (saved) return status(saved, reachable);
       if (pending) return browserChallenge(pending);
       if (loginRequest) return loginRequest;
       const operation = start(args, loginGeneration);
@@ -459,6 +541,9 @@ export function createCloudHandlers({
       }
     },
     async "cloud.logout"() {
+      if (environmentToken !== undefined) {
+        throw error("cloud_logout_env_token", "当前用的是环境变量 HIFABU_DEVICE_TOKEN，请从环境里移除它；要让这台机器的凭据彻底失效，请到「我的 Hifabu」移除这台机器。");
+      }
       if (logoutRequest) return logoutRequest;
       logoutRequest = logout();
       try {
@@ -468,6 +553,7 @@ export function createCloudHandlers({
       }
     },
     async "cloud.status"() {
+      if (makerStore) await prepareEnvironmentCredential();
       const saved = currentCredential();
       if (!saved) return pending ? browserChallenge(pending) : terminal ?? signedOut;
       if (offline && !isLoopback(new URL(saved.origin))) return status(saved, false);

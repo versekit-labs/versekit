@@ -4,6 +4,7 @@
 
 - `runtime_required`：从结果读取需要的 Node 版本、下载大小、安装位置和 `installCommand`。说明来源是 nodejs.org，安装到插件数据目录，系统和 PATH 不受影响。明确同意后才按参数数组运行返回的本地安装器。工具权限提示保留。校验失败时报告错误，停在这一步。
 - `cloud status` 未登录时，运行 `cloud login` 并等待用户在打开的浏览器核对 6 位码。及时把核对码给用户，等浏览器授权和小程序返回成功后接着当前请求。登录码和状态来自工具；只走 Hifabu 的浏览器授权流程。
+- 登录失败时按小程序返回的原因处理。`cloud_credential_store_failed` 表示无法保存本地登录资料，按错误提示检查插件数据目录权限或刷新登录状态。
 - `relayEnabled` 为 false 时，请用户去 hifabu.com 的「我的 Hifabu」申请开通传片，通常一个工作日。保留本次期号和素材选择，开通后继续。
 - 用户说退出 Hifabu 时用 `cloud logout`。若服务端未能注销，指向「我的 Hifabu」里的设备移除入口。
 
