@@ -20,7 +20,9 @@ const { findCommand } = await import("../src/commands.mjs");
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
-const RELEASE = "0.2.0";
+const CURRENT = updates.buildInfo().version;
+const [major, minor, patch] = CURRENT.split(/[-+]/, 1)[0].split(".");
+const RELEASE = `${major}.${minor}.${Number(patch) + 1}`;
 const seen = [];
 let server;
 let release;
@@ -52,7 +54,7 @@ after(() => {
   rmSync(HOME, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-const cur = (commit, version = "0.1.0") => ({ version, commit, short: updates.shortCommit(commit) });
+const cur = (commit, version = CURRENT) => ({ version, commit, short: updates.shortCommit(commit) });
 const setState = (id, state) => core.open().prepare("UPDATE publish SET state=? WHERE id=?").run(state, id);
 function pub(state, scheduledAt = null) {
   const g = store.addGroup({ name: `组 ${Math.random()}` });
@@ -217,7 +219,7 @@ test("ACC-update-03 定时检查：不空闲就推迟不打断；空闲才更新
   useRelease();
   down = false;
   core.open().prepare("DELETE FROM meta WHERE key='update.state'").run();
-  // buildInfo 在测试里读的是仓库根：没有 .versekit-build.json、提交号未知，不影响（只要不是最新）
+  // buildInfo 读取仓库版本，测试发布源提供比它更新的版本。
 
   // 1) 不空闲：登录窗口开着
   await run({ busy: () => 1 });
