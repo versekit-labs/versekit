@@ -38,6 +38,10 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
   add("a_xhs", "xiaohongshu", "@出海合规", "expired");
   add("a_dy", "douyin", "@出海合规", "expired");
   add("a_bili", "bilibili", "@出海合规", "ok");
+  const oldBiliFile = join(HOME, "bili-existing.json");
+  const oldBiliContent = JSON.stringify({ token_info: { access_token: "old-access", refresh_token: "old-refresh" } });
+  writeFileSync(oldBiliFile, oldBiliContent, { mode: 0o600 });
+  db.prepare("UPDATE account SET credential_ref=? WHERE id='a_bili'").run(oldBiliFile);
   store.recordHeartbeat();
 
   // ── 脚本化的假发布机 ──────────────────────────────────────────────────
@@ -230,11 +234,22 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     script.manualOk = true;
     await tab.waitFor(`/正常/.test(document.querySelector(${JSON.stringify(row("a_dy"))}).innerText)`, [], { timeout: 15e3, every: 150, what: "窗口里登录好了自己认出来" });
 
-    // B站换不到续期令牌时，显示重新扫码提示，不进入成功后的账号检查。
+    // B站的旧文件还有效时，手动确认也要先问这次登录的交换结果。
+    // 拉长轮询间隔，确保这里是按钮发起检查，而不是等定时轮询出结果。
+    await tab.goto(`${base}/system?r=bili#pollms=60000`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row("a_bili"))})`, [], { timeout: 15e3, what: "B 站账号行" });
+    await watch();
     await click(`${row("a_bili")} [data-login]`);
+    await waitText(/用 B 站 App 扫码并确认/, "B 站登录窗口已打开");
+    await click(`${row("a_bili")} + tr [data-done]`);
     await waitText(new RegExp(BILI_RETRY), "B 站令牌交换失败");
-    assert.match(await rowText("a_bili"), new RegExp(BILI_RETRY));
+    assert.match(await rowText("a_bili"), /没登上/);
+    assert.doesNotMatch(await rowText("a_bili"), /正常/);
     assert.equal(script.seen.some((s) => s.cmd === "check" && s.accountId === "a_bili"), false);
+    assert.equal(readFileSync(oldBiliFile, "utf8"), oldBiliContent);
+    await tab.goto(`${base}/system?r=after-bili#pollms=200`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row("a_xhs"))})`, [], { timeout: 15e3, what: "恢复轮询的账号页" });
+    await watch();
 
     // ── 退出登录：行内确认 ──
     await click(`${row("a_xhs")} [data-logout]`);
