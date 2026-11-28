@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createServer } from "node:http";
+import { once } from "node:events";
 
 const HOME = mkdtempSync(join(tmpdir(), "vk-cookie-"));
 process.env.HIFABU_HOME = HOME;
@@ -30,6 +32,37 @@ test("ACC-browser-login-02：后台会话 + 关掉修复 → 用人话报「登�
   assert.ok(bad.next);
   assert.equal(cookiePersistenceCheck({ env: {}, managername: "Background" }).ok, true);
   assert.equal(cookiePersistenceCheck({ env: { HIFABU_CHROME_MOCK_KEYCHAIN: "0" }, managername: "Aqua" }).ok, true);
+});
+
+test("ACC-account-12：打开登录页前清本站 cookie，其他站点与账号的 cookie 仍在", { timeout: 120_000 }, async (t) => {
+  process.env.HIFABU_CHROME_BIN = process.env.HIFABU_TEST_CHROME_BIN ?? findChrome();
+  const requests = [];
+  const server = createServer((req, res) => {
+    if (req.url === "/login") requests.push(req.headers.cookie);
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end(req.headers.cookie ? "旧登录跳转到首页" : "扫码二维码");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const loginUrl = `http://127.0.0.1:${server.address().port}/login`;
+  const accountId = "acc_relogin";
+  const otherId = "acc_untouched";
+  t.after(async () => {
+    await Promise.all([closeAccount(accountId), closeAccount(otherId)]);
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const [tab, other] = await Promise.all([accountId, otherId].map((id) => openAccount({ accountId: id, headless: true })));
+  const stale = { name: "session", value: "old", url: loginUrl, path: "/login" };
+  const unrelated = { name: "other_site", value: "keep", url: "https://unrelated.example.test/" };
+  assert.equal((await tab.send("Network.setCookie", stale)).success, true);
+  assert.equal((await tab.send("Network.setCookie", unrelated)).success, true);
+  assert.equal((await other.send("Network.setCookie", stale)).success, true);
+
+  const login = await openAccount({ accountId, headless: true, url: loginUrl, loginWindow: true, clearCookiesFor: "127.0.0.1" });
+  assert.deepEqual(requests, [undefined], "首次导航不能带上旧登录 cookie");
+  assert.equal(await login.eval("document.body.textContent"), "扫码二维码");
+  assert.equal((await login.cookies(unrelated.url)).find(({ name }) => name === unrelated.name)?.value, "keep");
+  assert.equal((await other.cookies(loginUrl)).find(({ name }) => name === stale.name)?.value, "old");
 });
 
 test("ACC-browser-login-01/03：写入持久 cookie → closeAccount → Cookies 表有行、重开仍在", { timeout: 120_000 }, async () => {

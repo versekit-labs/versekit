@@ -1380,7 +1380,13 @@
     else if (d.smssend) smsSend(d.smssend);
     else if (d.smsresend) smsSend(d.smsresend, true);
     else if (d.smsgo) smsVerify(d.smsgo);
-    else if (d.done) { const id = d.done; ui.login[id] = { ...ui.login[id], text: "正在检查登录状态…" }; draw(); confirm(id, { manual: true }); }
+    else if (d.done) {
+      const id = d.done;
+      ui.login[id] = { ...ui.login[id], text: "正在检查登录状态…" };
+      draw();
+      if (acc(id)?.platform === "bilibili") await pollOnce(id);
+      else await confirm(id, { manual: true });
+    }
     else if (d.cancel) {
       const id = d.cancel;
       stopPoll(id); delete ui.login[id]; draw();

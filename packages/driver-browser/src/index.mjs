@@ -1096,6 +1096,16 @@ async function newTab(instance) {
       return (res?.cookies ?? []).map((c) => ({ name: c.name, domain: c.domain, value: c.value, expires: c.expires }));
     },
 
+    /** 在当前账号的 profile 里清除本站及其子域的 cookie，包括登录接口专用路径。 */
+    async clearSiteCookies(site) {
+      const { cookies } = await send("Storage.getCookies");
+      for (const { name, domain, path, partitionKey } of cookies) {
+        const host = domain.replace(/^\./, "");
+        if (host !== site && !host.endsWith(`.${site}`)) continue;
+        await send("Network.deleteCookies", { name, domain, path, ...(partitionKey ? { partitionKey } : {}) });
+      }
+    },
+
     async screenshot() {
       return Buffer.from((await send("Page.captureScreenshot")).data, "base64");
     },
@@ -1193,7 +1203,7 @@ async function newTab(instance) {
  */
 export async function openAccount(options = {}) {
   if (!options || typeof options !== "object") throw new TypeError("openAccount 需要 { accountId, url?, headless? }");
-  const { accountId, url, headless = false, reuse = false, loginWindow = false, gotoTimeout } = options;
+  const { accountId, url, headless = false, reuse = false, loginWindow = false, gotoTimeout, clearCookiesFor } = options;
   // 登录窗口给人用：只等 DOM 就绪，重页面一直不 load 也不算失败（#375）。其余场景仍等 load。
   const gotoOpts = loginWindow ? { waitUntil: "domcontentloaded", tolerateTimeout: true, ...(gotoTimeout ? { timeout: gotoTimeout } : {}) } : {};
   const id = requireAccountId(accountId);
@@ -1212,7 +1222,7 @@ export async function openAccount(options = {}) {
   // reuse：复用已有标签页。传字符串时按 URL 匹配，避免拿到 about:blank
   // 这种空页（会把「已登录」误判成未登录）。
   let existing = null;
-  if (typeof reuse === "string") {
+  if (!clearCookiesFor && typeof reuse === "string") {
     for (const t of instance.tabs) {
       const here = await t.url().catch(() => "");
       if (here.includes(reuse)) {
@@ -1220,7 +1230,7 @@ export async function openAccount(options = {}) {
         break;
       }
     }
-  } else if (reuse) {
+  } else if (!clearCookiesFor && reuse) {
     existing = [...instance.tabs][0] ?? null;
   }
   if (existing) {
@@ -1233,6 +1243,7 @@ export async function openAccount(options = {}) {
   }
   const tab = await newTab(instance);
   try {
+    if (clearCookiesFor) await tab.clearSiteCookies(clearCookiesFor);
     if (url) await tab.goto(url, gotoOpts);
   } catch (err) {
     await tab.close().catch(() => {});

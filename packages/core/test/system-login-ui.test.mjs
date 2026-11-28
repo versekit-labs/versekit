@@ -26,6 +26,7 @@ const SHOTS = process.env.HIFABU_SHOT_DIR || null;
 
 const PHONE = "13812345678";
 const CODE = "246810";
+const BILI_RETRY = "B 站没给续期凭据，请在登录窗口里重新扫码";
 const QR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#fff"/><path d="M10 10h30v30H10zM80 10h30v30H80zM10 80h30v30H10zM50 50h20v20H50zM80 80h10v30H80z" fill="#111"/></svg>');
 
 test("系统页：扫码自己走到正常、短信转给发布机且不落痕迹、窗口登录才有「我登录好了」、发布机不在线时登录按钮不可用、现在更新", { skip: skipBrowser, timeout: 120e3 }, async (t) => {
@@ -37,6 +38,10 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
   add("a_xhs", "xiaohongshu", "@出海合规", "expired");
   add("a_dy", "douyin", "@出海合规", "expired");
   add("a_bili", "bilibili", "@出海合规", "ok");
+  const oldBiliFile = join(HOME, "bili-existing.json");
+  const oldBiliContent = JSON.stringify({ token_info: { access_token: "old-access", refresh_token: "old-refresh" } });
+  writeFileSync(oldBiliFile, oldBiliContent, { mode: 0o600 });
+  db.prepare("UPDATE account SET credential_ref=? WHERE id='a_bili'").run(oldBiliFile);
   store.recordHeartbeat();
 
   // ── 脚本化的假发布机 ──────────────────────────────────────────────────
@@ -72,6 +77,7 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     "account.login.status": async ({ accountId }) => {
       script.polls++;
       if (accountId === "a_dy") return script.manualOk ? (markOk(accountId), { state: "ok", mode: "manual" }) : { state: "pending", mode: "manual" };
+      if (accountId === "a_bili") return { state: "failed", mode: "browser-qrcode", error_code: "bilibili_token_exchange_failed", note: BILI_RETRY };
       if (script.qr === "ok") { markOk(accountId); return { mode: "qr", state: "ok", persisted: true }; }
       if (script.qr === "scanned") return { mode: "qr", state: "scanned", note: "已扫码，请在手机上确认登录" };
       if (script.qr === "expired") return { mode: "qr", state: "expired", qr: null };
@@ -80,9 +86,16 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     "account.login.start": async ({ accountId, phone }) => { script.seen.push({ cmd: "start", accountId, phone }); return { mode: "sms", phone: `${phone.slice(0, 3)}****${phone.slice(-4)}`, sent: true }; },
     "account.login.resend": async ({ accountId }) => { script.seen.push({ cmd: "resend", accountId }); return { sent: true }; },
     "account.login.verify": async ({ accountId, code }) => { script.seen.push({ cmd: "verify", accountId, code }); if (code !== CODE) throw new Error("登录失败：验证码不正确"); markOk(accountId); return { ok: true, state: "ok" }; },
-    "account.login.open": async ({ accountId }) => { script.opened++; script.seen.push({ cmd: "open", accountId }); return { opened: true }; },
+    "account.login.open": async ({ accountId }) => {
+      script.opened++;
+      script.seen.push({ cmd: "open", accountId });
+      return accountId === "a_bili" ? { opened: true, mode: "browser-qrcode" } : { opened: true };
+    },
     "account.login.cancel": async () => ({ canceled: true }),
-    "account.check": async ({ accountId }) => ({ accountId, state: "ok" }),
+    "account.check": async ({ accountId }) => {
+      script.seen.push({ cmd: "check", accountId });
+      return { accountId, state: "ok" };
+    },
     "account.switch": async ({ accountId }) => { script.seen.push({ cmd: "switch", accountId }); db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired", switched: true }; },
     "account.logout": async ({ accountId }) => { db.prepare("UPDATE account SET state='expired' WHERE id=?").run(accountId); return { accountId, state: "expired" }; },
     "update.status": () => script.updated
@@ -220,6 +233,23 @@ test("系统页：扫码自己走到正常、短信转给发布机且不落痕�
     await shot("system-window.png");
     script.manualOk = true;
     await tab.waitFor(`/正常/.test(document.querySelector(${JSON.stringify(row("a_dy"))}).innerText)`, [], { timeout: 15e3, every: 150, what: "窗口里登录好了自己认出来" });
+
+    // B站的旧文件还有效时，手动确认也要先问这次登录的交换结果。
+    // 拉长轮询间隔，确保这里是按钮发起检查，而不是等定时轮询出结果。
+    await tab.goto(`${base}/system?r=bili#pollms=60000`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row("a_bili"))})`, [], { timeout: 15e3, what: "B 站账号行" });
+    await watch();
+    await click(`${row("a_bili")} [data-login]`);
+    await waitText(/用 B 站 App 扫码并确认/, "B 站登录窗口已打开");
+    await click(`${row("a_bili")} + tr [data-done]`);
+    await waitText(new RegExp(BILI_RETRY), "B 站令牌交换失败");
+    assert.match(await rowText("a_bili"), /没登上/);
+    assert.doesNotMatch(await rowText("a_bili"), /正常/);
+    assert.equal(script.seen.some((s) => s.cmd === "check" && s.accountId === "a_bili"), false);
+    assert.equal(readFileSync(oldBiliFile, "utf8"), oldBiliContent);
+    await tab.goto(`${base}/system?r=after-bili#pollms=200`);
+    await tab.waitFor(`document.querySelector(${JSON.stringify(row("a_xhs"))})`, [], { timeout: 15e3, what: "恢复轮询的账号页" });
+    await watch();
 
     // ── 退出登录：行内确认 ──
     await click(`${row("a_xhs")} [data-logout]`);

@@ -87,6 +87,7 @@ export async function startQrLogin({ accountId, tabFor = defaultTabFor }) {
   let ownsBrowser = false;
   try {
     ({ tab, ownsBrowser } = await tabFor(accountId));
+    await tab.clearSiteCookies("weixin.qq.com");
     await tab.goto(LOGIN_PAGE, { waitUntil: "domcontentloaded" });
     await tab.waitFor(`!!document.querySelector('img, canvas, iframe') || !location.pathname.includes('login')`, [], { timeout: 30e3, every: 300, what: "视频号助手登录页" });
   } catch (err) {
@@ -96,7 +97,8 @@ export async function startQrLogin({ accountId, tabFor = defaultTabFor }) {
   const session = { tab, ownsBrowser, startedAt: Date.now(), qr: null };
   sessions.set(accountId, session);
   if ((await tab.eval(QR_STATE)) === "ok") {
-    return { mode: "qr", state: "pending", qr: null, note: "这个账号已经是登录状态，正在确认…" };
+    await endSession(accountId, session);
+    return { mode: "qr", state: "failed", reason: "session_not_cleared", note: "登录页仍在使用上次的登录状态，没有给出新二维码。请重新打开登录窗口扫码。" };
   }
   try {
     await sleep(500);

@@ -163,9 +163,14 @@ async function cmdDoctor() {
 const LOGIN_URL = {
   tiktok: "https://www.tiktok.com/login",
   xiaohongshu: "https://creator.xiaohongshu.com/login",
-  xiaohongshu: "https://creator.xiaohongshu.com/login",
   douyin: "https://creator.douyin.com/",
   youtube: "https://studio.youtube.com/",
+};
+const LOGIN_SITE = {
+  tiktok: "tiktok.com",
+  xiaohongshu: "xiaohongshu.com",
+  douyin: "douyin.com",
+  youtube: "youtube.com",
 };
 
 let subscriptionCache = null;
@@ -248,11 +253,11 @@ async function creatorLoginTab(accountId, { fresh = false } = {}) {
     accountId,
     headless: true,
     reuse: fresh ? false : "creator.xiaohongshu.com",
-    ...(fresh ? { url: "https://creator.xiaohongshu.com/login" } : {}),
+    ...(fresh ? { url: XHS_LOGIN, clearCookiesFor: LOGIN_SITE.xiaohongshu } : {}),
   });
   const here = await tab.url().catch(() => "");
   if (!/creator\.xiaohongshu\.com/.test(here)) {
-    await tab.goto("https://creator.xiaohongshu.com/login", { waitUntil: "domcontentloaded" });
+    await tab.goto(XHS_LOGIN, { waitUntil: "domcontentloaded" });
   }
   await tab.waitFor(`!!document.querySelector('input[placeholder*="手机号"]') || !location.pathname.includes('/login')`, [], {
     timeout: 30e3,
@@ -283,7 +288,7 @@ async function creatorLoggedIn(accountId, knownTab = null) {
 // 会话只放进程内存（与短信登录一样）：daemon 重启后二维码自然作废，重新点一次即可。
 
 const XHS_CREATOR = "https://creator.xiaohongshu.com";
-const XHS_LOGIN = `${XHS_CREATOR}/login`;
+const XHS_LOGIN = LOGIN_URL.xiaohongshu;
 const QR_SESSION_MS = 10 * 60e3; // 一次扫码会话最长 10 分钟（中间自动换码）
 const QR_PERSIST_MS = 60e3; // 登录成功后最多等 60 秒让会话 cookie 落成持久 cookie
 const QR_STALE_MS = 150e3; // 同一张码最多挂 150 秒（平台约 1–2 分钟过期），再久就主动换新
@@ -518,14 +523,11 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
           next: result?.next ?? `已在 ${account.platform} 的浏览器窗口打开登录页，登录完不用回来点任何按钮，页面会自动识别`,
         };
       }
-      const url =
-        account.platform === "xiaohongshu"
-          ? "https://creator.xiaohongshu.com/login"
-          : LOGIN_URL[account.platform];
+      const url = LOGIN_URL[account.platform];
       if (!url) throw new Error(`${account.platform} 没有网页登录地址`);
 
       // 有头浏览器：人能看见、能操作。登录成功后这个实例保持运行，发布直接复用。
-      await openAccount({ accountId, url, headless: false, loginWindow: true });
+      await openAccount({ accountId, url, loginWindow: true, clearCookiesFor: LOGIN_SITE[account.platform] });
       loginSessions.set(accountId, { openedAt: Date.now() });
       return {
         opened: true,
@@ -579,6 +581,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
       let tab;
       try {
         tab = await openAccount({ accountId, headless: true });
+        await tab.clearSiteCookies(LOGIN_SITE.xiaohongshu);
         await tab.goto(XHS_LOGIN, { waitUntil: "domcontentloaded" });
         // 登录页是 SPA：等卡片渲染出来（短信或扫码任一），或者已经被跳走（本来就登录着）。
         await tab.waitFor(`!location.pathname.includes('/login') || /短信登录|扫一扫登录|发送验证码/.test(document.body.innerText || '')`, [], {
@@ -594,9 +597,8 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
       loginSessions.set(accountId, session);
 
       if (await pageLoggedIn(tab)) {
-        // 本来就登录着：仍要确认是持久会话，交给 status 统一收尾。
-        session.loggedInAt = Date.now();
-        return { mode: "qr", state: "pending", qr: null, note: "这个账号已经是登录状态，正在确认登录态已保存…" };
+        await endQrSession(accountId, session);
+        return qrFailed(accountId, "session_not_cleared", "登录页仍在使用上次的登录状态，没有给出新二维码。可以打开登录窗口重新扫码。");
       }
       try {
         await switchToQr(tab);
@@ -634,7 +636,15 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
       // 之后的 check / 发布 / 采集都只用这一条 credential_ref。
       const adapter = adapterOf(account.platform);
       if (typeof adapter?.loginStatus === "function") {
-        const result = await adapter.loginStatus({ accountId, credentialRef: account.credential_ref ?? null });
+        const result = await adapter.loginStatus({
+          accountId,
+          credentialRef: account.credential_ref ?? null,
+          onFailure: ({ error_code, note }) => emit({
+            type: "account.login_failed",
+            severity: "warn",
+            payload: { account_id: accountId, platform: account.platform, error_code, message: note },
+          }),
+        });
         if (result?.state === "ok" && result.credentialRef && result.credentialRef !== account.credential_ref) {
           open().prepare("UPDATE account SET credential_ref=? WHERE id=?").run(result.credentialRef, accountId);
         }
@@ -864,6 +874,8 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
     "account.reauth": async ({ accountId }) => {
       const account = getAccount(accountId);
       if (!account) throw new Error(`没有这个账号：${accountId}`);
+      const qrSession = loginSessions.get(accountId);
+      if (qrSession?.mode === "qr") await endQrSession(accountId, qrSession);
       // 适配器自带登录流程时用它：B站会打开扫码窗口，不再回一句「去终端跑 biliup」。
       const adapter = adapterOf(account.platform);
       if (typeof adapter?.login === "function") {
@@ -878,7 +890,7 @@ function daemonHandlers(adapters, log, { cloud, machineRelay, uploadQueue, offli
       }
       const url = LOGIN_URL[account.platform];
       if (!url) return core["account.reauth"]({ accountId });
-      await openAccount({ accountId, url, loginWindow: true });
+      await openAccount({ accountId, url, loginWindow: true, clearCookiesFor: LOGIN_SITE[account.platform] });
       log(`[reauth] 打开 ${account.platform} 登录页（账号 ${accountId}）`);
       return {
         accountId,
