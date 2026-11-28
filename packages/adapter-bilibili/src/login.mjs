@@ -28,7 +28,7 @@ const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 
 /**
  * biliup 登录文件里真正会被用到的 cookie。SESSDATA 是身份、bili_jct 是 CSRF，
- * 缺任何一个都不算登录成功；其余有就带上，biliup renew 会自己补齐 token_info。
+ * 缺任何一个都无法换取 biliup 令牌；其余有就带上。
  */
 const CREDENTIAL_COOKIES = ["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid", "default_sites", "sec_ck"];
 const REQUIRED_COOKIES = ["SESSDATA", "bili_jct"];
@@ -79,7 +79,7 @@ export function cookiesFrom(list) {
   });
 }
 
-/** biliup-rs 的 LoginInfo 形状（兜底：token 交换失败时先落网页 cookie）。 */
+/** 将旧版 cookie 数组转换成 biliup-rs 的 LoginInfo 文件形状。 */
 export function cookieFilePayload(cookies) {
   const mid = Number(cookies.find((c) => c.name === "DedeUserID")?.value);
   return {
@@ -182,7 +182,10 @@ async function exchangeForBiliup(cookies) {
     if (json.code !== 0) throw new Error(`B站 TV 登录轮询失败：${json.code} ${json.message ?? ""}`.trim());
     const data = json.data ?? {};
     const token = data.token_info ?? data;
-    if (!data.cookie_info || !token?.access_token) throw new Error("B站返回的 TV 登录信息不完整");
+    if (!data.cookie_info || typeof token.access_token !== "string" || !token.access_token.trim() ||
+        typeof token.refresh_token !== "string" || !token.refresh_token.trim()) {
+      throw new Error("B站返回的 TV 登录信息不完整");
+    }
     return {
       cookie_info: data.cookie_info,
       sso: data.sso ?? [],
@@ -190,7 +193,7 @@ async function exchangeForBiliup(cookies) {
         access_token: token.access_token,
         expires_in: token.expires_in ?? 0,
         mid: token.mid ?? 0,
-        refresh_token: token.refresh_token ?? "",
+        refresh_token: token.refresh_token,
       },
       platform: "BiliTV",
     };
@@ -200,16 +203,14 @@ async function exchangeForBiliup(cookies) {
 
 /** 登录窗口留在内存里；daemon 重启后靠账号 profile 的 marker 重新认领。 */
 const sessions = new Map();
-const inflight = new Map();
 
-async function liveLoginTab(accountId) {
-  const session = sessions.get(accountId);
+async function liveLoginTab(accountId, session) {
   if (session?.tab) {
     try {
       await session.tab.url();
       return session.tab;
     } catch {
-      sessions.delete(accountId);
+      return null;
     }
   }
   if (!hasLiveBrowser(accountId)) return null;
@@ -225,12 +226,29 @@ async function liveLoginTab(accountId) {
  * 打开登录窗口。返回后页面每 2 秒问一次 loginStatus；二维码由 B站自己的页面渲染，
  * 不依赖终端，也不依赖我们把二维码画出来。
  */
-export async function login({ accountId, headless = false } = {}) {
+export async function login({ accountId, headless = false, openTab = openAccount } = {}) {
   if (!accountId) throw new Error("login 需要 accountId");
-  const tab = await openAccount({ accountId, headless, url: LOGIN_URL, loginWindow: true });
+  const previous = sessions.get(accountId);
+  if (previous?.opening) return previous.opening;
+  const session = {};
+  sessions.set(accountId, session);
+  session.opening = openLoginTab({ accountId, headless, openTab, session, previous });
+  try {
+    return await session.opening;
+  } catch (err) {
+    session.completed = idleLogin();
+    throw err;
+  } finally {
+    delete session.opening;
+  }
+}
+
+async function openLoginTab({ accountId, headless, openTab, session, previous }) {
+  await previous?.tab?.close().catch(() => {});
+  const tab = await openTab({ accountId, headless, url: LOGIN_URL, loginWindow: true, clearCookiesFor: "bilibili.com" });
+  session.tab = tab;
   // 页面加载失败也把窗口留着：人可以在窗口里刷新，登录结果仍然能读到。
   await tab.waitFor("document.readyState === 'complete'", [], { timeout: 20e3, every: 250, what: "B站登录页" }).catch(() => {});
-  sessions.set(accountId, { openedAt: Date.now(), tab });
   return {
     opened: true,
     url: LOGIN_URL,
@@ -244,49 +262,60 @@ export async function login({ accountId, headless = false } = {}) {
  * LoginInfo（含 token_info）写进本机凭证文件。
  * 真正的「能不能用」仍由 check()（`biliup renew`）确认——这里不冒充登录成功。
  */
-export async function loginStatus({ accountId, credentialRef = null } = {}) {
+export async function loginStatus({ accountId, credentialRef = null, onFailure } = {}) {
   if (!accountId) throw new Error("loginStatus 需要 accountId");
+  let session = sessions.get(accountId);
+  if (!session) {
+    session = {};
+    sessions.set(accountId, session);
+  }
+  if (session.opening) return pendingScan();
+  if (session.completed) return session.completed;
   // 页面每 2 秒轮询一次，交换 token 要几秒；并发的第二次请求直接等第一次的结果。
-  if (inflight.has(accountId)) return inflight.get(accountId);
-  const task = readAndExchange({ accountId, credentialRef }).finally(() => inflight.delete(accountId));
-  inflight.set(accountId, task);
-  return task;
+  session.inflight ??= readAndExchange({ accountId, credentialRef, session, onFailure }).finally(() => delete session.inflight);
+  return session.inflight;
 }
 
-async function readAndExchange({ accountId, credentialRef }) {
-  const session = sessions.get(accountId);
-  // 同一轮登录只交换一次 token：页面在 check 期间可能还会轮询一两次，
-  // 每次都换 token 会和 biliup 正在读的凭证文件抢写。
-  if (session?.completed) return session.completed;
+function idleLogin() {
+  return { state: "idle", mode: "browser-qrcode", note: "登录窗口没有打开：点「重新打开登录窗口」再扫一次" };
+}
 
-  const tab = await liveLoginTab(accountId);
-  if (!tab) {
-    return { state: "idle", mode: "browser-qrcode", note: "登录窗口没有打开：点「重新打开登录窗口」再扫一次" };
-  }
+function pendingScan() {
+  return { state: "pending", mode: "browser-qrcode", note: "等待扫码：在登录窗口里用 B站 App 扫码并确认" };
+}
+
+async function readAndExchange({ accountId, credentialRef, session, onFailure }) {
+  const tab = await liveLoginTab(accountId, session);
+  if (sessions.get(accountId) !== session) return pendingScan();
+  if (!tab) return idleLogin();
+  session.tab = tab;
 
   const raw = await tab.cookies("https://www.bilibili.com").catch(() => []);
   const cookies = cookiesFrom(raw);
-  if (!cookies) {
-    return { state: "pending", mode: "browser-qrcode", note: "等待扫码：在登录窗口里用 B站 App 扫码并确认" };
-  }
+  if (!cookies || sessions.get(accountId) !== session) return pendingScan();
 
   const file = credentialPathFor(accountId, credentialRef);
   let payload;
-  let note = "已从登录窗口拿到 B站登录信息，写入本机凭证文件；正在用 biliup 确认";
   try {
     payload = await exchangeForBiliup(cookies);
-    note = "已拿到完整 B站登录信息（含续期 token），写入本机凭证文件；正在用 biliup 确认";
-  } catch (err) {
-    // 交换失败不等于网页登录失败：先落网页 cookie，biliup 校验会给出最终结论。
-    payload = cookieFilePayload(cookies);
-    note = `已保存 B站网页登录信息，但换发 biliup token 失败：${err.message}。biliup 校验可能不通过，可重试`;
+  } catch {
+    if (sessions.get(accountId) !== session) return pendingScan();
+    const failure = {
+      state: "failed",
+      mode: "browser-qrcode",
+      error_code: "bilibili_token_exchange_failed",
+      note: "B 站没给续期凭据，请在登录窗口里重新扫码",
+    };
+    onFailure?.(failure);
+    session.completed = failure;
+    return failure;
   }
+  if (sessions.get(accountId) !== session) return pendingScan();
 
   writeCookieFile(file, payload);
-  const result = { state: "ok", mode: "browser-qrcode", credentialRef: file, note };
-  const live = sessions.get(accountId);
-  if (live) live.completed = result;
+  const note = "已拿到完整 B站登录信息（含续期 token），写入本机凭证文件；正在用 biliup 确认";
+  session.completed = { state: "ok", mode: "browser-qrcode", credentialRef: file, note };
   // cookie 已换成凭证文件，登录窗口没用了：几秒后收掉，别一直占屏幕和内存（#91）。
   closeLoginWindow(accountId).catch(() => {});
-  return result;
+  return session.completed;
 }

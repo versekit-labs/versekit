@@ -324,6 +324,11 @@ export function fakeTab(page, { hooks = {} } = {}) {
     },
     async screenshot() { return Buffer.from("png"); },
     async url() { return `https://channels.weixin.qq.com${page.path}`; },
+    async clearSiteCookies(site) {
+      page.log.push(`clearSiteCookies:${site}`);
+      page.o.loggedIn = false;
+      page.loginPhase = "waiting";
+    },
     async goto(url) {
       const path = new URL(url).pathname;
       page.log.push(`goto:${path}`);

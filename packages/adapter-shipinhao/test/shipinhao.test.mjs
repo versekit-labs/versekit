@@ -244,11 +244,13 @@ test("ACC-shipinhao-03 发布途中登录掉了（上传后被送去二维码页
 
 // ---------------------------------------------------------------- ACC-shipinhao-06 网页扫码
 
-test("ACC-shipinhao-06 扫码：出码 → 已扫 → 确认成功", async () => {
-  const page = new ChannelsMock({ loggedIn: false });
+test("ACC-account-12 / ACC-shipinhao-06 扫码：先清旧登录 → 出码 → 已扫 → 确认成功", async () => {
+  const page = new ChannelsMock({ loggedIn: true });
+  page.loginPhase = "ok";
   const tab = fakeTab(page);
   const tabFor = async () => ({ tab, ownsBrowser: false });
   const start = await startQrLogin({ accountId: "acc_qr1", tabFor });
+  assert.deepEqual(page.log.slice(0, 2), ["clearSiteCookies:weixin.qq.com", "goto:/login.html"]);
   assert.equal(start.state, "waiting");
   assert.match(start.qr, /^data:image\/png;base64,QR1/);
   assert.equal((await qrLoginStatus({ accountId: "acc_qr1" })).state, "waiting");

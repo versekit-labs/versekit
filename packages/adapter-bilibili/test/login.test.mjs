@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 process.env.HIFABU_HOME = mkdtempSync(join(tmpdir(), "vk-bili-login-"));
 
-const { credentialPathFor, cookiesFrom, cookieFilePayload, writeCookieFile, loginStatus } = await import("../src/login.mjs");
+const { credentialPathFor, cookiesFrom, cookieFilePayload, writeCookieFile, login, loginStatus, LOGIN_URL } = await import("../src/login.mjs");
 
 const cdpCookies = [
   { name: "SESSDATA", value: "sess-token", expires: 1802268997, secure: false },
@@ -77,6 +77,69 @@ test("没有登录窗口时 status 返回 idle，不伪造成功", async () => {
   assert.equal(result.state, "idle");
   assert.ok(result.note);
 });
+
+test("ACC-account-12：B站重新登录先清本站旧 cookie，再等扫码", async () => {
+  const accountId = "acc_bili_reauth";
+  let cookies = cdpCookies;
+  const order = [];
+  const tab = {
+    url: async () => LOGIN_URL,
+    waitFor: async () => order.push("二维码已渲染"),
+    cookies: async () => cookies,
+  };
+  await login({ accountId, openTab: async ({ clearCookiesFor, url }) => {
+    if (clearCookiesFor === "bilibili.com") {
+      cookies = [];
+      order.push("清理旧登录");
+    }
+    assert.equal(url, LOGIN_URL);
+    assert.deepEqual(cookies, [], "第一次访问登录页时旧 cookie 已删除");
+    return tab;
+  } });
+  assert.deepEqual(order, ["清理旧登录", "二维码已渲染"]);
+  assert.equal((await loginStatus({ accountId })).state, "pending");
+});
+
+test("ACC-account-12：旧 cookie 即使齐全，换令牌失败也报失败并保留已有凭证", async (t) => {
+  const accountId = "acc_bili_rejected";
+  const file = credentialPathFor(accountId);
+  writeCookieFile(file, { token_info: { access_token: "old-access", refresh_token: "old-refresh" } });
+  const original = readFileSync(file, "utf8");
+  const fetchTv = t.mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/auth_code")) return Response.json({ code: 0, data: { auth_code: "tv-auth" } });
+    assert.ok(url.endsWith("/confirm"));
+    return Response.json({ code: -400, message: "登录已失效" });
+  });
+  const tab = { url: async () => LOGIN_URL, waitFor: async () => {}, cookies: async () => cdpCookies };
+  await login({ accountId, openTab: async () => tab });
+
+  const onFailure = t.mock.fn();
+  const status = () => loginStatus({ accountId, credentialRef: file, onFailure });
+  const [result, concurrent] = await Promise.all([status(), status()]);
+  assert.deepEqual(result, {
+    state: "failed", mode: "browser-qrcode", error_code: "bilibili_token_exchange_failed", note: "B 站没给续期凭据，请在登录窗口里重新扫码",
+  });
+  assert.deepEqual(concurrent, result);
+  assert.deepEqual(await status(), result);
+  assert.equal(onFailure.mock.callCount(), 1, "同一轮登录只报一次失败事件");
+  assert.deepEqual(onFailure.mock.calls[0].arguments, [result]);
+  assert.equal(fetchTv.mock.callCount(), 2, "同一轮登录只换一次令牌");
+  assert.equal(readFileSync(file, "utf8"), original);
+});
+
+test("ACC-account-12：换回的响应没有续期令牌时不生成新的凭证文件", async (t) => {
+  const accountId = "acc_bili_missing_refresh";
+  t.mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/auth_code")) return Response.json({ code: 0, data: { auth_code: "tv-auth" } });
+    if (url.endsWith("/confirm")) return Response.json({ code: 0 });
+    assert.ok(url.endsWith("/poll"));
+    return Response.json({ code: 0, data: { cookie_info: { cookies: [] }, token_info: { access_token: "access-only" } } });
+  });
+  await login({ accountId, openTab: async () => ({ url: async () => LOGIN_URL, waitFor: async () => {}, cookies: async () => cdpCookies }) });
+  assert.equal((await loginStatus({ accountId })).state, "failed");
+  assert.equal(existsSync(credentialPathFor(accountId)), false);
+});
+
 test("ACC-acct-iso-06：B站退出登录删掉这个账号自己的凭据文件，别的账号的还在；重复退出不报错", async () => {
   const { clearCredentials } = await import("../src/login.mjs");
   const { default: bilibili } = await import("../src/index.mjs");
