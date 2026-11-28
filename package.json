@@ -1,6 +1,6 @@
 {
   "name": "versekit",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Local-first publish + own-account analytics control plane for multi-platform creators",
   "type": "module",
